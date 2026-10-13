@@ -1,5 +1,5 @@
 import type { FieldDef, RecordDto } from '@synapse/shared';
-import { objectPerm } from '@synapse/shared';
+import { allowedChoices, fieldVisible, objectPerm, resolveLayout } from '@synapse/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -49,7 +49,10 @@ export function RecordDetailPage() {
       if (e instanceof ApiError && e.status === 409) {
         toast('Someone else changed this record. Reloaded the latest version.', true);
         qc.invalidateQueries({ queryKey: key });
-      } else toast(e instanceof ApiError && e.details?.[0] ? `${e.details[0].field}: ${e.details[0].message}` : (e as Error).message, true);
+      } else if (e instanceof ApiError && e.details?.[0]?.field) {
+        const label = obj?.fields.find((f) => f.key === e.details![0]!.field)?.label ?? e.details[0].field;
+        toast(e.details[0].message === e.message ? e.message : `${label}: ${e.details[0].message}`, true);
+      } else toast((e as Error).message, true);
     },
   });
 
@@ -60,7 +63,11 @@ export function RecordDetailPage() {
   const canEdit = perm?.update !== 'none';
   const pipeline = pipelines.find((p) => p.id === rec.pipeline_id);
   const stageIdx = pipeline?.stages.findIndex((s) => s.id === rec.stage_id) ?? -1;
-  const fields = obj.fields.filter((f) => !['full_name', 'pipeline_id', 'stage_id', 'ai_score'].includes(f.key));
+  const byKey = new Map(obj.fields.map((f) => [f.key, f]));
+  const values = rec as Record<string, unknown>;
+  const sections = resolveLayout(obj)
+    .sections.map((s) => ({ ...s, fields: s.fields.map((k) => byKey.get(k)).filter((f): f is FieldDef => !!f && !['full_name', 'pipeline_id', 'stage_id', 'ai_score'].includes(f.key) && fieldVisible(f, values)) }))
+    .filter((s) => s.fields.length);
   const insights = rec.ai_insights as { reasons?: string[]; nextAction?: string | null; model?: string | null } | null;
 
   return (
@@ -119,16 +126,15 @@ export function RecordDetailPage() {
       )}
 
       <div className="record-grid">
-        <section className="panel">
-          <div className="panel-head">
-            <h2>Details</h2>
-          </div>
-          <div className="fields">
-            {fields.map((f) => (
-              <EditableField key={f.key} field={f} record={rec} objectKey={object} editable={canEdit && !f.readOnly} onSave={(v) => save.mutateAsync({ [f.key]: v })} />
-            ))}
-          </div>
-        </section>
+        <div className="stack" style={{ gap: 16 }}>
+          {sections.map((sec, i) => (
+            <DetailSection key={sec.id} title={i === 0 && sections.length === 1 ? 'Details' : sec.title || 'Details'} startCollapsed={!!sec.collapsed}>
+              {sec.fields.map((f) => (
+                <EditableField key={f.key} field={f} record={rec} objectKey={object} editable={canEdit && !f.readOnly} onSave={(v) => save.mutateAsync({ [f.key]: v })} />
+              ))}
+            </DetailSection>
+          ))}
+        </div>
 
         <section className="panel">
           <div className="tabs" role="tablist">
@@ -151,6 +157,21 @@ export function RecordDetailPage() {
 
       {converting && <ConvertModal leadId={id} company={String(rec.company ?? '')} onClose={() => setConverting(false)} />}
     </>
+  );
+}
+
+function DetailSection({ title, startCollapsed, children }: { title: string; startCollapsed: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(!startCollapsed);
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <button className="section-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          <h2>{title}</h2>
+          <span aria-hidden="true">{open ? '−' : '+'}</span>
+        </button>
+      </div>
+      {open && <div className="fields">{children}</div>}
+    </section>
   );
 }
 
@@ -186,7 +207,7 @@ function EditableField({ field, record, objectKey, editable, onSave }: { field: 
             if (e.key === 'Escape') setEditing(false);
           }}
         >
-          <FieldInput field={field} objectKey={objectKey} value={val} onChange={setVal} />
+          <FieldInput field={field} objectKey={objectKey} value={val} onChange={setVal} choices={field.options?.controlling ? allowedChoices(field, record as Record<string, unknown>) : undefined} />
         </div>
       ) : (
         <span className="val">

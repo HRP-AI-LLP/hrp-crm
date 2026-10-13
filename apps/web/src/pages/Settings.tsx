@@ -1,4 +1,8 @@
-import { FIELD_TYPES, type FieldType } from '@synapse/shared';
+import type { FieldDef } from '@synapse/shared';
+import { AutomationsTab } from '../components/builders/AutomationBuilder';
+import { FieldEditor, TYPE_LABELS } from '../components/builders/FieldEditor';
+import { LayoutBuilder } from '../components/builders/LayoutBuilder';
+import { RulesEditor } from '../components/builders/RulesEditor';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
@@ -10,7 +14,7 @@ import { useMeta } from '../lib/hooks';
 type Json = Record<string, any>;
 
 const TABS = [
-  ['fields', 'Fields', 'metadata'],
+  ['fields', 'Objects & fields', 'metadata'],
   ['pipelines', 'Pipelines', 'metadata'],
   ['users', 'Users', 'users'],
   ['roles', 'Roles & access', 'roles'],
@@ -44,13 +48,13 @@ export function SettingsPage() {
           ))}
         </div>
         <div className="panel-body">
-          {tab === 'fields' && <FieldsTab />}
+          {tab === 'fields' && <ObjectsTab />}
           {tab === 'pipelines' && <PipelinesTab />}
           {tab === 'users' && <UsersTab />}
           {tab === 'roles' && <RolesTab />}
           {tab === 'modules' && <ModulesTab />}
           {tab === 'ai' && <AiModelsTab />}
-          {tab === 'workflows' && <WorkflowsTab />}
+          {tab === 'workflows' && <AutomationsTab />}
           {tab === 'forms' && <FormsTab />}
           {tab === 'channels' && <ChannelsTab />}
           {tab === 'domains' && <DomainsTab />}
@@ -77,12 +81,13 @@ function useRun() {
   };
 }
 
-// ------------------------------------------------------------------ fields & objects
-function FieldsTab() {
+// ------------------------------------------------------------------ objects: fields, page layout, validation rules
+function ObjectsTab() {
   const { data: meta } = useMeta();
   const run = useRun();
   const [objectKey, setObjectKey] = useState('lead');
-  const [adding, setAdding] = useState(false);
+  const [sub, setSub] = useState<'fields' | 'layout' | 'rules'>('fields');
+  const [editing, setEditing] = useState<FieldDef | 'new' | null>(null);
   const [newObject, setNewObject] = useState(false);
   const obj = meta?.objects.find((o) => o.key === objectKey);
   return (
@@ -100,123 +105,95 @@ function FieldsTab() {
             New object
           </button>
         </div>
-        <button className="btn primary" onClick={() => setAdding(true)}>
-          Add field
-        </button>
-      </div>
-      <table className="data">
-        <thead>
-          <tr>
-            <th>Label</th>
-            <th>Key</th>
-            <th>Type</th>
-            <th>Options</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {obj?.fields.map((f) => (
-            <tr key={f.key}>
-              <td>{f.label}</td>
-              <td className="muted">{f.key}</td>
-              <td>{f.type}</td>
-              <td className="small">
-                {[f.standard && 'standard', f.required && 'required', f.indexed && 'filterable', f.pii && 'personal data', f.moduleKey && `module: ${f.moduleKey}`].filter(Boolean).join(', ')}
-              </td>
-              <td>
-                {!f.standard && (
-                  <button className="btn danger sm" onClick={() => window.confirm(`Remove "${f.label}"? Existing values are kept but hidden.`) && run(() => del(`/api/admin/objects/${objectKey}/fields/${f.key}`), 'Field removed', [['meta']])}>
-                    Remove
-                  </button>
-                )}
-              </td>
-            </tr>
+        <div className="seg" role="tablist" aria-label="Object settings">
+          {([['fields', 'Fields'], ['layout', 'Page layout'], ['rules', 'Validation rules']] as const).map(([k, l]) => (
+            <button key={k} role="tab" aria-selected={sub === k} aria-pressed={sub === k} onClick={() => setSub(k)}>
+              {l}
+              {k === 'rules' && obj?.validationRules?.length ? ` (${obj.validationRules.length})` : ''}
+            </button>
           ))}
-        </tbody>
-      </table>
-      {adding && <AddFieldModal objectKey={objectKey} onClose={() => setAdding(false)} />}
-      {newObject && <NewObjectModal onClose={() => setNewObject(false)} onCreated={(k) => setObjectKey(k)} />}
-    </div>
-  );
-}
-
-function AddFieldModal({ objectKey, onClose }: { objectKey: string; onClose: () => void }) {
-  const run = useRun();
-  const { data: meta } = useMeta();
-  const [f, setF] = useState({ label: '', key: '', type: 'text' as FieldType, required: false, indexed: false, pii: false, choices: '', lookupObject: 'account' });
-  const keyFrom = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').replace(/^(\d)/, 'f_$1').slice(0, 40);
-  const save = async () => {
-    const options: Json = {};
-    if (f.type === 'picklist' || f.type === 'multipicklist') options.choices = f.choices.split(',').map((c) => c.trim()).filter(Boolean).map((c) => ({ value: keyFrom(c) || c, label: c }));
-    if (f.type === 'lookup') options.lookupObject = f.lookupObject;
-    const r = await run(() => put(`/api/admin/objects/${objectKey}/fields/${f.key}`, { label: f.label, type: f.type, required: f.required, indexed: f.indexed, pii: f.pii, options }), 'Field added', [['meta']]);
-    if (r) onClose();
-  };
-  return (
-    <Modal
-      title="Add field"
-      onClose={onClose}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>
-            Cancel
-          </button>
-          <button className="btn primary" onClick={save} disabled={!f.label || !f.key}>
-            Add field
-          </button>
-        </>
-      }
-    >
-      <div className="modal-body">
-        <label className="field">
-          Label
-          <input value={f.label} onChange={(e) => setF((s) => ({ ...s, label: e.target.value, key: s.key && s.key !== keyFrom(s.label) ? s.key : keyFrom(e.target.value) }))} />
-        </label>
-        <label className="field">
-          API key
-          <input value={f.key} onChange={(e) => setF((s) => ({ ...s, key: e.target.value }))} />
-        </label>
-        <label className="field">
-          Type
-          <select value={f.type} onChange={(e) => setF((s) => ({ ...s, type: e.target.value as FieldType }))}>
-            {FIELD_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
-        {f.type === 'lookup' && (
-          <label className="field">
-            Links to
-            <select value={f.lookupObject} onChange={(e) => setF((s) => ({ ...s, lookupObject: e.target.value }))}>
-              {meta?.objects.map((o) => (
-                <option key={o.key} value={o.key}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        {(f.type === 'picklist' || f.type === 'multipicklist') && (
-          <label className="field wide">
-            Choices (comma separated)
-            <input value={f.choices} onChange={(e) => setF((s) => ({ ...s, choices: e.target.value }))} placeholder="Hot, Warm, Cold" />
-          </label>
-        )}
-        <div className="wide stack" style={{ gap: 6 }}>
-          <label className="row">
-            <input type="checkbox" checked={f.required} onChange={(e) => setF((s) => ({ ...s, required: e.target.checked }))} /> Required
-          </label>
-          <label className="row">
-            <input type="checkbox" checked={f.indexed} onChange={(e) => setF((s) => ({ ...s, indexed: e.target.checked }))} /> Filterable (indexed for fast filters and sorting)
-          </label>
-          <label className="row">
-            <input type="checkbox" checked={f.pii} onChange={(e) => setF((s) => ({ ...s, pii: e.target.checked }))} /> Personal data (kept out of AI providers that may train on prompts)
-          </label>
         </div>
       </div>
-    </Modal>
+      {obj && sub === 'fields' && (
+        <>
+          <div className="spread">
+            <p className="muted small" style={{ margin: 0 }}>
+              {obj.fields.length} fields · {obj.fields.filter((f) => !f.standard).length} custom
+            </p>
+            <div className="row">
+              {obj.fields.some((f) => f.type === 'formula' || f.type === 'rollup') && (
+                <button className="btn" onClick={() => run(() => post(`/api/admin/objects/${objectKey}/recalculate`), 'Recalculating formulas and roll-ups')}>
+                  Recalculate
+                </button>
+              )}
+              <button className="btn primary" onClick={() => setEditing('new')}>
+                Add field
+              </button>
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Label</th>
+                  <th>API name</th>
+                  <th>Type</th>
+                  <th>Details</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {obj.fields.map((f) => (
+                  <tr key={f.key}>
+                    <td>
+                      <b>{f.label}</b>
+                    </td>
+                    <td className="muted mono small">{f.key}</td>
+                    <td>{TYPE_LABELS[f.type]}</td>
+                    <td className="small" style={{ whiteSpace: 'normal' }}>
+                      {[
+                        f.standard && 'standard',
+                        f.required && 'required',
+                        f.options?.requiredWhen && 'conditionally required',
+                        f.options?.visibleWhen && 'conditionally shown',
+                        f.options?.controlling && `depends on ${obj.fields.find((x) => x.key === f.options!.controlling!.field)?.label ?? f.options.controlling.field}`,
+                        f.indexed && 'filterable',
+                        f.pii && 'personal data',
+                        f.type === 'formula' && f.options?.expression && <code key="e" className="mono">= {f.options.expression}</code>,
+                        f.moduleKey && `module: ${f.moduleKey}`,
+                      ]
+                        .filter(Boolean)
+                        .map((x, i) => (
+                          <span key={i}>
+                            {i > 0 && ' · '}
+                            {x}
+                          </span>
+                        ))}
+                    </td>
+                    <td>
+                      {!f.standard && (
+                        <div className="row" style={{ justifyContent: 'flex-end' }}>
+                          <button className="btn sm" onClick={() => setEditing(f)}>
+                            Edit
+                          </button>
+                          <button className="btn danger sm" onClick={() => window.confirm(`Remove "${f.label}"? Existing values are kept but hidden.`) && run(() => del(`/api/admin/objects/${objectKey}/fields/${f.key}`), 'Field removed', [['meta']])}>
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      {obj && sub === 'layout' && <LayoutBuilder obj={obj} />}
+      {obj && sub === 'rules' && <RulesEditor obj={obj} />}
+      {obj && editing && <FieldEditor obj={obj} field={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} />}
+      {newObject && <NewObjectModal onClose={() => setNewObject(false)} onCreated={(k) => setObjectKey(k)} />}
+    </div>
   );
 }
 
@@ -589,140 +566,6 @@ function ModulesTab() {
 }
 
 // ------------------------------------------------------------------ workflows
-function WorkflowsTab() {
-  const run = useRun();
-  const { data: meta } = useMeta();
-  const { data } = useQuery({ queryKey: ['admin-workflows'], queryFn: () => get<{ items: Json[] }>('/api/admin/workflows') });
-  const [w, setW] = useState<{ name: string; objectKey: string; triggerEvent: string; field: string; op: string; value: string; action: string; title: string; text: string } | null>(null);
-  const save = async () => {
-    if (!w) return;
-    const action =
-      w.action === 'create_task'
-        ? { type: 'create_task', title: w.title, dueInHours: 24, assignTo: 'owner' }
-        : w.action === 'send_email'
-          ? { type: 'send_email', to: 'field:email', subject: w.title, body: w.text }
-          : w.action === 'send_whatsapp'
-            ? { type: 'send_whatsapp', to: 'field:phone', body: w.text }
-            : { type: 'ai_score' };
-    const body = { name: w.name, objectKey: w.objectKey, triggerEvent: w.triggerEvent, conditions: w.field ? [{ field: w.field, op: w.op, value: w.value }] : [], actions: [action] };
-    if (await run(() => post('/api/admin/workflows', body), 'Automation created', [['admin-workflows']])) setW(null);
-  };
-  const obj = meta?.objects.find((o) => o.key === w?.objectKey);
-  return (
-    <div className="stack">
-      <div className="spread">
-        <p className="muted" style={{ margin: 0 }}>
-          When something happens to a record and the condition matches, Synapse runs the action. Use {'{{field_key}}'} to insert record values.
-        </p>
-        <button className="btn primary" onClick={() => setW({ name: '', objectKey: 'lead', triggerEvent: 'created', field: '', op: 'eq', value: '', action: 'create_task', title: 'Call {{full_name}}', text: '' })}>
-          New automation
-        </button>
-      </div>
-      {data?.items.length ? (
-        <table className="data">
-          <tbody>
-            {data.items.map((x) => (
-              <tr key={x.id}>
-                <td>
-                  <b>{x.name}</b>
-                  <div className="muted small">
-                    When a {x.object_key} is {x.trigger_event.replace('_', ' ')} · {x.actions.map((a: Json) => a.type.replace('_', ' ')).join(', ')} · ran {x.run_count} times
-                  </div>
-                </td>
-                <td style={{ width: 200 }}>
-                  <div className="row">
-                    <button className="btn sm" onClick={() => run(() => put(`/api/admin/workflows/${x.id}`, { name: x.name, objectKey: x.object_key, triggerEvent: x.trigger_event, conditions: x.conditions, actions: x.actions, isEnabled: !x.is_enabled }), x.is_enabled ? 'Automation paused' : 'Automation resumed', [['admin-workflows']])}>
-                      {x.is_enabled ? 'Pause' : 'Resume'}
-                    </button>
-                    <button className="btn sm danger" onClick={() => run(() => del(`/api/admin/workflows/${x.id}`), 'Automation deleted', [['admin-workflows']])}>
-                      Delete
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <Empty title="No automations yet">Start with “when a lead is created from a referral, create a call task”.</Empty>
-      )}
-      {w && (
-        <Modal title="New automation" onClose={() => setW(null)} footer={<button className="btn primary" onClick={save} disabled={!w.name}>Create automation</button>}>
-          <div className="modal-body">
-            <label className="field wide">
-              Name
-              <input value={w.name} onChange={(e) => setW({ ...w, name: e.target.value })} />
-            </label>
-            <label className="field">
-              When a
-              <select value={w.objectKey} onChange={(e) => setW({ ...w, objectKey: e.target.value, field: '' })}>
-                {meta?.objects.map((o) => (
-                  <option key={o.key} value={o.key}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              is
-              <select value={w.triggerEvent} onChange={(e) => setW({ ...w, triggerEvent: e.target.value })}>
-                <option value="created">created</option>
-                <option value="updated">updated</option>
-                <option value="stage_changed">moved to a new stage</option>
-              </select>
-            </label>
-            <label className="field">
-              and field (optional)
-              <select value={w.field} onChange={(e) => setW({ ...w, field: e.target.value })}>
-                <option value="">Any record</option>
-                {obj?.fields.map((f) => (
-                  <option key={f.key} value={f.key}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {w.field && (
-              <label className="field">
-                <select value={w.op} onChange={(e) => setW({ ...w, op: e.target.value })} aria-label="Operator">
-                  <option value="eq">equals</option>
-                  <option value="neq">does not equal</option>
-                  <option value="gt">is greater than</option>
-                  <option value="lt">is less than</option>
-                  <option value="contains">contains</option>
-                  <option value="changed_to">changes to</option>
-                </select>
-                <input value={w.value} onChange={(e) => setW({ ...w, value: e.target.value })} placeholder="value" aria-label="Value" />
-              </label>
-            )}
-            <label className="field wide">
-              Then
-              <select value={w.action} onChange={(e) => setW({ ...w, action: e.target.value })}>
-                <option value="create_task">Create a task for the owner</option>
-                <option value="send_email">Send an email to the record</option>
-                <option value="send_whatsapp">Send a WhatsApp message</option>
-                <option value="ai_score">Rescore with AI (leads)</option>
-              </select>
-            </label>
-            {(w.action === 'create_task' || w.action === 'send_email') && (
-              <label className="field wide">
-                {w.action === 'create_task' ? 'Task title' : 'Subject'}
-                <input value={w.title} onChange={(e) => setW({ ...w, title: e.target.value })} />
-              </label>
-            )}
-            {(w.action === 'send_email' || w.action === 'send_whatsapp') && (
-              <label className="field wide">
-                Message
-                <textarea value={w.text} onChange={(e) => setW({ ...w, text: e.target.value })} placeholder="Hi {{first_name}}, thanks for your interest…" />
-              </label>
-            )}
-          </div>
-        </Modal>
-      )}
-    </div>
-  );
-}
-
 // ------------------------------------------------------------------ forms
 function FormsTab() {
   const run = useRun();

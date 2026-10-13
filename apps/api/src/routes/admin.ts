@@ -9,6 +9,10 @@ import { createObject, createPipeline, installModule, objectSpecSchema, pipeline
 import { invalidatePrincipal } from '../services/tenancy';
 import { attachWorkerDomain, vanityEnabled, vanityHost } from '../services/domains';
 import { workflowSchema } from '../services/workflows';
+import { checkFormula, layoutSchema, validationRuleSchema } from '@synapse/shared';
+import { formulaFieldNames } from '../services/computed';
+import { enqueue } from '../services/jobs';
+import { safeCtx } from './public';
 import { chatWith, tenantProvider } from '../services/ai/router';
 import { createProviderSchema, encryptKey, hint, loadTenantProviders, normaliseCreate, assertSafeBaseUrl, tenantAiSettings, updateProviderSchema } from '../services/ai/tenant-providers';
 
@@ -62,7 +66,9 @@ export const adminRoutes = new Hono<AppEnv>()
   })
   .put('/objects/:key/fields/:field', requireAdmin('metadata'), async (c) => {
     const spec = fieldSpecSchema.parse({ ...(await c.req.json()), key: c.req.param('field') });
-    const id = await c.var.db.tx(scope(c), (tx) => upsertField(tx, c.var.tenant.id, c.req.param('key'), spec));
+    const id = await c.var.db.tx(scope(c), (tx) => upsertField(tx, c.var.tenant.id, c.req.param('key'), spec, null, c.var.meta));
+    // existing records get their computed values in the background
+    if (spec.type === 'formula' || spec.type === 'rollup') await enqueue(c.env, safeCtx(c), [{ type: 'meta.recompute', tenantId: c.var.tenant.id, objectKey: c.req.param('key') }]);
     return c.json({ id, key: spec.key });
   })
   .delete('/objects/:key/fields/:field', requireAdmin('metadata'), async (c) => {
@@ -73,6 +79,82 @@ export const adminRoutes = new Hono<AppEnv>()
       await tx.query(`delete from record_index where tenant_id = $1 and object_key = $2 and field_key = $3`, [c.var.tenant.id, key, field]);
       // values stay in `custom` jsonb (recoverable); they are no longer exposed through the API
     });
+    return c.json({ ok: true });
+  })
+
+  .post('/objects/:key/recalculate', requireAdmin('metadata'), async (c) => {
+    const key = c.req.param('key');
+    if (!c.var.meta.objects.some((o) => o.key === key)) throw notFound();
+    await enqueue(c.env, safeCtx(c), [{ type: 'meta.recompute', tenantId: c.var.tenant.id, objectKey: key }]);
+    return c.json({ ok: true });
+  })
+
+  // ------------------------------------------------------------------ page layouts (drag-and-drop builder)
+  .put('/objects/:key/layout', requireAdmin('metadata'), async (c) => {
+    const key = c.req.param('key');
+    const obj = c.var.meta.objects.find((o) => o.key === key);
+    if (!obj) throw notFound();
+    const body = await c.req.json();
+    if (body === null || (typeof body === 'object' && (body as { reset?: boolean }).reset)) {
+      await c.var.db.tx(scope(c), (tx) => tx.query(`update custom_objects set settings = settings - 'layout' where tenant_id = $1 and key = $2`, [c.var.tenant.id, key]));
+      return c.json({ ok: true, layout: null });
+    }
+    const layout = layoutSchema.parse(body);
+    const known = new Set(obj.fields.map((f) => f.key));
+    const placed = [...layout.sections.flatMap((s) => s.fields), ...layout.hidden];
+    const bad = placed.filter((f) => !known.has(f));
+    if (bad.length) throw badRequest(`Unknown fields: ${bad.join(', ')}`);
+    if (new Set(placed).size !== placed.length) throw badRequest('A field can appear only once on the page');
+    const required = obj.fields.filter((f) => f.required && !f.readOnly && layout.hidden.includes(f.key));
+    if (required.length) throw badRequest(`Required fields must stay on the page: ${required.map((f) => f.label).join(', ')}`);
+    await c.var.db.tx(scope(c), (tx) =>
+      tx.query(`update custom_objects set settings = jsonb_set(settings, '{layout}', $3::jsonb) where tenant_id = $1 and key = $2`, [c.var.tenant.id, key, JSON.stringify(layout)]),
+    );
+    return c.json({ ok: true, layout });
+  })
+
+  // ------------------------------------------------------------------ validation rules
+  .post('/objects/:key/check-formula', requireAdmin('metadata'), async (c) => {
+    const obj = c.var.meta.objects.find((o) => o.key === c.req.param('key'));
+    if (!obj) throw notFound();
+    const b = z.object({ expression: z.string().max(4000) }).parse(await c.req.json());
+    return c.json({ error: checkFormula(b.expression, formulaFieldNames(obj)) });
+  })
+  .post('/objects/:key/validation-rules', requireAdmin('metadata'), async (c) => {
+    const key = c.req.param('key');
+    const obj = c.var.meta.objects.find((o) => o.key === key);
+    if (!obj) throw notFound();
+    const r = validationRuleSchema.parse(await c.req.json());
+    const err = checkFormula(r.condition, formulaFieldNames(obj));
+    if (err) throw badRequest(err, [{ field: 'condition', message: err }]);
+    if (r.field && !obj.fields.some((f) => f.key === r.field)) throw badRequest('Unknown field');
+    const row = await c.var.db.tx(scope(c), (tx) =>
+      tx.one(`insert into validation_rules (tenant_id, object_key, name, condition, message, field_key, is_active) values ($1,$2,$3,$4,$5,$6,$7) returning *`, [
+        c.var.tenant.id, key, r.name, r.condition, r.message, r.field ?? null, r.active,
+      ]),
+    );
+    return c.json(row, 201);
+  })
+  .put('/objects/:key/validation-rules/:id', requireAdmin('metadata'), async (c) => {
+    const key = c.req.param('key');
+    const obj = c.var.meta.objects.find((o) => o.key === key);
+    if (!obj) throw notFound();
+    const r = validationRuleSchema.parse(await c.req.json());
+    const err = checkFormula(r.condition, formulaFieldNames(obj));
+    if (err) throw badRequest(err, [{ field: 'condition', message: err }]);
+    const row = await c.var.db.tx(scope(c), (tx) =>
+      tx.one(`update validation_rules set name=$4, condition=$5, message=$6, field_key=$7, is_active=$8 where tenant_id=$1 and object_key=$2 and id=$3 returning *`, [
+        c.var.tenant.id, key, uuid.parse(c.req.param('id')), r.name, r.condition, r.message, r.field ?? null, r.active,
+      ]),
+    );
+    if (!row) throw notFound();
+    return c.json(row);
+  })
+  .delete('/objects/:key/validation-rules/:id', requireAdmin('metadata'), async (c) => {
+    const rows = await c.var.db.tx(scope(c), (tx) =>
+      tx.query(`delete from validation_rules where tenant_id = $1 and object_key = $2 and id = $3 returning id`, [c.var.tenant.id, c.req.param('key'), uuid.parse(c.req.param('id'))]),
+    );
+    if (!rows.length) throw notFound();
     return c.json({ ok: true });
   })
 

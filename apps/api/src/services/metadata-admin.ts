@@ -2,7 +2,8 @@
  * Metadata engine write path: custom objects, custom fields, pipelines/stages and module install.
  * All writes are tenant scoped; meta_version is bumped by DB triggers, which rotates edge caches.
  */
-import { type FieldSpec, fieldSpecSchema, KEY_PATTERN, MODULES, RESERVED_FIELD_KEYS } from '@synapse/shared';
+import { type FieldDef, type FieldSpec, fieldSpecSchema, KEY_PATTERN, MODULES, RESERVED_FIELD_KEYS, type TenantMeta } from '@synapse/shared';
+import { checkComputedSpec, rollupReturnType } from './computed';
 import { z } from 'zod';
 import type { Tx } from '../lib/db';
 import { badRequest, conflict, notFound } from '../lib/errors';
@@ -46,8 +47,17 @@ export async function createObject(tx: Tx, tenantId: string, spec: z.infer<typeo
   return row?.id ?? null;
 }
 
-export async function upsertField(tx: Tx, tenantId: string, objectKey: string, spec: FieldSpec, moduleKey: string | null = null) {
+export async function upsertField(tx: Tx, tenantId: string, objectKey: string, spec: FieldSpec, moduleKey: string | null = null, meta?: TenantMeta) {
   const f = fieldSpecSchema.parse(spec);
+  const metaObj = meta?.objects.find((o) => o.key === objectKey);
+  if (f.type === 'rollup' && meta) f.options = { ...f.options, returnType: rollupReturnType(meta, { ...f, standard: false } as FieldDef) };
+  if (meta && metaObj) {
+    const err = checkComputedSpec(meta, metaObj, { ...f, standard: false } as FieldDef);
+    if (err) throw badRequest(err, [{ field: 'options', message: err }]);
+  } else if (f.type === 'formula' || f.type === 'rollup') {
+    if (!f.options?.expression && !f.options?.rollup) throw badRequest('Computed fields need a definition');
+  }
+  if ((f.type === 'formula' || f.type === 'rollup') && f.required) f.required = false;
   if (RESERVED_FIELD_KEYS.has(f.key)) throw badRequest(`"${f.key}" is a reserved field key`);
   if ((f.type === 'picklist' || f.type === 'multipicklist') && !f.options?.choices?.length) throw badRequest('Picklist fields need at least one choice');
   if (f.type === 'lookup' && !f.options?.lookupObject) throw badRequest('Lookup fields need options.lookupObject');

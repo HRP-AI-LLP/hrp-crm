@@ -3,16 +3,18 @@
  * Actions run as the system on behalf of the tenant; updates they make are tagged fromAutomation
  * and never re-trigger workflows (no loops).
  */
+import { evalCondition, type FValue } from '@synapse/shared';
 import { z } from 'zod';
 import type { Env } from '../env';
 import { hmacSha256Hex } from '../lib/crypto';
 import type { Db } from '../lib/db';
 import type { Job } from './jobs';
-import { readRowSystem, type RecordCtx, type RecordEvent, updateRecord } from './records';
+import { createRecord, readRowSystem, type RecordCtx, type RecordEvent, updateRecord } from './records';
 
 export const workflowConditionSchema = z.object({
   field: z.string().min(1),
-  op: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'in', 'is_empty', 'not_empty', 'changed', 'changed_to']),
+  // 'formula': value is a Synapse formula that must be true (field is ignored)
+  op: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'in', 'is_empty', 'not_empty', 'changed', 'changed_to', 'formula']),
   value: z.unknown().optional(),
 });
 
@@ -24,17 +26,64 @@ export const workflowActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('send_email'), to: z.string().default('field:email'), subject: z.string().max(300), body: z.string().max(10_000) }),
   z.object({ type: z.literal('send_whatsapp'), to: z.string().default('field:phone'), body: z.string().max(4096) }),
   z.object({ type: z.literal('ai_score') }),
+  z.object({ type: z.literal('create_record'), object: z.string().min(1).max(60), values: z.record(z.string().max(60), z.unknown()) }),
+  z.object({ type: z.literal('add_note'), subject: z.string().max(200), body: z.string().max(5000).optional() }),
 ]);
 export type WorkflowAction = z.infer<typeof workflowActionSchema>;
 
-export const workflowSchema = z.object({
-  name: z.string().min(1).max(120),
-  objectKey: z.string().min(1),
-  triggerEvent: z.enum(['created', 'updated', 'stage_changed', 'deleted']),
-  conditions: z.array(workflowConditionSchema).max(20).default([]),
-  actions: z.array(workflowActionSchema).min(1).max(10),
-  isEnabled: z.boolean().default(true),
-});
+/** If/else branch: steps under `then` run when every condition matches, `else` otherwise. */
+export interface WorkflowBranch {
+  type: 'branch';
+  label?: string;
+  conditions: z.infer<typeof workflowConditionSchema>[];
+  then: WorkflowStep[];
+  else: WorkflowStep[];
+}
+export type WorkflowStep = WorkflowAction | WorkflowBranch;
+
+export const workflowStepSchema: z.ZodType<WorkflowStep> = z.lazy(() =>
+  z.union([
+    workflowActionSchema,
+    z.object({
+      type: z.literal('branch'),
+      label: z.string().max(80).optional(),
+      conditions: z.array(workflowConditionSchema).max(20).default([]),
+      then: z.array(workflowStepSchema).max(15).default([]),
+      else: z.array(workflowStepSchema).max(15).default([]),
+    }),
+  ]),
+) as z.ZodType<WorkflowStep>;
+
+function stepStats(steps: WorkflowStep[], depth = 1): { count: number; depth: number } {
+  let count = 0;
+  let max = depth;
+  for (const s of steps) {
+    count++;
+    if (s.type === 'branch') {
+      for (const arm of [s.then, s.else]) {
+        const r = stepStats(arm, depth + 1);
+        count += r.count;
+        max = Math.max(max, r.depth);
+      }
+    }
+  }
+  return { count, depth: max };
+}
+
+export const workflowSchema = z
+  .object({
+    name: z.string().min(1).max(120),
+    objectKey: z.string().min(1),
+    triggerEvent: z.enum(['created', 'updated', 'stage_changed', 'deleted']),
+    conditions: z.array(workflowConditionSchema).max(20).default([]),
+    actions: z.array(workflowStepSchema).min(1).max(15),
+    isEnabled: z.boolean().default(true),
+  })
+  .superRefine((w, ctx) => {
+    const st = stepStats(w.actions);
+    if (st.count > 40) ctx.addIssue({ code: 'custom', path: ['actions'], message: 'An automation can have at most 40 steps' });
+    if (st.depth > 4) ctx.addIssue({ code: 'custom', path: ['actions'], message: 'Branches can be nested at most 3 deep' });
+  });
 
 type Flat = Record<string, unknown>;
 
@@ -45,6 +94,13 @@ export function flatten(row: Record<string, unknown>): Flat {
 
 export function matches(conditions: z.infer<typeof workflowConditionSchema>[], rec: Flat, changes: Record<string, [unknown, unknown]> = {}): boolean {
   return conditions.every((c) => {
+    if (c.op === 'formula') {
+      return evalCondition(String(c.value ?? ''), {
+        get: (k) => rec[k] as FValue | undefined,
+        prior: (k) => (k in changes ? (changes[k]![0] as FValue) : (rec[k] as FValue | undefined)),
+        isNew: false,
+      });
+    }
     const v = rec[c.field];
     const s = (x: unknown) => (x === null || x === undefined ? '' : String(x));
     switch (c.op) {
@@ -72,6 +128,8 @@ export function matches(conditions: z.infer<typeof workflowConditionSchema>[], r
         return c.field in changes;
       case 'changed_to':
         return c.field in changes && s(changes[c.field]![1]) === s(c.value);
+      default:
+        return false;
     }
   });
 }
@@ -106,7 +164,7 @@ export async function runWorkflows(env: Env, db: Db, ctx: Omit<RecordCtx, 'tx'>,
 
   for (const wf of workflows) {
     const conditions = z.array(workflowConditionSchema).safeParse(wf.conditions);
-    const actions = z.array(workflowActionSchema).safeParse(wf.actions);
+    const actions = z.array(workflowStepSchema).safeParse(wf.actions);
     const started = new Date();
     if (!conditions.success || !actions.success) {
       await logRun(db, sc, wf.id, event.recordId, 'failed', null, 'invalid workflow definition', started);
@@ -115,10 +173,20 @@ export async function runWorkflows(env: Env, db: Db, ctx: Omit<RecordCtx, 'tx'>,
     if (!matches(conditions.data, rec, event.changes)) continue;
 
     const output: unknown[] = [];
-    try {
-      for (const action of actions.data) {
-        output.push(await executeAction(env, db, ctx, sc, action, event, rec, wf.run_count, followUps));
+    const runSteps = async (steps: WorkflowStep[], path: string): Promise<void> => {
+      for (const [i, step] of steps.entries()) {
+        if (step.type === 'branch') {
+          const yes = matches(step.conditions, rec, event.changes);
+          output.push({ step: `${path}${i + 1}`, branch: step.label ?? 'If', result: yes ? 'then' : 'else' });
+          await runSteps(yes ? step.then : step.else, `${path}${i + 1}.${yes ? 'then' : 'else'}.`);
+          continue;
+        }
+        const r = await executeAction(env, db, ctx, sc, step, event, rec, wf.run_count, followUps);
+        output.push({ step: `${path}${i + 1}`, type: step.type, ...(r && typeof r === 'object' ? r : {}) });
       }
+    };
+    try {
+      await runSteps(actions.data, '');
       await logRun(db, sc, wf.id, event.recordId, 'success', output, null, started);
     } catch (e) {
       await logRun(db, sc, wf.id, event.recordId, 'failed', output, (e as Error).message.slice(0, 1000), started);
@@ -162,13 +230,33 @@ async function executeAction(
       return { taskId: t?.id };
     }
     case 'update_field': {
-      await db.tx(sc, (tx) => updateRecord({ ...ctx, tx }, event.objectKey, event.recordId, { [action.field]: action.value }, { bypassPermissions: true, fromAutomation: true }));
+      const value = typeof action.value === 'string' ? render(action.value, rec) : action.value;
+      await db.tx(sc, (tx) => updateRecord({ ...ctx, tx }, event.objectKey, event.recordId, { [action.field]: value }, { bypassPermissions: true, fromAutomation: true }));
+      rec[action.field] = value;
       return { updated: action.field };
     }
     case 'assign_owner': {
       const owner = action.userIds[runCount % action.userIds.length]!;
       await db.tx(sc, (tx) => updateRecord({ ...ctx, tx }, event.objectKey, event.recordId, { owner_id: owner }, { bypassPermissions: true, fromAutomation: true }));
+      rec.owner_id = owner;
       return { owner };
+    }
+    case 'create_record': {
+      const values = Object.fromEntries(
+        Object.entries(action.values)
+          .map(([k, v]) => [k, typeof v === 'string' ? render(v, rec) : v] as const)
+          .filter(([, v]) => v !== ''),
+      );
+      const r = await db.tx(sc, (tx) => createRecord({ ...ctx, tx }, action.object, values, { bypassPermissions: true, fromAutomation: true }));
+      return { created: action.object, recordId: r.record.id };
+    }
+    case 'add_note': {
+      await db.tx(sc, (tx) =>
+        tx.query(`insert into activities (tenant_id, kind, subject, body, related_object, related_id) values ($1, 'note', $2, $3, $4, $5)`, [
+          sc.tenantId, render(action.subject, rec), action.body ? render(action.body, rec) : null, event.objectKey, event.recordId,
+        ]),
+      );
+      return { note: true };
     }
     case 'send_webhook': {
       const body = JSON.stringify({ event: `${event.objectKey}.${event.kind}`, tenantId: sc.tenantId, record: rec, changes: event.changes ?? {}, sentAt: new Date().toISOString() });

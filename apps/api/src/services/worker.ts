@@ -1,7 +1,7 @@
 /**
  * Job processor shared by the Queue consumer and the inline (waitUntil) fallback.
  */
-import { mergePermissions } from '@synapse/shared';
+import { mergePermissions, storageFor } from '@synapse/shared';
 import type { Env, Principal, TenantInfo } from '../env';
 import { hmacSha256Hex } from '../lib/crypto';
 import { Db } from '../lib/db';
@@ -9,6 +9,7 @@ import { analyzeSentiment, indexDocument, scoreLead } from './ai/features';
 import { AiUnavailableError } from './ai/router';
 import { type ChannelAccount, matchOrCreateSender, parseInbound, sendViaChannel } from './channels';
 import { enqueue, type Job, type Waiter } from './jobs';
+import { recomputeRecord } from './computed';
 import { loadMeta } from './tenancy';
 import { runWorkflows } from './workflows';
 
@@ -116,6 +117,23 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
           }
         }
         await enqueue(env, waiter, events);
+        return;
+      }
+      case 'meta.recompute': {
+        const obj = meta.objects.find((o) => o.key === job.objectKey);
+        if (!obj) return;
+        const st = storageFor(job.objectKey);
+        const BATCH = 200;
+        const ids = await db.tx(sc, async (tx) => {
+          const rows = await tx.query<{ id: string }>(
+            `select id from ${st.table} where tenant_id = $1 and deleted_at is null and id > $2::uuid${st.discriminated ? ' and object_key = $4' : ''} order by id limit $3`,
+            st.discriminated ? [tenant.id, job.after ?? '00000000-0000-0000-0000-000000000000', BATCH, job.objectKey] : [tenant.id, job.after ?? '00000000-0000-0000-0000-000000000000', BATCH],
+          );
+          const ctx = { ...base, tx };
+          for (const r of rows) await recomputeRecord(ctx, job.objectKey, r.id);
+          return rows.map((r) => r.id);
+        });
+        if (ids.length === BATCH) await enqueue(env, waiter, [{ ...job, after: ids[ids.length - 1] }]);
         return;
       }
       case 'webhook.deliver': {

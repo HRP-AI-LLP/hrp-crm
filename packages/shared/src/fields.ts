@@ -1,8 +1,9 @@
 import { z } from 'zod';
+import type { FormulaReturnType } from './formula';
 
 export const FIELD_TYPES = [
   'text', 'textarea', 'number', 'currency', 'percent', 'date', 'datetime', 'boolean',
-  'picklist', 'multipicklist', 'email', 'phone', 'url', 'lookup', 'user',
+  'picklist', 'multipicklist', 'email', 'phone', 'url', 'lookup', 'user', 'formula', 'rollup',
 ] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
 
@@ -14,6 +15,21 @@ export interface PicklistChoice {
   color?: string;
 }
 
+export const RETURN_TYPES = ['number', 'currency', 'percent', 'text', 'date', 'boolean'] as const;
+export const ROLLUP_AGGREGATES = ['count', 'sum', 'avg', 'min', 'max'] as const;
+
+export interface RollupSpec {
+  /** child object holding the lookup */
+  object: string;
+  /** lookup field on the child that points at this object */
+  via: string;
+  aggregate: (typeof ROLLUP_AGGREGATES)[number];
+  /** child field aggregated (not needed for count) */
+  field?: string;
+  /** only children matching all of these */
+  filters?: { field: string; op: string; value?: unknown }[];
+}
+
 export interface FieldOptions {
   choices?: PicklistChoice[];
   lookupObject?: string;
@@ -22,6 +38,16 @@ export interface FieldOptions {
   max?: number;
   maxLength?: number;
   default?: unknown;
+  /** formula fields */
+  expression?: string;
+  returnType?: FormulaReturnType;
+  /** roll-up summary fields */
+  rollup?: RollupSpec;
+  /** dependent picklist: allowed values of this field per value of the controlling picklist */
+  controlling?: { field: string; map: Record<string, string[]> };
+  /** formula conditions: show the field only when true / require it when true */
+  visibleWhen?: string;
+  requiredWhen?: string;
 }
 
 /** Unified field descriptor for standard columns and tenant custom fields. */
@@ -62,6 +88,20 @@ export const fieldSpecSchema = z.object({
       max: z.number().optional(),
       maxLength: z.number().int().min(1).max(100_000).optional(),
       default: z.unknown().optional(),
+      expression: z.string().trim().min(1).max(2000).optional(),
+      returnType: z.enum(RETURN_TYPES).optional(),
+      rollup: z
+        .object({
+          object: z.string().regex(KEY_PATTERN),
+          via: z.string().regex(KEY_PATTERN),
+          aggregate: z.enum(ROLLUP_AGGREGATES),
+          field: z.string().regex(KEY_PATTERN).optional(),
+          filters: z.array(z.object({ field: z.string().regex(KEY_PATTERN), op: z.string().max(20), value: z.unknown().optional() })).max(10).optional(),
+        })
+        .optional(),
+      controlling: z.object({ field: z.string().regex(KEY_PATTERN), map: z.record(z.string().max(80), z.array(z.string().max(80)).max(500)) }).optional(),
+      visibleWhen: z.string().trim().max(2000).optional(),
+      requiredWhen: z.string().trim().max(2000).optional(),
     })
     .optional(),
 });
@@ -69,11 +109,19 @@ export type FieldSpec = z.infer<typeof fieldSpecSchema>;
 
 const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Computed fields (formula, roll-up) are stored like their result type; everything else as itself. */
+export function valueType(field: Pick<FieldDef, 'type' | 'options'>): Exclude<FieldType, 'formula' | 'rollup'> {
+  if (field.type === 'formula' || field.type === 'rollup') return field.options?.returnType ?? 'number';
+  return field.type;
+}
+
+export const isComputed = (f: Pick<FieldDef, 'type'>) => f.type === 'formula' || f.type === 'rollup';
+
 /** Builds a zod validator for one field value (null clears the field). */
 export function valueSchema(field: FieldDef): z.ZodType<unknown> {
   const o = field.options ?? {};
   let s: z.ZodType<unknown>;
-  switch (field.type) {
+  switch (valueType(field)) {
     case 'text':
       s = z.string().trim().max(o.maxLength ?? 255);
       break;

@@ -5,7 +5,8 @@
  */
 import { type FieldDef, type ObjectMeta, fieldAccess, objectPerm, storageFor } from '@synapse/shared';
 import { badRequest, forbidden } from '../lib/errors';
-import { createRecord, getObject, listRecords, loadRow, type RecordCtx, type RecordEvent, updateRecord } from './records';
+import { hasRollupParents, recomputeRecord, refreshParents } from './computed';
+import { createRecord, deleteRecord, getObject, listRecords, loadRow, type RecordCtx, type RecordEvent, updateRecord } from './records';
 
 const ident = (s: string) => {
   if (!/^[a-z_][a-z0-9_]*$/.test(s)) throw new Error(`unsafe identifier ${s}`);
@@ -195,6 +196,9 @@ export async function mergeRecords(
 
   const s = storageFor(objectKey);
   await ctx.tx.query(`update ${ident(s.table)} set deleted_at = now(), merged_into = $2 where tenant_id = $1 and id = any($3::uuid[])`, [t, masterId, ids]);
+  // children moved to the master: its roll-ups grow; parents of the merged rows shrink
+  await recomputeRecord(ctx, objectKey, masterId);
+  if (hasRollupParents(ctx.meta, objectKey)) await refreshParents(ctx, objectKey, dups);
   await ctx.tx.query(
     `insert into activities (tenant_id, kind, subject, body, related_object, related_id, metadata) values ($1, 'system', $2, $3, $4, $5, $6)`,
     [t, `Merged ${ids.length} duplicate${ids.length > 1 ? 's' : ''}`, dups.map((d) => String(d[s.titleColumn] ?? '')).join(', '), objectKey, masterId, JSON.stringify({ merged: ids })],
@@ -222,9 +226,7 @@ export async function bulkAction(
   for (const id of ids) {
     const r = await savepoint(ctx, async () => {
       if (action === 'update') return (await updateRecord(ctx, objectKey, id, patch)).events;
-      await loadRow(ctx, objectKey, id, 'delete', true);
-      await ctx.tx.query(`update ${ident(s.table)} set deleted_at = now() where tenant_id = $1 and id = $2::uuid`, [ctx.tenantId, id]);
-      return [{ objectKey, recordId: id, kind: 'deleted' as const }];
+      return deleteRecord(ctx, objectKey, id);
     });
     if (r.ok) {
       succeeded++;

@@ -1,4 +1,4 @@
-import type { FieldDef, ObjectMeta, RecordDto } from '@synapse/shared';
+import { allowedChoices, type FieldDef, fieldRequired, fieldVisible, isComputed, type ObjectMeta, type PicklistChoice, type RecordDto, resolveLayout, valueType } from '@synapse/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -17,7 +17,7 @@ export function FieldValue({ field, record }: { field: FieldDef; record: RecordD
   if (field.key === 'pipeline_id') return <>{meta?.pipelines.find((p) => p.id === v)?.name ?? '—'}</>;
   if (field.key === 'ai_score') return <ScoreRing value={v as number | null} />;
   if (v === null || v === undefined || v === '') return <span className="muted">—</span>;
-  switch (field.type) {
+  switch (valueType(field)) {
     case 'currency':
       return <>{money(v, String(record.currency ?? 'INR'))}</>;
     case 'number':
@@ -59,8 +59,9 @@ function LookupLink({ objectKey, id }: { objectKey: string; id: string }) {
 }
 
 /** Editable input for any field type. */
-export function FieldInput({ field, value, onChange, objectKey }: { field: FieldDef; value: unknown; onChange: (v: unknown) => void; objectKey: string }) {
+export function FieldInput({ field, value, onChange, objectKey, choices }: { field: FieldDef; value: unknown; onChange: (v: unknown) => void; objectKey: string; choices?: PicklistChoice[] }) {
   const { data: users } = useUsers();
+  const opts = choices ?? field.options?.choices ?? [];
   const pipelines = usePipelines(objectKey);
   const id = `f-${field.key}`;
   const str = value === null || value === undefined ? '' : String(value);
@@ -109,8 +110,8 @@ export function FieldInput({ field, value, onChange, objectKey }: { field: Field
     case 'picklist':
       return (
         <select id={id} value={str} onChange={(e) => onChange(e.target.value || null)}>
-          <option value="">—</option>
-          {field.options?.choices?.map((c) => (
+          <option value="">{choices && !choices.length ? 'Choose the controlling field first' : '—'}</option>
+          {opts.map((c) => (
             <option key={c.value} value={c.value}>
               {c.label}
             </option>
@@ -120,7 +121,7 @@ export function FieldInput({ field, value, onChange, objectKey }: { field: Field
     case 'multipicklist':
       return (
         <select id={id} multiple value={(value as string[]) ?? []} onChange={(e) => onChange([...e.target.selectedOptions].map((o) => o.value))}>
-          {field.options?.choices?.map((c) => (
+          {opts.map((c) => (
             <option key={c.value} value={c.value}>
               {c.label}
             </option>
@@ -192,14 +193,31 @@ export function RecordFormModal({ object, onClose, onSaved, initial }: { object:
   const [dupes, setDupes] = useState<DuplicateMatch[] | null>(null);
   const toast = useToast();
   const hasPipeline = usePipelines(object.key).length > 0;
-  const fields = object.fields.filter((f) => !f.readOnly && f.key !== 'pipeline_id' && (hasPipeline || f.key !== 'stage_id'));
+  const byKey = new Map(object.fields.map((f) => [f.key, f]));
+  const editable = (f: FieldDef | undefined): f is FieldDef => !!f && !f.readOnly && !isComputed(f) && f.key !== 'pipeline_id' && (hasPipeline || f.key !== 'stage_id') && fieldVisible(f, values);
+  const sections = resolveLayout(object)
+    .sections.map((s) => ({ ...s, fields: s.fields.map((k) => byKey.get(k)).filter(editable) }))
+    .filter((s) => s.fields.length);
+  const setValue = (f: FieldDef, v: unknown) =>
+    setValues((s) => {
+      const next = { ...s, [f.key]: v };
+      // clear dependent picklists whose value is no longer allowed
+      for (const d of object.fields) {
+        if (d.options?.controlling?.field !== f.key || next[d.key] === undefined) continue;
+        const ok = new Set(allowedChoices(d, next).map((c) => c.value));
+        const cur = next[d.key];
+        if (Array.isArray(cur) ? cur.some((x) => !ok.has(String(x))) : cur !== null && cur !== '' && !ok.has(String(cur))) next[d.key] = Array.isArray(cur) ? cur.filter((x) => ok.has(String(x))) : null;
+      }
+      return next;
+    });
 
   const submit = async (e?: React.FormEvent) => {
     e?.preventDefault();
     setBusy(true);
     setErrors({});
     try {
-      const body = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== '' && v !== undefined));
+      // values of fields hidden by their "show when" condition are not sent
+      const body = Object.fromEntries(Object.entries(values).filter(([k, v]) => v !== '' && v !== undefined && (!byKey.get(k) || fieldVisible(byKey.get(k)!, values))));
       // first press checks for likely duplicates; a second press ("Save anyway") skips the check
       if (dupes === null) {
         const found = await post<{ matches: DuplicateMatch[] }>(`/api/v1/records/${object.key}/check-duplicates`, body).then((x) => x.matches, () => []);
@@ -214,6 +232,7 @@ export function RecordFormModal({ object, onClose, onSaved, initial }: { object:
     } catch (err) {
       if (err instanceof ApiError && err.details?.length) {
         setErrors(Object.fromEntries(err.details.map((d) => [d.field ?? d.path ?? '', d.message])));
+        if (err.details.some((d) => !d.field && !d.path)) setErrors((e) => ({ ...e, '': err.message }));
       } else toast((err as Error).message, true);
     } finally {
       setBusy(false);
@@ -237,23 +256,30 @@ export function RecordFormModal({ object, onClose, onSaved, initial }: { object:
     >
       <form className="modal-body" onSubmit={submit}>
         {dupes && dupes.length > 0 && <DuplicateWarning objectKey={object.key} matches={dupes} />}
-        {fields.map((f) => (
-          <label key={f.key} className={`field${WIDE_TYPES.has(f.type) ? ' wide' : ''}`} htmlFor={`f-${f.key}`}>
-            <span>
-              {f.label} {f.required && <span className="req">*</span>}
-            </span>
-            <FieldInput
-              field={f}
-              objectKey={object.key}
-              value={values[f.key]}
-              onChange={(v) => {
-                setValues((s) => ({ ...s, [f.key]: v }));
-                if (dupes && ['email', 'phone', 'name', 'company', 'domain', 'website', 'first_name', 'last_name'].includes(f.key)) setDupes(null);
-              }}
-            />
-            {f.helpText && <span className="muted small">{f.helpText}</span>}
-            {errors[f.key] && <span className="field-error">{errors[f.key]}</span>}
-          </label>
+        {errors[''] && <div className="field-error wide">{errors['']}</div>}
+        {sections.map((sec) => (
+          <fieldset key={sec.id} className={`form-section wide cols-${sec.columns}`}>
+            {sections.length > 1 && <legend>{sec.title}</legend>}
+            {sec.fields.map((f) => (
+              <label key={f.key} className={`field${WIDE_TYPES.has(f.type) || sec.columns === 1 ? ' wide' : ''}`} htmlFor={`f-${f.key}`}>
+                <span>
+                  {f.label} {fieldRequired(f, values) && <span className="req">*</span>}
+                </span>
+                <FieldInput
+                  field={f}
+                  objectKey={object.key}
+                  value={values[f.key]}
+                  choices={f.options?.controlling ? allowedChoices(f, values) : undefined}
+                  onChange={(v) => {
+                    setValue(f, v);
+                    if (dupes && ['email', 'phone', 'name', 'company', 'domain', 'website', 'first_name', 'last_name'].includes(f.key)) setDupes(null);
+                  }}
+                />
+                {f.helpText && <span className="muted small">{f.helpText}</span>}
+                {errors[f.key] && <span className="field-error">{errors[f.key]}</span>}
+              </label>
+            ))}
+          </fieldset>
         ))}
         <button type="submit" hidden />
       </form>

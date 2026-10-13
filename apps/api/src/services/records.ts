@@ -22,12 +22,15 @@ import {
   KEY_PATTERN,
   objectPerm,
   resolveConditionValue,
+  isComputed,
   storageFor,
   valueSchema,
+  valueType,
 } from '@synapse/shared';
 import type { Principal } from '../env';
 import type { Tx } from '../lib/db';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
+import { computeFormulas, evaluateRules, hasRollupParents, recomputeRecord, refreshParents, rowValues, throwIfIssues, withStage } from './computed';
 
 export interface RecordCtx {
   tx: Tx;
@@ -71,7 +74,7 @@ function resolveFilterValue(v: unknown, userId: string): unknown {
 const GENERATED_COLUMNS = new Set(['full_name']);
 const SYSTEM_SORTS = new Set(['created_at', 'updated_at']);
 
-class Params {
+export class Params {
   values: unknown[] = [];
   add(v: unknown): string {
     this.values.push(v);
@@ -79,7 +82,7 @@ class Params {
   }
 }
 
-const ident = (s: string) => {
+export const ident = (s: string) => {
   if (!/^[a-z_][a-z0-9_]*$/.test(s)) throw new Error(`unsafe identifier ${s}`);
   return `"${s}"`;
 };
@@ -136,7 +139,7 @@ function abacSql(perms: EffectivePermissions, objectKey: string, obj: ObjectMeta
 }
 
 const castFor = (f: FieldDef) => {
-  switch (f.type) {
+  switch (valueType(f)) {
     case 'number':
     case 'currency':
     case 'percent':
@@ -155,7 +158,7 @@ const castFor = (f: FieldDef) => {
   }
 };
 
-function filterSql(f: FieldDef, op: string, value: unknown, objectKey: string, p: Params): string {
+export function filterSql(f: FieldDef, op: string, value: unknown, objectKey: string, p: Params): string {
   const cast = castFor(f);
   const ops: Record<string, string> = { eq: '=', neq: 'is distinct from', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 
@@ -437,6 +440,11 @@ export async function createRecord(
     }
   }
 
+  // formulas, field dependencies and validation rules see the complete new record
+  const values = withStage(ctx.meta, { ...cols, ...prepared.custom });
+  if (obj.fields.some(isComputed)) Object.assign(prepared.custom, computeFormulas(obj, values, ctx.principal.user.id));
+  if (!opts.fromAutomation) throwIfIssues(evaluateRules(obj, values, null, null, ctx.principal.user.id));
+
   const p = new Params();
   const names: string[] = [];
   const vals: string[] = [];
@@ -448,7 +456,9 @@ export async function createRecord(
   if (s.discriminated) push('object_key', objectKey);
   for (const [k, v] of Object.entries(cols)) push(k, v);
   push('custom', JSON.stringify(stripNulls(prepared.custom)), '::jsonb');
-  const row = await ctx.tx.one(`insert into ${ident(s.table)} (${names.join(', ')}) values (${vals.join(', ')}) returning *`, p.values);
+  let row = await ctx.tx.one(`insert into ${ident(s.table)} (${names.join(', ')}) values (${vals.join(', ')}) returning *`, p.values);
+  if (obj.fields.some((f) => f.type === 'rollup') && (await recomputeRecord(ctx, objectKey, row!.id as string))) row = await readRowSystem(ctx, objectKey, row!.id as string);
+  if (hasRollupParents(ctx.meta, objectKey)) await refreshParents(ctx, objectKey, [row]);
   const record = toDto(obj, row!, ctx.principal.permissions);
   return { record, events: [{ objectKey, recordId: record.id, kind: 'created', fromAutomation: !!opts.fromAutomation }] };
 }
@@ -489,6 +499,11 @@ export async function updateRecord(
     }
   }
 
+  const prior = rowValues(ctx.meta, obj, row);
+  const values = withStage(ctx.meta, { ...prior, ...cols, ...prepared.custom });
+  if (obj.fields.some(isComputed)) Object.assign(prepared.custom, computeFormulas(obj, values, ctx.principal.user.id));
+  if (!opts.fromAutomation) throwIfIssues(evaluateRules(obj, values, prior, new Set(Object.keys(patch)), ctx.principal.user.id));
+
   const oldCustom = (row.custom ?? {}) as Record<string, unknown>;
   const newCustom = stripNulls({ ...oldCustom, ...prepared.custom });
 
@@ -505,6 +520,7 @@ export async function updateRecord(
     `update ${ident(s.table)} r set ${sets.join(', ')} where r.tenant_id = ${p.add(ctx.tenantId)}::uuid and r.id = ${p.add(id)}::uuid returning *`,
     p.values,
   );
+  if (hasRollupParents(ctx.meta, objectKey)) await refreshParents(ctx, objectKey, [row, updated]);
 
   if (stageChanged) {
     await ctx.tx.query(
@@ -527,9 +543,10 @@ async function loadRowSystem(ctx: RecordCtx, objectKey: string, id: string) {
 }
 
 export async function deleteRecord(ctx: RecordCtx, objectKey: string, id: string): Promise<RecordEvent[]> {
-  await loadRow(ctx, objectKey, id, 'delete', true);
+  const { row } = await loadRow(ctx, objectKey, id, 'delete', true);
   const s = storageFor(objectKey);
   await ctx.tx.query(`update ${ident(s.table)} set deleted_at = now() where tenant_id = $1 and id = $2::uuid`, [ctx.tenantId, id]);
+  if (hasRollupParents(ctx.meta, objectKey)) await refreshParents(ctx, objectKey, [row]);
   return [{ objectKey, recordId: id, kind: 'deleted' }];
 }
 

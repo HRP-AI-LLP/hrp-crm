@@ -1,4 +1,5 @@
 import type { FieldDef } from './fields';
+import type { PageLayout, ValidationRule } from './layout';
 import type { EffectivePermissions } from './permissions';
 
 /** Shapes exchanged between the API and the SPA. */
@@ -11,6 +12,9 @@ export interface ObjectMeta {
   isStandard: boolean;
   moduleKey: string | null;
   fields: FieldDef[];
+  /** saved page layout (null = default single section) */
+  layout?: PageLayout | null;
+  validationRules?: ValidationRule[];
 }
 
 export interface StageMeta {

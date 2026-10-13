@@ -1,6 +1,8 @@
 import {
   CUSTOM_OBJECT_BASE_FIELDS,
   type FieldDef,
+  isComputed,
+  layoutSchema,
   type ObjectMeta,
   type PipelineMeta,
   type RolePermissions,
@@ -68,8 +70,8 @@ export async function loadMeta(env: Env, tx: Tx, tenant: TenantInfo): Promise<Te
 
 export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> {
   // sequential on purpose: one pg client per request cannot pipeline concurrent queries
-  const objects = await tx.query<{ key: string; label: string; plural_label: string; icon: string | null; is_standard: boolean; module_key: string | null }>(
-      `select key, label, plural_label, icon, is_standard, module_key from custom_objects where tenant_id = $1 order by is_standard desc, label`,
+  const objects = await tx.query<{ key: string; label: string; plural_label: string; icon: string | null; is_standard: boolean; module_key: string | null; settings: Record<string, unknown> | null }>(
+      `select key, label, plural_label, icon, is_standard, module_key, settings from custom_objects where tenant_id = $1 order by is_standard desc, label`,
       [tenant.id],
     );
   const fields = await tx.query<{ object_key: string; key: string; label: string; field_type: FieldDef['type']; is_required: boolean; is_indexed: boolean; is_pii: boolean; options: FieldDef['options']; help_text: string | null; position: number; module_key: string | null }>(
@@ -83,6 +85,10 @@ export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> 
     );
   const stages = await tx.query<{ id: string; pipeline_id: string; key: string; label: string; position: number; probability: number; category: 'open' | 'won' | 'lost'; color: string | null }>(
       `select id, pipeline_id, key, label, position, probability, category, color from pipeline_stages where tenant_id = $1 order by position`,
+      [tenant.id],
+    );
+  const rules = await tx.query<{ id: string; object_key: string; name: string; condition: string; message: string; field_key: string | null; is_active: boolean }>(
+      `select id, object_key, name, condition, message, field_key, is_active from validation_rules where tenant_id = $1 order by created_at`,
       [tenant.id],
     );
   const modules = await tx.query<{ module_key: string; version: string; is_enabled: boolean }>(`select module_key, version, is_enabled from tenant_modules where tenant_id = $1`, [tenant.id]);
@@ -100,12 +106,26 @@ export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> 
         indexed: f.is_indexed,
         pii: f.is_pii,
         standard: false,
+        readOnly: isComputed({ type: f.field_type }) || undefined,
         options: f.options ?? {},
         helpText: f.help_text,
         position: f.position,
         moduleKey: f.module_key,
       }));
-    return { key: o.key, label: o.label, plural: o.plural_label, icon: o.icon, isStandard: o.is_standard, moduleKey: o.module_key, fields: [...std, ...custom] };
+    const layout = layoutSchema.safeParse(o.settings?.layout);
+    return {
+      key: o.key,
+      label: o.label,
+      plural: o.plural_label,
+      icon: o.icon,
+      isStandard: o.is_standard,
+      moduleKey: o.module_key,
+      fields: [...std, ...custom],
+      layout: layout.success ? layout.data : null,
+      validationRules: rules
+        .filter((r) => r.object_key === o.key)
+        .map((r) => ({ id: r.id, name: r.name, condition: r.condition, message: r.message, field: r.field_key, active: r.is_active })),
+    };
   });
 
   const pipelines: PipelineMeta[] = pipes.map((p) => ({
