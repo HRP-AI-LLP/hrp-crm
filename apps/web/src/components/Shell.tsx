@@ -76,7 +76,7 @@ export function Shell() {
     <div className="shell">
       <nav className={`nav${navOpen ? ' open' : ''}`} aria-label="Main">
         <div className="brand">
-          <img src="/favicon.svg" width="30" height="30" alt="" />
+          <span className="brand-mark"><img src="/logo-mark.png" alt="HRP AI" /></span>
           <div>
             <b>HRP Synapse</b>
             <span>{me?.tenant.name}</span>

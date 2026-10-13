@@ -20,15 +20,20 @@ export function useTenantProbe() {
 function Art() {
   return (
     <div className="auth-art">
-      <div className="row" style={{ gap: 10 }}>
-        <img src="/favicon.svg" width="34" height="34" alt="" />
-        <b style={{ color: '#fff', fontSize: 16 }}>HRP Synapse</b>
+      <div className="row" style={{ gap: 12 }}>
+        <span className="brand-mark" style={{ width: 44, height: 44 }}>
+          <img src="/logo-mark.png" alt="HRP AI" style={{ width: 36, height: 36 }} />
+        </span>
+        <div>
+          <b style={{ color: '#fff', fontSize: 17, display: 'block' }}>HRP Synapse</b>
+          <span style={{ color: '#7dd3fc', fontSize: 13 }}>by HRP AI LLP</span>
+        </div>
       </div>
       <div>
         <h1>Every conversation, connected.</h1>
         <p>Leads, deals and customer messages in one place, with AI that tells your team who to call next and why.</p>
       </div>
-      <p className="small">A product of HRP AI LLP</p>
+      <p className="small">HRP AI LLP · Where humans &amp; machines think together</p>
     </div>
   );
 }

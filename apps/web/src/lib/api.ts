@@ -91,3 +91,23 @@ export const post = <T,>(p: string, body?: unknown) => api<T>(p, { method: 'POST
 export const patch = <T,>(p: string, body: unknown, headers?: HeadersInit) => api<T>(p, { method: 'PATCH', body, headers });
 export const put = <T,>(p: string, body: unknown) => api<T>(p, { method: 'PUT', body });
 export const del = <T,>(p: string) => api<T>(p, { method: 'DELETE' });
+
+/** Authenticated file download (e.g. CSV export). Returns response headers for row counts. */
+export async function download(path: string, fallbackName: string, retry = true): Promise<Headers> {
+  const res = await fetch(path, { headers: headers(), credentials: 'same-origin' });
+  if (res.status === 401 && retry && (await refreshSession())) return download(path, fallbackName, false);
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, j?.error?.code ?? 'error', j?.error?.message ?? `Download failed (${res.status})`);
+  }
+  const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return res.headers;
+}

@@ -55,6 +55,17 @@ export interface ListQuery {
   cursor?: string | null;
   stageId?: string;
   pipelineId?: string;
+  /** also return the total number of matching rows (capped at 10 000) */
+  count?: boolean;
+  /** restrict to these ids (bulk actions on a selection) */
+  ids?: string[];
+}
+
+/** "$me" in a filter value means the signed-in user (e.g. owner_id eq $me for "My records"). */
+function resolveFilterValue(v: unknown, userId: string): unknown {
+  if (v === '$me') return userId;
+  if (Array.isArray(v)) return v.map((x) => (x === '$me' ? userId : x));
+  return v;
 }
 
 const GENERATED_COLUMNS = new Set(['full_name']);
@@ -169,7 +180,7 @@ function filterSql(f: FieldDef, op: string, value: unknown, objectKey: string, p
   else if (cast === 'timestamptz' || cast === 'date') expr = `app.try_timestamptz(r.custom ->> '${f.key}')`;
   else if (cast === 'boolean') expr = `app.try_boolean(r.custom ->> '${f.key}')`;
   else expr = `(r.custom ->> '${f.key}')`;
-  const valueCast = !f.standard && cast === 'date' ? 'timestamptz' : cast;
+  const valueCast = !f.standard && cast === 'date' ? 'timestamptz' : !f.standard && cast === 'uuid' ? 'text' : cast;
 
   switch (op) {
     case 'is_null':
@@ -257,8 +268,9 @@ export async function listRecords(ctx: RecordCtx, objectKey: string, q: ListQuer
   for (const f of q.filters ?? []) {
     const def = fm.get(f.field);
     if (!def || !visible(f.field)) throw badRequest(`Cannot filter on "${f.field}"`);
-    where.push(`(${filterSql(def, f.op, f.value, objectKey, p)})`);
+    where.push(`(${filterSql(def, f.op, resolveFilterValue(f.value, ctx.principal.user.id), objectKey, p)})`);
   }
+  if (q.ids?.length) where.push(`r.id = any(${p.add(q.ids)}::uuid[])`);
 
   let order = 'r.updated_at desc';
   if (q.sort) {
@@ -277,13 +289,19 @@ export async function listRecords(ctx: RecordCtx, objectKey: string, q: ListQuer
   const sql = `select r.* from ${ident(s.table)} r where ${where.join(' and ')} order by ${order}, r.id limit ${limit + 1} offset ${offset}`;
   const rows = await ctx.tx.query(sql, p.values);
   const more = rows.length > limit;
+  let total: number | undefined;
+  if (q.count) {
+    const c = await ctx.tx.one<{ n: number }>(`select count(*)::int as n from (select 1 from ${ident(s.table)} r where ${where.join(' and ')} limit 10000) x`, p.values);
+    total = c?.n ?? 0;
+  }
   return {
     items: rows.slice(0, limit).map((r) => toDto(obj, r, perms)),
     nextCursor: more ? btoa(String(offset + limit)) : null,
+    ...(total !== undefined ? { total } : {}),
   };
 }
 
-async function loadRow(ctx: RecordCtx, objectKey: string, id: string, action: 'read' | 'update' | 'delete', lock = false) {
+export async function loadRow(ctx: RecordCtx, objectKey: string, id: string, action: 'read' | 'update' | 'delete', lock = false) {
   const obj = getObject(ctx.meta, objectKey);
   const perms = ctx.principal.permissions;
   const level = objectPerm(perms, objectKey)[action];

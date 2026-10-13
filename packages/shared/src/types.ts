@@ -57,6 +57,7 @@ export interface RecordDto {
 export interface ListResponse<T> {
   items: T[];
   nextCursor: string | null;
+  total?: number;
 }
 
 export interface ApiErrorBody {

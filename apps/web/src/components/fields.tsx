@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { ApiError, get, post } from '../lib/api';
 import { date, dateTime, money, number } from '../lib/format';
 import { stageLookup, useMeta, usePipelines, useUsers } from '../lib/hooks';
+import { type DuplicateMatch, DuplicateWarning } from './RecordData';
 import { Modal, ScoreRing, StageChip, useToast } from './ui';
 
 /** Read-only rendering of any field value by type. */
@@ -188,6 +189,7 @@ export function RecordFormModal({ object, onClose, onSaved, initial }: { object:
   const [values, setValues] = useState<Record<string, unknown>>(initial ?? {});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [dupes, setDupes] = useState<DuplicateMatch[] | null>(null);
   const toast = useToast();
   const hasPipeline = usePipelines(object.key).length > 0;
   const fields = object.fields.filter((f) => !f.readOnly && f.key !== 'pipeline_id' && (hasPipeline || f.key !== 'stage_id'));
@@ -198,6 +200,14 @@ export function RecordFormModal({ object, onClose, onSaved, initial }: { object:
     setErrors({});
     try {
       const body = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== '' && v !== undefined));
+      // first press checks for likely duplicates; a second press ("Save anyway") skips the check
+      if (dupes === null) {
+        const found = await post<{ matches: DuplicateMatch[] }>(`/api/v1/records/${object.key}/check-duplicates`, body).then((x) => x.matches, () => []);
+        if (found.length) {
+          setDupes(found);
+          return;
+        }
+      }
       const r = await post<RecordDto>(`/api/v1/records/${object.key}`, body);
       toast(`${object.label} created`);
       onSaved(r);
@@ -220,18 +230,27 @@ export function RecordFormModal({ object, onClose, onSaved, initial }: { object:
             Cancel
           </button>
           <button className="btn primary" onClick={() => submit()} disabled={busy}>
-            {busy ? 'Saving…' : `Create ${object.label.toLowerCase()}`}
+            {busy ? 'Saving…' : dupes?.length ? 'Save anyway' : `Create ${object.label.toLowerCase()}`}
           </button>
         </>
       }
     >
       <form className="modal-body" onSubmit={submit}>
+        {dupes && dupes.length > 0 && <DuplicateWarning objectKey={object.key} matches={dupes} />}
         {fields.map((f) => (
           <label key={f.key} className={`field${WIDE_TYPES.has(f.type) ? ' wide' : ''}`} htmlFor={`f-${f.key}`}>
             <span>
               {f.label} {f.required && <span className="req">*</span>}
             </span>
-            <FieldInput field={f} objectKey={object.key} value={values[f.key]} onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))} />
+            <FieldInput
+              field={f}
+              objectKey={object.key}
+              value={values[f.key]}
+              onChange={(v) => {
+                setValues((s) => ({ ...s, [f.key]: v }));
+                if (dupes && ['email', 'phone', 'name', 'company', 'domain', 'website', 'first_name', 'last_name'].includes(f.key)) setDupes(null);
+              }}
+            />
             {f.helpText && <span className="muted small">{f.helpText}</span>}
             {errors[f.key] && <span className="field-error">{errors[f.key]}</span>}
           </label>

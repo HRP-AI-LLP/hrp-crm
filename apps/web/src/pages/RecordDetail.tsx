@@ -10,6 +10,7 @@ import { useAuth } from '../lib/auth';
 import { dateTime, relative } from '../lib/format';
 import { useObject, usePipelines } from '../lib/hooks';
 import { TaskList } from './Tasks';
+import { DuplicateBanner, RelatedPanel } from '../components/RecordData';
 
 interface Activity {
   id: string;
@@ -31,7 +32,7 @@ export function RecordDetailPage() {
   const toast = useToast();
   const nav = useNavigate();
   const { me } = useAuth();
-  const [tab, setTab] = useState<'timeline' | 'tasks' | 'ai'>('timeline');
+  const [tab, setTab] = useState<'timeline' | 'related' | 'tasks' | 'ai'>('timeline');
   const [converting, setConverting] = useState(false);
   const pipelines = usePipelines(object);
   const key = ['record', object, id];
@@ -96,6 +97,8 @@ export function RecordDetailPage() {
         </div>
       </div>
 
+      {canEdit && <DuplicateBanner obj={obj} record={rec} />}
+
       {pipeline && (
         <div className="panel" style={{ padding: 10, marginBottom: 20 }}>
           <div className="stage-track" role="group" aria-label={`${pipeline.name} stage`}>
@@ -129,13 +132,14 @@ export function RecordDetailPage() {
 
         <section className="panel">
           <div className="tabs" role="tablist">
-            {(['timeline', 'tasks', 'ai'] as const).map((t) => (
+            {(['timeline', 'related', 'tasks', 'ai'] as const).map((t) => (
               <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
-                {t === 'timeline' ? 'Timeline' : t === 'tasks' ? 'Tasks' : 'Synapse AI'}
+                {t === 'timeline' ? 'Timeline' : t === 'related' ? 'Related' : t === 'tasks' ? 'Tasks' : 'Synapse AI'}
               </button>
             ))}
           </div>
           {tab === 'timeline' && <Timeline object={object} id={id} canLog={canEdit} />}
+          {tab === 'related' && <RelatedPanel object={object} id={id} />}
           {tab === 'tasks' && (
             <div className="panel-body">
               <TaskList relatedObject={object} relatedId={id} compact />

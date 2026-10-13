@@ -53,6 +53,7 @@ const listQuerySchema = z.object({
   cursor: z.string().max(40).optional(),
   stage: z.string().uuid().optional(),
   pipeline: z.string().uuid().optional(),
+  count: z.enum(['1', 'true']).optional(),
 });
 
 const activitySchema = z.object({
@@ -110,7 +111,7 @@ export const crmRoutes = new Hono<AppEnv>()
   // ---------------------------------------------------------------- records
   .get('/records/:object', async (c) => {
     const q = listQuerySchema.parse(c.req.query());
-    const query: ListQuery = { q: q.q, filters: q.filters, sort: q.sort, dir: q.dir, limit: q.limit, cursor: q.cursor, stageId: q.stage, pipelineId: q.pipeline };
+    const query: ListQuery = { q: q.q, filters: q.filters, sort: q.sort, dir: q.dir, limit: q.limit, cursor: q.cursor, stageId: q.stage, pipelineId: q.pipeline, count: !!q.count };
     return c.json(await c.var.db.tx(scope(c, true), (tx) => listRecords(rctx(c, tx), c.req.param('object'), query)));
   })
   .post('/records/:object', async (c) => {

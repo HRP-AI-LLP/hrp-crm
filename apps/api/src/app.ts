@@ -8,6 +8,7 @@ import { adminRoutes } from './routes/admin';
 import { aiRoutes } from './routes/ai';
 import { authRoutes } from './routes/auth';
 import { crmRoutes } from './routes/crm';
+import { dataRoutes } from './routes/data';
 import { publicRoutes } from './routes/public';
 
 export function createApp() {
@@ -44,6 +45,7 @@ export function createApp() {
     app.use(path, tenantResolver, authenticate);
   }
   app.route('/api/v1', crmRoutes);
+  app.route('/api/v1', dataRoutes);
   app.route('/api/ai', aiRoutes);
   app.route('/api/admin', adminRoutes);
 

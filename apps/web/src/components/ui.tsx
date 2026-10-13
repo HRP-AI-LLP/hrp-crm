@@ -65,7 +65,7 @@ export function ScoreRing({ value, size = 'sm' }: { value: number | null | undef
   const r = (px - stroke) / 2;
   const c = 2 * Math.PI * r;
   const v = value === null || value === undefined ? null : Math.max(0, Math.min(100, value));
-  const color = v === null ? '#c7d0d8' : v >= 70 ? '#e8a317' : v >= 40 ? '#2d8197' : '#9aa6b2';
+  const color = v === null ? '#cbd5e1' : v >= 70 ? '#06a6c7' : v >= 40 ? '#0f8dde' : '#94a3b8';
   return (
     <span className={`score ${size}`} title={v === null ? 'Not scored yet' : `AI score ${v}`}>
       <svg width={px} height={px} aria-hidden="true">
