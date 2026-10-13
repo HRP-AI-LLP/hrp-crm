@@ -231,6 +231,45 @@ export function BulkEditModal({ obj, count, onApply, onClose }: { obj: ObjectMet
 // ------------------------------------------------------------------------------------- import
 const BATCH = 50;
 
+/** Example value for an import template column. */
+function sampleValue(f: FieldDef): string {
+  switch (f.type) {
+    case 'email':
+      return 'name@example.com';
+    case 'phone':
+      return '+91 98100 00000';
+    case 'url':
+      return 'https://example.com';
+    case 'number':
+    case 'percent':
+      return '10';
+    case 'currency':
+      return '25000';
+    case 'date':
+      return '31/12/2026';
+    case 'datetime':
+      return '2026-12-31 11:00';
+    case 'boolean':
+      return 'Yes';
+    case 'picklist':
+      return f.options?.choices?.[0]?.label ?? '';
+    case 'multipicklist':
+      return (f.options?.choices ?? []).slice(0, 2).map((c) => c.label).join('; ');
+    case 'user':
+      return 'owner@yourcompany.com';
+    case 'lookup':
+      return `(name of the ${f.options?.lookupObject?.replace(/_/g, ' ') ?? 'record'})`;
+    default:
+      return f.required ? `${f.label} (required)` : '';
+  }
+}
+
+/** A CSV whose headers match this object's fields (import maps them automatically). */
+export function downloadImportTemplate(obj: ObjectMeta) {
+  const fields = obj.fields.filter((f) => !f.readOnly && f.key !== 'pipeline_id' && f.type !== 'formula' && f.type !== 'rollup');
+  downloadText(`${obj.key}-import-template.csv`, toCsv([fields.map((f) => f.label), fields.map(sampleValue)]));
+}
+
 function guessField(header: string, fields: FieldDef[]): string {
   const h = header.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const aliases: Record<string, string> = { 'e mail': 'email', mail: 'email', mobile: 'phone', 'phone number': 'phone', 'mobile number': 'phone', 'contact number': 'phone', 'company name': 'company', organisation: 'company', organization: 'company', 'first': 'first_name', 'last': 'last_name', surname: 'last_name', 'lead source': 'source', owner: 'owner_id', 'assigned to': 'owner_id', stage: 'stage_id', status: 'stage_id', 'deal value': 'amount', value: 'amount', 'expected close': 'close_date' };
@@ -354,6 +393,12 @@ export function ImportWizard({ obj, onClose, onDone }: { obj: ObjectMeta; onClos
         {step === 'pick' && (
           <div className="stack">
             <p style={{ margin: 0 }}>Choose a CSV file. The first row must contain column names. Excel files can be saved as CSV from File → Save As.</p>
+            <div>
+              <button type="button" className="btn sm" onClick={() => downloadImportTemplate(obj)}>
+                Download a template
+              </button>{' '}
+              <span className="muted small">with every {obj.label.toLowerCase()} column and an example row</span>
+            </div>
             <input type="file" accept=".csv,text/csv" onChange={(e) => onFile(e.target.files?.[0])} aria-label="CSV file" />
             <p className="muted small" style={{ margin: 0 }}>
               Dates like 31/12/2026, amounts like ₹12,50,000, Yes/No values, owner emails and stage names are understood. Up to 50,000 rows.

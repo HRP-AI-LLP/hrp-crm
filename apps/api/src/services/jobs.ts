@@ -14,7 +14,9 @@ export type Job =
   | { type: 'message.inbound'; tenantId: string; channelAccountId: string; payload: unknown }
   | { type: 'webhook.deliver'; tenantId: string; subscriptionId: string; event: string; payload: unknown }
   /** re-evaluate formula / roll-up fields of every record of an object, 200 at a time */
-  | { type: 'meta.recompute'; tenantId: string; objectKey: string; after?: string };
+  | { type: 'meta.recompute'; tenantId: string; objectKey: string; after?: string }
+  /** one page of one table of a workspace backup (see services/backup.ts) */
+  | { type: 'backup.step'; tenantId: string; stamp: string; table: number; after?: string | null };
 
 export interface Waiter {
   waitUntil(p: Promise<unknown>): void;

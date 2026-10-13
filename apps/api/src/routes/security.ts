@@ -2,12 +2,15 @@
  * Security & admin: workspace security policy, invitations and reset links, MFA resets,
  * teams, sharing rules, API keys and a usage overview. Mounted under /api/admin.
  */
-import { KEY_PATTERN, valueSchema, valueType } from '@synapse/shared';
+import { KEY_PATTERN, type SecurityPolicy, valueSchema, valueType } from '@synapse/shared';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
 import { randomToken, sha256Hex } from '../lib/crypto';
-import { badRequest, conflict, notFound } from '../lib/errors';
+import { networkRefusal, parseCidr, requestIp } from '../lib/ip';
+import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
+import type { Waiter } from '../services/jobs';
+import { backupStream, deleteBackup, listBackups, startBackup } from '../services/backup';
 import { requireAdmin, scope } from '../middleware';
 import { actionEmail, appOrigin, sendPlatformMail } from '../services/mailer';
 import { invalidatePrincipal } from '../services/tenancy';
@@ -30,6 +33,17 @@ async function sendInvite(c: { env: AppEnv['Bindings']; req: { url: string }; va
   return { url, emailed };
 }
 
+function ownerOnly(c: { var: AppEnv['Variables'] }) {
+  if (!c.var.principal.user.isOwner) throw forbidden('Only the workspace owner can manage backups');
+}
+function waiterOf(c: { executionCtx: { waitUntil(p: Promise<unknown>): void } }): Waiter | null {
+  try {
+    return c.executionCtx;
+  } catch {
+    return null;
+  }
+}
+
 export const securityRoutes = new Hono<AppEnv>()
   // ------------------------------------------------------------------ policy
   .get('/security', requireAdmin('users'), async (c) => {
@@ -40,18 +54,78 @@ export const securityRoutes = new Hono<AppEnv>()
                 count(*) filter (where status = 'invited')::int as invited from users where tenant_id = $1`,
         [c.var.tenant.id],
       );
-      return { policy: { requireMfa: t?.security?.requireMfa === true }, stats };
+      const sec = (t?.security ?? {}) as SecurityPolicy;
+      return { policy: { requireMfa: sec.requireMfa === true, ipAllowlist: sec.ipAllowlist ?? [], countries: sec.countries ?? [] }, stats };
     });
-    return c.json({ ...out, mailer: !!c.env.RESEND_API_KEY });
+    return c.json({ ...out, mailer: !!c.env.RESEND_API_KEY, you: { ip: requestIp(c.env, (n) => c.req.header(n)), country: c.req.header('cf-ipcountry') ?? null } });
   })
   .put('/security', requireAdmin('users'), async (c) => {
-    const b = z.object({ requireMfa: z.boolean() }).parse(await c.req.json());
+    const b = z
+      .object({
+        requireMfa: z.boolean().optional(),
+        ipAllowlist: z
+          .array(z.string().trim().min(2).max(64))
+          .max(100)
+          .optional()
+          .refine((l) => !l || l.every((x) => parseCidr(x)), 'Use IP addresses or CIDR ranges such as 203.0.113.0/24 or 2001:db8::/32'),
+        countries: z
+          .array(z.string().trim().toUpperCase().regex(/^[A-Z]{2}$/, 'Use two-letter country codes such as IN'))
+          .max(60)
+          .optional(),
+      })
+      .parse(await c.req.json());
     if (b.requireMfa && !c.var.principal.user.mfaEnabled) throw badRequest('Turn on two-factor sign-in for your own account first, so you are not locked out');
+    // never save a policy that would shut out the admin making the change
+    const cur = (c.var.meta.tenant.security ?? {}) as SecurityPolicy;
+    const next: SecurityPolicy = { ipAllowlist: b.ipAllowlist ?? cur.ipAllowlist ?? [], countries: b.countries ?? cur.countries ?? [] };
+    const lockout = networkRefusal(c.env, next, (n) => c.req.header(n));
+    if (lockout) throw badRequest(`This change would block your own access: ${lockout}. Include your current network first.`);
     await c.var.db.tx(scope(c), async (tx) => {
       await tx.query(`update tenants set settings = jsonb_set(settings, '{security}', coalesce(settings -> 'security', '{}'::jsonb) || $2::jsonb) where id = $1`, [c.var.tenant.id, JSON.stringify(b)]);
       await tx.query(`insert into audit_logs (tenant_id, action, object_key, changes) values ($1,'security_policy','tenant',$2)`, [c.var.tenant.id, JSON.stringify(b)]);
     });
-    return c.json({ ok: true, policy: b });
+    return c.json({ ok: true, policy: { ...cur, ...b } });
+  })
+
+  // ------------------------------------------------------------------ backups (workspace owner only: they contain everything)
+  .get('/backups', async (c) => {
+    ownerOnly(c);
+    const daily = await c.var.db.tx(scope(c, true), (tx) => tx.one<{ on: boolean }>(`select coalesce((settings -> 'backup' ->> 'daily')::boolean, false) as on from tenants where id = $1`, [c.var.tenant.id]));
+    if (!c.env.FILES) return c.json({ available: false, daily: daily?.on ?? false, items: [] });
+    return c.json({ available: true, daily: daily?.on ?? false, items: await listBackups(c.env, c.var.tenant.id) });
+  })
+  .post('/backups', async (c) => {
+    ownerOnly(c);
+    const m = await startBackup(c.env, c.var.db, waiterOf(c), c.var.tenant.id, c.var.principal.user.id);
+    await c.var.db.tx(scope(c), (tx) => tx.query(`insert into audit_logs (tenant_id, action, object_key, changes) values ($1,'backup_started','tenant',$2)`, [c.var.tenant.id, JSON.stringify({ stamp: m.stamp })]));
+    return c.json(m, 202);
+  })
+  .put('/backups/settings', async (c) => {
+    ownerOnly(c);
+    const b = z.object({ daily: z.boolean() }).parse(await c.req.json());
+    if (b.daily && !c.env.FILES) throw badRequest('File storage (R2) is not set up for this server');
+    await c.var.db.tx(scope(c), (tx) => tx.query(`update tenants set settings = jsonb_set(settings, '{backup}', coalesce(settings -> 'backup', '{}'::jsonb) || $2::jsonb) where id = $1`, [c.var.tenant.id, JSON.stringify(b)]));
+    return c.json(b);
+  })
+  .get('/backups/:stamp/download', async (c) => {
+    ownerOnly(c);
+    const { body, m } = await backupStream(c.env, c.var.tenant.id, c.req.param('stamp'));
+    await c.var.db.tx(scope(c), (tx) => tx.query(`insert into audit_logs (tenant_id, action, object_key, changes, ip) values ($1,'backup_downloaded','tenant',$2,$3)`, [c.var.tenant.id, JSON.stringify({ stamp: m.stamp }), c.req.header('cf-connecting-ip') ?? null]));
+    return new Response(body, {
+      headers: {
+        'content-type': 'application/gzip',
+        'content-disposition': `attachment; filename="synapse-${c.var.tenant.slug}-${m.stamp}.ndjson.gz"`,
+        'cache-control': 'no-store',
+      },
+    });
+  })
+  .delete('/backups/:stamp', async (c) => {
+    ownerOnly(c);
+    const stamp = c.req.param('stamp');
+    if (!/^[0-9TZ-]{10,40}$/.test(stamp)) throw notFound();
+    if (!c.env.FILES) throw notFound();
+    await deleteBackup(c.env, c.var.tenant.id, stamp);
+    return c.body(null, 204);
   })
 
   // ------------------------------------------------------------------ invitations, reset links, MFA reset, sign-out

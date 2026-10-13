@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import type { AdminArea } from '@synapse/shared';
-import { hasAdmin } from '@synapse/shared';
+import { hasAdmin, type SecurityPolicy } from '@synapse/shared';
+import { assertNetworkAllowed } from './lib/ip';
 import type { AppEnv } from './env';
 import { Db } from './lib/db';
 import { ApiError, forbidden, unauthorized } from './lib/errors';
@@ -41,6 +42,11 @@ export const tenantResolver: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!tenant) throw new ApiError(404, 'tenant_not_found', 'Unknown workspace');
   if (tenant.status !== 'active') throw new ApiError(403, 'tenant_inactive', 'This workspace is not active');
   c.set('tenant', tenant);
+  // sign-in, token refresh and two-factor steps honour the workspace network policy too
+  if (c.req.method === 'POST' && new URL(c.req.url).pathname.startsWith('/api/auth/') && !new URL(c.req.url).pathname.endsWith('/logout')) {
+    const row = await c.var.db.tx({ tenantId: tenant.id, readOnly: true }, (tx) => tx.one<{ security: SecurityPolicy | null }>(`select settings -> 'security' as security from tenants where id = $1`, [tenant.id]));
+    assertNetworkAllowed(c.env, row?.security ?? undefined, (n) => c.req.header(n));
+  }
   await next();
 };
 
@@ -67,6 +73,7 @@ async function authenticateApiKey(c: Context<AppEnv>, key: string) {
     return { meta, principal, row };
   });
   if (!row || !principal || !meta || principal.user.status !== 'active') throw unauthorized('Invalid or revoked API key');
+  assertNetworkAllowed(c.env, meta.tenant.security, (n) => c.req.header(n));
   if (meta.tenant.security?.requireMfa && !principal.user.mfaEnabled) throw forbidden('The person this key acts as must turn on two-factor sign-in');
   const write = !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method);
   if (write && !row.scopes.includes('write')) throw forbidden('This API key is read-only');
@@ -116,6 +123,7 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
     return { meta, principal, live: true };
   });
   if (!live || !meta) throw unauthorized('Session ended');
+  assertNetworkAllowed(c.env, meta.tenant.security, (n) => c.req.header(n));
   if (!principal || principal.user.status !== 'active') throw unauthorized('Account is not active');
   // workspace policy: no data access until two-factor sign-in is set up
   if (meta.tenant.security?.requireMfa && !principal.user.mfaEnabled && !new URL(c.req.url).pathname.startsWith('/api/auth/')) {

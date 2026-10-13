@@ -14,7 +14,7 @@ const ident = (s: string) => {
 };
 
 /** Runs fn inside a savepoint so one bad row doesn't abort the surrounding transaction. */
-async function savepoint<T>(ctx: RecordCtx, fn: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string; details?: unknown }> {
+export async function savepoint<T>(ctx: RecordCtx, fn: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string; details?: unknown }> {
   await ctx.tx.query('savepoint row_sp');
   try {
     const value = await fn();

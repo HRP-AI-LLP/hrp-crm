@@ -5,6 +5,7 @@ import { get, patch, post, put, del } from '../../lib/api';
 import { dateTime, money2 } from '../../lib/format';
 import { useMeta } from '../../lib/hooks';
 import { Empty, Modal, Spinner, useToast } from '../ui';
+import { downloadText, parseCsv, toCsv } from '../../lib/csv';
 
 type Json = Record<string, any>;
 const MOVE_LABEL: Record<string, string> = { in: 'Stock in', out: 'Stock out', adjust: 'Adjustment', transfer_in: 'Transfer in', transfer_out: 'Transfer out', reserve: 'Reserved', release: 'Released' };
@@ -302,6 +303,7 @@ export function InventoryPage({ canManage }: { canManage: boolean }) {
   const [whF, setWhF] = useState('');
   const [low, setLow] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [opening, setOpening] = useState(false);
   const wh = useWarehouses();
   const stock = useQuery({
     queryKey: ['inventory', 'stock', q, whF, low],
@@ -317,9 +319,14 @@ export function InventoryPage({ canManage }: { canManage: boolean }) {
           <p>Stock by warehouse, reservations for confirmed orders, and every movement.</p>
         </div>
         {canManage && (
-          <button className="btn primary" onClick={() => setMoving(true)}>
-            Update stock
-          </button>
+          <div className="row">
+            <button className="btn" onClick={() => setOpening(true)}>
+              Import opening stock
+            </button>
+            <button className="btn primary" onClick={() => setMoving(true)}>
+              Update stock
+            </button>
+          </div>
         )}
       </div>
       {stock.data && (
@@ -418,6 +425,7 @@ export function InventoryPage({ canManage }: { canManage: boolean }) {
         {tab === 'warehouses' && <WarehousesTab canManage={canManage} />}
         {tab === 'categories' && <CategoriesTab canManage={canManage} />}
       </section>
+      {opening && <OpeningStockModal onClose={() => setOpening(false)} onDone={() => qc.invalidateQueries({ queryKey: ['inventory'] })} />}
       {moving && <StockMoveModal onClose={() => setMoving(false)} onDone={() => { setMoving(false); qc.invalidateQueries({ queryKey: ['inventory'] }); }} />}
     </>
   );
@@ -591,5 +599,101 @@ function CategoriesTab({ canManage }: { canManage: boolean }) {
         </table>
       )}
     </div>
+  );
+}
+
+/** Opening balances from a CSV: SKU, Warehouse (code or name, optional), Quantity, Unit cost (optional). */
+function OpeningStockModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [rows, setRows] = useState<{ sku: string; warehouse: string | null; quantity: number; unitCost: number | null }[] | null>(null);
+  const [result, setResult] = useState<{ applied: number; unchanged: number; failed: { row: number; error: string }[] } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const onFile = async (f?: File) => {
+    if (!f) return;
+    const [head, ...body] = parseCsv(await f.text());
+    const h = (head ?? []).map((x) => x.trim().toLowerCase());
+    const col = (...names: string[]) => h.findIndex((x) => names.includes(x));
+    const iSku = col('sku', 'item code', 'code');
+    const iQty = col('quantity', 'qty', 'opening stock', 'opening quantity', 'on hand');
+    if (iSku < 0 || iQty < 0) return toast('The file needs at least “SKU” and “Quantity” columns', true);
+    const iWh = col('warehouse', 'location', 'store');
+    const iCost = col('unit cost', 'cost', 'cost price', 'rate');
+    const num = (v?: string) => (v && v.trim() ? Number(v.replace(/[₹,\s]/g, '')) : null);
+    setRows(
+      body
+        .filter((r) => r[iSku]?.trim())
+        .map((r) => ({ sku: r[iSku]!.trim(), warehouse: iWh >= 0 ? r[iWh]?.trim() || null : null, quantity: num(r[iQty]) ?? 0, unitCost: iCost >= 0 ? num(r[iCost]) : null })),
+    );
+    setResult(null);
+  };
+  const run = async () => {
+    if (!rows?.length) return;
+    setBusy(true);
+    const total = { applied: 0, unchanged: 0, failed: [] as { row: number; error: string }[] };
+    try {
+      for (let i = 0; i < rows.length; i += 500) {
+        const r = await post<typeof total>('/api/v1/inventory/opening-stock', { rows: rows.slice(i, i + 500) });
+        total.applied += r.applied;
+        total.unchanged += r.unchanged;
+        total.failed.push(...r.failed.map((f) => ({ ...f, row: f.row + i })));
+      }
+      setResult(total);
+      onDone();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title="Import opening stock"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            {result ? 'Close' : 'Cancel'}
+          </button>
+          {!result && (
+            <button className="btn primary" disabled={!rows?.length || busy} onClick={run}>
+              {busy ? 'Importing…' : rows ? `Set stock for ${rows.length} rows` : 'Import'}
+            </button>
+          )}
+        </>
+      }
+    >
+      <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+        <p style={{ margin: 0 }}>
+          Each row sets the quantity on hand for one product in one warehouse. Products are matched by SKU; a blank warehouse means your default one. Running the same file twice changes nothing.
+        </p>
+        <div>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => downloadText('opening-stock-template.csv', toCsv([['SKU', 'Warehouse', 'Quantity', 'Unit cost'], ['SOFA-3S-GRY', 'MAIN', '12', '35000']]))}
+          >
+            Download a template
+          </button>
+        </div>
+        <input type="file" accept=".csv,text/csv" aria-label="Opening stock CSV" onChange={(e) => void onFile(e.target.files?.[0])} />
+        {rows && !result && <p className="small">{rows.length} rows ready.</p>}
+        {result && (
+          <div className="stack">
+            <p className="small" style={{ margin: 0 }}>
+              <b>{result.applied}</b> updated, {result.unchanged} already correct, {result.failed.length} with problems.
+            </p>
+            {result.failed.length > 0 && (
+              <ul className="small" style={{ margin: 0, paddingLeft: 18, maxHeight: 180, overflow: 'auto' }}>
+                {result.failed.slice(0, 100).map((f) => (
+                  <li key={f.row}>
+                    Row {f.row + 1}: {f.error}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }

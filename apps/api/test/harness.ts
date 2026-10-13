@@ -59,23 +59,43 @@ export async function makeHarness(dbName: string) {
   return { env, app, call, signup, login, as };
 }
 
-/** In-memory stand-in for an R2 bucket (put / get / delete are all the API uses). */
+/** In-memory stand-in for an R2 bucket (put / get / delete / list as the API uses them). */
 export function fakeR2() {
   const store = new Map<string, Uint8Array>();
+  const bytes = (v: unknown) => (typeof v === 'string' ? new TextEncoder().encode(v) : v instanceof ArrayBuffer ? new Uint8Array(v) : new Uint8Array(v as Uint8Array));
   return {
     store,
-    async put(key: string, value: Uint8Array) {
-      store.set(key, new Uint8Array(value));
+    async put(key: string, value: unknown) {
+      store.set(key, bytes(value));
       return { key };
     },
     async get(key: string) {
       const v = store.get(key);
       if (!v) return null;
-      return { body: new Blob([v]).stream() };
+      return {
+        body: new Blob([v]).stream(),
+        arrayBuffer: async () => v.slice().buffer,
+        text: async () => new TextDecoder().decode(v),
+        json: async () => JSON.parse(new TextDecoder().decode(v)),
+      };
     },
-    async delete(key: string) {
-      store.delete(key);
+    async delete(key: string | string[]) {
+      for (const k of Array.isArray(key) ? key : [key]) store.delete(k);
+    },
+    async list(o: { prefix?: string; delimiter?: string; cursor?: string } = {}) {
+      const keys = [...store.keys()].filter((k) => k.startsWith(o.prefix ?? '')).sort();
+      if (o.delimiter) {
+        const prefixes = new Set<string>();
+        const objects: { key: string }[] = [];
+        for (const k of keys) {
+          const rest = k.slice((o.prefix ?? '').length);
+          const i = rest.indexOf(o.delimiter);
+          if (i >= 0) prefixes.add((o.prefix ?? '') + rest.slice(0, i + 1));
+          else objects.push({ key: k });
+        }
+        return { objects, delimitedPrefixes: [...prefixes], truncated: false };
+      }
+      return { objects: keys.map((key) => ({ key })), delimitedPrefixes: [], truncated: false };
     },
   };
 }
-

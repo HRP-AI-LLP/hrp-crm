@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { del, get, post, put } from '../../lib/api';
+import { del, download, get, post, put } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { date, number, relative } from '../../lib/format';
 import { useMeta, useUsers } from '../../lib/hooks';
@@ -15,7 +15,11 @@ export function SecurityPolicyTab() {
   const qc = useQueryClient();
   const toast = useToast();
   const { me } = useAuth();
-  const { data } = useQuery({ queryKey: ['admin-security'], queryFn: () => get<{ policy: { requireMfa: boolean }; stats: { users: number; mfa: number; invited: number }; mailer: boolean }>('/api/admin/security') });
+  const { data } = useQuery({
+    queryKey: ['admin-security'],
+    queryFn: () =>
+      get<{ policy: { requireMfa: boolean; ipAllowlist: string[]; countries: string[] }; stats: { users: number; mfa: number; invited: number }; mailer: boolean; you: { ip: string | null; country: string | null } }>('/api/admin/security'),
+  });
   if (!data) return <Spinner />;
   const pct = data.stats.users ? Math.round((data.stats.mfa / data.stats.users) * 100) : 0;
   return (
@@ -79,7 +83,196 @@ export function SecurityPolicyTab() {
           </div>
         </div>
       </section>
+      <NetworkPolicy policy={data.policy} you={data.you} />
+      {me?.user.isOwner && <Backups />}
     </div>
+  );
+}
+
+function NetworkPolicy({ policy, you }: { policy: { ipAllowlist: string[]; countries: string[] }; you: { ip: string | null; country: string | null } }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [ips, setIps] = useState(policy.ipAllowlist.join('\n'));
+  const [countries, setCountries] = useState(policy.countries.join(', '));
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try {
+      await put('/api/admin/security', {
+        ipAllowlist: ips.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean),
+        countries: countries.split(/[\s,]+/).map((x) => x.trim().toUpperCase()).filter(Boolean),
+      });
+      toast('Network restrictions saved');
+      qc.invalidateQueries({ queryKey: ['admin-security'] });
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const active = policy.ipAllowlist.length > 0 || policy.countries.length > 0;
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Network restrictions</h2>
+        <span className={`chip${active ? ' good' : ''}`}>{active ? 'On' : 'Off'}</span>
+      </div>
+      <div className="panel-body stack">
+        <p className="muted small" style={{ margin: 0 }}>
+          Limit sign-in, the app and API keys to your office networks or countries. Customer pages (quotes, delivery confirmations, ticket status, web forms) stay open. You are connecting from{' '}
+          <b>{you.ip ?? 'an unknown address'}</b>
+          {you.country ? ` (${you.country})` : ''} — a rule that would block you cannot be saved.
+        </p>
+        <label className="field">
+          <span>Allowed IP addresses or ranges (one per line)</span>
+          <textarea rows={4} value={ips} onChange={(e) => setIps(e.target.value)} placeholder={'203.0.113.0/24\n2001:db8::/32'} spellCheck={false} />
+        </label>
+        {you.ip && !ips.includes(you.ip) && (
+          <div>
+            <button type="button" className="link" onClick={() => setIps((v) => (v.trim() ? `${v.trim()}\n${you.ip}` : you.ip!))}>
+              Add my current address ({you.ip})
+            </button>
+          </div>
+        )}
+        <label className="field">
+          <span>Allowed countries (two-letter codes, e.g. IN, AE)</span>
+          <input value={countries} onChange={(e) => setCountries(e.target.value)} placeholder="Leave empty to allow any country" />
+        </label>
+        <div>
+          <button className="btn primary" disabled={busy} onClick={save}>
+            {busy ? 'Saving…' : 'Save restrictions'}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+interface BackupItem {
+  stamp: string;
+  status: 'running' | 'complete' | 'failed';
+  startedAt: string;
+  finishedAt?: string;
+  bytes: number;
+  parts: number;
+  tables: { name: string; rows: number }[];
+  error?: string;
+}
+
+function Backups() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const { data } = useQuery({
+    queryKey: ['admin-backups'],
+    queryFn: () => get<{ available: boolean; daily: boolean; items: BackupItem[] }>('/api/admin/backups'),
+    refetchInterval: (q) => (q.state.data?.items.some((b) => b.status === 'running') ? 3000 : false),
+  });
+  const reload = () => qc.invalidateQueries({ queryKey: ['admin-backups'] });
+  if (!data) return <Spinner />;
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>Backups</h2>
+        {data.available && (
+          <button
+            className="btn sm"
+            onClick={async () => {
+              try {
+                await post('/api/admin/backups');
+                toast('Backup started');
+                reload();
+              } catch (e) {
+                toast((e as Error).message, true);
+              }
+            }}
+          >
+            Back up now
+          </button>
+        )}
+      </div>
+      <div className="panel-body stack">
+        {!data.available ? (
+          <p className="muted small" style={{ margin: 0 }}>
+            Backups are stored in Cloudflare R2, which is not set up for this server yet.
+          </p>
+        ) : (
+          <>
+            <p className="muted small" style={{ margin: 0 }}>
+              A backup holds every record, setting and log of this workspace as compressed JSON lines — passwords, sessions, API keys and connection secrets are never included. Uploaded files stay in storage and are referenced by id. The newest 7 are kept.
+            </p>
+            <label className="row" style={{ alignItems: 'flex-start' }}>
+              <span className="switch" style={{ marginTop: 2 }}>
+                <input
+                  type="checkbox"
+                  checked={data.daily}
+                  aria-label="Daily automatic backup"
+                  onChange={async (e) => {
+                    try {
+                      await put('/api/admin/backups/settings', { daily: e.target.checked });
+                      reload();
+                    } catch (err) {
+                      toast((err as Error).message, true);
+                    }
+                  }}
+                />
+                <span />
+              </span>
+              <span>
+                <b>Back up automatically every night</b>
+              </span>
+            </label>
+            {data.items.length ? (
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Started</th>
+                    <th>Status</th>
+                    <th className="num">Records</th>
+                    <th className="num">Size</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.items.map((b) => (
+                    <tr key={b.stamp}>
+                      <td>{relative(b.startedAt)}</td>
+                      <td>
+                        <span className={`chip${b.status === 'complete' ? ' good' : b.status === 'failed' ? ' bad' : ' info'}`} title={b.error}>
+                          {b.status === 'running' ? 'Running…' : b.status === 'complete' ? 'Ready' : 'Failed'}
+                        </span>
+                      </td>
+                      <td className="num">{number(b.tables.reduce((n, t) => n + t.rows, 0))}</td>
+                      <td className="num">{(b.bytes / 1024).toFixed(b.bytes > 1024 * 1024 ? 0 : 1)} KB</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {b.status === 'complete' && (
+                          <button
+                            className="link"
+                            onClick={() => download(`/api/admin/backups/${b.stamp}/download`, `synapse-backup-${b.stamp}.ndjson.gz`).catch((e) => toast((e as Error).message, true))}
+                          >
+                            Download
+                          </button>
+                        )}
+                        <button
+                          className="link danger"
+                          onClick={async () => {
+                            await del(`/api/admin/backups/${b.stamp}`).catch((e) => toast((e as Error).message, true));
+                            reload();
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="muted small">No backups yet.</p>
+            )}
+          </>
+        )}
+      </div>
+    </section>
   );
 }
 

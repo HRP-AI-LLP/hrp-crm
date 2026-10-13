@@ -38,7 +38,9 @@ export function visibleMeta(meta: TenantMeta, principal: Principal): TenantMeta 
     scoring: { rules: [], hot: a.scoring.hot, warm: a.scoring.warm },
     approval: a.approval.filter((r) => keys.has(r.objectKey)).map((r) => ({ ...r, criteria: [], approverId: null })),
   };
-  return { ...meta, objects, pipelines: meta.pipelines.filter((pl) => keys.has(pl.objectKey)), automation };
+  // network policy details are for admins (Settings → Security), not every member
+  const tenant = { ...meta.tenant, security: { requireMfa: meta.tenant.security?.requireMfa === true } };
+  return { ...meta, tenant, objects, pipelines: meta.pipelines.filter((pl) => keys.has(pl.objectKey)), automation };
 }
 
 const listQuerySchema = z.object({

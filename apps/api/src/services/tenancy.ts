@@ -171,7 +171,12 @@ export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> 
   }));
 
   return {
-    tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name, metaVersion: version?.meta_version ?? tenant.metaVersion, security: { requireMfa: version?.security?.requireMfa === true } },
+    tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name, metaVersion: version?.meta_version ?? tenant.metaVersion, security: {
+        requireMfa: version?.security?.requireMfa === true,
+        ipAllowlist: Array.isArray(version?.security?.ipAllowlist) ? (version!.security!.ipAllowlist as string[]) : [],
+        countries: Array.isArray(version?.security?.countries) ? (version!.security!.countries as string[]) : [],
+      },
+    },
     objects: objectMetas,
     pipelines,
     modules: modules.map((m) => ({ key: m.module_key, version: m.version, enabled: m.is_enabled })),

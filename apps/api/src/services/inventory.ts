@@ -229,3 +229,44 @@ export async function createVariants(ctx: RecordCtx, parentId: string, attribute
   }
   return { created: created.length, skipped: combos.length - created.length };
 }
+
+export interface OpeningRow {
+  sku: string;
+  warehouse?: string | null;
+  quantity: number;
+  unitCost?: number | null;
+}
+
+/**
+ * Opening balances from a spreadsheet: each row sets the on-hand quantity of one SKU in one
+ * warehouse (code or name; default warehouse when blank) with an "Opening stock" adjustment.
+ * Rows are independent — the bad ones are reported, the rest are applied.
+ */
+export async function openingStock(ctx: RecordCtx, rows: OpeningRow[]) {
+  assertCanMoveStock(ctx);
+  const { savepoint } = await import('./data');
+  const whs = await ctx.tx.query<{ id: string; code: string; name: string }>(`select id, code, name from warehouses where tenant_id = $1 and is_active`, [ctx.tenantId]);
+  const fallback = await defaultWarehouse(ctx);
+  const out = { applied: 0, unchanged: 0, failed: [] as { row: number; error: string }[] };
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]!;
+    const res = await savepoint(ctx, async () => {
+      const product = await ctx.tx.one<{ id: string }>(`select id from products where tenant_id = $1 and deleted_at is null and lower(sku) = lower($2) limit 1`, [ctx.tenantId, r.sku.trim()]);
+      if (!product) throw badRequest(`No product with SKU "${r.sku}"`);
+      const w = r.warehouse?.trim();
+      const wh = w ? whs.find((x) => x.code.toLowerCase() === w.toLowerCase() || x.name.toLowerCase() === w.toLowerCase()) : { id: fallback };
+      if (!wh) throw badRequest(`No active warehouse "${w}"`);
+      if (!(r.quantity >= 0)) throw badRequest('Opening quantity cannot be negative');
+      const lvl = await ctx.tx.one<{ on_hand: string }>(`select on_hand from stock_levels where tenant_id = $1 and product_id = $2 and warehouse_id = $3`, [ctx.tenantId, product.id, wh.id]);
+      const delta = n3(r.quantity - n3(lvl?.on_hand ?? 0));
+      if (!delta) return false;
+      await moveStock(ctx, { productId: product.id, warehouseId: wh.id, type: 'adjust', qty: delta, reason: 'Opening stock', unitCost: r.unitCost ?? null });
+      if (r.unitCost != null) await ctx.tx.query(`update products set cost_price = coalesce(cost_price, $3) where tenant_id = $1 and id = $2`, [ctx.tenantId, product.id, r.unitCost]);
+      return true;
+    });
+    if (!res.ok) out.failed.push({ row: i + 1, error: res.error });
+    else if (res.value) out.applied++;
+    else out.unchanged++;
+  }
+  return out;
+}

@@ -8,6 +8,7 @@ import { createApp } from './app';
 import type { Env } from './env';
 import { Db } from './lib/db';
 import type { Job } from './services/jobs';
+import { dailyBackups } from './services/backup';
 import { reminderSweep } from './services/reminders';
 import { processJob } from './services/worker';
 
@@ -45,6 +46,8 @@ export default {
           await tx.query(`delete from ai_usage where tenant_id = $1 and created_at < now() - interval '90 days'`, [t.tenant_id]);
         });
       }
+      // workspaces with automatic backups enabled get one a day (kept: newest 7)
+      await dailyBackups(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'daily-backups', msg: (e as Error).message })));
     } finally {
       await db.close();
     }

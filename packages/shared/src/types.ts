@@ -87,6 +87,10 @@ export interface AutomationMeta {
 export interface SecurityPolicy {
   /** every member must use two-factor sign-in */
   requireMfa?: boolean;
+  /** sign-in and API access only from these IPv4/IPv6 addresses or CIDR ranges (empty = anywhere) */
+  ipAllowlist?: string[];
+  /** ISO-3166 alpha-2 country codes access is allowed from (empty = anywhere) */
+  countries?: string[];
 }
 
 export interface MeResponse {

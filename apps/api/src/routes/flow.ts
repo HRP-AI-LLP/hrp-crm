@@ -5,6 +5,7 @@
  */
 import { CRITERIA_OPS, KEY_PATTERN, type TenantMeta } from '@synapse/shared';
 import { Hono } from 'hono';
+import { availablePersonas, homeFor, PERSONAS } from '../services/home';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
 import { badRequest, notFound } from '../lib/errors';
@@ -81,6 +82,18 @@ export const flowRoutes = new Hono<AppEnv>()
 
   // ============================================================================ lead insights
   /** Open leads by age and by time since the last interaction, overall and per owner. */
+  /** Role dashboard: ?persona=owner|sales|operations|inventory|service (default: the caller's best fit). */
+  .get('/insights/home', async (c) => {
+    const want = z.enum(PERSONAS).optional().parse(c.req.query('persona') || undefined);
+    const out = await c.var.db.tx(scope(c, true), async (tx) => {
+      const ctx = rctx(c, tx);
+      const personas = availablePersonas(ctx);
+      const persona = want && personas.includes(want) ? want : personas[0];
+      if (!persona) return { personas, data: null };
+      return { personas, data: await homeFor(ctx, persona) };
+    });
+    return c.json(out);
+  })
   .get('/insights/lead-aging', async (c) => {
     const out = await c.var.db.tx(scope(c, true), async (tx) => {
       const ctx = rctx(c, tx);

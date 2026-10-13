@@ -15,6 +15,7 @@
     "db:migrate": "pnpm --filter @synapse/db migrate",
     "db:seed": "pnpm --filter @synapse/db seed",
     "setup": "node scripts/setup/provision.mjs",
+    "setup:r2": "node scripts/setup/enable-r2.mjs",
     "deploy:dev": "pnpm --filter @synapse/web build && pnpm --filter @synapse/api deploy:dev",
     "deploy:prod": "pnpm --filter @synapse/web build && pnpm --filter @synapse/api deploy:prod",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json"

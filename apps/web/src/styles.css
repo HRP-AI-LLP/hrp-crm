@@ -750,3 +750,20 @@ a.day-item:hover { background: var(--brand-50); }
 a.day-item, a.day-item:hover, a.day-item *, .day-item a.grow { text-decoration: none; }
 .day-time { white-space: nowrap; width: 66px; font-size: 12px; }
 @media (max-width: 960px) { .account-grid { grid-template-columns: minmax(0, 1fr); } }
+
+/* role dashboards */
+.role-view { display: grid; gap: 14px; margin-bottom: 22px; }
+.role-view > .seg { justify-self: start; }
+.role-tiles { margin-bottom: 0; }
+a.role-tile { color: inherit; text-decoration: none; }
+a.role-tile:hover { border-color: var(--brand-500); }
+.kpi .v.tone-good { color: var(--good); }
+.kpi .v.tone-bad { color: var(--bad); }
+.kpi .v.tone-warn { color: #b45309; }
+.role-chart { margin: 0; }
+.role-chart svg { width: 100%; height: auto; }
+.role-chart text { font-size: 11px; fill: var(--ink-3); }
+.role-chart .bar-a, .legend-inline i.bar-a { fill: var(--brand-700); background: var(--brand-700); }
+.role-chart .bar-b, .legend-inline i.bar-b { fill: var(--accent); background: var(--accent); }
+.legend-inline i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.role-chart figcaption { display: flex; gap: 14px; margin-top: 6px; }

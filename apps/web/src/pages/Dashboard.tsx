@@ -7,6 +7,7 @@ import { useAuth } from '../lib/auth';
 import { moneyShort } from '../lib/format';
 import { useMeta } from '../lib/hooks';
 import { LeadInsights } from '../components/LeadInsights';
+import { RoleView } from '../components/RoleView';
 import { ServiceInsights } from '../components/ops/ServicePanels';
 
 interface Stats {
@@ -46,6 +47,8 @@ export function DashboardPage() {
           Open my tasks
         </Link>
       </div>
+
+      <RoleView />
 
       <div className="kpis">
         <div className="panel kpi">

@@ -11,7 +11,7 @@ import type { AppEnv } from '../env';
 import { badRequest, forbidden, notFound } from '../lib/errors';
 import { metaWrite, requireAdmin, scope } from '../middleware';
 import { disableApp, enabledApps, enableApp, listApps } from '../services/apps';
-import { assertCanMoveStock, createVariants, movements, moveStock, productStock, stockOverview, transferStock } from '../services/inventory';
+import { assertCanMoveStock, createVariants, movements, moveStock, openingStock, productStock, stockOverview, transferStock } from '../services/inventory';
 import { enqueue, eventJobs } from '../services/jobs';
 import { changeStatus, confirmOrder, getOrder, orderFromQuote, recordMilestonePayment, reopenOrder, saveOrderLines, setMilestones, shipLines } from '../services/orders';
 import { closePo, getPurchaseOrder, issuePo, poFromOrder, receiveGoods, savePoLines, vendorPerformance } from '../services/purchasing';
@@ -75,6 +75,18 @@ export const opsRoutes = new Hono<AppEnv>()
       return moveStock(ctx, { productId: b.productId, warehouseId: b.warehouseId, type: b.type, qty: b.type === 'out' ? -b.quantity : b.quantity, reason: b.reason ?? null, unitCost: b.unitCost ?? null });
     });
     return c.json(r, 201);
+  })
+  .post('/inventory/opening-stock', async (c) => {
+    requireApp(c, 'inventory');
+    const b = z
+      .object({
+        rows: z
+          .array(z.object({ sku: z.string().trim().min(1).max(80), warehouse: z.string().trim().max(120).nullish(), quantity: z.coerce.number().finite(), unitCost: z.coerce.number().min(0).max(1e12).nullish() }))
+          .min(1)
+          .max(500),
+      })
+      .parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => openingStock(rctx(c, tx), b.rows)));
   })
   .post('/inventory/transfers', async (c) => {
     requireApp(c, 'inventory');
