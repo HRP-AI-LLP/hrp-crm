@@ -20,6 +20,9 @@ const uuid = z.string().uuid();
 
 export const adminRoutes = new Hono<AppEnv>()
   // ------------------------------------------------------------------ tenant
+  .get('/tenant', requireAdmin('metadata'), async (c) =>
+    c.json(await c.var.db.tx(scope(c, true), (tx) => tx.one(`select id, slug, name, settings from tenants where id = $1`, [c.var.tenant.id]))),
+  )
   .patch('/tenant', requireAdmin('metadata'), async (c) => {
     const b = z.object({ name: z.string().min(1).max(120).optional(), settings: z.record(z.string(), z.unknown()).optional() }).parse(await c.req.json());
     const row = await c.var.db.tx(scope(c), (tx) =>

@@ -29,6 +29,7 @@ import {
 } from '@synapse/shared';
 import type { Principal } from '../env';
 import type { Tx } from '../lib/db';
+import { randomToken } from '../lib/crypto';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
 import { computeFormulas, evaluateRules, hasRollupParents, recomputeRecord, refreshParents, rowValues, throwIfIssues, withStage } from './computed';
 
@@ -247,6 +248,102 @@ function decodeCursor(cursor: string | null | undefined): number {
   return Number.isInteger(n) && n >= 0 && n <= 10_000 ? n : 0;
 }
 
+/** Row-visibility predicates (base + sharing scope + ABAC) for any query over an object. */
+export function visibilityWhere(ctx: RecordCtx, objectKey: string, p: Params): string[] {
+  const obj = getObject(ctx.meta, objectKey);
+  const perms = ctx.principal.permissions;
+  const perm = objectPerm(perms, objectKey);
+  if (perm.read === 'none') throw forbidden();
+  return [baseWhere(objectKey, p, ctx.tenantId), scopeSql(perm.read, p, ctx.principal.user.id), abacSql(perms, objectKey, obj, p, ctx.principal)];
+}
+
+export interface AggregateQuery {
+  filters?: { field: string; op: string; value?: unknown }[];
+  groupBy?: string | null;
+  groupBy2?: string | null;
+  dateBucket?: 'day' | 'week' | 'month' | 'quarter' | 'year' | null;
+  measure: { agg: 'count' | 'sum' | 'avg' | 'min' | 'max'; field?: string | null };
+  timezone?: string;
+}
+
+const SYSTEM_DATE_FIELDS: Record<string, FieldDef> = {
+  created_at: { key: 'created_at', label: 'Created', type: 'datetime', standard: true },
+  updated_at: { key: 'updated_at', label: 'Last updated', type: 'datetime', standard: true },
+};
+
+/** GROUP BY one or two fields with COUNT/SUM/AVG/MIN/MAX, under the same visibility rules as lists. */
+export async function aggregateRecords(ctx: RecordCtx, objectKey: string, q: AggregateQuery) {
+  const obj = getObject(ctx.meta, objectKey);
+  const perms = ctx.principal.permissions;
+  const s = storageFor(objectKey);
+  const p = new Params();
+  const where = visibilityWhere(ctx, objectKey, p);
+  const fm = fieldMap(obj);
+  const field = (k: string, purpose: string): FieldDef => {
+    const def = fm.get(k) ?? SYSTEM_DATE_FIELDS[k];
+    if (!def || fieldAccess(perms, objectKey, k) === 'hidden') throw badRequest(`Cannot ${purpose} "${k}"`);
+    return def;
+  };
+  for (const f of q.filters ?? []) where.push(`(${filterSql(field(f.field, 'filter on'), f.op, resolveFilterValue(f.value, ctx.principal.user.id), objectKey, p)})`);
+
+  let tzParam: string | null = null;
+  const tz = () => (tzParam ??= p.add(/^[A-Za-z_]+\/[A-Za-z_]+$/.test(q.timezone ?? '') ? q.timezone : 'Asia/Kolkata'));
+  const groupExpr = (k: string) => {
+    const def = field(k, 'group by');
+    const vt = valueType(def);
+    if (vt === 'multipicklist' || vt === 'textarea') throw badRequest(`Cannot group by "${k}"`);
+    if (vt === 'date' || vt === 'datetime') {
+      const raw = def.standard ? `r.${ident(def.key)}::timestamptz` : `app.try_timestamptz(r.custom ->> '${def.key}')`;
+      const bucket = q.dateBucket ?? 'month';
+      if (!['day', 'week', 'month', 'quarter', 'year'].includes(bucket)) throw badRequest('Unknown date bucket');
+      return `to_char(date_trunc('${bucket}', (${raw}) at time zone ${tz()}), 'YYYY-MM-DD')`;
+    }
+    if (vt === 'boolean') return def.standard ? `r.${ident(def.key)}::text` : `(r.custom ->> '${def.key}')`;
+    return def.standard ? `r.${ident(def.key)}::text` : `(r.custom ->> '${def.key}')`;
+  };
+  let measure = 'count(*)';
+  if (q.measure.agg !== 'count') {
+    const def = field(q.measure.field ?? '', 'summarise');
+    const vt = valueType(def);
+    if (!['number', 'currency', 'percent'].includes(vt)) throw badRequest('Only number fields can be summed or averaged');
+    const expr = def.standard ? `r.${ident(def.key)}::numeric` : `app.try_numeric(r.custom ->> '${def.key}')`;
+    measure = `${q.measure.agg}(${expr})`;
+  }
+  const g1 = q.groupBy ? groupExpr(q.groupBy) : null;
+  const g2 = q.groupBy && q.groupBy2 ? groupExpr(q.groupBy2) : null;
+  const select = [g1 ? `${g1} as g1` : `null::text as g1`, g2 ? `${g2} as g2` : `null::text as g2`, `${measure}::float8 as value`, 'count(*)::int as n'];
+  const groupBy = [g1 && 'g1', g2 && 'g2'].filter(Boolean);
+  const sql = `select ${select.join(', ')} from ${ident(s.table)} r where ${where.join(' and ')}${groupBy.length ? ` group by ${groupBy.join(', ')} order by ${groupBy.join(', ')} nulls last` : ''} limit 1000`;
+  const rows = await ctx.tx.query<{ g1: string | null; g2: string | null; value: number | null; n: number }>(sql, p.values);
+
+  // human labels for ids (owners, stages, lookups) and picklist values
+  const labels: Record<string, Record<string, string>> = {};
+  for (const [k, col] of [[q.groupBy, 'g1'], [q.groupBy2, 'g2']] as const) {
+    if (!k) continue;
+    const def = fm.get(k);
+    const ids = [...new Set(rows.map((r) => r[col]).filter((v): v is string => !!v))];
+    const map: Record<string, string> = {};
+    if (def?.key === 'stage_id' || def?.key === 'pipeline_id') {
+      for (const pl of ctx.meta.pipelines) {
+        map[pl.id] = pl.name;
+        for (const st of pl.stages) map[st.id] = st.label;
+      }
+    } else if (def?.type === 'user' && ids.length) {
+      for (const u of await ctx.tx.query<{ id: string; full_name: string }>(`select id, full_name from users where tenant_id = $1 and id::text = any($2::text[])`, [ctx.tenantId, ids])) map[u.id] = u.full_name;
+    } else if (def?.type === 'lookup' && def.options?.lookupObject && ids.length) {
+      const ts = storageFor(def.options.lookupObject);
+      for (const r of await ctx.tx.query<{ id: string; t: string }>(`select id, ${ident(ts.titleColumn)} as t from ${ident(ts.table)} where tenant_id = $1 and id::text = any($2::text[])`, [ctx.tenantId, ids])) map[r.id] = r.t;
+    } else if (def && (def.type === 'picklist' || def.type === 'multipicklist')) {
+      for (const c of def.options?.choices ?? []) map[c.value] = c.label;
+    } else if (def && valueType(def) === 'boolean') {
+      map.true = 'Yes';
+      map.false = 'No';
+    }
+    labels[col] = map;
+  }
+  return { rows, labels };
+}
+
 export async function listRecords(ctx: RecordCtx, objectKey: string, q: ListQuery) {
   const obj = getObject(ctx.meta, objectKey);
   const perms = ctx.principal.permissions;
@@ -282,8 +379,9 @@ export async function listRecords(ctx: RecordCtx, objectKey: string, q: ListQuer
     else {
       const def = fm.get(q.sort);
       if (!def || !visible(q.sort)) throw badRequest(`Cannot sort on "${q.sort}"`);
-      const numeric = ['number', 'currency', 'percent'].includes(def.type);
-      const expr = def.standard ? `r.${ident(def.key)}` : numeric ? `app.try_numeric(r.custom ->> '${def.key}')` : `(r.custom ->> '${def.key}')`;
+      const vt = valueType(def);
+      const numeric = ['number', 'currency', 'percent'].includes(vt);
+      const expr = def.standard ? `r.${ident(def.key)}` : numeric ? `app.try_numeric(r.custom ->> '${def.key}')` : ['date', 'datetime'].includes(vt) ? `app.try_timestamptz(r.custom ->> '${def.key}')` : `(r.custom ->> '${def.key}')`;
       order = `${expr} ${dir} nulls last`;
     }
   }
@@ -440,6 +538,12 @@ export async function createRecord(
     }
   }
 
+  if (objectKey === 'quote' && !cols.quote_number) {
+    const n = await ctx.tx.one<{ n: string }>(`select app.next_counter('quote') as n`);
+    cols.quote_number = `Q-${new Date().getFullYear()}-${String(n!.n).padStart(4, '0')}`;
+    // the customer link exists from the start (so templates can include it); it only resolves once sent
+    cols.share_token = randomToken(24);
+  }
   // formulas, field dependencies and validation rules see the complete new record
   const values = withStage(ctx.meta, { ...cols, ...prepared.custom });
   if (obj.fields.some(isComputed)) Object.assign(prepared.custom, computeFormulas(obj, values, ctx.principal.user.id));

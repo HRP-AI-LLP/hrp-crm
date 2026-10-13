@@ -16,6 +16,7 @@ import {
   type RecordCtx,
   updateRecord,
 } from '../services/records';
+import { noteReminder } from '../services/reminders';
 import { safeCtx } from './public';
 
 /** Metadata trimmed to what this user may see (hidden fields and unreadable objects removed). */
@@ -70,6 +71,7 @@ const taskSchema = z.object({
   status: z.enum(['open', 'in_progress', 'done', 'cancelled']).optional(),
   priority: z.enum(['low', 'normal', 'high', 'urgent']).optional(),
   dueAt: z.string().datetime({ offset: true }).nullish(),
+  remindAt: z.string().datetime({ offset: true }).nullish(),
   assigneeId: z.string().uuid().nullish(),
   relatedObject: z.string().max(60).nullish(),
   relatedId: z.string().uuid().nullish(),
@@ -199,11 +201,12 @@ export const crmRoutes = new Hono<AppEnv>()
     const b = taskSchema.parse(await c.req.json());
     const row = await c.var.db.tx(scope(c), (tx) =>
       tx.one(
-        `insert into tasks (tenant_id, title, description, status, priority, due_at, assignee_id, related_object, related_id)
-         values ($1,$2,$3,coalesce($4,'open'),coalesce($5,'normal'),$6,coalesce($7::uuid,$8::uuid),$9,$10) returning *`,
-        [c.var.tenant.id, b.title, b.description ?? null, b.status ?? null, b.priority ?? null, b.dueAt ?? null, b.assigneeId ?? null, c.var.principal.user.id, b.relatedObject ?? null, b.relatedId ?? null],
+        `insert into tasks (tenant_id, title, description, status, priority, due_at, assignee_id, related_object, related_id, remind_at)
+         values ($1,$2,$3,coalesce($4,'open'),coalesce($5,'normal'),$6,coalesce($7::uuid,$8::uuid),$9,$10,$11) returning *`,
+        [c.var.tenant.id, b.title, b.description ?? null, b.status ?? null, b.priority ?? null, b.dueAt ?? null, b.assigneeId ?? null, c.var.principal.user.id, b.relatedObject ?? null, b.relatedId ?? null, b.remindAt ?? null],
       ),
     );
+    await noteReminder(c.env, b.remindAt);
     return c.json(row, 201);
   })
   .patch('/tasks/:id', async (c) => {
@@ -218,14 +221,17 @@ export const crmRoutes = new Hono<AppEnv>()
             status = coalesce($7, status), priority = coalesce($8, priority),
             due_at = case when $9::boolean then $10::timestamptz else due_at end,
             assignee_id = case when $11::boolean then $12::uuid else assignee_id end,
+            remind_at = case when $14::boolean then $15::timestamptz else remind_at end,
+            reminded_at = case when $14::boolean then null else reminded_at end,
             completed_at = case when coalesce($7, status) = 'done' and completed_at is null then now()
                                 when coalesce($7, status) <> 'done' then null else completed_at end
           where tenant_id = $1 and id = $2 and ($3::boolean or assignee_id = $13 or created_by = $13)
           returning *`,
-        [c.var.tenant.id, c.req.param('id'), perm.update === 'all' || perm.update === 'team', b.title ?? null, b.description !== undefined, b.description ?? null, b.status ?? null, b.priority ?? null, b.dueAt !== undefined, b.dueAt ?? null, b.assigneeId !== undefined, b.assigneeId ?? null, me],
+        [c.var.tenant.id, c.req.param('id'), perm.update === 'all' || perm.update === 'team', b.title ?? null, b.description !== undefined, b.description ?? null, b.status ?? null, b.priority ?? null, b.dueAt !== undefined, b.dueAt ?? null, b.assigneeId !== undefined, b.assigneeId ?? null, me, b.remindAt !== undefined, b.remindAt ?? null],
       ),
     );
     if (!row) throw notFound();
+    await noteReminder(c.env, b.remindAt);
     return c.json(row);
   })
   .delete('/tasks/:id', async (c) => {

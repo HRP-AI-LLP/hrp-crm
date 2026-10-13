@@ -59,7 +59,7 @@
       },
       "ai": { "binding": "AI" },
       "vectorize": [{ "binding": "VECTORIZE", "index_name": "synapse-kb-dev" }],
-      "triggers": { "crons": ["17 3 * * *"] }
+      "triggers": { "crons": ["17 3 * * *", "*/5 * * * *"] }
     },
 
     // ---------------------------------------------------------------- production (branch: prod)
@@ -95,7 +95,7 @@
       },
       "ai": { "binding": "AI" },
       "vectorize": [{ "binding": "VECTORIZE", "index_name": "synapse-kb-prod" }],
-      "triggers": { "crons": ["17 3 * * *"] }
+      "triggers": { "crons": ["17 3 * * *", "*/5 * * * *"] }
     }
   }
 }

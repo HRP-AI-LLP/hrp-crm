@@ -1,9 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
-import { get } from '../lib/api';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { get, post } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { initials } from '../lib/format';
+import { initials, relative } from '../lib/format';
 import { useMeta } from '../lib/hooks';
 import { Icon } from './ui';
 
@@ -61,13 +61,80 @@ function GlobalSearch() {
   );
 }
 
+interface Note {
+  id: string;
+  kind: string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+/** Bell with unread count; polls every minute while the tab is visible. */
+function Notifications() {
+  const qc = useQueryClient();
+  const nav = useNavigate();
+  const [open, setOpen] = useState(false);
+  const { data } = useQuery({
+    queryKey: ['notifications'],
+    queryFn: () => get<{ items: Note[]; unread: number }>('/api/v1/notifications'),
+    refetchInterval: () => (document.visibilityState === 'visible' ? 60_000 : false),
+    staleTime: 30_000,
+  });
+  const markRead = async (ids?: string[]) => {
+    await post('/api/v1/notifications/read', ids ? { ids } : {}).catch(() => undefined);
+    qc.invalidateQueries({ queryKey: ['notifications'] });
+  };
+  const unread = data?.unread ?? 0;
+  return (
+    <div className="notif">
+      <button className="btn ghost sm notif-btn" aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+          <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+        </svg>
+        {unread > 0 && <span className="notif-count">{unread > 9 ? '9+' : unread}</span>}
+      </button>
+      {open && (
+        <div className="notif-pop" role="dialog" aria-label="Notifications">
+          <div className="spread notif-head">
+            <b>Notifications</b>
+            {unread > 0 && (
+              <button className="link" onClick={() => markRead()}>
+                Mark all read
+              </button>
+            )}
+          </div>
+          {!data?.items.length && <p className="muted small" style={{ padding: 12 }}>You are all caught up.</p>}
+          {data?.items.map((n) => (
+            <button
+              key={n.id}
+              className={`notif-item${n.read_at ? '' : ' unread'}`}
+              onClick={() => {
+                setOpen(false);
+                if (!n.read_at) void markRead([n.id]);
+                if (n.link) nav(n.link);
+              }}
+            >
+              <b>{n.title}</b>
+              {n.body && <span>{n.body}</span>}
+              <small>{relative(n.created_at)}</small>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Shell() {
   const { me, logout, can } = useAuth();
   const { data: meta } = useMeta();
   const [navOpen, setNavOpen] = useState(false);
   const loc = useLocation();
   useEffect(() => setNavOpen(false), [loc.pathname]);
-  const std = ['lead', 'contact', 'account', 'deal'];
+  const std = ['lead', 'contact', 'account', 'deal', 'quote', 'product'];
   const objects = meta?.objects ?? [];
   const custom = objects.filter((o) => !std.includes(o.key));
   const admin = me && (can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains'));
@@ -97,6 +164,13 @@ export function Shell() {
               </NavLink>
             ))}
           {objects.some((o) => o.key === 'deal') && <NavLink to="/pipeline/deal">Deal board</NavLink>}
+        </div>
+        <div className="nav-group">
+          <div>Plan</div>
+          <NavLink to="/calendar">Calendar</NavLink>
+          <NavLink to="/forecast">Forecast</NavLink>
+          <NavLink to="/reports">Reports</NavLink>
+          <NavLink to="/dashboards">Dashboards</NavLink>
         </div>
         {custom.length > 0 && (
           <div className="nav-group">
@@ -129,6 +203,7 @@ export function Shell() {
             <Icon.menu />
           </button>
           <GlobalSearch />
+          <Notifications />
         </header>
         <main className="content">
           <Outlet />

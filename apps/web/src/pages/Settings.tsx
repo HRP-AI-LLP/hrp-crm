@@ -3,6 +3,7 @@ import { AutomationsTab } from '../components/builders/AutomationBuilder';
 import { FieldEditor, TYPE_LABELS } from '../components/builders/FieldEditor';
 import { LayoutBuilder } from '../components/builders/LayoutBuilder';
 import { RulesEditor } from '../components/builders/RulesEditor';
+import { SalesSetup } from '../components/SalesSetup';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
@@ -16,6 +17,7 @@ type Json = Record<string, any>;
 const TABS = [
   ['fields', 'Objects & fields', 'metadata'],
   ['pipelines', 'Pipelines', 'metadata'],
+  ['sales', 'Sales setup', 'metadata'],
   ['users', 'Users', 'users'],
   ['roles', 'Roles & access', 'roles'],
   ['modules', 'Industry modules', 'modules'],
@@ -50,6 +52,7 @@ export function SettingsPage() {
         <div className="panel-body">
           {tab === 'fields' && <ObjectsTab />}
           {tab === 'pipelines' && <PipelinesTab />}
+          {tab === 'sales' && <SalesSetup />}
           {tab === 'users' && <UsersTab />}
           {tab === 'roles' && <RolesTab />}
           {tab === 'modules' && <ModulesTab />}

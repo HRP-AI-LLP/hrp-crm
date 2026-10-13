@@ -12,6 +12,11 @@ import { RecordDetailPage } from './pages/RecordDetail';
 import { RecordListPage } from './pages/RecordList';
 import { SettingsPage } from './pages/Settings';
 import { TasksPage } from './pages/Tasks';
+import { CalendarPage } from './pages/Calendar';
+import { DashboardsPage } from './pages/Dashboards';
+import { ForecastPage } from './pages/Forecast';
+import { PublicQuotePage, QuotePrintPage } from './pages/QuotePages';
+import { ReportBuilderPage, ReportsPage } from './pages/Reports';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useAuth();
@@ -31,6 +36,15 @@ export function App() {
   return (
     <Routes>
       <Route path="/f/:key" element={<PublicFormPage />} />
+      <Route path="/q/:token" element={<PublicQuotePage />} />
+      <Route
+        path="/print/quote/:id"
+        element={
+          <RequireAuth>
+            <QuotePrintPage />
+          </RequireAuth>
+        }
+      />
       <Route path="/login" element={ready && me ? <Navigate to="/" replace /> : <LoginPage />} />
       <Route path="/signup" element={<SignupPage />} />
       <Route
@@ -46,6 +60,12 @@ export function App() {
         <Route path="o/:object/:id" element={<RecordDetailPage />} />
         <Route path="pipeline/:object" element={<PipelinePage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
+        <Route path="calendar" element={<CalendarPage />} />
+        <Route path="forecast" element={<ForecastPage />} />
+        <Route path="reports" element={<ReportsPage />} />
+        <Route path="reports/:id" element={<ReportBuilderPage />} />
+        <Route path="dashboards" element={<DashboardsPage />} />
+        <Route path="dashboards/:id" element={<DashboardsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

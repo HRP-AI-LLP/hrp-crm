@@ -23,6 +23,7 @@ export function TaskList({ relatedObject, relatedId, compact }: { relatedObject?
   const toast = useToast();
   const [title, setTitle] = useState('');
   const [due, setDue] = useState('');
+  const [remind, setRemind] = useState('');
   const [showDone, setShowDone] = useState(false);
   const qs = new URLSearchParams();
   if (relatedObject && relatedId) {
@@ -36,7 +37,9 @@ export function TaskList({ relatedObject, relatedId, compact }: { relatedObject?
     e.preventDefault();
     if (!title.trim()) return;
     try {
-      await post('/api/v1/tasks', { title, dueAt: due ? new Date(due).toISOString() : null, relatedObject, relatedId });
+      const dueAt = due ? new Date(due) : null;
+      const remindAt = dueAt && remind !== '' ? new Date(dueAt.getTime() - Number(remind) * 60_000).toISOString() : null;
+      await post('/api/v1/tasks', { title, dueAt: dueAt?.toISOString() ?? null, remindAt, relatedObject, relatedId });
       setTitle('');
       setDue('');
       qc.invalidateQueries({ queryKey: ['tasks'] });
@@ -56,6 +59,15 @@ export function TaskList({ relatedObject, relatedId, compact }: { relatedObject?
       <form className="row" onSubmit={add}>
         <input placeholder="Add a task…" value={title} onChange={(e) => setTitle(e.target.value)} aria-label="Task title" />
         <input type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} aria-label="Due" style={{ width: 210 }} />
+        {due && (
+          <select value={remind} onChange={(e) => setRemind(e.target.value)} aria-label="Reminder" style={{ width: 150 }}>
+            <option value="">No reminder</option>
+            <option value="0">At due time</option>
+            <option value="15">15 min before</option>
+            <option value="60">1 hour before</option>
+            <option value="1440">1 day before</option>
+          </select>
+        )}
         <button className="btn primary" disabled={!title.trim()}>
           Add
         </button>

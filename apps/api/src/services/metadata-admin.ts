@@ -34,7 +34,7 @@ export const pipelineSpecSchema = z.object({
     .max(30),
 });
 
-const STANDARD = new Set(['lead', 'contact', 'account', 'deal', 'task', 'activity', 'user', 'pipeline', 'stage']);
+const STANDARD = new Set(['lead', 'contact', 'account', 'deal', 'product', 'quote', 'event', 'report', 'dashboard', 'task', 'activity', 'user', 'pipeline', 'stage']);
 
 export async function createObject(tx: Tx, tenantId: string, spec: z.infer<typeof objectSpecSchema>, moduleKey: string | null = null) {
   if (STANDARD.has(spec.key)) throw conflict(`"${spec.key}" is a reserved object key`);

@@ -7,12 +7,21 @@ import { ApiError, badRequest, conflict, notFound } from '../lib/errors';
 import type { ChannelAccount } from '../services/channels';
 import { verifyMetaSignature, webhookVerifyToken } from '../services/channels';
 import { enqueue, eventJobs } from '../services/jobs';
-import { createRecord } from '../services/records';
+import { getQuote, respondToQuote } from '../services/quotes';
+import { createRecord, type RecordCtx } from '../services/records';
 import { attachWorkerDomain, signInUrl, vanityEnabled, vanityHost } from '../services/domains';
 import { isAppHost, loadMeta, resolveTenant } from '../services/tenancy';
 import { systemPrincipal } from '../services/worker';
 
 const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'mail', 'smtp', 'status', 'docs', 'help', 'support', 'billing', 'static', 'assets', 'cdn', 'auth', 'login', 'signup', 'dev', 'staging', 'prod', 'hrp', 'synapse']);
+
+/** System context for public endpoints acting inside one workspace. */
+async function systemCtx(c: { env: AppEnv['Bindings'] }, tx: RecordCtx['tx'], tenantId: string): Promise<RecordCtx> {
+  const tenant = await tx.one<{ id: string; slug: string; name: string; status: string; meta_version: number }>(`select * from tenants where id = $1`, [tenantId]);
+  const meta = await loadMeta(c.env, tx, { id: tenant!.id, slug: tenant!.slug, name: tenant!.name, status: tenant!.status, metaVersion: tenant!.meta_version });
+  const owner = await tx.one<{ id: string }>(`select id from users where tenant_id = $1 and is_owner limit 1`, [tenantId]);
+  return { tx, meta, tenantId, principal: systemPrincipal(owner?.id ?? null, meta.objects.map((o) => o.key)) };
+}
 
 async function verifyTurnstile(secret: string | undefined, token: string | undefined, ip: string | undefined): Promise<boolean> {
   if (!secret) return true; // not configured (dev)
@@ -134,6 +143,43 @@ export const publicRoutes = new Hono<AppEnv>()
   })
 
   // ---------------------------------------------------------------------------------------------
+  // Shared quotes: customers view and accept/decline without an account
+  // ---------------------------------------------------------------------------------------------
+  .get('/quotes/:token', async (c) => {
+    const route = await resolveRoute(c, 'quote', c.req.param('token'));
+    const out = await c.var.db.tx({ tenantId: route.tenant_id, readOnly: true }, async (tx) => {
+      const ctx = await systemCtx(c, tx, route.tenant_id);
+      const q = await getQuote(ctx, route.target_id);
+      const { quote } = q;
+      // only customer-facing fields leave the building
+      return {
+        quote: {
+          name: quote.name, quote_number: quote.quote_number, status: quote.status, currency: quote.currency, valid_until: quote.valid_until,
+          subtotal: quote.subtotal, discount_total: quote.discount_total, tax_total: quote.tax_total, grand_total: quote.grand_total,
+          terms: quote.terms, notes: quote.notes, bill_to: quote.bill_to, accepted_at: quote.accepted_at, accepted_by: quote.accepted_by, created_at: quote.created_at,
+        },
+        lines: q.lines.map(({ id: _i, productId: _p, ...l }) => l),
+        account: q.account ? { name: q.account.name, billing_address: q.account.billing_address ?? null } : null,
+        contact: q.contact ? { name: q.contact.name } : null,
+        company: q.company,
+      };
+    });
+    c.header('cache-control', 'no-store');
+    c.header('x-robots-tag', 'noindex');
+    return c.json(out);
+  })
+  .post('/quotes/:token/respond', async (c) => {
+    const route = await resolveRoute(c, 'quote', c.req.param('token'));
+    const b = z.object({ accept: z.boolean(), name: z.string().trim().min(2).max(120), comment: z.string().max(2000).nullish() }).parse(await c.req.json());
+    const events = await c.var.db.tx({ tenantId: route.tenant_id }, async (tx) => {
+      const ctx = await systemCtx(c, tx, route.tenant_id);
+      return respondToQuote(ctx, route.target_id, b.accept, b.name, b.comment ?? null);
+    });
+    await enqueue(c.env, safeCtx(c), eventJobs(route.tenant_id, null, events));
+    return c.json({ ok: true, status: b.accept ? 'accepted' : 'rejected' });
+  })
+
+  // ---------------------------------------------------------------------------------------------
   // Inbound channel webhooks (WhatsApp Cloud API, email relays, generic JSON)
   // ---------------------------------------------------------------------------------------------
   .get('/inbound/:key', async (c) => {
@@ -164,7 +210,7 @@ export const publicRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   });
 
-async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form' | 'channel', key: string) {
+async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form' | 'channel' | 'quote', key: string) {
   if (!/^[A-Za-z0-9_-]{16,80}$/.test(key)) throw notFound();
   const rows = await c.var.db.platform<{ tenant_id: string; target_id: string; tenant_status: string }>(`select * from app.resolve_public_route($1, $2)`, [kind, key]);
   const r = rows[0];

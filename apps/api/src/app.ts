@@ -10,6 +10,7 @@ import { authRoutes } from './routes/auth';
 import { crmRoutes } from './routes/crm';
 import { dataRoutes } from './routes/data';
 import { publicRoutes } from './routes/public';
+import { salesRoutes } from './routes/sales';
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -46,6 +47,7 @@ export function createApp() {
   }
   app.route('/api/v1', crmRoutes);
   app.route('/api/v1', dataRoutes);
+  app.route('/api/v1', salesRoutes);
   app.route('/api/ai', aiRoutes);
   app.route('/api/admin', adminRoutes);
 

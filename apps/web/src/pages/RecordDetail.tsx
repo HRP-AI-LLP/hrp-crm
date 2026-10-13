@@ -11,6 +11,9 @@ import { dateTime, relative } from '../lib/format';
 import { useObject, usePipelines } from '../lib/hooks';
 import { TaskList } from './Tasks';
 import { DuplicateBanner, RelatedPanel } from '../components/RecordData';
+import { EmailComposer } from '../components/EmailComposer';
+import { QuoteEditor } from '../components/QuoteEditor';
+import { EventModal } from './Calendar';
 
 interface Activity {
   id: string;
@@ -34,6 +37,8 @@ export function RecordDetailPage() {
   const { me } = useAuth();
   const [tab, setTab] = useState<'timeline' | 'related' | 'tasks' | 'ai'>('timeline');
   const [converting, setConverting] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
   const pipelines = usePipelines(object);
   const key = ['record', object, id];
   const { data: rec, isLoading, error } = useQuery({ queryKey: key, queryFn: () => get<RecordDto>(`/api/v1/records/${object}/${id}`) });
@@ -81,7 +86,31 @@ export function RecordDetailPage() {
             <p className="small">Updated {relative(rec.updated_at)}</p>
           </div>
         </div>
-        <div className="row">
+        <div className="row" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {['lead', 'contact', 'account', 'deal', 'quote'].includes(object) || obj.fields.some((f) => f.type === 'email') ? (
+            <button className="btn" onClick={() => setComposing(true)}>
+              Email
+            </button>
+          ) : null}
+          <button className="btn" onClick={() => setScheduling(true)}>
+            Schedule
+          </button>
+          {object === 'deal' && me && objectPerm(me.permissions, 'quote').create && (
+            <button
+              className="btn"
+              onClick={async () => {
+                try {
+                  const q = await post<RecordDto>(`/api/v1/quotes/from-deal/${id}`);
+                  toast(`Quote ${q.quote_number} created`);
+                  nav(`/o/quote/${q.id}`);
+                } catch (e) {
+                  toast((e as Error).message, true);
+                }
+              }}
+            >
+              Create quote
+            </button>
+          )}
           {object === 'lead' && !rec.converted_at && canEdit && (
             <button className="btn primary" onClick={() => setConverting(true)}>
               Convert lead
@@ -105,6 +134,11 @@ export function RecordDetailPage() {
       </div>
 
       {canEdit && <DuplicateBanner obj={obj} record={rec} />}
+      {object === 'quote' && (
+        <div style={{ marginBottom: 20 }}>
+          <QuoteEditor quoteId={id} canEdit={canEdit} />
+        </div>
+      )}
 
       {pipeline && (
         <div className="panel" style={{ padding: 10, marginBottom: 20 }}>
@@ -155,6 +189,13 @@ export function RecordDetailPage() {
         </section>
       </div>
 
+      {composing && <EmailComposer object={object} recordId={id} onClose={() => setComposing(false)} />}
+      {scheduling && (
+        <EventModal
+          event={{ title: `${object === 'deal' ? 'Meeting' : 'Call'}: ${rec.title}`, kind: object === 'deal' ? 'meeting' : 'call', starts_at: new Date(Math.ceil(Date.now() / 3600_000) * 3600_000).toISOString(), ends_at: new Date(Math.ceil(Date.now() / 3600_000) * 3600_000 + 1800_000).toISOString(), reminder_minutes: 15, related_object: object, related_id: id, attendees: [] }}
+          onClose={() => setScheduling(false)}
+        />
+      )}
       {converting && <ConvertModal leadId={id} company={String(rec.company ?? '')} onClose={() => setConverting(false)} />}
     </>
   );

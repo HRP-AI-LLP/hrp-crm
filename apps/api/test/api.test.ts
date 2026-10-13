@@ -123,7 +123,7 @@ describe('tenant isolation at the API', () => {
 describe('records, pipelines, metadata', () => {
   it('serves metadata with standard objects and pipelines', async () => {
     const r = await call('GET', '/api/v1/meta', { tenant: 'acme', token: acme.token });
-    expect(r.json.objects.map((o: Json) => o.key).sort()).toEqual(['account', 'contact', 'deal', 'lead']);
+    expect(r.json.objects.map((o: Json) => o.key).sort()).toEqual(['account', 'contact', 'deal', 'lead', 'product', 'quote']);
     expect(r.json.pipelines.find((p: Json) => p.objectKey === 'deal').stages.length).toBe(6);
   });
 
