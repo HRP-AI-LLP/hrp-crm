@@ -7,11 +7,14 @@ import { ApiError, badRequest, conflict, notFound } from '../lib/errors';
 import type { ChannelAccount } from '../services/channels';
 import { verifyMetaSignature, webhookVerifyToken } from '../services/channels';
 import { enqueue, eventJobs } from '../services/jobs';
+import { confirmByCustomer, publicJob } from '../services/delivery';
 import { fileHeaders, verifyFileLink } from '../services/files';
+import { customerReply, publicTicket } from '../services/service';
 import { getQuote, respondToQuote } from '../services/quotes';
 import { createRecord, type RecordCtx } from '../services/records';
 import { attachWorkerDomain, signInUrl, vanityEnabled, vanityHost } from '../services/domains';
 import { isAppHost, loadMeta, resolveTenant } from '../services/tenancy';
+import { noteReminder } from '../services/reminders';
 import { systemPrincipal } from '../services/worker';
 
 const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'mail', 'smtp', 'status', 'docs', 'help', 'support', 'billing', 'static', 'assets', 'cdn', 'auth', 'login', 'signup', 'dev', 'staging', 'prod', 'hrp', 'synapse']);
@@ -138,10 +141,11 @@ export const publicRoutes = new Hono<AppEnv>()
       if (form.object_key === 'lead' && body.consent === true) {
         await tx.query(`update leads set consent = $3 where tenant_id = $1 and id = $2`, [route.tenant_id, record.id, JSON.stringify({ marketing: { granted: true, at: new Date().toISOString(), source: 'web_form', ip: c.req.header('cf-connecting-ip') ?? null } })]);
       }
-      return { events, message: form.settings.successMessage ?? 'Thank you! We will be in touch shortly.' };
+      return { events, message: form.settings.successMessage ?? 'Thank you! We will be in touch shortly.', due: (record.first_response_due as string | undefined) ?? null, statusToken: form.object_key === 'ticket' ? ((await tx.one<{ t: string }>(`select share_token as t from tickets where tenant_id = $1 and id = $2`, [route.tenant_id, record.id]))?.t ?? null) : null };
     });
     await enqueue(c.env, safeCtx(c), eventJobs(route.tenant_id, null, result.events));
-    return c.json({ ok: true, message: result.message }, 201);
+    if (result.due) await noteReminder(c.env, result.due);
+    return c.json({ ok: true, message: result.message, ...(result.statusToken ? { statusUrl: `/t/${result.statusToken}` } : {}) }, 201);
   })
 
   // ---------------------------------------------------------------------------------------------
@@ -202,6 +206,50 @@ export const publicRoutes = new Hono<AppEnv>()
   })
 
   // ---------------------------------------------------------------------------------------------
+  // Customer links: delivery confirmation, installation sign-off, complaint status
+  // ---------------------------------------------------------------------------------------------
+  .get('/jobs/:kind/:token', async (c) => {
+    const kind = z.enum(['shipment', 'installation']).parse(c.req.param('kind'));
+    const route = await resolveRoute(c, kind, c.req.param('token'));
+    const out = await c.var.db.tx({ tenantId: route.tenant_id, readOnly: true }, async (tx) => publicJob(await systemCtx(c, tx, route.tenant_id), kind, route.target_id));
+    c.header('cache-control', 'no-store');
+    c.header('x-robots-tag', 'noindex');
+    return c.json(out);
+  })
+  .post('/jobs/:kind/:token/confirm', async (c) => {
+    const kind = z.enum(['shipment', 'installation']).parse(c.req.param('kind'));
+    const route = await resolveRoute(c, kind, c.req.param('token'));
+    const b = z
+      .object({
+        name: z.string().trim().min(2).max(120),
+        rating: z.number().int().min(1).max(5).nullish(),
+        feedback: z.string().trim().max(2000).nullish(),
+        signature: z.string().max(800_000).nullish(),
+      })
+      .parse(await c.req.json());
+    const events = await c.var.db.tx({ tenantId: route.tenant_id }, async (tx) => confirmByCustomer(await systemCtx(c, tx, route.tenant_id), c.env, kind, route.target_id, b));
+    await enqueue(c.env, safeCtx(c), eventJobs(route.tenant_id, null, events));
+    return c.json({ ok: true });
+  })
+  .get('/tickets/:token', async (c) => {
+    const route = await resolveRoute(c, 'ticket', c.req.param('token'));
+    const out = await c.var.db.tx({ tenantId: route.tenant_id, readOnly: true }, async (tx) => publicTicket(await systemCtx(c, tx, route.tenant_id), route.target_id));
+    c.header('cache-control', 'no-store');
+    c.header('x-robots-tag', 'noindex');
+    return c.json(out);
+  })
+  .post('/tickets/:token', async (c) => {
+    const route = await resolveRoute(c, 'ticket', c.req.param('token'));
+    const b = z
+      .object({ message: z.string().trim().max(4000).nullish(), rating: z.number().int().min(1).max(5).nullish(), comment: z.string().trim().max(2000).nullish() })
+      .refine((x) => !!x.message || !!x.rating, { message: 'Write a message or give a rating' })
+      .parse(await c.req.json());
+    const events = await c.var.db.tx({ tenantId: route.tenant_id }, async (tx) => customerReply(await systemCtx(c, tx, route.tenant_id), route.target_id, b));
+    await enqueue(c.env, safeCtx(c), eventJobs(route.tenant_id, null, events));
+    return c.json({ ok: true });
+  })
+
+  // ---------------------------------------------------------------------------------------------
   // Inbound channel webhooks (WhatsApp Cloud API, email relays, generic JSON)
   // ---------------------------------------------------------------------------------------------
   .get('/inbound/:key', async (c) => {
@@ -232,7 +280,7 @@ export const publicRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   });
 
-async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form' | 'channel' | 'quote', key: string) {
+async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form' | 'channel' | 'quote' | 'shipment' | 'installation' | 'ticket', key: string) {
   if (!/^[A-Za-z0-9_-]{16,80}$/.test(key)) throw notFound();
   const rows = await c.var.db.platform<{ tenant_id: string; target_id: string; tenant_status: string }>(`select * from app.resolve_public_route($1, $2)`, [kind, key]);
   const r = rows[0];

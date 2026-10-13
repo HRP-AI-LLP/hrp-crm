@@ -1,6 +1,6 @@
 import type { FieldDef } from './fields';
 
-export const STANDARD_OBJECT_KEYS = ['lead', 'contact', 'account', 'deal', 'product', 'quote', 'sales_order', 'vendor', 'purchase_order'] as const;
+export const STANDARD_OBJECT_KEYS = ['lead', 'contact', 'account', 'deal', 'product', 'quote', 'sales_order', 'vendor', 'purchase_order', 'shipment', 'installation', 'ticket'] as const;
 export type StandardObjectKey = (typeof STANDARD_OBJECT_KEYS)[number];
 
 export interface ObjectStorage {
@@ -24,6 +24,11 @@ export const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'expired
 export const FORECAST_CATEGORIES = ['pipeline', 'best_case', 'commit', 'omitted'] as const;
 export const ORDER_STATUSES = ['draft', 'confirmed', 'in_production', 'ready', 'dispatched', 'delivered', 'installed', 'completed', 'cancelled'] as const;
 export const PO_STATUSES = ['draft', 'sent', 'partially_received', 'received', 'closed', 'cancelled'] as const;
+export const SHIPMENT_STATUSES = ['planned', 'packed', 'dispatched', 'delivered', 'failed', 'cancelled'] as const;
+export const INSTALLATION_STATUSES = ['scheduled', 'in_progress', 'on_hold', 'completed', 'cancelled'] as const;
+export const TICKET_STATUSES = ['new', 'open', 'in_progress', 'waiting_customer', 'resolved', 'closed'] as const;
+export const TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
+export const TICKET_CATEGORIES = ['damage', 'defect', 'installation', 'delivery', 'warranty', 'billing', 'feedback', 'other'] as const;
 export const VENDOR_TYPES = ['manufacturer', 'supplier', 'contractor', 'transporter', 'installer', 'service_provider', 'other'] as const;
 const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
 
@@ -210,6 +215,72 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'received_at', label: 'Fully received at', type: 'datetime', standard: true, readOnly: true },
     owner,
   ],
+  shipment: [
+    { key: 'name', label: 'Shipment', type: 'text', standard: true, required: true },
+    { key: 'shipment_number', label: 'Delivery #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, readOnly: true, indexed: true, options: { choices: choices(SHIPMENT_STATUSES) } },
+    { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, readOnly: true, options: { lookupObject: 'sales_order' } },
+    { key: 'account_id', label: 'Customer', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
+    { key: 'planned_date', label: 'Planned date', type: 'date', standard: true, indexed: true },
+    { key: 'warehouse_id', label: 'Ship from', type: 'picklist', standard: true, options: { choices: [] } },
+    { key: 'delivery_address', label: 'Delivery address', type: 'textarea', standard: true },
+    { key: 'contact_phone', label: 'Site contact phone', type: 'phone', standard: true },
+    { key: 'carrier', label: 'Carrier / transporter', type: 'text', standard: true },
+    { key: 'vehicle_no', label: 'Vehicle no.', type: 'text', standard: true },
+    { key: 'driver_name', label: 'Driver', type: 'text', standard: true },
+    { key: 'driver_phone', label: 'Driver phone', type: 'phone', standard: true },
+    { key: 'tracking_ref', label: 'Tracking / LR no.', type: 'text', standard: true },
+    { key: 'dispatched_at', label: 'Dispatched at', type: 'datetime', standard: true, readOnly: true },
+    { key: 'delivered_at', label: 'Delivered at', type: 'datetime', standard: true, readOnly: true },
+    { key: 'received_by', label: 'Received by', type: 'text', standard: true, readOnly: true },
+    { key: 'exception_reason', label: 'Exception', type: 'textarea', standard: true, readOnly: true },
+    { key: 'customer_rating', label: 'Customer rating', type: 'number', standard: true, readOnly: true },
+    { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
+    { ...owner, label: 'Coordinator' },
+  ],
+  installation: [
+    { key: 'name', label: 'Job', type: 'text', standard: true, required: true },
+    { key: 'job_number', label: 'Job #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, readOnly: true, indexed: true, options: { choices: choices(INSTALLATION_STATUSES) } },
+    { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, options: { lookupObject: 'sales_order' } },
+    { key: 'shipment_id', label: 'Delivery', type: 'lookup', standard: true, options: { lookupObject: 'shipment' } },
+    { key: 'account_id', label: 'Customer', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
+    { key: 'scheduled_start', label: 'Starts', type: 'datetime', standard: true, indexed: true },
+    { key: 'scheduled_end', label: 'Ends', type: 'datetime', standard: true },
+    { key: 'site_address', label: 'Site address', type: 'textarea', standard: true },
+    { key: 'contact_phone', label: 'Site contact phone', type: 'phone', standard: true },
+    { key: 'started_at', label: 'Started at', type: 'datetime', standard: true, readOnly: true },
+    { key: 'completed_at', label: 'Completed at', type: 'datetime', standard: true, readOnly: true },
+    { key: 'completion_notes', label: 'Completion notes', type: 'textarea', standard: true, readOnly: true },
+    { key: 'issue_type', label: 'Exception', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['site_not_ready', 'customer_unavailable', 'missing_parts', 'damaged_item', 'measurement_mismatch', 'other']) } },
+    { key: 'issue_notes', label: 'Exception notes', type: 'textarea', standard: true, readOnly: true },
+    { key: 'customer_rating', label: 'Customer rating', type: 'number', standard: true, readOnly: true },
+    { ...owner, label: 'Technician' },
+  ],
+  ticket: [
+    { key: 'name', label: 'Subject', type: 'text', standard: true, required: true },
+    { key: 'ticket_number', label: 'Ticket #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, indexed: true, options: { choices: choices(TICKET_STATUSES) } },
+    { key: 'priority', label: 'Priority', type: 'picklist', standard: true, indexed: true, options: { choices: choices(TICKET_PRIORITIES) } },
+    { key: 'category', label: 'Category', type: 'picklist', standard: true, indexed: true, options: { choices: choices(TICKET_CATEGORIES) } },
+    { key: 'channel', label: 'Channel', type: 'picklist', standard: true, options: { choices: choices(['phone', 'email', 'whatsapp', 'instagram', 'web', 'walk_in', 'internal']) } },
+    { key: 'description', label: 'Description', type: 'textarea', standard: true },
+    { key: 'account_id', label: 'Customer', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
+    { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },
+    { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, options: { lookupObject: 'sales_order' } },
+    { key: 'product_id', label: 'Product', type: 'lookup', standard: true, options: { lookupObject: 'product' } },
+    { key: 'customer_name', label: 'Reported by', type: 'text', standard: true },
+    { key: 'customer_phone', label: 'Reporter phone', type: 'phone', standard: true },
+    { key: 'customer_email', label: 'Reporter email', type: 'email', standard: true },
+    { key: 'resolution', label: 'Resolution', type: 'textarea', standard: true },
+    { key: 'first_response_due', label: 'First response due', type: 'datetime', standard: true, readOnly: true },
+    { key: 'resolution_due', label: 'Resolve by', type: 'datetime', standard: true, readOnly: true, indexed: true },
+    { key: 'first_responded_at', label: 'First response', type: 'datetime', standard: true, readOnly: true },
+    { key: 'resolved_at', label: 'Resolved at', type: 'datetime', standard: true, readOnly: true },
+    { key: 'sla_breached', label: 'SLA breached', type: 'boolean', standard: true, readOnly: true },
+    { key: 'satisfaction', label: 'Customer satisfaction', type: 'number', standard: true, readOnly: true },
+    { ...owner, label: 'Assigned to' },
+  ],
 };
 
 /** Standard fields every custom object gets (stored in the generic `records` table). */
@@ -242,6 +313,9 @@ export const OBJECT_STORAGE: Record<string, ObjectStorage> = {
   sales_order: reg('sales_orders', 'name', ['name', 'order_number']),
   vendor: reg('vendors', 'name', ['name', 'vendor_code', 'phone']),
   purchase_order: reg('purchase_orders', 'name', ['name', 'po_number']),
+  shipment: reg('shipments', 'name', ['name', 'shipment_number', 'tracking_ref']),
+  installation: reg('installations', 'name', ['name', 'job_number']),
+  ticket: reg('tickets', 'name', ['name', 'ticket_number', 'customer_phone']),
 };
 
 export function storageFor(objectKey: string): ObjectStorage {

@@ -662,3 +662,31 @@ details summary { cursor: pointer; }
 .order-flow li.done { background: var(--brand-100); color: var(--brand-700); }
 .order-flow li.current { background: var(--brand-700); color: #fff; }
 details > summary { cursor: pointer; color: var(--brand-700); }
+
+/* ---------- customer pages (delivery, installation, ticket) ---------- */
+.customer-page { max-width: 560px; margin: 0 auto; padding: 20px 16px; }
+.customer-page h1 { margin: 10px 0 14px; }
+.cp-head { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 12px; border-bottom: 2px solid var(--brand-700); color: var(--brand-700); }
+.cp-card { padding: 14px 16px; margin-bottom: 14px; }
+.cp-card h2 { margin-bottom: 10px; }
+.cp-card p { margin: 4px 0; }
+.cp-card .field { margin-bottom: 10px; }
+.cp-items { margin: 10px 0 0; padding-left: 18px; }
+.cp-updates { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.cp-updates li { padding: 8px 10px; border-radius: 8px; background: var(--line-2); }
+.cp-updates li.you { background: var(--brand-50); }
+.sig-wrap { display: flex; align-items: flex-end; gap: 8px; }
+.sig { width: 100%; height: 140px; border: 1px dashed var(--ink-3); border-radius: 8px; background: #fff; touch-action: none; }
+.stars { display: flex; gap: 4px; }
+.stars button { font-size: 28px; line-height: 1; background: none; border: 0; color: var(--line); cursor: pointer; padding: 2px; }
+.stars button.on { color: #f59e0b; }
+.checklist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.week-grid { display: grid; grid-template-columns: repeat(7, minmax(140px, 1fr)); gap: 8px; overflow-x: auto; }
+.week-day { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm); min-height: 160px; padding: 8px; }
+.week-day.today { border-color: var(--brand-500); }
+.week-day h3 { font-size: 12.5px; color: var(--ink-3); margin-bottom: 6px; }
+.job-chip { display: block; padding: 6px 8px; border-radius: 6px; margin-bottom: 6px; font-size: 12.5px; background: var(--brand-50); border-left: 3px solid var(--brand-500); color: var(--ink); }
+.job-chip.ship { background: var(--accent-soft); border-left-color: var(--accent); }
+.job-chip.on_hold, .job-chip.failed { border-left-color: var(--bad); }
+.job-chip.completed, .job-chip.delivered { opacity: .7; }
+.public-wrap.customer-page { margin: 0 auto; text-align: left; max-width: 560px; }

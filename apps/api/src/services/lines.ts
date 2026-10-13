@@ -16,7 +16,7 @@ export interface LineDoc {
 }
 
 export const LINE_DOCS: Record<string, LineDoc> = {
-  sales_order: { objectKey: 'sales_order', header: 'sales_orders', table: 'sales_order_lines', extra: ['reserved_qty', 'delivered_qty', 'invoiced_qty'] },
+  sales_order: { objectKey: 'sales_order', header: 'sales_orders', table: 'sales_order_lines', extra: ['reserved_qty', 'shipped_qty', 'delivered_qty', 'invoiced_qty'] },
   purchase_order: { objectKey: 'purchase_order', header: 'purchase_orders', table: 'purchase_order_lines', extra: ['received_qty', 'rejected_qty'] },
 };
 

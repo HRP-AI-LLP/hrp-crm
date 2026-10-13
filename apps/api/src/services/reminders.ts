@@ -9,6 +9,7 @@
  */
 import type { Env } from '../env';
 import type { Db, Tx } from '../lib/db';
+import { sweepSla } from './service';
 
 const KEY = 'p:reminders:next';
 const ist = (d: Date) => d.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
@@ -67,6 +68,7 @@ export async function sweepTenant(tx: Tx, tenantId: string): Promise<Date | null
       tenantId, l.owner_id, `Follow up with ${l.full_name}`, `Planned for ${ist(l.next_follow_up_at)}`, `/o/lead/${l.id}`,
     ]);
   }
+  const slaNext = await sweepSla(tx, tenantId);
   await tx.query(`update quotes set status = 'expired' where tenant_id = $1 and status = 'sent' and valid_until < current_date and deleted_at is null`, [tenantId]);
   const next = await tx.one<{ t: Date | null }>(
     `select least(
@@ -76,7 +78,9 @@ export async function sweepTenant(tx: Tx, tenantId: string): Promise<Date | null
      ) as t`,
     [tenantId],
   );
-  return next?.t ?? null;
+  const n = next?.t ?? null;
+  if (!slaNext) return n;
+  return !n || slaNext < n ? slaNext : n;
 }
 
 export async function reminderSweep(env: Env, db: Db, force = false): Promise<{ ran: boolean; next: string | null }> {

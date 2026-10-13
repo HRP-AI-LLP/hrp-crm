@@ -21,6 +21,8 @@ import { ReportBuilderPage, ReportsPage } from './pages/Reports';
 import { ApprovalsPage } from './pages/Approvals';
 import { DocPrintPage } from './pages/DocPrint';
 import { InventoryRoute } from './pages/Operations';
+import { JobConfirmPage, TicketStatusPage } from './pages/CustomerPages';
+import { FieldSchedulePage } from './pages/FieldSchedule';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useAuth();
@@ -42,6 +44,9 @@ export function App() {
     <Routes>
       <Route path="/f/:key" element={<PublicFormPage />} />
       <Route path="/q/:token" element={<PublicQuotePage />} />
+      <Route path="/d/:token" element={<JobConfirmPage kind="shipment" />} />
+      <Route path="/i/:token" element={<JobConfirmPage kind="installation" />} />
+      <Route path="/t/:token" element={<TicketStatusPage />} />
       <Route
         path="/print/quote/:id"
         element={
@@ -85,6 +90,7 @@ export function App() {
         <Route path="dashboards/:id" element={<DashboardsPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="inventory" element={<InventoryRoute />} />
+        <Route path="schedule" element={<FieldSchedulePage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

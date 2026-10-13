@@ -58,3 +58,24 @@ export async function makeHarness(dbName: string) {
 
   return { env, app, call, signup, login, as };
 }
+
+/** In-memory stand-in for an R2 bucket (put / get / delete are all the API uses). */
+export function fakeR2() {
+  const store = new Map<string, Uint8Array>();
+  return {
+    store,
+    async put(key: string, value: Uint8Array) {
+      store.set(key, new Uint8Array(value));
+      return { key };
+    },
+    async get(key: string) {
+      const v = store.get(key);
+      if (!v) return null;
+      return { body: new Blob([v]).stream() };
+    },
+    async delete(key: string) {
+      store.delete(key);
+    },
+  };
+}
+

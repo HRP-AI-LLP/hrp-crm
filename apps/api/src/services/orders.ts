@@ -179,22 +179,34 @@ export async function reopenOrder(ctx: RecordCtx, id: string): Promise<RecordEve
 }
 
 /**
- * Ships lines out of stock (quantities per line; omitted = everything still open). Used by the
- * delivery app per shipment and by "Deliver from stock" when the delivery app is off.
+ * Moves order lines through fulfilment (quantities per line; null = everything still open):
+ *   'ship'    goods leave the warehouse: stock out (from the reservation), shipped_qty grows
+ *   'deliver' the customer has them: delivered_qty grows, fulfilment / status refresh
+ *   'both'    "deliver from stock" in one step
+ * Used per shipment by the delivery app and by "Deliver from stock" without it.
  */
-export async function shipLines(ctx: RecordCtx, id: string, qtyByLine: Record<string, number> | null, ref: { object: string; id: string; label: string }, warehouseId?: string | null) {
+export async function shipLines(
+  ctx: RecordCtx,
+  id: string,
+  qtyByLine: Record<string, number> | null,
+  ref: { object: string; id: string; label: string },
+  warehouseId?: string | null,
+  mode: 'ship' | 'deliver' | 'both' = 'both',
+): Promise<RecordEvent[]> {
   const row = await readRowSystem(ctx, 'sales_order', id);
   if (!row) throw notFound();
-  if (!['confirmed', 'in_production', 'ready', 'dispatched'].includes(String(row.status))) throw badRequest('Confirm the order before shipping it');
+  if (mode !== 'deliver' && !['confirmed', 'in_production', 'ready', 'dispatched', 'delivered', 'installed'].includes(String(row.status))) throw badRequest('Confirm the order before shipping it');
   const lines = await readLines(ctx, DOC, id);
   const wh = warehouseId ?? (row.warehouse_id as string | null);
-  let shipped = 0;
+  let moved = 0;
   for (const l of lines) {
-    const open = Number(l.quantity) - Number(l.deliveredQty ?? 0);
+    const shipped = Number(l.shippedQty ?? 0);
+    const delivered = Number(l.deliveredQty ?? 0);
+    const open = mode === 'deliver' ? shipped - delivered : Number(l.quantity) - shipped;
     const q = qtyByLine ? Number(qtyByLine[l.id] ?? 0) : open;
     if (q <= 0) continue;
-    if (q > open + 1e-9) throw badRequest(`${l.name}: only ${open} left to deliver`);
-    if (l.productId && wh) {
+    if (q > open + 1e-9) throw badRequest(`${l.name}: only ${open} left to ${mode === 'deliver' ? 'deliver' : 'ship'}`);
+    if (mode !== 'deliver' && l.productId && wh) {
       const p = await ctx.tx.one<{ track_inventory: boolean; product_type: string }>(`select track_inventory, product_type from products where tenant_id = $1 and id = $2`, [ctx.tenantId, l.productId]);
       if (p?.track_inventory && p.product_type === 'goods') {
         const fromReserved = Math.min(q, Number(l.reservedQty ?? 0));
@@ -203,11 +215,43 @@ export async function shipLines(ctx: RecordCtx, id: string, qtyByLine: Record<st
         await ctx.tx.query(`update sales_order_lines set reserved_qty = reserved_qty - $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, l.id, fromReserved]);
       }
     }
-    await ctx.tx.query(`update sales_order_lines set delivered_qty = delivered_qty + $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, l.id, q]);
-    shipped += q;
+    await ctx.tx.query(
+      `update sales_order_lines set shipped_qty = shipped_qty + $3, delivered_qty = delivered_qty + $4 where tenant_id = $1 and id = $2`,
+      [ctx.tenantId, l.id, mode === 'deliver' ? 0 : q, mode === 'ship' ? 0 : q],
+    );
+    moved += q;
   }
-  if (!shipped) throw badRequest('Nothing to ship');
-  return refreshFulfilment(ctx, id);
+  if (!moved) throw badRequest(mode === 'deliver' ? 'Nothing to deliver' : 'Nothing to ship');
+  const events: RecordEvent[] = [];
+  if (mode === 'ship' && ['confirmed', 'in_production', 'ready'].includes(String(row.status))) events.push(...(await setStatus(ctx, id, String(row.status), 'dispatched')));
+  if (mode !== 'ship') events.push(...(await refreshFulfilment(ctx, id)));
+  return events;
+}
+
+/** Goods come back (failed delivery): stock in again and re-reserved for the order. */
+export async function returnLines(ctx: RecordCtx, id: string, qtyByLine: Record<string, number>, ref: { object: string; id: string; label: string }, warehouseId: string | null, reason: string) {
+  const row = await readRowSystem(ctx, 'sales_order', id);
+  if (!row) throw notFound();
+  const wh = warehouseId ?? (row.warehouse_id as string | null);
+  for (const l of await readLines(ctx, DOC, id)) {
+    const q = Number(qtyByLine[l.id] ?? 0);
+    if (q <= 0) continue;
+    if (l.productId && wh) {
+      const p = await ctx.tx.one<{ track_inventory: boolean; product_type: string }>(`select track_inventory, product_type from products where tenant_id = $1 and id = $2`, [ctx.tenantId, l.productId]);
+      if (p?.track_inventory && p.product_type === 'goods') {
+        await moveStock(ctx, { productId: l.productId, warehouseId: wh, type: 'in', qty: q, reserved: q, reason: `Returned: ${reason}`, ref });
+        await ctx.tx.query(`update sales_order_lines set reserved_qty = reserved_qty + $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, l.id, q]);
+      }
+    }
+    await ctx.tx.query(`update sales_order_lines set shipped_qty = greatest(shipped_qty - $3, 0) where tenant_id = $1 and id = $2`, [ctx.tenantId, l.id, q]);
+  }
+}
+
+/** Installation finished: a delivered order becomes installed (milestones follow). Internal, no permission check. */
+export async function markInstalled(ctx: RecordCtx, id: string): Promise<RecordEvent[]> {
+  const row = await readRowSystem(ctx, 'sales_order', id);
+  if (!row || row.status !== 'delivered') return [];
+  return setStatus(ctx, id, 'delivered', 'installed');
 }
 
 /** Recomputes fulfilment status (and moves the order to delivered when everything arrived). */

@@ -135,6 +135,7 @@ export const crmRoutes = new Hono<AppEnv>()
     const { record, events } = await c.var.db.tx(scope(c), (tx) => createRecord(rctx(c, tx), c.req.param('object'), body, { autoAssign }));
     await enqueue(c.env, safeCtx(c), eventJobs(c.var.tenant.id, c.var.principal.user.id, events));
     if (record.next_follow_up_at) await noteReminder(c.env, record.next_follow_up_at as string);
+    if (record.first_response_due) await noteReminder(c.env, record.first_response_due as string);
     return c.json(record, 201);
   })
   .get('/records/:object/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => getRecord(rctx(c, tx), c.req.param('object'), c.req.param('id')))))
@@ -146,6 +147,7 @@ export const crmRoutes = new Hono<AppEnv>()
     const { record, events } = await c.var.db.tx(scope(c), (tx) => updateRecord(rctx(c, tx), c.req.param('object'), c.req.param('id'), body, { expectedVersion }));
     await enqueue(c.env, safeCtx(c), eventJobs(c.var.tenant.id, c.var.principal.user.id, events));
     if (body.next_follow_up_at && record.next_follow_up_at) await noteReminder(c.env, record.next_follow_up_at as string);
+    if ((body.priority || body.category) && record.first_response_due) await noteReminder(c.env, record.first_response_due as string);
     return c.json(record);
   })
   .delete('/records/:object/:id', async (c) => {

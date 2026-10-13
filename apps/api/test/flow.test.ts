@@ -1,27 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Db } from '../src/lib/db';
 import { sweepTenant } from '../src/services/reminders';
-import { type Json, makeHarness, PW } from './harness';
-
-/** In-memory stand-in for an R2 bucket (put / get / delete are all the API uses). */
-export function fakeR2() {
-  const store = new Map<string, Uint8Array>();
-  return {
-    store,
-    async put(key: string, value: Uint8Array) {
-      store.set(key, new Uint8Array(value));
-      return { key };
-    },
-    async get(key: string) {
-      const v = store.get(key);
-      if (!v) return null;
-      return { body: new Blob([v]).stream() };
-    },
-    async delete(key: string) {
-      store.delete(key);
-    },
-  };
-}
+import { fakeR2, type Json, makeHarness, PW } from './harness';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 73, 72, 68, 82, 1, 2, 3, 4]);
 

@@ -6,6 +6,7 @@ import { date, money2 } from '../../lib/format';
 import { useMeta } from '../../lib/hooks';
 import { Modal, useToast } from '../ui';
 import { type DocLine, LinesEditor, toLineInput } from './LinesEditor';
+import { OrderFulfilment } from './FieldPanels';
 
 type Json = Record<string, any>;
 const FLOW = ['draft', 'confirmed', 'in_production', 'ready', 'dispatched', 'delivered', 'installed', 'completed'];
@@ -80,7 +81,10 @@ export function OrderPanel({ orderId, canEdit }: { orderId: string; canEdit: boo
             </button>
           )}
           {canEdit &&
-            (NEXT[status] ?? []).map((s) => (
+            (NEXT[status] ?? [])
+              // with the delivery app, deliveries move the order to dispatched / delivered
+              .filter((s) => !apps.has('delivery') || !['dispatched', 'delivered'].includes(s))
+              .map((s) => (
               <button key={s} className="btn sm" onClick={() => act(() => post(`/api/v1/orders/${orderId}/status`, { status: s }), `Marked ${LABEL[s]!.toLowerCase()}`)}>
                 Mark {LABEL[s]!.toLowerCase()}
               </button>
@@ -131,13 +135,14 @@ export function OrderPanel({ orderId, canEdit }: { orderId: string; canEdit: boo
           locked={!canEdit || status !== 'draft'}
           priceFrom="list_price"
           currency={o.currency}
-          extraCols={status === 'draft' ? [] : [{ key: 'reservedQty', label: 'Reserved' }, { key: 'deliveredQty', label: 'Delivered' }]}
+          extraCols={status === 'draft' ? [] : [{ key: 'reservedQty', label: 'Reserved' }, { key: 'shippedQty', label: 'Shipped' }, { key: 'deliveredQty', label: 'Delivered' }]}
           saveLabel="Save order"
           onSave={async (lines) => {
             await act(() => put(`/api/v1/orders/${orderId}/lines`, { lines: lines.map(toLineInput) }), 'Order saved');
           }}
         />
 
+        {apps.has('delivery') && <OrderFulfilment order={o} lines={data.lines} canEdit={canEdit} />}
         <div className="spread" style={{ marginTop: 6 }}>
           <h3>Payment milestones</h3>
           {canEdit && !['cancelled', 'completed'].includes(status) && (

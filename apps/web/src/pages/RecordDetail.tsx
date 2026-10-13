@@ -20,6 +20,8 @@ import { ApprovalBar, QuoteRevisions } from '../components/Approvals';
 import { OrderPanel, useApps } from '../components/ops/OrderPanel';
 import { PoPanel, VendorScorecard } from '../components/ops/PurchasePanels';
 import { ProductStockPanel } from '../components/ops/Inventory';
+import { InstallationPanel, ShipmentPanel } from '../components/ops/FieldPanels';
+import { RaiseTicketButton, TicketBar } from '../components/ops/ServicePanels';
 import { hasAdmin } from '@synapse/shared';
 
 interface Activity {
@@ -113,6 +115,7 @@ export function RecordDetailPage() {
           <button className="btn" onClick={() => setScheduling(true)}>
             Schedule
           </button>
+          {apps.has('service') && ['account', 'contact', 'sales_order'].includes(object) && me && objectPerm(me.permissions, 'ticket').create && <RaiseTicketButton object={object} record={rec} />}
           {canEdit && (
             <button className="btn" onClick={() => setSharing(true)}>
               Share
@@ -198,6 +201,9 @@ export function RecordDetailPage() {
         </>
       )}
       {object === 'vendor' && <VendorScorecard vendorId={id} />}
+      {object === 'shipment' && <ShipmentPanel id={id} canEdit={canEdit} />}
+      {object === 'installation' && <InstallationPanel id={id} canEdit={canEdit} />}
+      {object === 'ticket' && <TicketBar ticket={rec} canEdit={canEdit} />}
       {object === 'product' && apps.has('inventory') && rec.product_type !== 'service' && (
         <ProductStockPanel productId={id} productName={rec.title} isVariant={!!rec.variant_of} canMove={!!me && (hasAdmin(me.permissions, 'operations') || objectPerm(me.permissions, 'product').update === 'all')} />
       )}

@@ -33,6 +33,7 @@ import { randomToken } from '../lib/crypto';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
 import { computeFormulas, evaluateRules, hasRollupParents, recomputeRecord, refreshParents, rowValues, throwIfIssues, withStage } from './computed';
 import { computeScore, notifyOwner, pickAssignee } from './routing';
+import { beforeCreate, beforeUpdate } from './hooks';
 
 export interface RecordCtx {
   tx: Tx;
@@ -578,8 +579,9 @@ export async function createRecord(
   if (numbering && !cols[numbering.column]) {
     cols[numbering.column] = await nextDocumentNumber(ctx, objectKey);
     // the customer link exists from the start (so templates can include it); it only resolves once sent
-    if (objectKey === 'quote') cols.share_token = randomToken(24);
+    if (['quote', 'shipment', 'installation', 'ticket'].includes(objectKey)) cols.share_token = randomToken(24);
   }
+  await beforeCreate(ctx, objectKey, cols);
   if ((objectKey === 'sales_order' || objectKey === 'purchase_order') && cols.warehouse_id === undefined) {
     const wh = await ctx.tx.one<{ id: string }>(`select id from warehouses where tenant_id = $1 and is_default and is_active`, [ctx.tenantId]);
     if (wh) cols.warehouse_id = wh.id;
@@ -620,12 +622,22 @@ const LOCKED_AFTER_DRAFT: Record<string, string[]> = {
   sales_order: ['warehouse_id', 'account_id', 'currency'],
   purchase_order: ['vendor_id', 'warehouse_id', 'currency'],
 };
+/** Documents that drive stock or customer commitments can only be deleted in these states. */
+const DELETABLE_IN: Record<string, string[]> = {
+  sales_order: ['draft', 'cancelled'],
+  purchase_order: ['draft', 'cancelled'],
+  shipment: ['planned', 'cancelled'],
+  installation: ['scheduled', 'cancelled'],
+};
 
 /** Objects whose records get a running document number on creation. */
 export const NUMBERED: Record<string, { column: string; prefix: string }> = {
   quote: { column: 'quote_number', prefix: 'Q' },
   sales_order: { column: 'order_number', prefix: 'SO' },
   purchase_order: { column: 'po_number', prefix: 'PO' },
+  shipment: { column: 'shipment_number', prefix: 'DL' },
+  installation: { column: 'job_number', prefix: 'INS' },
+  ticket: { column: 'ticket_number', prefix: 'TK' },
 };
 
 /** Next number like Q-2026-0007; prefixes can be changed in Settings → Sales setup (settings.numbering). */
@@ -689,6 +701,7 @@ export async function updateRecord(
       cols.rating = sc.rating;
     }
   }
+  await beforeUpdate(ctx, objectKey, row, cols);
   const ownerChanged = cols.owner_id !== undefined && cols.owner_id !== row.owner_id;
   if (ownerChanged && objectKey === 'lead') cols.assigned_at = new Date().toISOString();
   if (objectKey === 'lead' && cols.next_follow_up_at !== undefined && String(cols.next_follow_up_at) !== String(row.next_follow_up_at ?? '')) cols.follow_up_reminded_at = null;
@@ -735,7 +748,8 @@ async function loadRowSystem(ctx: RecordCtx, objectKey: string, id: string) {
 export async function deleteRecord(ctx: RecordCtx, objectKey: string, id: string): Promise<RecordEvent[]> {
   const { row } = await loadRow(ctx, objectKey, id, 'delete', true);
   const s = storageFor(objectKey);
-  if (LOCKED_AFTER_DRAFT[objectKey] && !['draft', 'cancelled'].includes(String(row.status))) throw badRequest('Cancel it first; only draft or cancelled documents can be deleted');
+  const deletable = DELETABLE_IN[objectKey];
+  if (deletable && !deletable.includes(String(row.status))) throw badRequest(`Cancel it first; only ${deletable.join(' or ')} records can be deleted`);
   await ctx.tx.query(`update ${ident(s.table)} set deleted_at = now() where tenant_id = $1 and id = $2::uuid`, [ctx.tenantId, id]);
   if (hasRollupParents(ctx.meta, objectKey)) await refreshParents(ctx, objectKey, [row]);
   return [{ objectKey, recordId: id, kind: 'deleted' }];

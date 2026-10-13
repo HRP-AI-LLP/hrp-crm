@@ -62,7 +62,40 @@ export const APPS: Record<string, AppDefinition> = {
         key: 'operations',
         name: 'Operations',
         description: 'Orders, purchasing, deliveries and installations',
-        permissions: { objects: { '*': readOnly, sales_order: all, purchase_order: all, vendor: all, product: all, lead: none }, admin: ['operations'] },
+        permissions: { objects: { '*': readOnly, sales_order: all, purchase_order: all, vendor: all, product: all, shipment: all, installation: all, lead: none }, admin: ['operations'] },
+      },
+    ],
+  },
+  delivery: {
+    key: 'delivery',
+    name: 'Delivery & installation',
+    description: 'Plan dispatches against orders, track vehicles and delivery proof, schedule technicians for installation with checklists, and collect customer sign-off by link.',
+    objects: [
+      { key: 'shipment', label: 'Delivery', plural: 'Deliveries', icon: 'truck' },
+      { key: 'installation', label: 'Installation', plural: 'Installations', icon: 'tool' },
+    ],
+    requires: ['orders'],
+    roles: [
+      {
+        key: 'technician',
+        name: 'Technician',
+        description: 'Own installation jobs and deliveries; read customers and orders',
+        permissions: { objects: { '*': none, installation: { read: 'own', create: false, update: 'own', delete: 'none' }, shipment: { read: 'own', create: false, update: 'own', delete: 'none' }, account: readOnly, contact: readOnly, sales_order: readOnly, product: readOnly, ticket: { read: 'own', create: true, update: 'own', delete: 'none' } } },
+      },
+    ],
+  },
+  service: {
+    key: 'service',
+    name: 'Service & complaints',
+    description: 'Complaint tickets from phone, WhatsApp, web forms or walk-ins, with categories, priorities, SLA timers, escalation on breach, and a status link for the customer.',
+    objects: [{ key: 'ticket', label: 'Ticket', plural: 'Tickets', icon: 'life-buoy' }],
+    requires: [],
+    roles: [
+      {
+        key: 'service_agent',
+        name: 'Service Agent',
+        description: 'Tickets end to end; read customers, orders and products',
+        permissions: { objects: { '*': readOnly, ticket: all, lead: none, deal: none, quote: none } },
       },
     ],
   },

@@ -7,6 +7,7 @@ import { SalesSetup } from '../components/SalesSetup';
 import { PeopleTab } from '../components/admin/People';
 import { RoutingTab } from '../components/admin/RoutingAdmin';
 import { AppsTab } from '../components/admin/AppsAdmin';
+import { ServiceSettingsTab } from '../components/ops/ServicePanels';
 import { ApiKeysTab, SecurityPolicyTab, SharingRulesTab, TeamsTab, UsageTab } from '../components/admin/SecurityAdmin';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -24,6 +25,7 @@ const GROUPS: [string, [string, string, string][]][] = [
     ['pipelines', 'Pipelines', 'metadata'],
     ['workflows', 'Automations', 'workflows'],
     ['routing', 'Routing & approvals', 'workflows'],
+    ['service', 'Service & delivery', 'workflows'],
     ['forms', 'Web forms', 'metadata'],
     ['sales', 'Sales setup', 'metadata'],
     ['apps', 'Apps', 'modules'],
@@ -114,6 +116,7 @@ export function SettingsPage() {
           {tab === 'ai' && <AiModelsTab />}
           {tab === 'workflows' && <AutomationsTab />}
           {tab === 'routing' && <RoutingTab />}
+          {tab === 'service' && <ServiceSettingsTab />}
           {tab === 'forms' && <FormsTab />}
           {tab === 'channels' && <ChannelsTab />}
           {tab === 'domains' && <DomainsTab />}
