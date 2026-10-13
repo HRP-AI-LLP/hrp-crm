@@ -65,6 +65,10 @@ if (!dev.VAPID_PRIVATE_KEY) {
   console.log('✓ created a Web Push key pair for dev (kept in infra/.local/secrets.json)');
 }
 
+// packages added since the last install (e.g. after copying in new code) — quick no-op when up to date
+step('Checking installed packages');
+run('pnpm install --frozen-lockfile --prefer-offline', { display: 'pnpm install' });
+
 step('Connecting to the Neon dev branch');
 const neon = createApiClient({ apiKey: NEON_API_KEY });
 const projectId = state.neon?.projectId;
