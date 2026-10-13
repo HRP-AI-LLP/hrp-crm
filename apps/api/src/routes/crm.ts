@@ -136,6 +136,10 @@ export const crmRoutes = new Hono<AppEnv>()
     await enqueue(c.env, safeCtx(c), eventJobs(c.var.tenant.id, c.var.principal.user.id, events));
     if (record.next_follow_up_at) await noteReminder(c.env, record.next_follow_up_at as string);
     if (record.first_response_due) await noteReminder(c.env, record.first_response_due as string);
+    if (c.req.param('object') === 'payment' && record.sales_order_id) {
+      const { refreshOrderPaid } = await import('../services/billing');
+      await c.var.db.tx(scope(c), (tx) => refreshOrderPaid(rctx(c, tx), String(record.sales_order_id)));
+    }
     return c.json(record, 201);
   })
   .get('/records/:object/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => getRecord(rctx(c, tx), c.req.param('object'), c.req.param('id')))))
@@ -148,6 +152,11 @@ export const crmRoutes = new Hono<AppEnv>()
     await enqueue(c.env, safeCtx(c), eventJobs(c.var.tenant.id, c.var.principal.user.id, events));
     if (body.next_follow_up_at && record.next_follow_up_at) await noteReminder(c.env, record.next_follow_up_at as string);
     if ((body.priority || body.category) && record.first_response_due) await noteReminder(c.env, record.first_response_due as string);
+    if (c.req.param('object') === 'invoice' && record.status === 'draft' && (body.place_of_supply !== undefined || body.account_id !== undefined)) {
+      const { refreshDraft } = await import('../services/billing');
+      await c.var.db.tx(scope(c), (tx) => refreshDraft(rctx(c, tx), c.req.param('id')));
+      return c.json(await c.var.db.tx(scope(c, true), (tx) => getRecord(rctx(c, tx), 'invoice', c.req.param('id'))));
+    }
     return c.json(record);
   })
   .delete('/records/:object/:id', async (c) => {

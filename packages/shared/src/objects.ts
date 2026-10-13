@@ -1,6 +1,6 @@
 import type { FieldDef } from './fields';
 
-export const STANDARD_OBJECT_KEYS = ['lead', 'contact', 'account', 'deal', 'product', 'quote', 'sales_order', 'vendor', 'purchase_order', 'shipment', 'installation', 'ticket'] as const;
+export const STANDARD_OBJECT_KEYS = ['lead', 'contact', 'account', 'deal', 'product', 'quote', 'sales_order', 'vendor', 'purchase_order', 'shipment', 'installation', 'ticket', 'invoice', 'payment'] as const;
 export type StandardObjectKey = (typeof STANDARD_OBJECT_KEYS)[number];
 
 export interface ObjectStorage {
@@ -29,6 +29,8 @@ export const INSTALLATION_STATUSES = ['scheduled', 'in_progress', 'on_hold', 'co
 export const TICKET_STATUSES = ['new', 'open', 'in_progress', 'waiting_customer', 'resolved', 'closed'] as const;
 export const TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 export const TICKET_CATEGORIES = ['damage', 'defect', 'installation', 'delivery', 'warranty', 'billing', 'feedback', 'other'] as const;
+export const INVOICE_STATUSES = ['draft', 'issued', 'partially_paid', 'paid', 'cancelled'] as const;
+export const PAYMENT_MODES = ['cash', 'upi', 'bank_transfer', 'cheque', 'card', 'other'] as const;
 export const VENDOR_TYPES = ['manufacturer', 'supplier', 'contractor', 'transporter', 'installer', 'service_provider', 'other'] as const;
 const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
 
@@ -281,6 +283,53 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'satisfaction', label: 'Customer satisfaction', type: 'number', standard: true, readOnly: true },
     { ...owner, label: 'Assigned to' },
   ],
+  invoice: [
+    { key: 'name', label: 'Title', type: 'text', standard: true, required: true },
+    { key: 'invoice_number', label: 'Invoice #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'doc_type', label: 'Type', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['tax_invoice', 'credit_note', 'proforma']) } },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, readOnly: true, indexed: true, options: { choices: choices(INVOICE_STATUSES) } },
+    { key: 'account_id', label: 'Customer', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
+    { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },
+    { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, readOnly: true, options: { lookupObject: 'sales_order' } },
+    { key: 'original_invoice_id', label: 'Against invoice', type: 'lookup', standard: true, readOnly: true, options: { lookupObject: 'invoice' } },
+    { key: 'invoice_date', label: 'Invoice date', type: 'date', standard: true, indexed: true },
+    { key: 'due_date', label: 'Due date', type: 'date', standard: true, indexed: true },
+    { key: 'place_of_supply', label: 'Place of supply', type: 'text', standard: true, helpText: 'State the goods / services are supplied to; defaults to the customer state' },
+    { key: 'shipping_address', label: 'Ship to', type: 'textarea', standard: true },
+    { key: 'reverse_charge', label: 'Reverse charge', type: 'boolean', standard: true },
+    { key: 'buyer_gstin', label: 'Customer GSTIN', type: 'text', standard: true, readOnly: true },
+    { key: 'supply_type', label: 'Supply', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['intra', 'inter', 'export']) } },
+    { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
+    { key: 'taxable_total', label: 'Taxable value', type: 'currency', standard: true, readOnly: true },
+    { key: 'cgst_total', label: 'CGST', type: 'currency', standard: true, readOnly: true },
+    { key: 'sgst_total', label: 'SGST', type: 'currency', standard: true, readOnly: true },
+    { key: 'igst_total', label: 'IGST', type: 'currency', standard: true, readOnly: true },
+    { key: 'grand_total', label: 'Invoice total', type: 'currency', standard: true, readOnly: true },
+    { key: 'amount_paid', label: 'Paid', type: 'currency', standard: true, readOnly: true },
+    { key: 'amount_credited', label: 'Credited', type: 'currency', standard: true, readOnly: true },
+    { key: 'balance_due', label: 'Balance due', type: 'currency', standard: true, readOnly: true, indexed: true },
+    { key: 'max_discount_pct', label: 'Highest line discount %', type: 'percent', standard: true, readOnly: true },
+    { key: 'approval_status', label: 'Approval', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(APPROVAL_STATUSES) } },
+    { key: 'irn', label: 'IRN (e-invoice)', type: 'text', standard: true, readOnly: true },
+    { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
+    { key: 'terms', label: 'Terms', type: 'textarea', standard: true },
+    owner,
+  ],
+  payment: [
+    { key: 'name', label: 'Payment', type: 'text', standard: true, required: true },
+    { key: 'payment_number', label: 'Receipt #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['received', 'void']) } },
+    { key: 'account_id', label: 'Customer', type: 'lookup', standard: true, required: true, options: { lookupObject: 'account' } },
+    { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, options: { lookupObject: 'sales_order' } },
+    { key: 'payment_date', label: 'Received on', type: 'date', standard: true, indexed: true },
+    { key: 'amount', label: 'Amount', type: 'currency', standard: true, required: true, options: { min: 0.01 } },
+    { key: 'mode', label: 'Mode', type: 'picklist', standard: true, options: { choices: choices(PAYMENT_MODES) } },
+    { key: 'reference', label: 'Reference (UTR / cheque no.)', type: 'text', standard: true },
+    { key: 'amount_allocated', label: 'Applied to invoices', type: 'currency', standard: true, readOnly: true },
+    { key: 'unallocated', label: 'Unapplied', type: 'currency', standard: true, readOnly: true },
+    { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
+    owner,
+  ],
 };
 
 /** Standard fields every custom object gets (stored in the generic `records` table). */
@@ -316,6 +365,8 @@ export const OBJECT_STORAGE: Record<string, ObjectStorage> = {
   shipment: reg('shipments', 'name', ['name', 'shipment_number', 'tracking_ref']),
   installation: reg('installations', 'name', ['name', 'job_number']),
   ticket: reg('tickets', 'name', ['name', 'ticket_number', 'customer_phone']),
+  invoice: reg('invoices', 'name', ['name', 'invoice_number', 'buyer_name']),
+  payment: reg('payments', 'name', ['name', 'payment_number', 'reference']),
 };
 
 export function storageFor(objectKey: string): ObjectStorage {

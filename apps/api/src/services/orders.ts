@@ -318,8 +318,10 @@ async function rescaleMilestones(ctx: RecordCtx, id: string) {
 }
 
 /** Records money received against a milestone (cash, UPI, cheque …) and updates the order. */
-export async function recordMilestonePayment(ctx: RecordCtx, orderId: string, milestoneId: string, amount: number, note: string | null) {
-  await loadRow(ctx, 'sales_order', orderId, 'update', true);
+export async function recordMilestonePayment(ctx: RecordCtx, orderId: string, milestoneId: string, amount: number, note: string | null, opts: { asAccounts?: boolean } = {}) {
+  // accounts staff (billing) record receipts on orders they may only read
+  if (opts.asAccounts) await loadRow(ctx, 'sales_order', orderId, 'read');
+  else await loadRow(ctx, 'sales_order', orderId, 'update', true);
   const m = await ctx.tx.one<{ amount: string; amount_paid: string; name: string }>(`select amount, amount_paid, name from order_milestones where tenant_id = $1 and order_id = $2 and id = $3 for update`, [ctx.tenantId, orderId, milestoneId]);
   if (!m) throw notFound();
   if (!(amount > 0)) throw badRequest('Amount must be positive');

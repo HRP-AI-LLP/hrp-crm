@@ -7,6 +7,7 @@ import { useMeta } from '../../lib/hooks';
 import { Modal, useToast } from '../ui';
 import { type DocLine, LinesEditor, toLineInput } from './LinesEditor';
 import { OrderFulfilment } from './FieldPanels';
+import { OrderBilling } from './BillingPanels';
 
 type Json = Record<string, any>;
 const FLOW = ['draft', 'confirmed', 'in_production', 'ready', 'dispatched', 'delivered', 'installed', 'completed'];
@@ -143,6 +144,7 @@ export function OrderPanel({ orderId, canEdit }: { orderId: string; canEdit: boo
         />
 
         {apps.has('delivery') && <OrderFulfilment order={o} lines={data.lines} canEdit={canEdit} />}
+        {apps.has('billing') && <OrderBilling order={o} milestones={data.milestones} canEdit={canEdit} />}
         <div className="spread" style={{ marginTop: 6 }}>
           <h3>Payment milestones</h3>
           {canEdit && !['cancelled', 'completed'].includes(status) && (
@@ -260,7 +262,14 @@ export function OrderPanel({ orderId, canEdit }: { orderId: string; canEdit: boo
           title={`Payment for “${paying.name}”`}
           onClose={() => setPaying(null)}
           footer={
-            <button className="btn primary" disabled={!(Number(amount) > 0)} onClick={async () => (await act(() => post(`/api/v1/orders/${orderId}/milestones/${paying.id}/payments`, { amount: Number(amount), note: note || null }), 'Payment recorded')) && setPaying(null)}>
+            <button
+              className="btn primary"
+              disabled={!(Number(amount) > 0)}
+              onClick={async () =>
+                (await act(() => post(`/api/v1/orders/${orderId}/milestones/${paying.id}/${apps.has('billing') ? 'receipt' : 'payments'}`, { amount: Number(amount), note: note || null }), apps.has('billing') ? 'Receipt saved' : 'Payment recorded')) &&
+                setPaying(null)
+              }
+            >
               Record payment
             </button>
           }

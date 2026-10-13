@@ -1,9 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
-import { get } from '../../lib/api';
-import { money2 } from '../../lib/format';
-import { computeLines } from '../QuoteEditor';
-import type { QuoteLine } from '../QuoteDocument';
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { get } from "../../lib/api";
+import { money2 } from "../../lib/format";
+import { computeLines } from "../QuoteEditor";
+import type { QuoteLine } from "../QuoteDocument";
 
 export interface DocLine extends QuoteLine {
   id?: string;
@@ -25,13 +25,22 @@ interface ProductOpt {
 /** Products for line pickers (first 500, cached). */
 export function useProductOptions() {
   return useQuery({
-    queryKey: ['product-options'],
-    queryFn: () => get<{ items: ProductOpt[] }>('/api/v1/records/product?limit=200&sort=name&dir=asc'),
+    queryKey: ["product-options"],
+    queryFn: () =>
+      get<{ items: ProductOpt[] }>(
+        "/api/v1/records/product?limit=200&sort=name&dir=asc",
+      ),
     staleTime: 120_000,
   });
 }
 
-const blank = (): DocLine => ({ name: '', quantity: 1, unitPrice: 0, discountPct: 0, taxRate: 18 });
+const blank = (): DocLine => ({
+  name: "",
+  quantity: 1,
+  unitPrice: 0,
+  discountPct: 0,
+  taxRate: 18,
+});
 
 /**
  * Line items for orders, purchase orders and invoices. Prices default from the product's list
@@ -41,19 +50,22 @@ export function LinesEditor({
   lines: initial,
   locked,
   priceFrom,
-  currency = 'INR',
+  currency = "INR",
   extraCols = [],
-  taxLabel = 'GST',
-  saveLabel = 'Save lines',
+  taxLabel = "GST",
+  saveLabel = "Save lines",
+  hideTotals = false,
   onSave,
 }: {
   lines: DocLine[];
   locked: boolean;
-  priceFrom: 'list_price' | 'cost_price';
+  priceFrom: "list_price" | "cost_price";
   currency?: string;
   extraCols?: { key: string; label: string }[];
   taxLabel?: string;
   saveLabel?: string;
+  /** the caller shows its own totals (invoices: CGST/SGST/IGST from the server) */
+  hideTotals?: boolean;
   onSave: (lines: DocLine[]) => Promise<unknown>;
 }) {
   const [lines, setLines] = useState<DocLine[]>(initial);
@@ -72,7 +84,14 @@ export function LinesEditor({
   const pick = (i: number, id: string) => {
     const p = products.data?.items.find((x) => x.id === id);
     if (!p) return edit(i, { productId: null });
-    edit(i, { productId: id, name: p.name, unit: p.unit, hsnSac: p.hsn_sac, taxRate: Number(p.tax_rate ?? 18), unitPrice: Number(p[priceFrom] ?? p.list_price ?? 0) });
+    edit(i, {
+      productId: id,
+      name: p.name,
+      unit: p.unit,
+      hsnSac: p.hsn_sac,
+      taxRate: Number(p.tax_rate ?? 18),
+      unitPrice: Number(p[priceFrom] ?? p.list_price ?? 0),
+    });
   };
   const save = async () => {
     setBusy(true);
@@ -122,12 +141,16 @@ export function LinesEditor({
                 <td className="muted">{i + 1}</td>
                 <td>
                   {!locked && (
-                    <select aria-label={`Product for line ${i + 1}`} value={l.productId ?? ''} onChange={(e) => pick(i, e.target.value)}>
+                    <select
+                      aria-label={`Product for line ${i + 1}`}
+                      value={l.productId ?? ""}
+                      onChange={(e) => pick(i, e.target.value)}
+                    >
                       <option value="">Custom item</option>
                       {products.data?.items.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name}
-                          {p.sku ? ` (${p.sku})` : ''}
+                          {p.sku ? ` (${p.sku})` : ""}
                         </option>
                       ))}
                     </select>
@@ -135,34 +158,115 @@ export function LinesEditor({
                   {locked ? (
                     <div>
                       <b>{l.name}</b>
-                      {l.description && <div className="muted small">{l.description}</div>}
+                      {l.description && (
+                        <div className="muted small">{l.description}</div>
+                      )}
                     </div>
                   ) : (
                     <>
-                      <input aria-label={`Item name, line ${i + 1}`} value={l.name} onChange={(e) => edit(i, { name: e.target.value })} placeholder="Item name" />
-                      <input aria-label={`Description, line ${i + 1}`} className="small" value={l.description ?? ''} onChange={(e) => edit(i, { description: e.target.value })} placeholder="Description (optional)" />
+                      <input
+                        aria-label={`Item name, line ${i + 1}`}
+                        value={l.name}
+                        onChange={(e) => edit(i, { name: e.target.value })}
+                        placeholder="Item name"
+                      />
+                      <input
+                        aria-label={`Description, line ${i + 1}`}
+                        className="small"
+                        value={l.description ?? ""}
+                        onChange={(e) =>
+                          edit(i, { description: e.target.value })
+                        }
+                        placeholder="Description (optional)"
+                      />
                     </>
                   )}
                 </td>
-                <td>{locked ? <span className="small">{l.hsnSac ?? '—'}</span> : <input aria-label={`HSN/SAC, line ${i + 1}`} value={l.hsnSac ?? ''} onChange={(e) => edit(i, { hsnSac: e.target.value })} />}</td>
-                <td className="num">{locked ? Number(l.quantity) : <input aria-label={`Quantity, line ${i + 1}`} className="num" inputMode="decimal" value={l.quantity} onChange={(e) => edit(i, { quantity: e.target.value as unknown as number })} />}</td>
+                <td>
+                  {locked ? (
+                    <span className="small">{l.hsnSac ?? "—"}</span>
+                  ) : (
+                    <input
+                      aria-label={`HSN/SAC, line ${i + 1}`}
+                      value={l.hsnSac ?? ""}
+                      onChange={(e) => edit(i, { hsnSac: e.target.value })}
+                    />
+                  )}
+                </td>
+                <td className="num">
+                  {locked ? (
+                    Number(l.quantity)
+                  ) : (
+                    <input
+                      aria-label={`Quantity, line ${i + 1}`}
+                      className="num"
+                      inputMode="decimal"
+                      value={l.quantity}
+                      onChange={(e) =>
+                        edit(i, {
+                          quantity: e.target.value as unknown as number,
+                        })
+                      }
+                    />
+                  )}
+                </td>
                 {extraCols.map((c) => (
                   <td key={c.key} className="num">
                     {Number((l as DocLine)[c.key] ?? 0)}
                   </td>
                 ))}
-                <td className="num">{locked ? money2(l.unitPrice, currency) : <input aria-label={`Rate, line ${i + 1}`} className="num" inputMode="decimal" value={l.unitPrice} onChange={(e) => edit(i, { unitPrice: e.target.value as unknown as number })} />}</td>
-                <td className="num">{locked ? `${Number(l.discountPct)}` : <input aria-label={`Discount, line ${i + 1}`} className="num" inputMode="decimal" value={l.discountPct} onChange={(e) => edit(i, { discountPct: e.target.value as unknown as number })} />}</td>
+                <td className="num">
+                  {locked ? (
+                    money2(l.unitPrice, currency)
+                  ) : (
+                    <input
+                      aria-label={`Rate, line ${i + 1}`}
+                      className="num"
+                      inputMode="decimal"
+                      value={l.unitPrice}
+                      onChange={(e) =>
+                        edit(i, {
+                          unitPrice: e.target.value as unknown as number,
+                        })
+                      }
+                    />
+                  )}
+                </td>
+                <td className="num">
+                  {locked ? (
+                    `${Number(l.discountPct)}`
+                  ) : (
+                    <input
+                      aria-label={`Discount, line ${i + 1}`}
+                      className="num"
+                      inputMode="decimal"
+                      value={l.discountPct}
+                      onChange={(e) =>
+                        edit(i, {
+                          discountPct: e.target.value as unknown as number,
+                        })
+                      }
+                    />
+                  )}
+                </td>
                 <td className="num">
                   {locked ? (
                     `${Number(l.taxRate)}`
                   ) : (
-                    <select aria-label={`${taxLabel}, line ${i + 1}`} value={String(l.taxRate)} onChange={(e) => edit(i, { taxRate: Number(e.target.value) })}>
-                      {[...new Set([0, 5, 12, 18, 28, Number(l.taxRate)])].sort((a, b) => a - b).map((r) => (
-                        <option key={r} value={r}>
-                          {r}%
-                        </option>
-                      ))}
+                    <select
+                      aria-label={`${taxLabel}, line ${i + 1}`}
+                      value={String(l.taxRate)}
+                      onChange={(e) =>
+                        edit(i, { taxRate: Number(e.target.value) })
+                      }
+                    >
+                      {[...new Set([0, 5, 12, 18, 28, Number(l.taxRate)])]
+                        .sort((a, b) => a - b)
+                        .map((r) => (
+                          <option key={r} value={r}>
+                            {r}%
+                          </option>
+                        ))}
                     </select>
                   )}
                 </td>
@@ -171,7 +275,14 @@ export function LinesEditor({
                 </td>
                 {!locked && (
                   <td>
-                    <button className="btn ghost sm" aria-label={`Remove line ${i + 1}`} onClick={() => { setLines((ls) => ls.filter((_, j) => j !== i)); setDirty(true); }}>
+                    <button
+                      className="btn ghost sm"
+                      aria-label={`Remove line ${i + 1}`}
+                      onClick={() => {
+                        setLines((ls) => ls.filter((_, j) => j !== i));
+                        setDirty(true);
+                      }}
+                    >
                       ✕
                     </button>
                   </td>
@@ -180,7 +291,11 @@ export function LinesEditor({
             ))}
             {!calc.lines.length && (
               <tr>
-                <td colSpan={9 + extraCols.length} className="muted" style={{ textAlign: 'center', padding: 20 }}>
+                <td
+                  colSpan={9 + extraCols.length}
+                  className="muted"
+                  style={{ textAlign: "center", padding: 20 }}
+                >
                   No lines yet
                 </td>
               </tr>
@@ -188,41 +303,53 @@ export function LinesEditor({
           </tbody>
         </table>
       </div>
-      <div className="spread" style={{ alignItems: 'flex-start' }}>
+      <div className="spread" style={{ alignItems: "flex-start" }}>
         {!locked ? (
           <div className="row">
-            <button className="btn" onClick={() => { setLines((ls) => [...ls, blank()]); setDirty(true); }}>
+            <button
+              className="btn"
+              onClick={() => {
+                setLines((ls) => [...ls, blank()]);
+                setDirty(true);
+              }}
+            >
               Add line
             </button>
-            <button className="btn primary" disabled={!dirty || busy} onClick={save}>
-              {busy ? 'Saving…' : dirty ? saveLabel : 'Saved'}
+            <button
+              className="btn primary"
+              disabled={!dirty || busy}
+              onClick={save}
+            >
+              {busy ? "Saving…" : dirty ? saveLabel : "Saved"}
             </button>
           </div>
         ) : (
           <span />
         )}
-        <table className="qtotals">
-          <tbody>
-            <tr>
-              <th>Subtotal</th>
-              <td>{money2(calc.subtotal, currency)}</td>
-            </tr>
-            {calc.discountTotal > 0 && (
+        {!hideTotals && (
+          <table className="qtotals">
+            <tbody>
               <tr>
-                <th>Discount</th>
-                <td>− {money2(calc.discountTotal, currency)}</td>
+                <th>Subtotal</th>
+                <td>{money2(calc.subtotal, currency)}</td>
               </tr>
-            )}
-            <tr>
-              <th>{taxLabel}</th>
-              <td>{money2(calc.taxTotal, currency)}</td>
-            </tr>
-            <tr className="grand">
-              <th>Total</th>
-              <td>{money2(calc.grandTotal, currency)}</td>
-            </tr>
-          </tbody>
-        </table>
+              {calc.discountTotal > 0 && (
+                <tr>
+                  <th>Discount</th>
+                  <td>− {money2(calc.discountTotal, currency)}</td>
+                </tr>
+              )}
+              <tr>
+                <th>{taxLabel}</th>
+                <td>{money2(calc.taxTotal, currency)}</td>
+              </tr>
+              <tr className="grand">
+                <th>Total</th>
+                <td>{money2(calc.grandTotal, currency)}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );

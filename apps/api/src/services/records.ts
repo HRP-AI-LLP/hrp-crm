@@ -34,6 +34,9 @@ import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
 import { computeFormulas, evaluateRules, hasRollupParents, recomputeRecord, refreshParents, rowValues, throwIfIssues, withStage } from './computed';
 import { computeScore, notifyOwner, pickAssignee } from './routing';
 import { beforeCreate, beforeUpdate } from './hooks';
+import { NUMBERED, nextDocumentNumber } from './numbering';
+
+export { NUMBERED, nextDocumentNumber };
 
 export interface RecordCtx {
   tx: Tx;
@@ -621,6 +624,7 @@ export async function createRecord(
 const LOCKED_AFTER_DRAFT: Record<string, string[]> = {
   sales_order: ['warehouse_id', 'account_id', 'currency'],
   purchase_order: ['vendor_id', 'warehouse_id', 'currency'],
+  invoice: ['account_id', 'currency', 'place_of_supply', 'invoice_date', 'reverse_charge', 'contact_id', 'shipping_address'],
 };
 /** Documents that drive stock or customer commitments can only be deleted in these states. */
 const DELETABLE_IN: Record<string, string[]> = {
@@ -628,27 +632,9 @@ const DELETABLE_IN: Record<string, string[]> = {
   purchase_order: ['draft', 'cancelled'],
   shipment: ['planned', 'cancelled'],
   installation: ['scheduled', 'cancelled'],
+  invoice: ['draft'],
+  payment: ['void'],
 };
-
-/** Objects whose records get a running document number on creation. */
-export const NUMBERED: Record<string, { column: string; prefix: string }> = {
-  quote: { column: 'quote_number', prefix: 'Q' },
-  sales_order: { column: 'order_number', prefix: 'SO' },
-  purchase_order: { column: 'po_number', prefix: 'PO' },
-  shipment: { column: 'shipment_number', prefix: 'DL' },
-  installation: { column: 'job_number', prefix: 'INS' },
-  ticket: { column: 'ticket_number', prefix: 'TK' },
-};
-
-/** Next number like Q-2026-0007; prefixes can be changed in Settings → Sales setup (settings.numbering). */
-export async function nextDocumentNumber(ctx: RecordCtx, key: string, fallbackPrefix?: string): Promise<string> {
-  const n = await ctx.tx.one<{ n: string; prefix: string | null }>(
-    `select app.next_counter($1) as n, (select settings -> 'numbering' ->> $1 from tenants where id = $2) as prefix`,
-    [key, ctx.tenantId],
-  );
-  const prefix = (n?.prefix ?? '').trim() || NUMBERED[key]?.prefix || fallbackPrefix || key.toUpperCase();
-  return `${prefix}-${new Date().getFullYear()}-${String(n!.n).padStart(4, '0')}`;
-}
 
 function stripNulls(o: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined));

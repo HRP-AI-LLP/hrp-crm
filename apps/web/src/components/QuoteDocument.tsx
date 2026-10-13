@@ -225,6 +225,12 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
                 <td>{money2(tax, cur)}</td>
               </tr>
             )}
+            {Number(q.round_off ?? 0) !== 0 && (
+              <tr>
+                <th>Round off</th>
+                <td>{money2(q.round_off, cur)}</td>
+              </tr>
+            )}
             <tr className="grand">
               <th>Total</th>
               <td>{money2(q.grand_total, cur)}</td>

@@ -3,6 +3,8 @@
  * customer matching, installations' technician). Kept free of runtime imports from records.ts.
  */
 import type { Tx } from '../lib/db';
+import { badRequest } from '../lib/errors';
+import { nextFyNumber } from './numbering';
 
 interface HookCtx {
   tx: Tx;
@@ -60,6 +62,23 @@ export async function beforeCreate(ctx: HookCtx, objectKey: string, cols: Record
     await applySla(ctx, cols, new Date(), String(cols.priority), (cols.category as string | null) ?? null);
   }
   if (objectKey === 'installation') cols.technician_id = cols.owner_id ?? null;
+  if (objectKey === 'payment') {
+    if (cols.sales_order_id && !cols.account_id) {
+      const o = await ctx.tx.one<{ account_id: string | null }>(`select account_id from sales_orders where tenant_id = $1 and id = $2`, [ctx.tenantId, cols.sales_order_id]);
+      cols.account_id = o?.account_id ?? null;
+    }
+    if (!cols.account_id) throw badRequest('Validation failed', [{ field: 'account_id', message: 'is required' }]);
+    const date = String(cols.payment_date ?? new Date().toISOString().slice(0, 10));
+    const prefix = await ctx.tx.one<{ p: string | null }>(`select settings -> 'billing' ->> 'receiptPrefix' as p from tenants where id = $1`, [ctx.tenantId]);
+    const n = await nextFyNumber(ctx, 'payment', date, prefix?.p || 'RCPT');
+    cols.payment_number = n.number;
+    cols.financial_year = n.fy;
+    cols.mode ??= 'bank_transfer';
+  }
+  if (objectKey === 'invoice' && cols.account_id && cols.place_of_supply === undefined) {
+    const a = await ctx.tx.one<{ state: string | null }>(`select state from accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, cols.account_id]);
+    if (a?.state) cols.place_of_supply = a.state;
+  }
 }
 
 export async function beforeUpdate(ctx: HookCtx, objectKey: string, row: Record<string, unknown>, cols: Record<string, unknown>) {

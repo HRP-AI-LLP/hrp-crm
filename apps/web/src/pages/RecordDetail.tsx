@@ -22,6 +22,17 @@ import { PoPanel, VendorScorecard } from '../components/ops/PurchasePanels';
 import { ProductStockPanel } from '../components/ops/Inventory';
 import { InstallationPanel, ShipmentPanel } from '../components/ops/FieldPanels';
 import { RaiseTicketButton, TicketBar } from '../components/ops/ServicePanels';
+import { InvoicePanel, PaymentPanel } from '../components/ops/BillingPanels';
+
+/** Mirrors the API: documents that drive stock, tax or customer commitments are deleted only in these states. */
+const DELETABLE_IN: Record<string, string[]> = {
+  sales_order: ['draft', 'cancelled'],
+  purchase_order: ['draft', 'cancelled'],
+  shipment: ['planned', 'cancelled'],
+  installation: ['scheduled', 'cancelled'],
+  invoice: ['draft'],
+  payment: ['void'],
+};
 import { hasAdmin } from '@synapse/shared';
 
 interface Activity {
@@ -160,7 +171,7 @@ export function RecordDetailPage() {
               Convert lead
             </button>
           )}
-          {perm?.delete !== 'none' && !(['sales_order', 'purchase_order'].includes(object) && !['draft', 'cancelled'].includes(String(rec.status))) && (
+          {perm?.delete !== 'none' && (!DELETABLE_IN[object] || DELETABLE_IN[object]!.includes(String(rec.status))) && (
             <button
               className="btn danger"
               onClick={async () => {
@@ -204,6 +215,13 @@ export function RecordDetailPage() {
       {object === 'shipment' && <ShipmentPanel id={id} canEdit={canEdit} />}
       {object === 'installation' && <InstallationPanel id={id} canEdit={canEdit} />}
       {object === 'ticket' && <TicketBar ticket={rec} canEdit={canEdit} />}
+      {object === 'invoice' && (
+        <>
+          <ApprovalBar object={object} record={rec} canEdit={canEdit} />
+          <InvoicePanel id={id} canEdit={canEdit} />
+        </>
+      )}
+      {object === 'payment' && <PaymentPanel id={id} canEdit={canEdit} />}
       {object === 'product' && apps.has('inventory') && rec.product_type !== 'service' && (
         <ProductStockPanel productId={id} productName={rec.title} isVariant={!!rec.variant_of} canMove={!!me && (hasAdmin(me.permissions, 'operations') || objectPerm(me.permissions, 'product').update === 'all')} />
       )}

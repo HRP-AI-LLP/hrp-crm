@@ -23,6 +23,7 @@ import { DocPrintPage } from './pages/DocPrint';
 import { InventoryRoute } from './pages/Operations';
 import { JobConfirmPage, TicketStatusPage } from './pages/CustomerPages';
 import { FieldSchedulePage } from './pages/FieldSchedule';
+import { BillingRoute } from './pages/Operations';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useAuth();
@@ -91,6 +92,7 @@ export function App() {
         <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="inventory" element={<InventoryRoute />} />
         <Route path="schedule" element={<FieldSchedulePage />} />
+        <Route path="billing" element={<BillingRoute />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

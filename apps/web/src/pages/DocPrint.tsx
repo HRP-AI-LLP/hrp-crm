@@ -35,12 +35,37 @@ function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back:
       back: `/o/purchase_order/${p.id}`,
     };
   }
+  if (kind === 'invoice') {
+    const i = d.invoice;
+    const cn = i.doc_type === 'credit_note';
+    const billTo = { name: i.buyer_name ?? d.account?.name, address: i.buyer_address ?? [d.account?.address, d.account?.city].filter(Boolean).join(', '), state: i.place_of_supply ?? i.buyer_state ?? d.account?.state ?? '', gstin: i.buyer_gstin ?? d.account?.gstin ?? '' };
+    const rows: [string, string][] = [];
+    if (i.due_date && !cn) rows.push(['Due date', date(i.due_date)]);
+    if (i.place_of_supply) rows.push(['Place of supply', `${i.place_of_supply}${i.pos_code ? ` (${i.pos_code})` : ''}`]);
+    if (i.reverse_charge) rows.push(['Reverse charge', 'Yes']);
+    if (i.irn) rows.push(['IRN', `${String(i.irn).slice(0, 20)}…`]);
+    // the letterhead's state must be the seller state snapshot so CGST/SGST vs IGST prints as issued
+    const company = { ...d.company, state: i.seller_state ?? d.company.state, gstin: i.seller_gstin ?? d.company.gstin };
+    return {
+      doc: { quote: { ...i, bill_to: billTo, doc_date: i.invoice_date, status: 'issued', valid_until: null }, lines: d.lines, account: d.account, contact: null, company },
+      labels: {
+        title: cn ? 'Credit note' : i.doc_type === 'proforma' ? 'Proforma invoice' : i.status === 'draft' ? 'Tax invoice (draft)' : 'Tax invoice',
+        numberLabel: cn ? 'Credit note #' : 'Invoice #',
+        number: i.invoice_number ?? 'DRAFT',
+        party: 'Bill to',
+        rows,
+        footerNote: [i.supply_type === 'intra' ? 'Supply within the state: CGST + SGST' : i.supply_type === 'inter' ? 'Inter-state supply: IGST' : '', d.bankDetails ? `\n${d.bankDetails}` : ''].join(''),
+      },
+      back: `/o/invoice/${i.id}`,
+    };
+  }
   return null;
 }
 
 const SOURCES: Record<string, (id: string) => string> = {
   sales_order: (id) => `/api/v1/orders/${id}`,
   purchase_order: (id) => `/api/v1/purchase-orders/${id}`,
+  invoice: (id) => `/api/v1/invoices/${id}`,
 };
 
 export function DocPrintPage() {

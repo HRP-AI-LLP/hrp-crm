@@ -99,6 +99,24 @@ export const APPS: Record<string, AppDefinition> = {
       },
     ],
   },
+  billing: {
+    key: 'billing',
+    name: 'GST billing',
+    description: 'Tax invoices and credit notes with FY-wise numbering, CGST/SGST or IGST by place of supply, milestone invoicing from orders, payments and receivables, plus e-invoice JSON, GSTR-1 and Tally exports.',
+    objects: [
+      { key: 'invoice', label: 'Invoice', plural: 'Invoices', icon: 'receipt' },
+      { key: 'payment', label: 'Payment', plural: 'Payments', icon: 'wallet' },
+    ],
+    requires: [],
+    roles: [
+      {
+        key: 'accounts',
+        name: 'Accounts',
+        description: 'Invoices, credit notes, payments and GST exports',
+        permissions: { objects: { '*': readOnly, invoice: { ...all, delete: 'all' }, payment: all, account: { read: 'all', create: true, update: 'all', delete: 'none' }, lead: none, deal: readOnly }, admin: ['billing'] },
+      },
+    ],
+  },
 };
 
 export const APP_KEYS = Object.keys(APPS);
