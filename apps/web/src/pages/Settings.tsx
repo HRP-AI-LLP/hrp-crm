@@ -6,6 +6,7 @@ import { RulesEditor } from '../components/builders/RulesEditor';
 import { SalesSetup } from '../components/SalesSetup';
 import { PeopleTab } from '../components/admin/People';
 import { RoutingTab } from '../components/admin/RoutingAdmin';
+import { AppsTab } from '../components/admin/AppsAdmin';
 import { ApiKeysTab, SecurityPolicyTab, SharingRulesTab, TeamsTab, UsageTab } from '../components/admin/SecurityAdmin';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -25,6 +26,7 @@ const GROUPS: [string, [string, string, string][]][] = [
     ['routing', 'Routing & approvals', 'workflows'],
     ['forms', 'Web forms', 'metadata'],
     ['sales', 'Sales setup', 'metadata'],
+    ['apps', 'Apps', 'modules'],
     ['modules', 'Industry modules', 'modules'],
   ]],
   ['People & access', [
@@ -108,6 +110,7 @@ export function SettingsPage() {
           {tab === 'usage' && <UsageTab />}
           {tab === 'roles' && <RolesTab />}
           {tab === 'modules' && <ModulesTab />}
+          {tab === 'apps' && <AppsTab />}
           {tab === 'ai' && <AiModelsTab />}
           {tab === 'workflows' && <AutomationsTab />}
           {tab === 'routing' && <RoutingTab />}

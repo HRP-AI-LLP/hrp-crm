@@ -644,3 +644,21 @@ details summary { cursor: pointer; }
 .bucket-bars .fill { height: 100%; background: var(--brand-500); border-radius: 6px; }
 .nav-badge { margin-left: auto; min-width: 20px; height: 18px; padding: 0 6px; border-radius: 9px; background: var(--accent-bright); color: var(--brand-950); font-size: 11px; font-weight: 700; display: inline-grid; place-items: center; }
 .row-highlight td { background: var(--accent-soft); }
+
+/* ---------- apps & operations ---------- */
+.app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.app-card { padding: 14px 16px; }
+.app-card p { margin: 8px 0 0; }
+.app-card.on { border-color: var(--brand-500); box-shadow: inset 3px 0 0 var(--brand-500); }
+.switch { position: relative; width: 40px; height: 22px; flex: none; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }
+.switch span { position: absolute; inset: 0; border-radius: 11px; background: var(--line); transition: background .15s; }
+.switch span::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform .15s; }
+.switch input:checked + span { background: var(--brand-600); }
+.switch input:checked + span::after { transform: translateX(18px); }
+.switch input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 2px; }
+.order-flow { list-style: none; display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; counter-reset: step; }
+.order-flow li { flex: 1; min-width: 92px; padding: 6px 10px; border-radius: 6px; background: var(--line-2); color: var(--ink-3); font-size: 12.5px; font-weight: 500; text-align: center; }
+.order-flow li.done { background: var(--brand-100); color: var(--brand-700); }
+.order-flow li.current { background: var(--brand-700); color: #fff; }
+details > summary { cursor: pointer; color: var(--brand-700); }

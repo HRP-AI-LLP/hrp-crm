@@ -104,6 +104,12 @@ export async function findDuplicates(ctx: RecordCtx, objectKey: string, values: 
   const where = [`r.tenant_id = $1`, `r.deleted_at is null`];
   if (s.discriminated) where.push(`r.object_key = ${add(objectKey)}`);
   if (excludeId) where.push(`r.id <> ${add(excludeId)}::uuid`);
+  // product variants share their parent's name on purpose: never flag a variant family
+  if (objectKey === 'product') {
+    const fam = values.variant_of ? add(String(values.variant_of)) : excludeId ? add(excludeId) : null;
+    if (fam) where.push(`r.id <> ${fam}::uuid and coalesce(r.variant_of, '00000000-0000-0000-0000-000000000000'::uuid) <> ${fam}::uuid`);
+    if (values.variant_of) where.push(`r.id <> ${add(String(values.variant_of))}::uuid`);
+  }
   const rows = await ctx.tx.query<{ id: string; title: string; reasons: (string | null)[] }>(
     `select r.id, r.${ident(s.titleColumn)}::text as title, array[${reasonSql.join(', ')}] as reasons
        from ${ident(s.table)} r where ${where.join(' and ')} and (${conds.join(' or ')}) limit 25`,

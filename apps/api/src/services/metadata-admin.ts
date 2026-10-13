@@ -2,7 +2,7 @@
  * Metadata engine write path: custom objects, custom fields, pipelines/stages and module install.
  * All writes are tenant scoped; meta_version is bumped by DB triggers, which rotates edge caches.
  */
-import { type FieldDef, type FieldSpec, fieldSpecSchema, KEY_PATTERN, MODULES, RESERVED_FIELD_KEYS, type TenantMeta } from '@synapse/shared';
+import { type FieldDef, type FieldSpec, fieldSpecSchema, KEY_PATTERN, MODULES, reservedKeysFor, type TenantMeta } from '@synapse/shared';
 import { checkComputedSpec, rollupReturnType } from './computed';
 import { z } from 'zod';
 import type { Tx } from '../lib/db';
@@ -58,7 +58,7 @@ export async function upsertField(tx: Tx, tenantId: string, objectKey: string, s
     if (!f.options?.expression && !f.options?.rollup) throw badRequest('Computed fields need a definition');
   }
   if ((f.type === 'formula' || f.type === 'rollup') && f.required) f.required = false;
-  if (RESERVED_FIELD_KEYS.has(f.key)) throw badRequest(`"${f.key}" is a reserved field key`);
+  if (reservedKeysFor(objectKey).has(f.key)) throw badRequest(`"${f.key}" is a reserved field key`);
   if ((f.type === 'picklist' || f.type === 'multipicklist') && !f.options?.choices?.length) throw badRequest('Picklist fields need at least one choice');
   if (f.type === 'lookup' && !f.options?.lookupObject) throw badRequest('Lookup fields need options.lookupObject');
   const obj = await tx.one(`select 1 from custom_objects where tenant_id = $1 and key = $2`, [tenantId, objectKey]);

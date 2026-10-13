@@ -19,6 +19,8 @@ import { ForecastPage } from './pages/Forecast';
 import { PublicQuotePage, QuotePrintPage } from './pages/QuotePages';
 import { ReportBuilderPage, ReportsPage } from './pages/Reports';
 import { ApprovalsPage } from './pages/Approvals';
+import { DocPrintPage } from './pages/DocPrint';
+import { InventoryRoute } from './pages/Operations';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useAuth();
@@ -48,6 +50,14 @@ export function App() {
           </RequireAuth>
         }
       />
+      <Route
+        path="/print/:kind/:id"
+        element={
+          <RequireAuth>
+            <DocPrintPage />
+          </RequireAuth>
+        }
+      />
       <Route path="/login" element={ready && me ? <Navigate to="/" replace /> : <LoginPage />} />
       <Route path="/signup" element={<SignupPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
@@ -74,6 +84,7 @@ export function App() {
         <Route path="dashboards" element={<DashboardsPage />} />
         <Route path="dashboards/:id" element={<DashboardsPage />} />
         <Route path="approvals" element={<ApprovalsPage />} />
+        <Route path="inventory" element={<InventoryRoute />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

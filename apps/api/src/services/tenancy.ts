@@ -111,13 +111,27 @@ export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> 
     `select id, object_key, name, criteria, approver_type, approver_id, approver_role from approval_rules where tenant_id = $1 and is_active order by position, created_at`,
     [tenant.id],
   );
+  // dynamic picklists: product categories (as paths) and warehouses
+  const cats = await tx.query<{ id: string; name: string; parent_id: string | null }>(`select id, name, parent_id from product_categories where tenant_id = $1 order by position, name`, [tenant.id]);
+  const byId = new Map(cats.map((c) => [c.id, c]));
+  const path = (c: { name: string; parent_id: string | null }, depth = 0): string => {
+    const parent = c.parent_id ? byId.get(c.parent_id) : undefined;
+    return parent && depth < 6 ? `${path(parent, depth + 1)} / ${c.name}` : c.name;
+  };
+  const categoryChoices = cats.map((c) => ({ value: c.id, label: path(c) })).sort((a, b) => a.label.localeCompare(b.label));
+  const warehouseChoices = (await tx.query<{ id: string; name: string; code: string }>(`select id, name, code from warehouses where tenant_id = $1 and is_active order by is_default desc, name`, [tenant.id])).map((w) => ({ value: w.id, label: `${w.name} (${w.code})` }));
+  const dynamic: Record<string, { value: string; label: string }[]> = { category_id: categoryChoices, warehouse_id: warehouseChoices };
   // objects of a switched-off module/app stay in the database but disappear from the workspace
   const disabled = new Set(modules.filter((m) => !m.is_enabled).map((m) => m.module_key));
 
   const objectMetas: ObjectMeta[] = objects.filter((o) => !o.module_key || !disabled.has(o.module_key)).map((o) => {
-    const std = isStandardObject(o.key) ? STANDARD_FIELDS[o.key] : CUSTOM_OBJECT_BASE_FIELDS;
+    const std = (isStandardObject(o.key) ? STANDARD_FIELDS[o.key] : CUSTOM_OBJECT_BASE_FIELDS).map((f) =>
+      f.standard && f.type === 'picklist' && dynamic[f.key] ? { ...f, options: { ...f.options, choices: dynamic[f.key] } } : f,
+    );
+    const stdKeys = new Set(std.map((f) => f.key));
     const custom: FieldDef[] = fields
-      .filter((f) => f.object_key === o.key)
+      // a custom field shadowed by a newer standard field of the same name is retired (data stays in custom)
+      .filter((f) => f.object_key === o.key && !stdKeys.has(f.key))
       .map((f) => ({
         key: f.key,
         label: f.label,

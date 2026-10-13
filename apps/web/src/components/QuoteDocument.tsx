@@ -38,7 +38,19 @@ export function intraState(companyState: string, customerState?: string | null) 
 }
 
 /** A4 quotation, GST-ready: HSN/SAC, CGST/SGST vs IGST split, amount in words. */
-export function QuoteDocument({ doc }: { doc: QuoteDoc }) {
+export interface DocLabels {
+  title: string;
+  numberLabel: string;
+  number: string | null;
+  /** extra header rows, e.g. [['Delivery by', '12 Nov 2026']] */
+  rows?: [string, string][];
+  party?: string;
+  showValidity?: boolean;
+  /** text printed under the totals (e.g. bank details on invoices) */
+  footerNote?: string | null;
+}
+
+export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabels }) {
   const { quote: q, lines, account, contact, company } = doc;
   const cur = String(q.currency ?? 'INR');
   const billTo = (q.bill_to ?? {}) as Record<string, string>;
@@ -64,18 +76,24 @@ export function QuoteDocument({ doc }: { doc: QuoteDoc }) {
           {company.gstin && <p>GSTIN: {company.gstin}{company.state ? ` · ${company.state}` : ''}</p>}
         </div>
         <div className="qdoc-title">
-          <h2>Quotation</h2>
+          <h2>{labels?.title ?? 'Quotation'}</h2>
           <table>
             <tbody>
               <tr>
-                <th>Quote #</th>
-                <td>{q.quote_number ?? '—'}</td>
+                <th>{labels?.numberLabel ?? 'Quote #'}</th>
+                <td>{(labels ? labels.number : q.quote_number) ?? '—'}</td>
               </tr>
               <tr>
                 <th>Date</th>
-                <td>{date(q.created_at)}</td>
+                <td>{date(q.doc_date ?? q.created_at)}</td>
               </tr>
-              {q.valid_until && (
+              {labels?.rows?.map(([k, v]) => (
+                <tr key={k}>
+                  <th>{k}</th>
+                  <td>{v}</td>
+                </tr>
+              ))}
+              {(!labels || labels.showValidity) && q.valid_until && (
                 <tr>
                   <th>Valid until</th>
                   <td>{date(q.valid_until)}</td>
@@ -88,7 +106,7 @@ export function QuoteDocument({ doc }: { doc: QuoteDoc }) {
 
       <section className="qdoc-parties">
         <div>
-          <h3>Bill to</h3>
+          <h3>{labels?.party ?? 'Bill to'}</h3>
           <b>{billTo.name || account?.name || contact?.name || '—'}</b>
           {(billTo.address || addr(account?.billing_address)) && <p>{billTo.address || addr(account?.billing_address)}</p>}
           {billTo.state && <p>State: {billTo.state}</p>}
@@ -176,6 +194,7 @@ export function QuoteDocument({ doc }: { doc: QuoteDoc }) {
             </table>
           )}
           {cur === 'INR' && <p className="qdoc-words">{rupeesInWords(Number(q.grand_total ?? 0))}</p>}
+          {labels?.footerNote && <p className="qdoc-desc" style={{ whiteSpace: 'pre-wrap' }}>{labels.footerNote}</p>}
         </div>
         <table className="qdoc-totals">
           <tbody>

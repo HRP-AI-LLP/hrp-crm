@@ -17,6 +17,10 @@ import { QuoteEditor } from '../components/QuoteEditor';
 import { EventModal } from './Calendar';
 import { FilesPanel } from '../components/Files';
 import { ApprovalBar, QuoteRevisions } from '../components/Approvals';
+import { OrderPanel, useApps } from '../components/ops/OrderPanel';
+import { PoPanel, VendorScorecard } from '../components/ops/PurchasePanels';
+import { ProductStockPanel } from '../components/ops/Inventory';
+import { hasAdmin } from '@synapse/shared';
 
 interface Activity {
   id: string;
@@ -45,6 +49,7 @@ export function RecordDetailPage() {
   const [scheduling, setScheduling] = useState(false);
   const [sharing, setSharing] = useState(false);
   const pipelines = usePipelines(object);
+  const apps = useApps();
   const key = ['record', object, id];
   const { data: rec, isLoading, error } = useQuery({ queryKey: key, queryFn: () => get<RecordDto>(`/api/v1/records/${object}/${id}`) });
 
@@ -129,12 +134,30 @@ export function RecordDetailPage() {
               Create quote
             </button>
           )}
+          {object === 'quote' && rec.status === 'accepted' && apps.has('orders') && me && objectPerm(me.permissions, 'sales_order').create && (
+            <button
+              className="btn primary"
+              onClick={async () => {
+                try {
+                  const o = await post<{ id: string }>(`/api/v1/orders/from-quote/${id}`);
+                  toast('Sales order created');
+                  nav(`/o/sales_order/${o.id}`);
+                } catch (e) {
+                  const orderId = (e as ApiError).details as unknown as { orderId?: string } | undefined;
+                  if (orderId?.orderId) nav(`/o/sales_order/${orderId.orderId}`);
+                  else toast((e as Error).message, true);
+                }
+              }}
+            >
+              Convert to order
+            </button>
+          )}
           {object === 'lead' && !rec.converted_at && canEdit && (
             <button className="btn primary" onClick={() => setConverting(true)}>
               Convert lead
             </button>
           )}
-          {perm?.delete !== 'none' && (
+          {perm?.delete !== 'none' && !(['sales_order', 'purchase_order'].includes(object) && !['draft', 'cancelled'].includes(String(rec.status))) && (
             <button
               className="btn danger"
               onClick={async () => {
@@ -160,6 +183,23 @@ export function RecordDetailPage() {
           </div>
           <QuoteEditor quoteId={id} canEdit={canEdit} />
         </div>
+      )}
+
+      {object === 'sales_order' && (
+        <>
+          <ApprovalBar object={object} record={rec} canEdit={canEdit} />
+          <OrderPanel orderId={id} canEdit={canEdit} />
+        </>
+      )}
+      {object === 'purchase_order' && (
+        <>
+          <ApprovalBar object={object} record={rec} canEdit={canEdit} />
+          <PoPanel poId={id} canEdit={canEdit} />
+        </>
+      )}
+      {object === 'vendor' && <VendorScorecard vendorId={id} />}
+      {object === 'product' && apps.has('inventory') && rec.product_type !== 'service' && (
+        <ProductStockPanel productId={id} productName={rec.title} isVariant={!!rec.variant_of} canMove={!!me && (hasAdmin(me.permissions, 'operations') || objectPerm(me.permissions, 'product').update === 'all')} />
       )}
 
       {pipeline && (

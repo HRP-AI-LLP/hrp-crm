@@ -138,6 +138,19 @@ export const requireAdmin =
     }
   };
 
+/** Middleware for non-admin writes that change cached metadata (product categories, warehouses). */
+export const metaWrite: MiddlewareHandler<AppEnv> = async (c, next) => {
+  await next();
+  if (c.req.method !== 'GET' && c.res.status < 400) {
+    const work = invalidateTenantCache(c.env, c.var.tenant, new URL(c.req.url).host);
+    try {
+      c.executionCtx.waitUntil(work);
+    } catch {
+      await work;
+    }
+  }
+};
+
 /** Convenience: run a tenant-scoped transaction as the current user. */
 export function scope(c: { var: { tenant: { id: string }; principal?: { user: { id: string } }; requestId: string } }, readOnly = false) {
   return { tenantId: c.var.tenant.id, userId: c.var.principal?.user.id ?? null, requestId: c.var.requestId, readOnly };

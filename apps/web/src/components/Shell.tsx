@@ -136,8 +136,11 @@ export function Shell() {
   const loc = useLocation();
   useEffect(() => setNavOpen(false), [loc.pathname]);
   const std = ['lead', 'contact', 'account', 'deal', 'quote', 'product'];
+  const opsKeys = ['sales_order', 'purchase_order', 'vendor'];
   const objects = meta?.objects ?? [];
-  const custom = objects.filter((o) => !std.includes(o.key));
+  const custom = objects.filter((o) => !std.includes(o.key) && !opsKeys.includes(o.key) && !o.moduleKey?.startsWith('app.'));
+  const apps = new Set((meta?.modules ?? []).filter((m) => m.enabled && m.key.startsWith('app.')).map((m) => m.key.slice(4)));
+  const opsObjects = opsKeys.map((k) => objects.find((o) => o.key === k)).filter((o): o is NonNullable<typeof o> => !!o);
   const approvals = useApprovalCount(!!me);
   const admin = me && (can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains'));
 
@@ -167,6 +170,17 @@ export function Shell() {
             ))}
           {objects.some((o) => o.key === 'deal') && <NavLink to="/pipeline/deal">Deal board</NavLink>}
         </div>
+        {(opsObjects.length > 0 || apps.has('inventory')) && (
+          <div className="nav-group">
+            <div>Operations</div>
+            {opsObjects.map((o) => (
+              <NavLink key={o.key} to={`/o/${o.key}`}>
+                {o.plural}
+              </NavLink>
+            ))}
+            {apps.has('inventory') && <NavLink to="/inventory">Inventory</NavLink>}
+          </div>
+        )}
         <div className="nav-group">
           <div>Plan</div>
           <NavLink to="/calendar">Calendar</NavLink>

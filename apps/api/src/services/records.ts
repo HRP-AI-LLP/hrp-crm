@@ -574,11 +574,15 @@ export async function createRecord(
     }
   }
 
-  if (objectKey === 'quote' && !cols.quote_number) {
-    const n = await ctx.tx.one<{ n: string }>(`select app.next_counter('quote') as n`);
-    cols.quote_number = `Q-${new Date().getFullYear()}-${String(n!.n).padStart(4, '0')}`;
+  const numbering = NUMBERED[objectKey];
+  if (numbering && !cols[numbering.column]) {
+    cols[numbering.column] = await nextDocumentNumber(ctx, objectKey);
     // the customer link exists from the start (so templates can include it); it only resolves once sent
-    cols.share_token = randomToken(24);
+    if (objectKey === 'quote') cols.share_token = randomToken(24);
+  }
+  if ((objectKey === 'sales_order' || objectKey === 'purchase_order') && cols.warehouse_id === undefined) {
+    const wh = await ctx.tx.one<{ id: string }>(`select id from warehouses where tenant_id = $1 and is_default and is_active`, [ctx.tenantId]);
+    if (wh) cols.warehouse_id = wh.id;
   }
   // formulas, field dependencies and validation rules see the complete new record
   const values = withStage(ctx.meta, { ...cols, ...prepared.custom });
@@ -611,6 +615,29 @@ export async function createRecord(
   return { record, events: [{ objectKey, recordId: record.id, kind: 'created', fromAutomation: !!opts.fromAutomation }] };
 }
 
+/** Header fields frozen once a document leaves draft (stock, tax and the counterparty depend on them). */
+const LOCKED_AFTER_DRAFT: Record<string, string[]> = {
+  sales_order: ['warehouse_id', 'account_id', 'currency'],
+  purchase_order: ['vendor_id', 'warehouse_id', 'currency'],
+};
+
+/** Objects whose records get a running document number on creation. */
+export const NUMBERED: Record<string, { column: string; prefix: string }> = {
+  quote: { column: 'quote_number', prefix: 'Q' },
+  sales_order: { column: 'order_number', prefix: 'SO' },
+  purchase_order: { column: 'po_number', prefix: 'PO' },
+};
+
+/** Next number like Q-2026-0007; prefixes can be changed in Settings → Sales setup (settings.numbering). */
+export async function nextDocumentNumber(ctx: RecordCtx, key: string, fallbackPrefix?: string): Promise<string> {
+  const n = await ctx.tx.one<{ n: string; prefix: string | null }>(
+    `select app.next_counter($1) as n, (select settings -> 'numbering' ->> $1 from tenants where id = $2) as prefix`,
+    [key, ctx.tenantId],
+  );
+  const prefix = (n?.prefix ?? '').trim() || NUMBERED[key]?.prefix || fallbackPrefix || key.toUpperCase();
+  return `${prefix}-${new Date().getFullYear()}-${String(n!.n).padStart(4, '0')}`;
+}
+
 function stripNulls(o: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== null && v !== undefined));
 }
@@ -629,6 +656,10 @@ export async function updateRecord(
   const s = storageFor(objectKey);
   const prepared = await prepareValues(ctx, obj, patch, 'update', !!opts.bypassPermissions);
   const cols = prepared.columns;
+  const lock = LOCKED_AFTER_DRAFT[objectKey];
+  if (lock && row.status !== 'draft') {
+    for (const f of lock) if (cols[f] !== undefined && String(cols[f] ?? '') !== String(row[f] ?? '')) throw badRequest(`${obj.fields.find((x) => x.key === f)?.label ?? f} cannot change once the ${obj.label.toLowerCase()} is ${String(row.status).replace(/_/g, ' ')}`);
+  }
 
   const events: RecordEvent[] = [];
   let stageChanged: { from: unknown; to: unknown; label: string } | null = null;
@@ -704,6 +735,7 @@ async function loadRowSystem(ctx: RecordCtx, objectKey: string, id: string) {
 export async function deleteRecord(ctx: RecordCtx, objectKey: string, id: string): Promise<RecordEvent[]> {
   const { row } = await loadRow(ctx, objectKey, id, 'delete', true);
   const s = storageFor(objectKey);
+  if (LOCKED_AFTER_DRAFT[objectKey] && !['draft', 'cancelled'].includes(String(row.status))) throw badRequest('Cancel it first; only draft or cancelled documents can be deleted');
   await ctx.tx.query(`update ${ident(s.table)} set deleted_at = now() where tenant_id = $1 and id = $2::uuid`, [ctx.tenantId, id]);
   if (hasRollupParents(ctx.meta, objectKey)) await refreshParents(ctx, objectKey, [row]);
   return [{ objectKey, recordId: id, kind: 'deleted' }];

@@ -10,6 +10,7 @@ import { authRoutes } from './routes/auth';
 import { crmRoutes } from './routes/crm';
 import { dataRoutes } from './routes/data';
 import { flowRoutes, rulesAdminRoutes } from './routes/flow';
+import { appsAdminRoutes, opsRoutes } from './routes/ops';
 import { publicRoutes } from './routes/public';
 import { salesRoutes } from './routes/sales';
 import { securityRoutes } from './routes/security';
@@ -51,10 +52,12 @@ export function createApp() {
   app.route('/api/v1', dataRoutes);
   app.route('/api/v1', salesRoutes);
   app.route('/api/v1', flowRoutes);
+  app.route('/api/v1', opsRoutes);
   app.route('/api/ai', aiRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', securityRoutes);
   app.route('/api/admin', rulesAdminRoutes);
+  app.route('/api/admin', appsAdminRoutes);
 
   app.all('/api/*', () => {
     throw notFound('No such API route');
