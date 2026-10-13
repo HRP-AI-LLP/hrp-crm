@@ -1,0 +1,24 @@
+{
+  "neon": {
+    "projectId": "misty-hall-75971375",
+    "branches": {
+      "prod": "br-bitter-dream-b3u2fe76",
+      "dev": "br-twilight-thunder-b3ku362o"
+    }
+  },
+  "cloudflare": {
+    "dev": {
+      "kvId": "d15da4716d9d4d0cbbc87db21b9b9edb",
+      "hyperdriveId": "58b694256b33477a90ecd3d1b83fb949"
+    },
+    "prod": {
+      "kvId": "f11b241adaf041da8801bb2815415cd7",
+      "hyperdriveId": "544010787c534b9687c1f083e64459ab"
+    }
+  },
+  "zoneName": "hrpai.in",
+  "hosts": {
+    "dev": "hrpsynapse-dev.hrpai.in",
+    "prod": "hrpsynapse.hrpai.in"
+  }
+}
