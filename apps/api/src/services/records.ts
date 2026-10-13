@@ -98,19 +98,44 @@ function fieldMap(obj: ObjectMeta) {
   return new Map(obj.fields.map((f) => [f.key, f]));
 }
 
-function scopeSql(level: Access, p: Params, userId: string): string {
-  switch (level) {
-    case 'all':
-      return 'true';
-    case 'own':
-      return `r.owner_id = ${p.add(userId)}::uuid`;
-    case 'team': {
-      const u = p.add(userId);
-      return `(r.owner_id = ${u}::uuid or r.owner_id in (select m.id from users m where m.tenant_id = r.tenant_id and m.manager_id = ${u}::uuid))`;
+/**
+ * Row-level sharing predicate for own/team access: ownership, the reporting line, teams the user
+ * leads, records shared with the user or their teams, and sharing rules that apply to them.
+ */
+function scopeSql(level: Access, p: Params, principal: Principal, objectKey: string, obj: ObjectMeta, action: 'read' | 'update' | 'delete'): string {
+  if (level === 'all') return 'true';
+  if (level !== 'own' && level !== 'team') return 'false';
+  const u = p.add(principal.user.id);
+  const parts = [`r.owner_id = ${u}::uuid`];
+  if (level === 'team') {
+    parts.push(`r.owner_id in (select m.id from users m where m.tenant_id = r.tenant_id and m.manager_id = ${u}::uuid)`);
+    if (principal.leads?.length) {
+      parts.push(`r.owner_id in (select tm.user_id from team_members tm where tm.tenant_id = r.tenant_id and tm.team_id = any(${p.add(principal.leads)}::uuid[]))`);
     }
-    default:
-      return 'false';
   }
+  if (action !== 'delete') {
+    const teams = principal.teams ?? [];
+    parts.push(
+      `exists (select 1 from record_shares rs where rs.tenant_id = r.tenant_id and rs.object_key = ${p.add(objectKey)} and rs.record_id = r.id
+         and (rs.user_id = ${u}::uuid${teams.length ? ` or rs.team_id = any(${p.add(teams)}::uuid[])` : ''})${action === 'update' ? ` and rs.access = 'edit'` : ''})`,
+    );
+    for (const rule of principal.shares ?? []) {
+      if (rule.objectKey !== objectKey || (action === 'update' && rule.access !== 'edit')) continue;
+      const trial = new Params();
+      trial.values = [...p.values];
+      try {
+        const conds = rule.criteria.map((c) => {
+          const f = obj.fields.find((x) => x.key === c.field);
+          return f ? `(${filterSql(f, c.op, c.value, objectKey, trial)})` : 'false';
+        });
+        p.values = trial.values;
+        parts.push(conds.length ? `(${conds.join(' and ')})` : 'true');
+      } catch {
+        /* a broken rule grants nothing (and leaves no parameters behind) */
+      }
+    }
+  }
+  return `(${parts.join(' or ')})`;
 }
 
 function fieldExprText(f: FieldDef): string {
@@ -254,7 +279,7 @@ export function visibilityWhere(ctx: RecordCtx, objectKey: string, p: Params): s
   const perms = ctx.principal.permissions;
   const perm = objectPerm(perms, objectKey);
   if (perm.read === 'none') throw forbidden();
-  return [baseWhere(objectKey, p, ctx.tenantId), scopeSql(perm.read, p, ctx.principal.user.id), abacSql(perms, objectKey, obj, p, ctx.principal)];
+  return [baseWhere(objectKey, p, ctx.tenantId), scopeSql(perm.read, p, ctx.principal, objectKey, obj, 'read'), abacSql(perms, objectKey, obj, p, ctx.principal)];
 }
 
 export interface AggregateQuery {
@@ -353,7 +378,7 @@ export async function listRecords(ctx: RecordCtx, objectKey: string, q: ListQuer
   const s = storageFor(objectKey);
   const fm = fieldMap(obj);
   const p = new Params();
-  const where: string[] = [baseWhere(objectKey, p, ctx.tenantId), scopeSql(perm.read, p, ctx.principal.user.id), abacSql(perms, objectKey, obj, p, ctx.principal)];
+  const where: string[] = [baseWhere(objectKey, p, ctx.tenantId), scopeSql(perm.read, p, ctx.principal, objectKey, obj, 'read'), abacSql(perms, objectKey, obj, p, ctx.principal)];
 
   const visible = (k: string) => fieldAccess(perms, objectKey, k) !== 'hidden';
 
@@ -410,7 +435,7 @@ export async function loadRow(ctx: RecordCtx, objectKey: string, id: string, act
   if (!/^[0-9a-f-]{36}$/i.test(id)) throw notFound();
   const s = storageFor(objectKey);
   const p = new Params();
-  const where = [baseWhere(objectKey, p, ctx.tenantId), `r.id = ${p.add(id)}::uuid`, scopeSql(level, p, ctx.principal.user.id), abacSql(perms, objectKey, obj, p, ctx.principal)];
+  const where = [baseWhere(objectKey, p, ctx.tenantId), `r.id = ${p.add(id)}::uuid`, scopeSql(level, p, ctx.principal, objectKey, obj, action), abacSql(perms, objectKey, obj, p, ctx.principal)];
   const row = await ctx.tx.one(`select r.* from ${ident(s.table)} r where ${where.join(' and ')}${lock ? ' for update' : ''}`, p.values);
   if (!row) throw notFound();
   return { obj, row };
@@ -726,7 +751,7 @@ export async function dashboardStats(ctx: RecordCtx) {
     if (perm.read === 'none' || !ctx.meta.objects.some((o) => o.key === objectKey)) return null;
     const p = new Params();
     const obj = getObject(ctx.meta, objectKey);
-    const where = [baseWhere(objectKey, p, ctx.tenantId), scopeSql(perm.read, p, ctx.principal.user.id), abacSql(perms, objectKey, obj, p, ctx.principal)].join(' and ');
+    const where = [baseWhere(objectKey, p, ctx.tenantId), scopeSql(perm.read, p, ctx.principal, objectKey, obj, 'read'), abacSql(perms, objectKey, obj, p, ctx.principal)].join(' and ');
     return { p, where };
   };
 

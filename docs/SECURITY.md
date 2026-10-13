@@ -52,3 +52,11 @@ Because several workspaces can share one app host, refresh cookies are named per
 - PBKDF2 is capped at 100k iterations on Workers, below the current OWASP recommendation for SHA-256. The plan is to move hashing to an Argon2id service on Oracle ARM. Hashes are versioned, so they migrate on next login.
 - The audit log has no hash chain or tamper-evident export yet.
 - Data residency: everything currently runs in Neon's Singapore region. Per-tenant region pinning needs a separate Neon project per region.
+
+## Second-round additions
+
+- **Two-factor sign-in (TOTP, RFC 6238).** Secrets are encrypted with AES-GCM; the AAD binds them to tenant and user. Codes are accepted once (the last time step is stored), and five wrong codes end the pending sign-in. Recovery codes are stored as SHA-256 hashes and work once. Admins can require two-factor for the whole workspace; until then, members can reach only `/api/auth/*`.
+- **Invitations and resets** use single-use tokens (only hashes are stored) that expire after 7 days (invite), 1 hour (self-service reset) or 24 hours (admin link). A reset revokes every session. The "forgot password" endpoint returns the same response whether or not the account exists, and allows at most three mails per hour per person.
+- **Teams and sharing.** "Team" access covers direct reports and the members of teams the user leads. Sharing rules (criteria → team or role, read or edit) and per-record shares only ever widen own/team access. They are compiled into the same SQL predicate as lists, reports, exports and record loads.
+- **API keys** have the form `syn_<workspace>_<secret>`; only a SHA-256 hash is stored. A key acts as one user with that user's permissions, is limited to `/api/v1`, and is read-only unless it was given write scope. Keys can expire, can be revoked, and record when they were last used.
+- **Audit redaction.** Password, MFA, token and key hashes never reach the audit log.

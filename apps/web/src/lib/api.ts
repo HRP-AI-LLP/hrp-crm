@@ -42,6 +42,11 @@ let onSessionExpired: (() => void) | null = null;
 export function onExpired(fn: () => void) {
   onSessionExpired = fn;
 }
+let onMfaSetupRequired: (() => void) | null = null;
+/** called when the workspace starts requiring two-factor while someone is signed in */
+export function onMfaRequired(fn: () => void) {
+  onMfaSetupRequired = fn;
+}
 
 function headers(extra?: HeadersInit): Headers {
   const h = new Headers(extra);
@@ -81,6 +86,7 @@ export async function api<T = unknown>(path: string, init: { method?: string; bo
   const json = text ? JSON.parse(text) : null;
   if (!res.ok) {
     const e = json?.error ?? {};
+    if (res.status === 403 && e.code === 'mfa_setup_required') onMfaSetupRequired?.();
     throw new ApiError(res.status, e.code ?? 'error', e.message ?? `Request failed (${res.status})`, e.details);
   }
   return json as T;

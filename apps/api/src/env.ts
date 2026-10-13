@@ -40,6 +40,10 @@ export interface Env {
   CF_SAAS_API_TOKEN?: string;
   /** optional: token allowed to attach Workers Custom Domains (enables <slug>.<BASE_DOMAIN>) */
   CF_TENANT_DOMAINS_TOKEN?: string;
+  /** optional: Resend API key for invitations and password resets (free tier: 3,000 mails/month) */
+  RESEND_API_KEY?: string;
+  /** sender for platform mail, e.g. "HRP Synapse <no-reply@hrpai.in>" (domain verified in Resend) */
+  MAIL_FROM?: string;
 
   // --- bindings ---
   HYPERDRIVE?: Hyperdrive;
@@ -67,9 +71,17 @@ export interface Principal {
     status: string;
     attributes: Record<string, unknown>;
     roles: string[];
+    mfaEnabled?: boolean;
   };
   permissions: EffectivePermissions;
   sessionId: string;
+  /** teams the user belongs to / leads (team-scoped access and sharing) */
+  teams?: string[];
+  leads?: string[];
+  /** sharing rules that apply to this user */
+  shares?: { objectKey: string; criteria: { field: string; op: string; value?: unknown }[]; access: 'read' | 'edit' }[];
+  /** set when the request is authenticated with an API key */
+  apiKey?: { id: string; scopes: string[] };
 }
 
 export interface AppVariables {

@@ -12,6 +12,7 @@
  *   NEON_PROJECT_NAME  default "hrp-synapse"
  *   NEON_REGION        default "aws-ap-southeast-1" (Singapore — lowest latency to India)
  *   GROQ_API_KEY, GEMINI_API_KEY   optional AI fallbacks, stored as Worker secrets
+ *   RESEND_API_KEY           optional: emails invitations and password resets (resend.com free tier)
  *   SEED_DEMO          "false" to skip the demo workspace on dev
  *   SKIP_DEPLOY        "true" to provision without deploying
  *
@@ -396,6 +397,7 @@ async function main() {
       if (process.env.GROQ_API_KEY) bulk.GROQ_API_KEY = process.env.GROQ_API_KEY;
       if (process.env.GEMINI_API_KEY) bulk.GEMINI_API_KEY = process.env.GEMINI_API_KEY;
       if (process.env.CF_TENANT_DOMAINS_TOKEN) bulk.CF_TENANT_DOMAINS_TOKEN = process.env.CF_TENANT_DOMAINS_TOKEN;
+      if (process.env.RESEND_API_KEY) bulk.RESEND_API_KEY = process.env.RESEND_API_KEY;
       const tmp = join(LOCAL, `secrets-${env}.tmp.json`);
       writeJson(tmp, bulk);
       try {

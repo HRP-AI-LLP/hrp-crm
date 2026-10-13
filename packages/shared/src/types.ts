@@ -36,10 +36,15 @@ export interface PipelineMeta {
 }
 
 export interface TenantMeta {
-  tenant: { id: string; slug: string; name: string; metaVersion: number };
+  tenant: { id: string; slug: string; name: string; metaVersion: number; security?: SecurityPolicy };
   objects: ObjectMeta[];
   pipelines: PipelineMeta[];
   modules: { key: string; version: string; enabled: boolean }[];
+}
+
+export interface SecurityPolicy {
+  /** every member must use two-factor sign-in */
+  requireMfa?: boolean;
 }
 
 export interface MeResponse {

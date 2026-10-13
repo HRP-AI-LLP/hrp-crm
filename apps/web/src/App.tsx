@@ -3,7 +3,8 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Shell } from './components/Shell';
 import { Spinner } from './components/ui';
 import { useAuth } from './lib/auth';
-import { LoginPage, SignupPage } from './pages/Auth';
+import { AcceptInvitePage, ForgotPasswordPage, LoginPage, ResetPasswordPage, SignupPage } from './pages/Auth';
+import { AccountPage, MfaRequiredGate } from './pages/Account';
 import { DashboardPage } from './pages/Dashboard';
 import { KnowledgePage } from './pages/Knowledge';
 import { PipelinePage } from './pages/Pipeline';
@@ -28,6 +29,7 @@ function RequireAuth({ children }: { children: ReactNode }) {
       </div>
     );
   if (!me) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
+  if (me.security?.mfaRequired && !me.security.mfaEnabled) return <MfaRequiredGate />;
   return <>{children}</>;
 }
 
@@ -47,6 +49,9 @@ export function App() {
       />
       <Route path="/login" element={ready && me ? <Navigate to="/" replace /> : <LoginPage />} />
       <Route path="/signup" element={<SignupPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/accept-invite" element={<AcceptInvitePage />} />
       <Route
         element={
           <RequireAuth>
@@ -61,6 +66,7 @@ export function App() {
         <Route path="pipeline/:object" element={<PipelinePage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
         <Route path="calendar" element={<CalendarPage />} />
+        <Route path="account" element={<AccountPage />} />
         <Route path="forecast" element={<ForecastPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="reports/:id" element={<ReportBuilderPage />} />

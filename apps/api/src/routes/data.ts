@@ -5,6 +5,7 @@ import type { AppEnv } from '../env';
 import { badRequest, forbidden, notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { bulkAction, exportCsv, findDuplicates, importBatch, mergeRecords, relatedRecords } from '../services/data';
+import { loadRow } from '../services/records';
 import { enqueue, eventJobs } from '../services/jobs';
 import { getObject, type RecordCtx } from '../services/records';
 import { safeCtx } from './public';
@@ -71,6 +72,48 @@ export const dataRoutes = new Hono<AppEnv>()
       ]),
     );
     if (!rows.length) throw notFound();
+    return c.json({ ok: true });
+  })
+
+  // ------------------------------------------------------------------ manual record sharing
+  .get('/teams', async (c) => c.json({ items: await c.var.db.tx(scope(c, true), (tx) => tx.query(`select id, name from teams where tenant_id = $1 order by name`, [c.var.tenant.id])) }))
+  .get('/records/:object/:id/shares', async (c) => {
+    const { object, id } = c.req.param();
+    const items = await c.var.db.tx(scope(c, true), async (tx) => {
+      await loadRow(rctx(c, tx), object, id, 'read');
+      return tx.query(
+        `select rs.user_id, rs.team_id, rs.access, rs.created_at, u.full_name as user_name, t.name as team_name
+           from record_shares rs left join users u on u.tenant_id = rs.tenant_id and u.id = rs.user_id
+           left join teams t on t.tenant_id = rs.tenant_id and t.id = rs.team_id
+          where rs.tenant_id = $1 and rs.object_key = $2 and rs.record_id = $3 order by rs.created_at`,
+        [c.var.tenant.id, object, id],
+      );
+    });
+    return c.json({ items });
+  })
+  .post('/records/:object/:id/shares', async (c) => {
+    const { object, id } = c.req.param();
+    const b = z.object({ userId: uuid.nullish(), teamId: uuid.nullish(), access: z.enum(['read', 'edit']).default('read') }).refine((x) => !!x.userId !== !!x.teamId, 'Choose a person or a team').parse(await c.req.json());
+    await c.var.db.tx(scope(c), async (tx) => {
+      // only someone who can edit the record may share it
+      await loadRow(rctx(c, tx), object, id, 'update');
+      await tx.query(
+        `insert into record_shares (tenant_id, object_key, record_id, user_id, team_id, access) values ($1,$2,$3,$4,$5,$6)
+         on conflict (tenant_id, object_key, record_id, coalesce(user_id, team_id)) do update set access = excluded.access`,
+        [c.var.tenant.id, object, id, b.userId ?? null, b.teamId ?? null, b.access],
+      );
+      await tx.query(`insert into audit_logs (tenant_id, action, object_key, record_id, changes) values ($1,'share',$2,$3,$4)`, [c.var.tenant.id, object, id, JSON.stringify(b)]);
+    });
+    return c.json({ ok: true }, 201);
+  })
+  .delete('/records/:object/:id/shares', async (c) => {
+    const { object, id } = c.req.param();
+    const q = z.object({ userId: uuid.optional(), teamId: uuid.optional() }).parse(c.req.query());
+    await c.var.db.tx(scope(c), async (tx) => {
+      await loadRow(rctx(c, tx), object, id, 'update');
+      await tx.query(`delete from record_shares where tenant_id = $1 and object_key = $2 and record_id = $3 and (user_id = $4 or team_id = $5)`, [c.var.tenant.id, object, id, q.userId ?? null, q.teamId ?? null]);
+      await tx.query(`insert into audit_logs (tenant_id, action, object_key, record_id, changes) values ($1,'unshare',$2,$3,$4)`, [c.var.tenant.id, object, id, JSON.stringify(q)]);
+    });
     return c.json({ ok: true });
   })
 

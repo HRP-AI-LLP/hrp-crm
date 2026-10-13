@@ -190,7 +190,9 @@ export function Shell() {
         <div className="nav-foot">
           <span className="avatar">{initials(me?.user.fullName ?? '')}</span>
           <div className="grow">
-            <div style={{ color: '#fff', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>{me?.user.fullName}</div>
+            <Link to="/account" style={{ color: '#fff', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', whiteSpace: 'nowrap' }} title="My account and security">
+              {me?.user.fullName}
+            </Link>
             <button className="btn ghost sm" style={{ color: '#8fb6c0', padding: 0, height: 20 }} onClick={() => logout()}>
               Sign out
             </button>

@@ -11,6 +11,7 @@ import { crmRoutes } from './routes/crm';
 import { dataRoutes } from './routes/data';
 import { publicRoutes } from './routes/public';
 import { salesRoutes } from './routes/sales';
+import { securityRoutes } from './routes/security';
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -50,6 +51,7 @@ export function createApp() {
   app.route('/api/v1', salesRoutes);
   app.route('/api/ai', aiRoutes);
   app.route('/api/admin', adminRoutes);
+  app.route('/api/admin', securityRoutes);
 
   app.all('/api/*', () => {
     throw notFound('No such API route');

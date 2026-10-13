@@ -15,15 +15,21 @@
 - Industry modules: Real Estate, Healthcare, E-Commerce, Financial Services
 - Ops: idempotent provisioning, dev/prod CI/CD, Neon preview branches per PR, pre-deploy prod snapshot, audit log UI
 
+## Scaled in the second round (four phases)
+
+- **Brand**: the app follows www.hrpai.in — navy/cyan palette, Inter, logo emblem, mesh-and-grid sign-in art.
+- **Data & views**: saved personal and shared list views, a filter builder, a column chooser, total counts, bulk edit/delete/export, CSV import with column mapping, Indian formats and upsert, FLS-aware CSV export, duplicate detection, merge with per-field choices, and related lists.
+- **Visual builders**: formula fields (safe expression language shared by API and UI), roll-up summaries, validation rules, dependent picklists, conditional visibility and requirement, a drag-and-drop page layout builder, and a visual automation builder with nested if/else branches, formula conditions and run history.
+- **Sales productivity**: products and price books, GST-ready quotes (HSN/SAC, CGST+SGST/IGST, amount in words) with a print/PDF view and customer accept/decline links, email templates and sending, a calendar with reminders, in-app notifications, a forecast with quotas and drill-down, and a report and dashboard builder (bar, line, donut, funnel, number, pivot).
+- **Security & admin**: TOTP two-factor with recovery codes and a workspace-wide requirement, email or link invitations and password resets, session management, teams, team-lead visibility, sharing rules, per-record sharing, scoped API keys, and a usage page.
+
 ## Next (suggested order)
 
-1. **MFA (TOTP) and email-based invites and password reset.** Today an admin shares a temporary password once.
-2. **Argon2id hashing service on Oracle ARM.** This removes the PBKDF2 CPU risk.
-3. **CSV import and export** for all objects, run as a background job with FLS applied to exports.
-4. **Saved list views and a filter builder in the UI.** The API already supports filters and sorting on every field.
-5. **Email sync (IMAP/Gmail)** on the Oracle worker.
-6. **Layout and form builder UI.** The `forms.layout` data model exists; there's no drag-and-drop editor yet.
-7. **Reports**: grouped aggregates over the EAV index, scheduled email digests.
-8. **Platform admin console** for HRP staff, using a separate audited role (no RLS bypass inside the app).
-9. **Hash-chained audit export** for compliance customers.
-10. **Per-region data residency** (one Neon project per region, routed through the `tenants` registry).
+1. **Argon2id hashing service on Oracle ARM.** This removes the PBKDF2 CPU risk.
+2. **Email sync (IMAP/Gmail)** on the Oracle worker, so replies land on the timeline automatically.
+3. **Scheduled report digests** by email, and dashboard sharing by link.
+4. **Approval processes** (discount approvals on quotes) built on the automation engine.
+5. **Mobile PWA**: offline-first record views and a click-to-call/WhatsApp dialer.
+6. **Platform admin console** for HRP staff, using a separate audited role (no RLS bypass inside the app).
+7. **Hash-chained audit export** for compliance customers.
+8. **Per-region data residency** (one Neon project per region, routed through the `tenants` registry).

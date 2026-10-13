@@ -12,6 +12,7 @@ import { useObject, usePipelines } from '../lib/hooks';
 import { TaskList } from './Tasks';
 import { DuplicateBanner, RelatedPanel } from '../components/RecordData';
 import { EmailComposer } from '../components/EmailComposer';
+import { ShareModal } from '../components/ShareModal';
 import { QuoteEditor } from '../components/QuoteEditor';
 import { EventModal } from './Calendar';
 
@@ -39,6 +40,7 @@ export function RecordDetailPage() {
   const [converting, setConverting] = useState(false);
   const [composing, setComposing] = useState(false);
   const [scheduling, setScheduling] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const pipelines = usePipelines(object);
   const key = ['record', object, id];
   const { data: rec, isLoading, error } = useQuery({ queryKey: key, queryFn: () => get<RecordDto>(`/api/v1/records/${object}/${id}`) });
@@ -95,6 +97,11 @@ export function RecordDetailPage() {
           <button className="btn" onClick={() => setScheduling(true)}>
             Schedule
           </button>
+          {canEdit && (
+            <button className="btn" onClick={() => setSharing(true)}>
+              Share
+            </button>
+          )}
           {object === 'deal' && me && objectPerm(me.permissions, 'quote').create && (
             <button
               className="btn"
@@ -189,6 +196,7 @@ export function RecordDetailPage() {
         </section>
       </div>
 
+      {sharing && <ShareModal object={object} id={id} title={rec.title || obj.label} onClose={() => setSharing(false)} />}
       {composing && <EmailComposer object={object} recordId={id} onClose={() => setComposing(false)} />}
       {scheduling && (
         <EventModal

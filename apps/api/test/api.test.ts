@@ -77,7 +77,12 @@ describe('public + auth', () => {
   it('wrong password → 401; lockout after repeated failures', async () => {
     await call('POST', '/api/public/signup', { body: { workspaceName: 'Lock', slug: 'lockco', fullName: 'L', email: 'l@lock.test', password: PW } });
     for (let i = 0; i < 5; i++) expect((await call('POST', '/api/auth/login', { tenant: 'lockco', body: { email: 'l@lock.test', password: 'wrong' } })).status).toBe(401);
-    expect((await call('POST', '/api/auth/login', { tenant: 'lockco', body: { email: 'l@lock.test', password: PW } })).status).toBe(429);
+    // locked: even the right password is refused, with the same answer as a wrong one (no account enumeration)
+    const locked = await call('POST', '/api/auth/login', { tenant: 'lockco', body: { email: 'l@lock.test', password: PW } });
+    expect(locked.status).toBe(401);
+    expect(locked.json.accessToken).toBeUndefined();
+    const unknown = await call('POST', '/api/auth/login', { tenant: 'lockco', body: { email: 'nobody@lock.test', password: PW } });
+    expect(unknown.json.error.message).toBe(locked.json.error.message);
   });
   it('me returns owner permissions', async () => {
     const r = await call('GET', '/api/auth/me', { tenant: 'acme', token: acme.token });

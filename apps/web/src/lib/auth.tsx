@@ -2,18 +2,26 @@ import type { EffectivePermissions } from '@synapse/shared';
 import { hasAdmin } from '@synapse/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from 'react';
-import { api, onExpired, post, refreshSession, setAccessToken, setWorkspace } from './api';
+import { api, onExpired, onMfaRequired, post, refreshSession, setAccessToken, setWorkspace } from './api';
 
 export interface Me {
   user: { id: string; email: string; fullName: string; isOwner: boolean; roles: string[]; attributes: Record<string, unknown> };
   tenant: { id: string; slug: string; name: string };
   permissions: EffectivePermissions;
+  security?: { mfaEnabled: boolean; mfaRequired: boolean };
 }
+
+export type LoginResult = { ok: true } | { mfaChallenge: string };
 
 interface AuthState {
   me: Me | null;
   ready: boolean;
-  login(workspace: string | null, email: string, password: string): Promise<void>;
+  /** resolves with a challenge when two-factor sign-in is needed */
+  login(workspace: string | null, email: string, password: string): Promise<LoginResult>;
+  verifyMfa(challenge: string, code: { code?: string; recoveryCode?: string }): Promise<void>;
+  /** sign in with a token issued by invite acceptance */
+  adopt(accessToken: string): Promise<void>;
+  reload(): Promise<void>;
   logout(): Promise<void>;
   can(area: string): boolean;
 }
@@ -33,16 +41,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setMe(null);
       qc.clear();
     });
+    onMfaRequired(() => void loadMe().catch(() => undefined));
     (async () => {
       if (await refreshSession()) await loadMe().catch(() => setMe(null));
       setReady(true);
     })();
   }, [loadMe, qc]);
 
-  const login = async (workspace: string | null, email: string, password: string) => {
+  const login = async (workspace: string | null, email: string, password: string): Promise<LoginResult> => {
     if (workspace) setWorkspace(workspace);
-    const r = await post<{ accessToken: string }>('/api/auth/login', { email, password });
+    const r = await post<{ accessToken?: string; mfaRequired?: boolean; challenge?: string }>('/api/auth/login', { email, password });
+    if (r.mfaRequired && r.challenge) return { mfaChallenge: r.challenge };
+    setAccessToken(r.accessToken!);
+    await loadMe();
+    return { ok: true };
+  };
+
+  const verifyMfa = async (challenge: string, c: { code?: string; recoveryCode?: string }) => {
+    const r = await post<{ accessToken: string }>('/api/auth/mfa/verify', { challenge, ...c });
     setAccessToken(r.accessToken);
+    await loadMe();
+  };
+
+  const adopt = async (accessToken: string) => {
+    setAccessToken(accessToken);
     await loadMe();
   };
 
@@ -55,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const can = (area: string) => !!me && hasAdmin(me.permissions, area);
 
-  return <Ctx.Provider value={{ me, ready, login, logout, can }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ me, ready, login, verifyMfa, adopt, reload: loadMe, logout, can }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth() {

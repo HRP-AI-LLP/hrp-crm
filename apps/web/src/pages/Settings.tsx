@@ -4,6 +4,8 @@ import { FieldEditor, TYPE_LABELS } from '../components/builders/FieldEditor';
 import { LayoutBuilder } from '../components/builders/LayoutBuilder';
 import { RulesEditor } from '../components/builders/RulesEditor';
 import { SalesSetup } from '../components/SalesSetup';
+import { PeopleTab } from '../components/admin/People';
+import { ApiKeysTab, SecurityPolicyTab, SharingRulesTab, TeamsTab, UsageTab } from '../components/admin/SecurityAdmin';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
@@ -14,25 +16,48 @@ import { useMeta } from '../lib/hooks';
 
 type Json = Record<string, any>;
 
-const TABS = [
-  ['fields', 'Objects & fields', 'metadata'],
-  ['pipelines', 'Pipelines', 'metadata'],
-  ['sales', 'Sales setup', 'metadata'],
-  ['users', 'Users', 'users'],
-  ['roles', 'Roles & access', 'roles'],
-  ['modules', 'Industry modules', 'modules'],
-  ['ai', 'AI models', 'ai'],
-  ['workflows', 'Automations', 'workflows'],
-  ['forms', 'Web forms', 'metadata'],
-  ['channels', 'Channels', 'channels'],
-  ['domains', 'Domains', 'domains'],
-  ['audit', 'Audit log', 'audit'],
-] as const;
+const GROUPS: [string, [string, string, string][]][] = [
+  ['Customise', [
+    ['fields', 'Objects & fields', 'metadata'],
+    ['pipelines', 'Pipelines', 'metadata'],
+    ['workflows', 'Automations', 'workflows'],
+    ['forms', 'Web forms', 'metadata'],
+    ['sales', 'Sales setup', 'metadata'],
+    ['modules', 'Industry modules', 'modules'],
+  ]],
+  ['People & access', [
+    ['users', 'Users', 'users'],
+    ['teams', 'Teams', 'users'],
+    ['roles', 'Roles & access', 'roles'],
+    ['sharing', 'Sharing rules', 'roles'],
+    ['security', 'Security', 'users'],
+  ]],
+  ['Connect', [
+    ['ai', 'AI models', 'ai'],
+    ['channels', 'Channels', 'channels'],
+    ['apikeys', 'API keys', 'users'],
+    ['domains', 'Domains', 'domains'],
+  ]],
+  ['Monitor', [
+    ['usage', 'Usage', 'users'],
+    ['audit', 'Audit log', 'audit'],
+  ]],
+];
 
 export function SettingsPage() {
   const { can } = useAuth();
-  const tabs = TABS.filter(([, , area]) => can(area));
-  const [tab, setTab] = useState<string>(tabs[0]?.[0] ?? 'fields');
+  const groups = GROUPS.map(([g, items]) => [g, items.filter(([, , area]) => can(area))] as const).filter(([, items]) => items.length);
+  const all = groups.flatMap(([, items]) => items);
+  const initial = (() => {
+    const h = window.location.hash.slice(1);
+    return all.some(([k]) => k === h) ? h : (all[0]?.[0] ?? 'fields');
+  })();
+  const [tab, setTabState] = useState<string>(initial);
+  const setTab = (k: string) => {
+    setTabState(k);
+    history.replaceState(null, '', `#${k}`);
+  };
+  const current = all.find(([k]) => k === tab);
   return (
     <>
       <div className="page-head">
@@ -40,20 +65,45 @@ export function SettingsPage() {
           <h1>Settings</h1>
           <p>Shape Synapse to how your business sells.</p>
         </div>
-      </div>
-      <section className="panel">
-        <div className="tabs" role="tablist" style={{ overflowX: 'auto' }}>
-          {tabs.map(([k, label]) => (
-            <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
-              {label}
-            </button>
+        <select className="settings-select" value={tab} onChange={(e) => setTab(e.target.value)} aria-label="Settings section">
+          {groups.map(([g, items]) => (
+            <optgroup key={g} label={g}>
+              {items.map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </optgroup>
           ))}
+        </select>
+      </div>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings sections">
+          {groups.map(([g, items]) => (
+            <div key={g}>
+              <div className="settings-group">{g}</div>
+              {items.map(([k, l]) => (
+                <button key={k} aria-current={tab === k ? 'page' : undefined} onClick={() => setTab(k)}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          ))}
+        </nav>
+      <section className="panel" aria-label={current?.[1]}>
+        <div className="panel-head">
+          <h2>{current?.[1]}</h2>
         </div>
         <div className="panel-body">
           {tab === 'fields' && <ObjectsTab />}
           {tab === 'pipelines' && <PipelinesTab />}
           {tab === 'sales' && <SalesSetup />}
-          {tab === 'users' && <UsersTab />}
+          {tab === 'users' && <PeopleTab />}
+          {tab === 'teams' && <TeamsTab />}
+          {tab === 'sharing' && <SharingRulesTab />}
+          {tab === 'security' && <SecurityPolicyTab />}
+          {tab === 'apikeys' && <ApiKeysTab />}
+          {tab === 'usage' && <UsageTab />}
           {tab === 'roles' && <RolesTab />}
           {tab === 'modules' && <ModulesTab />}
           {tab === 'ai' && <AiModelsTab />}
@@ -64,6 +114,7 @@ export function SettingsPage() {
           {tab === 'audit' && <AuditTab />}
         </div>
       </section>
+      </div>
     </>
   );
 }
@@ -322,141 +373,6 @@ function PipelinesTab() {
 }
 
 // ------------------------------------------------------------------ users & roles
-function UsersTab() {
-  const run = useRun();
-  const { data, isLoading } = useQuery({ queryKey: ['admin-users'], queryFn: () => get<{ items: Json[] }>('/api/admin/users') });
-  const { data: roles } = useQuery({ queryKey: ['admin-roles'], queryFn: () => get<{ items: Json[] }>('/api/admin/roles') });
-  const [inv, setInv] = useState<{ email: string; fullName: string; role: string } | null>(null);
-  const [temp, setTemp] = useState<string | null>(null);
-  if (isLoading) return <Spinner />;
-  return (
-    <div className="stack">
-      <div className="spread">
-        <p className="muted" style={{ margin: 0 }}>
-          Attributes like region or branch drive attribute-based access rules.
-        </p>
-        <button className="btn primary" onClick={() => setInv({ email: '', fullName: '', role: 'sales_rep' })}>
-          Invite user
-        </button>
-      </div>
-      <table className="data">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Role</th>
-            <th>Attributes</th>
-            <th>Last sign-in</th>
-            <th />
-          </tr>
-        </thead>
-        <tbody>
-          {data?.items.map((u) => (
-            <tr key={u.id}>
-              <td>
-                <b>{u.full_name}</b> {u.is_owner && <span className="chip">owner</span>}
-                <div className="muted small">{u.email}</div>
-              </td>
-              <td>
-                <select value={u.roles[0] ?? ''} onChange={(e) => run(() => patch(`/api/admin/users/${u.id}`, { roles: [e.target.value] }), 'Role updated', [['admin-users']])} style={{ width: 'auto' }} aria-label="Role">
-                  {roles?.items.map((r) => (
-                    <option key={r.id} value={r.key}>
-                      {r.name}
-                    </option>
-                  ))}
-                </select>
-              </td>
-              <td className="small">
-                <button
-                  className="btn ghost sm"
-                  onClick={() => {
-                    const v = window.prompt('Attributes as JSON, e.g. {"region":"west"}', JSON.stringify(u.attributes ?? {}));
-                    if (v !== null) {
-                      try {
-                        const parsed = JSON.parse(v);
-                        run(() => patch(`/api/admin/users/${u.id}`, { attributes: parsed }), 'Attributes saved', [['admin-users']]);
-                      } catch {
-                        window.alert('That is not valid JSON');
-                      }
-                    }
-                  }}
-                >
-                  {Object.keys(u.attributes ?? {}).length ? Object.entries(u.attributes).map(([k, v]) => `${k}: ${v}`).join(', ') : 'Add attributes'}
-                </button>
-              </td>
-              <td className="muted">{u.last_login_at ? relative(u.last_login_at) : 'Never'}</td>
-              <td>
-                {!u.is_owner && (
-                  <div className="row">
-                    <button className="btn sm" onClick={async () => {
-                      const r = (await run(() => post(`/api/admin/users/${u.id}/reset-password`), 'Password reset')) as { temporaryPassword: string } | null;
-                      if (r) setTemp(r.temporaryPassword);
-                    }}>
-                      Reset password
-                    </button>
-                    <button className="btn sm danger" onClick={() => run(() => patch(`/api/admin/users/${u.id}`, { status: u.status === 'disabled' ? 'active' : 'disabled' }), u.status === 'disabled' ? 'User enabled' : 'User disabled', [['admin-users']])}>
-                      {u.status === 'disabled' ? 'Enable' : 'Disable'}
-                    </button>
-                  </div>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {inv && (
-        <Modal
-          title="Invite user"
-          onClose={() => setInv(null)}
-          footer={
-            <button
-              className="btn primary"
-              disabled={!inv.email || !inv.fullName}
-              onClick={async () => {
-                const r = (await run(() => post('/api/admin/users', { email: inv.email, fullName: inv.fullName, roles: [inv.role] }), 'User invited', [['admin-users'], ['users']])) as { temporaryPassword?: string } | null;
-                if (r) {
-                  setInv(null);
-                  if (r.temporaryPassword) setTemp(r.temporaryPassword);
-                }
-              }}
-            >
-              Invite user
-            </button>
-          }
-        >
-          <div className="modal-body">
-            <label className="field">
-              Full name
-              <input value={inv.fullName} onChange={(e) => setInv({ ...inv, fullName: e.target.value })} />
-            </label>
-            <label className="field">
-              Email
-              <input type="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} />
-            </label>
-            <label className="field wide">
-              Role
-              <select value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })}>
-                {roles?.items.map((r) => (
-                  <option key={r.id} value={r.key}>
-                    {r.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </Modal>
-      )}
-      {temp && (
-        <Modal title="Temporary password" onClose={() => setTemp(null)} footer={<button className="btn primary" onClick={() => setTemp(null)}>Done</button>}>
-          <div className="modal-body">
-            <p className="wide">Share this password privately. It is shown only once; ask the user to change it after signing in.</p>
-            <input className="wide" readOnly value={temp} onFocus={(e) => e.target.select()} />
-          </div>
-        </Modal>
-      )}
-    </div>
-  );
-}
-
 function RolesTab() {
   const run = useRun();
   const { data, isLoading } = useQuery({ queryKey: ['admin-roles'], queryFn: () => get<{ items: Json[] }>('/api/admin/roles') });

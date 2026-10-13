@@ -6,7 +6,8 @@ Multi-tenant, metadata-driven CRM by **HRP AI LLP**. It runs on free tiers: Clou
 apps/
   api/        Edge gateway Worker (Hono): tenant routing, auth, RBAC/ABAC/FLS, CRM API,
               queue consumer, cron. Also serves the SPA through Workers Static Assets.
-  web/        React 19 + Vite SPA (dashboard, records, pipeline board, tasks, knowledge base, settings)
+  web/        React 19 + Vite SPA (records, views, builders, quotes, calendar, forecast, reports,
+              dashboards, settings) in the hrpai.in brand
 packages/
   db/         SQL migrations (RLS, audit, EAV index, platform functions), runner, seed, RLS tests
   shared/     Field types and validation, standard objects, permission engine, industry modules
@@ -82,6 +83,32 @@ Workspace admins can add their own API keys in **Settings → AI models**. Suppo
 - **Storage:** keys are encrypted at rest and never shown again; only the last four characters are visible.
 - **Personal data:** each key has an *allow personal data* switch, so a key whose provider agreement doesn't cover customer data is used only for prompts without personal data.
 - **Daily cap:** calls made on a workspace's own keys don't count against the platform's daily AI cap.
+
+## What's inside
+
+| Area | Highlights |
+|---|---|
+| Records & views | Leads, contacts, accounts, deals, products, quotes and your own objects; saved/shared views, filters, columns, bulk edit, CSV import/export, duplicates & merge, related lists |
+| Builders | Custom fields incl. formulas and roll-ups, validation rules, dependent picklists, conditional fields, drag-and-drop page layouts, visual automations with branches |
+| Selling | Pipeline board, GST quotes with PDF and accept links, price books, email templates, calendar & reminders, notifications, forecast vs quota, reports & dashboards |
+| AI | Lead scoring, summaries, next best actions, email drafts, knowledge-base answers; workspace-owned model keys |
+| Security | RLS isolation, RBAC/ABAC/FLS, teams & sharing rules, TOTP two-factor (optionally required), invitations, session control, scoped API keys, audit log |
+
+### Optional email for invitations and password resets
+
+Without email, admins get a link to share. To send them by email, create a free [Resend](https://resend.com) account, verify `hrpai.in` there, and add the key to each Worker:
+
+```powershell
+cd apps/api
+npx wrangler secret put RESEND_API_KEY --env dev
+npx wrangler secret put RESEND_API_KEY --env production
+```
+
+The sender is `MAIL_FROM` in `wrangler.jsonc` (default `HRP Synapse <no-reply@hrpai.in>`).
+
+### API for integrations
+
+Settings → API keys creates keys such as `syn_acme_…`. Call `https://hrpsynapse.hrpai.in/api/v1/records/lead` with `Authorization: Bearer <key>`. The workspace is read from the key, and the key acts as the person it was created for.
 
 ## Branching and CI/CD
 

@@ -259,7 +259,7 @@ export const adminRoutes = new Hono<AppEnv>()
     c.json({
       items: await c.var.db.tx(scope(c, true), (tx) =>
         tx.query(
-          `select u.id, u.email, u.full_name, u.status, u.is_owner, u.attributes, u.manager_id, u.last_login_at, u.created_at,
+          `select u.id, u.email, u.full_name, u.status, u.is_owner, u.attributes, u.manager_id, u.last_login_at, u.created_at, (u.mfa_enabled_at is not null) as mfa_enabled,
                   coalesce(array_agg(r.key) filter (where r.key is not null), '{}') as roles
              from users u left join user_roles ur on ur.tenant_id = u.tenant_id and ur.user_id = u.id
              left join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
@@ -320,6 +320,8 @@ export const adminRoutes = new Hono<AppEnv>()
         [c.var.tenant.id, id, b.fullName ?? null, b.status ?? null, b.attributes ? JSON.stringify(b.attributes) : null, b.managerId !== undefined, b.managerId ?? null],
       );
       if (b.status === 'disabled') await tx.query(`update sessions set revoked_at = now() where tenant_id = $1 and user_id = $2 and revoked_at is null`, [c.var.tenant.id, id]);
+      // any status change voids outstanding invitation and reset links
+      if (b.status) await tx.query(`update user_tokens set used_at = now() where tenant_id = $1 and user_id = $2 and kind in ('invite', 'reset') and used_at is null`, [c.var.tenant.id, id]);
       if (b.roles) {
         const roles = await tx.query<{ id: string }>(`select id from roles where tenant_id = $1 and key = any($2)`, [c.var.tenant.id, b.roles]);
         if (roles.length !== b.roles.length) throw badRequest('Unknown role');

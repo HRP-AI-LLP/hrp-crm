@@ -92,7 +92,7 @@ export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> 
       [tenant.id],
     );
   const modules = await tx.query<{ module_key: string; version: string; is_enabled: boolean }>(`select module_key, version, is_enabled from tenant_modules where tenant_id = $1`, [tenant.id]);
-  const version = await tx.one<{ meta_version: number }>(`select meta_version from tenants where id = $1`, [tenant.id]);
+  const version = await tx.one<{ meta_version: number; security: Record<string, unknown> | null }>(`select meta_version, settings -> 'security' as security from tenants where id = $1`, [tenant.id]);
 
   const objectMetas: ObjectMeta[] = objects.map((o) => {
     const std = isStandardObject(o.key) ? STANDARD_FIELDS[o.key] : CUSTOM_OBJECT_BASE_FIELDS;
@@ -137,7 +137,7 @@ export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> 
   }));
 
   return {
-    tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name, metaVersion: version?.meta_version ?? tenant.metaVersion },
+    tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name, metaVersion: version?.meta_version ?? tenant.metaVersion, security: { requireMfa: version?.security?.requireMfa === true } },
     objects: objectMetas,
     pipelines,
     modules: modules.map((m) => ({ key: m.module_key, version: m.version, enabled: m.is_enabled })),
@@ -153,8 +153,8 @@ export async function loadPrincipal(env: Env, tx: Tx, tenant: TenantInfo, meta: 
   const cached = await cache.get<Omit<Principal, 'sessionId'>>(key);
   if (cached) return { ...cached, sessionId };
 
-  const user = await tx.one<{ id: string; email: string; full_name: string; is_owner: boolean; status: string; attributes: Record<string, unknown> }>(
-    `select id, email, full_name, is_owner, status, attributes from users where tenant_id = $1 and id = $2`,
+  const user = await tx.one<{ id: string; email: string; full_name: string; is_owner: boolean; status: string; attributes: Record<string, unknown>; mfa: boolean }>(
+    `select id, email, full_name, is_owner, status, attributes, (mfa_enabled_at is not null) as mfa from users where tenant_id = $1 and id = $2`,
     [tenant.id, userId],
   );
   if (!user) return null;
@@ -170,9 +170,23 @@ export async function loadPrincipal(env: Env, tx: Tx, tenant: TenantInfo, meta: 
   // the tenant owner can never be locked out of setup
   if (user.is_owner) parsed.push({ objects: { '*': { read: 'all', create: true, update: 'all', delete: 'all' } }, admin: ['*'] });
 
+  const teams = await tx.query<{ team_id: string; is_lead: boolean }>(
+    `select tm.team_id, (t.lead_id = $2) as is_lead from team_members tm join teams t on t.tenant_id = tm.tenant_id and t.id = tm.team_id where tm.tenant_id = $1 and tm.user_id = $2
+     union select id, true from teams where tenant_id = $1 and lead_id = $2`,
+    [tenant.id, userId],
+  );
+  const roleKeys = roles.map((r) => r.key);
+  const rules = await tx.query<{ object_key: string; criteria: { field: string; op: string; value?: unknown }[]; access: 'read' | 'edit' }>(
+    `select object_key, criteria, access from sharing_rules
+      where tenant_id = $1 and is_active and (team_id = any($2::uuid[]) or role_key = any($3::text[]))`,
+    [tenant.id, teams.map((t) => t.team_id), roleKeys],
+  );
   const value: Omit<Principal, 'sessionId'> = {
-    user: { id: user.id, email: user.email, fullName: user.full_name, isOwner: user.is_owner, status: user.status, attributes: user.attributes ?? {}, roles: roles.map((r) => r.key) },
+    user: { id: user.id, email: user.email, fullName: user.full_name, isOwner: user.is_owner, status: user.status, attributes: user.attributes ?? {}, roles: roleKeys, mfaEnabled: user.mfa },
     permissions: mergePermissions(parsed, meta.objects.map((o) => o.key).concat(['task', 'activity'])),
+    teams: [...new Set(teams.map((t) => t.team_id))],
+    leads: [...new Set(teams.filter((t) => t.is_lead).map((t) => t.team_id))],
+    shares: rules.map((r) => ({ objectKey: r.object_key, criteria: Array.isArray(r.criteria) ? r.criteria : [], access: r.access })),
   };
   await cache.set(key, value, { ttlSeconds: 60 });
   return { ...value, sessionId };
