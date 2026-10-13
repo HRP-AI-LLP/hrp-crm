@@ -1,6 +1,9 @@
 import {
   CUSTOM_OBJECT_BASE_FIELDS,
+  type ApprovalRuleMeta,
+  type AssignmentRuleMeta,
   type FieldDef,
+  type RuleCriterion,
   isComputed,
   layoutSchema,
   type ObjectMeta,
@@ -92,9 +95,26 @@ export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> 
       [tenant.id],
     );
   const modules = await tx.query<{ module_key: string; version: string; is_enabled: boolean }>(`select module_key, version, is_enabled from tenant_modules where tenant_id = $1`, [tenant.id]);
-  const version = await tx.one<{ meta_version: number; security: Record<string, unknown> | null }>(`select meta_version, settings -> 'security' as security from tenants where id = $1`, [tenant.id]);
+  const version = await tx.one<{ meta_version: number; security: Record<string, unknown> | null; scoring: { hot?: number; warm?: number } | null }>(
+    `select meta_version, settings -> 'security' as security, settings -> 'scoring' as scoring from tenants where id = $1`,
+    [tenant.id],
+  );
+  const assignment = await tx.query<{ id: string; object_key: string; name: string; criteria: RuleCriterion[]; strategy: AssignmentRuleMeta['strategy']; user_ids: string[]; team_id: string | null }>(
+    `select id, object_key, name, criteria, strategy, user_ids, team_id from assignment_rules where tenant_id = $1 and is_active order by position, created_at`,
+    [tenant.id],
+  );
+  const scoring = await tx.query<{ id: string; object_key: string; name: string; criteria: RuleCriterion[]; points: number }>(
+    `select id, object_key, name, criteria, points from scoring_rules where tenant_id = $1 and is_active order by created_at`,
+    [tenant.id],
+  );
+  const approval = await tx.query<{ id: string; object_key: string; name: string; criteria: RuleCriterion[]; approver_type: ApprovalRuleMeta['approverType']; approver_id: string | null; approver_role: string | null }>(
+    `select id, object_key, name, criteria, approver_type, approver_id, approver_role from approval_rules where tenant_id = $1 and is_active order by position, created_at`,
+    [tenant.id],
+  );
+  // objects of a switched-off module/app stay in the database but disappear from the workspace
+  const disabled = new Set(modules.filter((m) => !m.is_enabled).map((m) => m.module_key));
 
-  const objectMetas: ObjectMeta[] = objects.map((o) => {
+  const objectMetas: ObjectMeta[] = objects.filter((o) => !o.module_key || !disabled.has(o.module_key)).map((o) => {
     const std = isStandardObject(o.key) ? STANDARD_FIELDS[o.key] : CUSTOM_OBJECT_BASE_FIELDS;
     const custom: FieldDef[] = fields
       .filter((f) => f.object_key === o.key)
@@ -141,6 +161,15 @@ export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> 
     objects: objectMetas,
     pipelines,
     modules: modules.map((m) => ({ key: m.module_key, version: m.version, enabled: m.is_enabled })),
+    automation: {
+      assignment: assignment.map((r) => ({ id: r.id, objectKey: r.object_key, name: r.name, criteria: r.criteria ?? [], strategy: r.strategy, userIds: r.user_ids ?? [], teamId: r.team_id })),
+      scoring: {
+        rules: scoring.map((r) => ({ id: r.id, objectKey: r.object_key, name: r.name, criteria: r.criteria ?? [], points: r.points })),
+        hot: Number(version?.scoring?.hot ?? 70),
+        warm: Number(version?.scoring?.warm ?? 40),
+      },
+      approval: approval.map((r) => ({ id: r.id, objectKey: r.object_key, name: r.name, criteria: r.criteria ?? [], approverType: r.approver_type, approverId: r.approver_id, approverRole: r.approver_role })),
+    },
   };
 }
 

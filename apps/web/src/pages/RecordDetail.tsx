@@ -15,6 +15,8 @@ import { EmailComposer } from '../components/EmailComposer';
 import { ShareModal } from '../components/ShareModal';
 import { QuoteEditor } from '../components/QuoteEditor';
 import { EventModal } from './Calendar';
+import { FilesPanel } from '../components/Files';
+import { ApprovalBar, QuoteRevisions } from '../components/Approvals';
 
 interface Activity {
   id: string;
@@ -25,9 +27,10 @@ interface Activity {
   sentiment: string | null;
   occurred_at: string;
   actor_name: string | null;
+  metadata?: { location?: { lat: number; lng: number; accuracy?: number }; outcome?: string; durationMinutes?: number } | null;
 }
 
-const KIND_MARK: Record<string, string> = { note: 'N', call: 'C', email: '@', meeting: 'M', whatsapp: 'W', sms: 'S', stage_change: '→', system: '•', ai: 'AI', webhook: '⇄' };
+const KIND_MARK: Record<string, string> = { note: 'N', call: 'C', email: '@', meeting: 'M', whatsapp: 'W', instagram: 'IG', visit: 'V', sms: 'S', stage_change: '→', system: '•', ai: 'AI', webhook: '⇄' };
 
 export function RecordDetailPage() {
   const { object = '', id = '' } = useParams();
@@ -36,7 +39,7 @@ export function RecordDetailPage() {
   const toast = useToast();
   const nav = useNavigate();
   const { me } = useAuth();
-  const [tab, setTab] = useState<'timeline' | 'related' | 'tasks' | 'ai'>('timeline');
+  const [tab, setTab] = useState<'timeline' | 'related' | 'files' | 'tasks' | 'ai'>('timeline');
   const [converting, setConverting] = useState(false);
   const [composing, setComposing] = useState(false);
   const [scheduling, setScheduling] = useState(false);
@@ -85,7 +88,15 @@ export function RecordDetailPage() {
           <div>
             <div className="muted small">{obj.label}</div>
             <h1>{rec.title || 'Untitled'}</h1>
-            <p className="small">Updated {relative(rec.updated_at)}</p>
+            <p className="small row" style={{ gap: 6, flexWrap: 'wrap' }}>
+              {typeof rec.rating === 'string' && (
+                <span className={`chip rating-${rec.rating}`} title={`Score ${rec.score ?? '—'} from your scoring rules`}>
+                  {rec.rating} · {String(rec.score ?? '')}
+                </span>
+              )}
+              {object === 'quote' && Number(rec.revision ?? 1) > 1 && <span className="chip">Revision {String(rec.revision)}</span>}
+              <span>Updated {relative(rec.updated_at)}</span>
+            </p>
           </div>
         </div>
         <div className="row" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
@@ -143,6 +154,10 @@ export function RecordDetailPage() {
       {canEdit && <DuplicateBanner obj={obj} record={rec} />}
       {object === 'quote' && (
         <div style={{ marginBottom: 20 }}>
+          <ApprovalBar object={object} record={rec} canEdit={canEdit} />
+          <div style={{ marginBottom: 10 }}>
+            <QuoteRevisions quoteId={id} />
+          </div>
           <QuoteEditor quoteId={id} canEdit={canEdit} />
         </div>
       )}
@@ -179,14 +194,15 @@ export function RecordDetailPage() {
 
         <section className="panel">
           <div className="tabs" role="tablist">
-            {(['timeline', 'related', 'tasks', 'ai'] as const).map((t) => (
+            {(['timeline', 'related', 'files', 'tasks', 'ai'] as const).map((t) => (
               <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
-                {t === 'timeline' ? 'Timeline' : t === 'related' ? 'Related' : t === 'tasks' ? 'Tasks' : 'Synapse AI'}
+                {t === 'timeline' ? 'Timeline' : t === 'related' ? 'Related' : t === 'files' ? 'Files' : t === 'tasks' ? 'Tasks' : 'Synapse AI'}
               </button>
             ))}
           </div>
           {tab === 'timeline' && <Timeline object={object} id={id} canLog={canEdit} />}
           {tab === 'related' && <RelatedPanel object={object} id={id} />}
+          {tab === 'files' && <FilesPanel object={object} id={id} canEdit={canEdit} />}
           {tab === 'tasks' && (
             <div className="panel-body">
               <TaskList relatedObject={object} relatedId={id} compact />
@@ -272,13 +288,31 @@ function Timeline({ object, id, canLog }: { object: string; id: string; canLog: 
   const toast = useToast();
   const [kind, setKind] = useState('note');
   const [body, setBody] = useState('');
+  const [loc, setLoc] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const [locating, setLocating] = useState(false);
+  const locate = () => {
+    if (!navigator.geolocation) return toast('Location is not available on this device', true);
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        setLoc({ lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6), accuracy: Math.round(p.coords.accuracy) });
+        setLocating(false);
+      },
+      () => {
+        toast('Could not read your location. Allow location access and try again.', true);
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 15_000 },
+    );
+  };
   const { data, isLoading } = useQuery({ queryKey: ['timeline', object, id], queryFn: () => get<{ items: Activity[] }>(`/api/v1/records/${object}/${id}/timeline`) });
   const log = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!body.trim()) return;
     try {
-      await post(`/api/v1/records/${object}/${id}/activities`, { kind, subject: kind === 'note' ? 'Note' : `Logged ${kind}`, body });
+      await post(`/api/v1/records/${object}/${id}/activities`, { kind, subject: kind === 'note' ? 'Note' : kind === 'visit' ? 'Site visit' : `Logged ${kind}`, body, ...(kind === 'visit' && loc ? { location: loc } : {}) });
       setBody('');
+      setLoc(null);
       qc.invalidateQueries({ queryKey: ['timeline', object, id] });
     } catch (err) {
       toast((err as Error).message, true);
@@ -296,7 +330,13 @@ function Timeline({ object, id, canLog }: { object: string; id: string; canLog: 
               <option value="meeting">Meeting</option>
               <option value="email">Email (logged)</option>
               <option value="whatsapp">WhatsApp (logged)</option>
+              <option value="visit">Site / field visit</option>
             </select>
+            {kind === 'visit' && (
+              <button type="button" className="btn sm" onClick={locate} disabled={locating}>
+                {locating ? 'Locating…' : loc ? `📍 ±${loc.accuracy} m` : 'Add my location'}
+              </button>
+            )}
             <button className="btn primary sm" disabled={!body.trim()}>
               Add to timeline
             </button>
@@ -324,6 +364,19 @@ function Timeline({ object, id, canLog }: { object: string; id: string; canLog: 
                   {a.sentiment ? ` · sentiment ${a.sentiment}` : ''}
                 </div>
                 {a.body && <div className="body">{a.body}</div>}
+                {(a.metadata?.location || a.metadata?.outcome) && (
+                  <div className="small muted">
+                    {a.metadata.outcome ? `Outcome: ${a.metadata.outcome}` : ''}
+                    {a.metadata.location && (
+                      <>
+                        {a.metadata.outcome ? ' · ' : ''}
+                        <a href={`https://www.google.com/maps?q=${a.metadata.location.lat},${a.metadata.location.lng}`} target="_blank" rel="noopener noreferrer">
+                          Checked in here{a.metadata.location.accuracy ? ` (±${a.metadata.location.accuracy} m)` : ''}
+                        </a>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             </li>
           ))}

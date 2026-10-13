@@ -12,7 +12,7 @@ import type { Tx } from '../lib/db';
 export interface ChannelAccount {
   id: string;
   tenant_id: string;
-  channel: 'email' | 'whatsapp' | 'sms' | 'webhook';
+  channel: 'email' | 'whatsapp' | 'instagram' | 'sms' | 'webhook';
   provider: string;
   config: Record<string, unknown>;
   secret_ciphertext: string | null;
@@ -53,6 +53,18 @@ export async function sendViaChannel(env: Env, acc: ChannelAccount, msg: Outboun
       if (!res.ok) throw new Error(`whatsapp HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
       const j = (await res.json()) as { messages?: { id: string }[] };
       return { externalId: j.messages?.[0]?.id ?? null };
+    }
+    case 'instagram:meta_cloud': {
+      // Instagram messaging (Graph API, via the connected Facebook page); `to` is the IG-scoped user id
+      const version = String(acc.config.graphVersion ?? 'v21.0');
+      const res = await fetch(`https://graph.facebook.com/${version}/${acc.config.pageId ?? 'me'}/messages`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${secret.accessToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ recipient: { id: msg.to }, message: { text: msg.body.slice(0, 1000) } }),
+      });
+      if (!res.ok) throw new Error(`instagram HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      const j = (await res.json()) as { message_id?: string };
+      return { externalId: j.message_id ?? null };
     }
     case 'email:webhook':
     case 'webhook:generic':
@@ -107,6 +119,20 @@ export function parseInbound(acc: ChannelAccount, payload: unknown): InboundItem
       }
     return items;
   }
+  if (acc.channel === 'instagram') {
+    const items: InboundItem[] = [];
+    const entries = (p.entry as { messaging?: { sender?: { id?: string }; recipient?: { id?: string }; message?: { mid?: string; text?: string; is_echo?: boolean; attachments?: { type?: string }[] } }[] }[]) ?? [];
+    for (const e of entries)
+      for (const m of e.messaging ?? []) {
+        if (!m.sender?.id || !m.message || m.message.is_echo) continue;
+        items.push({
+          from: m.sender.id,
+          text: m.message.text ?? (m.message.attachments?.length ? `[${m.message.attachments[0]?.type ?? 'attachment'}]` : ''),
+          externalId: m.message.mid,
+        });
+      }
+    return items;
+  }
   // email / generic: { from, name?, subject?, text }
   if (typeof p.from === 'string' && (typeof p.text === 'string' || typeof p.body === 'string')) {
     return [{ from: p.from, name: typeof p.name === 'string' ? p.name : undefined, subject: typeof p.subject === 'string' ? p.subject : undefined, text: String(p.text ?? p.body), externalId: typeof p.id === 'string' ? p.id : undefined }];
@@ -116,6 +142,7 @@ export function parseInbound(acc: ChannelAccount, payload: unknown): InboundItem
 
 /** Finds the contact or lead an inbound sender belongs to, creating a lead if unknown. */
 export async function matchOrCreateSender(tx: Tx, tenantId: string, channel: string, item: InboundItem, defaultOwner: string | null) {
+  if (channel === 'instagram') return matchInstagram(tx, tenantId, item, defaultOwner);
   const isEmail = item.from.includes('@');
   const key = isEmail ? item.from.toLowerCase() : item.from.replace(/[^0-9]/g, '').slice(-10);
   const contact = isEmail
@@ -137,6 +164,28 @@ export async function matchOrCreateSender(tx: Tx, tenantId: string, channel: str
     `insert into leads (tenant_id, first_name, last_name, email, phone, source, pipeline_id, stage_id, owner_id)
      values ($1, $2, $3, $4, $5, $6, $7, $8, $9) returning id`,
     [tenantId, rest.length ? first : null, rest.length ? rest.join(' ') : (first ?? (isEmail ? item.from : `WhatsApp ${item.from}`)), isEmail ? key : null, isEmail ? null : `+${item.from.replace(/[^0-9]/g, '')}`, channel === 'whatsapp' ? 'whatsapp' : 'other', stage?.pipeline_id ?? null, stage?.id ?? null, defaultOwner],
+  );
+  return { objectKey: 'lead', id: created!.id, created: true };
+}
+
+/** Instagram senders have no phone or email: earlier conversations (or the lead's source detail) identify them. */
+async function matchInstagram(tx: Tx, tenantId: string, item: InboundItem, defaultOwner: string | null) {
+  const prior = await tx.one<{ related_object: string; related_id: string }>(
+    `select related_object, related_id from messages where tenant_id = $1 and channel = 'instagram' and from_addr = $2 and related_id is not null order by created_at desc limit 1`,
+    [tenantId, item.from],
+  );
+  if (prior) return { objectKey: prior.related_object, id: prior.related_id, created: false };
+  const tag = `ig:${item.from}`;
+  const lead = await tx.one<{ id: string }>(`select id from leads where tenant_id = $1 and source_detail = $2 and deleted_at is null limit 1`, [tenantId, tag]);
+  if (lead) return { objectKey: 'lead', id: lead.id, created: false };
+  const stage = await tx.one<{ pipeline_id: string; id: string }>(
+    `select s.pipeline_id, s.id from pipelines p join pipeline_stages s on s.tenant_id = p.tenant_id and s.pipeline_id = p.id
+      where p.tenant_id = $1 and p.object_key = 'lead' and p.is_default and s.category = 'open' order by s.position limit 1`,
+    [tenantId],
+  );
+  const created = await tx.one<{ id: string }>(
+    `insert into leads (tenant_id, last_name, source, source_detail, pipeline_id, stage_id, owner_id) values ($1, $2, 'instagram', $3, $4, $5, $6) returning id`,
+    [tenantId, item.name ?? `Instagram user ${item.from.slice(-6)}`, tag, stage?.pipeline_id ?? null, stage?.id ?? null, defaultOwner],
   );
   return { objectKey: 'lead', id: created!.id, created: true };
 }

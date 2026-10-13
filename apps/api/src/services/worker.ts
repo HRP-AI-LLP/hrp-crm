@@ -10,6 +10,7 @@ import { AiUnavailableError } from './ai/router';
 import { type ChannelAccount, matchOrCreateSender, parseInbound, sendViaChannel } from './channels';
 import { enqueue, type Job, type Waiter } from './jobs';
 import { recomputeRecord } from './computed';
+import { routeInserted } from './routing';
 import { loadMeta } from './tenancy';
 import { runWorkflows } from './workflows';
 
@@ -99,8 +100,10 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
             const act = await tx.one<{ id: string }>(
               `insert into activities (tenant_id, kind, subject, body, direction, related_object, related_id, metadata)
                values ($1,$2,$3,$4,'in',$5,$6,$7) returning id`,
-              [tenant.id, acc.channel === 'whatsapp' ? 'whatsapp' : 'email', item.subject ?? `Message from ${item.name ?? item.from}`, item.text, target.objectKey, target.id, JSON.stringify({ messageId: msg!.id })],
+              [tenant.id, acc.channel === 'whatsapp' || acc.channel === 'instagram' ? acc.channel : 'email', item.subject ?? `Message from ${item.name ?? item.from}`, item.text, target.objectKey, target.id, JSON.stringify({ messageId: msg!.id })],
             );
+            // leads created from a message go through assignment (unless the channel names an owner) and scoring
+            if (target.created) await routeInserted({ ...base, tx }, 'lead', target.id, !defaultOwner);
             return { target, msgId: msg!.id, activityId: act!.id };
           });
           if (!saved) continue;

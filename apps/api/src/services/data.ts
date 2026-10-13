@@ -362,7 +362,7 @@ export async function importBatch(
           return { kind: 'updated' as const, events: u.events };
         }
       }
-      const c = await createRecord(ctx, objectKey, values);
+      const c = await createRecord(ctx, objectKey, values, { autoAssign: values.owner_id === undefined });
       return { kind: 'created' as const, events: c.events };
     });
     if (r.ok) {

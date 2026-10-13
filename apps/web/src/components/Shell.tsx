@@ -6,6 +6,7 @@ import { useAuth } from '../lib/auth';
 import { initials, relative } from '../lib/format';
 import { useMeta } from '../lib/hooks';
 import { Icon } from './ui';
+import { useApprovalCount } from './Approvals';
 
 function GlobalSearch() {
   const [q, setQ] = useState('');
@@ -137,6 +138,7 @@ export function Shell() {
   const std = ['lead', 'contact', 'account', 'deal', 'quote', 'product'];
   const objects = meta?.objects ?? [];
   const custom = objects.filter((o) => !std.includes(o.key));
+  const approvals = useApprovalCount(!!me);
   const admin = me && (can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains'));
 
   return (
@@ -171,6 +173,9 @@ export function Shell() {
           <NavLink to="/forecast">Forecast</NavLink>
           <NavLink to="/reports">Reports</NavLink>
           <NavLink to="/dashboards">Dashboards</NavLink>
+          <NavLink to="/approvals">
+            Approvals{approvals.data?.pending ? <span className="nav-badge">{approvals.data.pending}</span> : null}
+          </NavLink>
         </div>
         {custom.length > 0 && (
           <div className="nav-group">

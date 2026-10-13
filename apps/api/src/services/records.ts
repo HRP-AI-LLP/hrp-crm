@@ -32,6 +32,7 @@ import type { Tx } from '../lib/db';
 import { randomToken } from '../lib/crypto';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
 import { computeFormulas, evaluateRules, hasRollupParents, recomputeRecord, refreshParents, rowValues, throwIfIssues, withStage } from './computed';
+import { computeScore, notifyOwner, pickAssignee } from './routing';
 
 export interface RecordCtx {
   tx: Tx;
@@ -540,14 +541,24 @@ export async function createRecord(
   ctx: RecordCtx,
   objectKey: string,
   input: Record<string, unknown>,
-  opts: { bypassPermissions?: boolean; fromAutomation?: boolean } = {},
+  opts: { bypassPermissions?: boolean; fromAutomation?: boolean; autoAssign?: boolean } = {},
 ): Promise<{ record: RecordDto; events: RecordEvent[] }> {
   const obj = getObject(ctx.meta, objectKey);
   if (!opts.bypassPermissions && !objectPerm(ctx.principal.permissions, objectKey).create) throw forbidden();
   const s = storageFor(objectKey);
   const prepared = await prepareValues(ctx, obj, input, 'create', !!opts.bypassPermissions);
   const cols = prepared.columns;
-  if (cols.owner_id === undefined) cols.owner_id = ctx.principal.user.id;
+  let assignedBy: string | null = null;
+  if (opts.autoAssign) {
+    // assignment rules see the record as entered (owner still unset)
+    const pick = await pickAssignee(ctx, objectKey, withStage(ctx.meta, { ...cols, ...prepared.custom }));
+    if (pick) {
+      cols.owner_id = pick.userId;
+      assignedBy = pick.rule;
+    }
+  }
+  if (cols.owner_id === undefined || cols.owner_id === null && opts.autoAssign) cols.owner_id = ctx.principal.user.id;
+  if (objectKey === 'lead' && cols.owner_id) cols.assigned_at = new Date().toISOString();
 
   if (s.hasPipeline) {
     const r = resolveStage(ctx.meta, objectKey, cols.pipeline_id, cols.stage_id);
@@ -573,6 +584,13 @@ export async function createRecord(
   const values = withStage(ctx.meta, { ...cols, ...prepared.custom });
   if (obj.fields.some(isComputed)) Object.assign(prepared.custom, computeFormulas(obj, values, ctx.principal.user.id));
   if (!opts.fromAutomation) throwIfIssues(evaluateRules(obj, values, null, null, ctx.principal.user.id));
+  if (obj.fields.some((f) => f.key === 'score' && f.standard)) {
+    const sc = computeScore(ctx, objectKey, values);
+    if (sc) {
+      cols.score = sc.score;
+      cols.rating = sc.rating;
+    }
+  }
 
   const p = new Params();
   const names: string[] = [];
@@ -589,6 +607,7 @@ export async function createRecord(
   if (obj.fields.some((f) => f.type === 'rollup') && (await recomputeRecord(ctx, objectKey, row!.id as string))) row = await readRowSystem(ctx, objectKey, row!.id as string);
   if (hasRollupParents(ctx.meta, objectKey)) await refreshParents(ctx, objectKey, [row]);
   const record = toDto(obj, row!, ctx.principal.permissions);
+  await notifyOwner(ctx, objectKey, record.id, row!.owner_id, record.title, assignedBy ? `Assignment rule: ${assignedBy}` : undefined);
   return { record, events: [{ objectKey, recordId: record.id, kind: 'created', fromAutomation: !!opts.fromAutomation }] };
 }
 
@@ -632,6 +651,16 @@ export async function updateRecord(
   const values = withStage(ctx.meta, { ...prior, ...cols, ...prepared.custom });
   if (obj.fields.some(isComputed)) Object.assign(prepared.custom, computeFormulas(obj, values, ctx.principal.user.id));
   if (!opts.fromAutomation) throwIfIssues(evaluateRules(obj, values, prior, new Set(Object.keys(patch)), ctx.principal.user.id));
+  if (obj.fields.some((f) => f.key === 'score' && f.standard)) {
+    const sc = computeScore(ctx, objectKey, values);
+    if (sc && (sc.score !== row.score || sc.rating !== row.rating)) {
+      cols.score = sc.score;
+      cols.rating = sc.rating;
+    }
+  }
+  const ownerChanged = cols.owner_id !== undefined && cols.owner_id !== row.owner_id;
+  if (ownerChanged && objectKey === 'lead') cols.assigned_at = new Date().toISOString();
+  if (objectKey === 'lead' && cols.next_follow_up_at !== undefined && String(cols.next_follow_up_at) !== String(row.next_follow_up_at ?? '')) cols.follow_up_reminded_at = null;
 
   const oldCustom = (row.custom ?? {}) as Record<string, unknown>;
   const newCustom = stripNulls({ ...oldCustom, ...prepared.custom });
@@ -650,6 +679,7 @@ export async function updateRecord(
     p.values,
   );
   if (hasRollupParents(ctx.meta, objectKey)) await refreshParents(ctx, objectKey, [row, updated]);
+  if (ownerChanged) await notifyOwner(ctx, objectKey, id, cols.owner_id, String(updated![storageFor(objectKey).titleColumn] ?? ''));
 
   if (stageChanged) {
     await ctx.tx.query(

@@ -31,7 +31,14 @@ export function visibleMeta(meta: TenantMeta, principal: Principal): TenantMeta 
         .map((f) => ({ ...f, readOnly: f.readOnly || fieldAccess(p, o.key, f.key) === 'read' })),
     }));
   const keys = new Set(objects.map((o) => o.key));
-  return { ...meta, objects, pipelines: meta.pipelines.filter((pl) => keys.has(pl.objectKey)) };
+  const a = meta.automation;
+  // rule definitions stay on the server; the UI only needs to know which objects have them
+  const automation = a && {
+    assignment: a.assignment.filter((r) => keys.has(r.objectKey)).map((r) => ({ ...r, criteria: [], userIds: [], teamId: null })),
+    scoring: { rules: [], hot: a.scoring.hot, warm: a.scoring.warm },
+    approval: a.approval.filter((r) => keys.has(r.objectKey)).map((r) => ({ ...r, criteria: [], approverId: null })),
+  };
+  return { ...meta, objects, pipelines: meta.pipelines.filter((pl) => keys.has(pl.objectKey)), automation };
 }
 
 const listQuerySchema = z.object({
@@ -58,11 +65,15 @@ const listQuerySchema = z.object({
 });
 
 const activitySchema = z.object({
-  kind: z.enum(['note', 'call', 'email', 'meeting', 'whatsapp', 'sms']),
+  kind: z.enum(['note', 'call', 'email', 'meeting', 'whatsapp', 'sms', 'instagram', 'visit']),
   subject: z.string().max(300).optional(),
   body: z.string().max(20_000).optional(),
   direction: z.enum(['in', 'out']).optional(),
   occurredAt: z.string().datetime({ offset: true }).optional(),
+  /** field visits: GPS position at check-in (and an optional check-out time / outcome) */
+  location: z.object({ lat: z.number().min(-90).max(90), lng: z.number().min(-180).max(180), accuracy: z.number().min(0).max(100_000).optional() }).optional(),
+  outcome: z.string().max(200).optional(),
+  durationMinutes: z.number().int().min(0).max(24 * 60).optional(),
 });
 
 const taskSchema = z.object({
@@ -118,8 +129,12 @@ export const crmRoutes = new Hono<AppEnv>()
   })
   .post('/records/:object', async (c) => {
     const body = z.record(z.string(), z.unknown()).parse(await c.req.json());
-    const { record, events } = await c.var.db.tx(scope(c), (tx) => createRecord(rctx(c, tx), c.req.param('object'), body));
+    // assignment rules run when asked (?assign=1) or for integrations creating records without an owner
+    const autoAssign = c.req.query('assign') === '1' || (!!c.var.principal.apiKey && body.owner_id === undefined);
+    if (autoAssign && body.owner_id === undefined) body.owner_id = null;
+    const { record, events } = await c.var.db.tx(scope(c), (tx) => createRecord(rctx(c, tx), c.req.param('object'), body, { autoAssign }));
     await enqueue(c.env, safeCtx(c), eventJobs(c.var.tenant.id, c.var.principal.user.id, events));
+    if (record.next_follow_up_at) await noteReminder(c.env, record.next_follow_up_at as string);
     return c.json(record, 201);
   })
   .get('/records/:object/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => getRecord(rctx(c, tx), c.req.param('object'), c.req.param('id')))))
@@ -130,6 +145,7 @@ export const crmRoutes = new Hono<AppEnv>()
     if (expectedVersion !== undefined && !Number.isInteger(expectedVersion)) throw badRequest('If-Match must be the record version');
     const { record, events } = await c.var.db.tx(scope(c), (tx) => updateRecord(rctx(c, tx), c.req.param('object'), c.req.param('id'), body, { expectedVersion }));
     await enqueue(c.env, safeCtx(c), eventJobs(c.var.tenant.id, c.var.principal.user.id, events));
+    if (body.next_follow_up_at && record.next_follow_up_at) await noteReminder(c.env, record.next_follow_up_at as string);
     return c.json(record);
   })
   .delete('/records/:object/:id', async (c) => {
@@ -166,9 +182,12 @@ export const crmRoutes = new Hono<AppEnv>()
       await getRecord(rctx(c, tx), object, id);
       if (objectPerm(c.var.principal.permissions, object).update === 'none') throw forbidden();
       return tx.one(
-        `insert into activities (tenant_id, kind, subject, body, direction, related_object, related_id, occurred_at)
-         values ($1,$2,$3,$4,$5,$6,$7,coalesce($8::timestamptz, now())) returning *`,
-        [c.var.tenant.id, body.kind, body.subject ?? null, body.body ?? null, body.direction ?? null, object, id, body.occurredAt ?? null],
+        `insert into activities (tenant_id, kind, subject, body, direction, related_object, related_id, occurred_at, metadata)
+         values ($1,$2,$3,$4,$5,$6,$7,coalesce($8::timestamptz, now()),$9) returning *`,
+        [
+          c.var.tenant.id, body.kind, body.subject ?? null, body.body ?? null, body.direction ?? null, object, id, body.occurredAt ?? null,
+          JSON.stringify({ ...(body.location ? { location: body.location } : {}), ...(body.outcome ? { outcome: body.outcome } : {}), ...(body.durationMinutes !== undefined ? { durationMinutes: body.durationMinutes } : {}) }),
+        ],
       );
     });
     return c.json(row, 201);

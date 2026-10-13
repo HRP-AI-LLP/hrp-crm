@@ -7,6 +7,7 @@ import { objectPerm, type RecordDto } from '@synapse/shared';
 import { z } from 'zod';
 import { randomToken } from '../lib/crypto';
 import { badRequest, forbidden, notFound } from '../lib/errors';
+import { assertApproved, reevaluate } from './approvals';
 import { refreshParents, hasRollupParents } from './computed';
 import { createRecord, loadRow, type RecordCtx, type RecordEvent, readRowSystem, toDto, updateRecord } from './records';
 
@@ -113,7 +114,9 @@ export async function getQuote(ctx: RecordCtx, id: string) {
 /** Replaces all line items and recalculates totals. */
 export async function saveLines(ctx: RecordCtx, id: string, input: LineInput[], opts: { priceBookId?: string | null; billTo?: unknown } = {}): Promise<RecordEvent[]> {
   const { row } = await loadRow(ctx, 'quote', id, 'update', true);
-  if (row.status === 'accepted') throw badRequest('Accepted quotes cannot be changed. Create a revision instead.');
+  if (row.status === 'accepted') throw badRequest('Accepted quotes cannot be changed. Convert it to an order, or create a new quote.');
+  if (row.status === 'superseded') throw badRequest('This revision was replaced by a newer one.');
+  if (row.status === 'sent' || row.status === 'rejected' || row.status === 'expired') throw badRequest('This quote was already sent. Create a revision to change it.');
   if (input.length > 200) throw badRequest('A quote can have at most 200 lines');
   const productIds = [...new Set(input.map((l) => l.productId).filter((x): x is string => !!x))];
   if (productIds.length) {
@@ -134,13 +137,14 @@ export async function saveLines(ctx: RecordCtx, id: string, input: LineInput[], 
     );
   }
   const updated = await ctx.tx.one<Record<string, unknown>>(
-    `update quotes set subtotal = $3, discount_total = $4, tax_total = $5, grand_total = $6,
+    `update quotes set subtotal = $3, discount_total = $4, tax_total = $5, grand_total = $6, max_discount_pct = $11,
             price_book_id = case when $7::boolean then $8::uuid else price_book_id end,
             bill_to = case when $9::boolean then $10::jsonb else bill_to end
       where tenant_id = $1 and id = $2 returning *`,
-    [ctx.tenantId, id, c.subtotal, c.discountTotal, c.taxTotal, c.grandTotal, opts.priceBookId !== undefined, opts.priceBookId ?? null, opts.billTo !== undefined, opts.billTo === undefined ? null : JSON.stringify(opts.billTo)],
+    [ctx.tenantId, id, c.subtotal, c.discountTotal, c.taxTotal, c.grandTotal, opts.priceBookId !== undefined, opts.priceBookId ?? null, opts.billTo !== undefined, opts.billTo === undefined ? null : JSON.stringify(opts.billTo), Math.max(0, ...c.lines.map((l) => l.discountPct))],
   );
   if (hasRollupParents(ctx.meta, 'quote')) await refreshParents(ctx, 'quote', [row, updated]);
+  await reevaluate(ctx, 'quote', id);
   const changes: Record<string, [unknown, unknown]> = {};
   for (const k of ['subtotal', 'discount_total', 'tax_total', 'grand_total'] as const) if (Number(row[k]) !== Number(updated![k])) changes[k] = [Number(row[k]), Number(updated![k])];
   return Object.keys(changes).length ? [{ objectKey: 'quote', recordId: id, kind: 'updated', changes }] : [];
@@ -171,6 +175,10 @@ export async function markSent(ctx: RecordCtx, id: string): Promise<{ token: str
   const { row } = await loadRow(ctx, 'quote', id, 'update', true);
   const n = await ctx.tx.one<{ n: string }>(`select count(*) n from quote_lines where tenant_id = $1 and quote_id = $2`, [ctx.tenantId, id]);
   if (!Number(n?.n)) throw badRequest('Add at least one line before sending the quote');
+  if (row.status === 'superseded') throw badRequest('This revision was replaced by a newer one.');
+  // rules may have been added since the lines were saved
+  if (row.approval_status === 'not_required' || row.approval_status === 'required') row.approval_status = await reevaluate(ctx, 'quote', id);
+  assertApproved(row, 'quote');
   const token = (row.share_token as string | null) ?? randomToken(24);
   if (!row.share_token) await ctx.tx.query(`update quotes set share_token = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, token]);
   let events: RecordEvent[] = [];
@@ -208,4 +216,58 @@ export async function syncDealAmount(ctx: RecordCtx, id: string) {
   if (!row.deal_id) throw badRequest('This quote is not linked to a deal');
   if (objectPerm(ctx.principal.permissions, 'deal').update === 'none') throw forbidden();
   return updateRecord(ctx, 'deal', String(row.deal_id), { amount: Number(row.grand_total) });
+}
+
+/**
+ * New revision of a sent / declined / expired quote: same customer and lines, number suffixed
+ * -R<n>, back to draft. The previous revision is marked superseded (its customer link stops working).
+ */
+export async function reviseQuote(ctx: RecordCtx, id: string): Promise<{ id: string; events: RecordEvent[] }> {
+  const { row } = await loadRow(ctx, 'quote', id, 'update', true);
+  if (row.status === 'draft') throw badRequest('Draft quotes can be edited directly.');
+  if (row.status === 'accepted') throw badRequest('Accepted quotes cannot be revised. Convert it to an order, or create a new quote.');
+  if (row.status === 'superseded') throw badRequest('A newer revision already exists.');
+  const rootId = (row.root_id as string | null) ?? id;
+  const latest = await ctx.tx.one<{ r: number }>(`select max(revision) r from quotes where tenant_id = $1 and (id = $2 or root_id = $2)`, [ctx.tenantId, rootId]);
+  const revision = Number(latest?.r ?? row.revision ?? 1) + 1;
+  const base = String(row.quote_number ?? '').replace(/-R\d+$/, '');
+  const validUntil = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+  const created = await ctx.tx.one<{ id: string }>(
+    `insert into quotes (tenant_id, name, quote_number, status, deal_id, account_id, contact_id, price_book_id, currency, valid_until,
+                         subtotal, discount_total, tax_total, grand_total, max_discount_pct, terms, notes, bill_to, share_token, owner_id, custom, revision, root_id, approval_status)
+     select tenant_id, name, $3, 'draft', deal_id, account_id, contact_id, price_book_id, currency, $4,
+            subtotal, discount_total, tax_total, grand_total, max_discount_pct, terms, notes, bill_to, $5, owner_id, custom, $6, $7, 'not_required'
+       from quotes where tenant_id = $1 and id = $2
+     returning id`,
+    [ctx.tenantId, id, `${base}-R${revision}`, validUntil, randomToken(24), revision, rootId],
+  );
+  await ctx.tx.query(
+    `insert into quote_lines (tenant_id, quote_id, position, product_id, name, description, hsn_sac, unit, quantity, unit_price, discount_pct, tax_rate, line_subtotal, line_tax, line_total)
+     select tenant_id, $3, position, product_id, name, description, hsn_sac, unit, quantity, unit_price, discount_pct, tax_rate, line_subtotal, line_tax, line_total
+       from quote_lines where tenant_id = $1 and quote_id = $2`,
+    [ctx.tenantId, id, created!.id],
+  );
+  await ctx.tx.query(`update quotes set status = 'superseded' where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
+  await reevaluate(ctx, 'quote', created!.id);
+  await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'quote',$3), ($1,'system',$4,'quote',$5)`, [
+    ctx.tenantId, `Replaced by revision ${revision}`, id, `Revision ${revision} of ${base}`, created!.id,
+  ]);
+  return {
+    id: created!.id,
+    events: [
+      { objectKey: 'quote', recordId: created!.id, kind: 'created' },
+      { objectKey: 'quote', recordId: id, kind: 'updated', changes: { status: [row.status, 'superseded'] } },
+    ],
+  };
+}
+
+/** All revisions of the quote family (oldest first). */
+export async function quoteRevisions(ctx: RecordCtx, id: string) {
+  const { row } = await loadRow(ctx, 'quote', id, 'read');
+  const rootId = (row.root_id as string | null) ?? id;
+  return ctx.tx.query(
+    `select id, quote_number, revision, status, grand_total::float8 as grand_total, approval_status, created_at from quotes
+      where tenant_id = $1 and (id = $2 or root_id = $2) and deleted_at is null order by revision`,
+    [ctx.tenantId, rootId],
+  );
 }

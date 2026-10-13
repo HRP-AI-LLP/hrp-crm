@@ -16,9 +16,11 @@ export interface ObjectStorage {
   discriminated: boolean;
 }
 
-const LEAD_SOURCES = ['website', 'referral', 'campaign', 'event', 'cold_call', 'whatsapp', 'partner', 'other'];
+export const LEAD_SOURCES = ['website', 'whatsapp', 'instagram', 'facebook', 'walk_in', 'referral', 'architect', 'interior_designer', 'dealer', 'campaign', 'event', 'cold_call', 'partner', 'manual', 'other'];
+export const ACCOUNT_TYPES = ['customer', 'prospect', 'architect', 'interior_designer', 'dealer', 'builder', 'partner', 'other'];
+export const APPROVAL_STATUSES = ['not_required', 'required', 'pending', 'approved', 'rejected'] as const;
 const INDUSTRIES = ['technology', 'finance', 'healthcare', 'real_estate', 'retail', 'manufacturing', 'education', 'services', 'other'];
-export const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'expired'] as const;
+export const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'expired', 'superseded'] as const;
 export const FORECAST_CATEGORIES = ['pipeline', 'best_case', 'commit', 'omitted'] as const;
 const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
 
@@ -36,8 +38,14 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'company', label: 'Company', type: 'text', standard: true },
     { key: 'email', label: 'Email', type: 'email', standard: true, pii: true, indexed: true },
     { key: 'phone', label: 'Phone', type: 'phone', standard: true, pii: true },
-    { key: 'source', label: 'Source', type: 'picklist', standard: true, options: { choices: choices(LEAD_SOURCES) } },
+    { key: 'source', label: 'Source', type: 'picklist', standard: true, indexed: true, options: { choices: choices(LEAD_SOURCES) } },
+    { key: 'source_detail', label: 'Source detail', type: 'text', standard: true, helpText: 'Campaign name, referrer, showroom…' },
+    { key: 'referred_by_id', label: 'Referred by (architect / dealer)', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
     ...pipelineFields,
+    { key: 'next_follow_up_at', label: 'Next follow-up', type: 'datetime', standard: true, helpText: 'The owner gets a reminder at this time' },
+    { key: 'score', label: 'Score', type: 'number', standard: true, readOnly: true, helpText: 'From the scoring rules in Settings' },
+    { key: 'rating', label: 'Rating', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['hot', 'warm', 'cold']) } },
+    { key: 'last_activity_at', label: 'Last activity', type: 'datetime', standard: true, readOnly: true },
     { key: 'ai_score', label: 'AI score', type: 'number', standard: true, readOnly: true },
     { key: 'sentiment', label: 'Sentiment', type: 'text', standard: true, readOnly: true },
     { key: 'converted_at', label: 'Converted at', type: 'datetime', standard: true, readOnly: true },
@@ -56,6 +64,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
   account: [
     { key: 'name', label: 'Account name', type: 'text', standard: true, required: true },
     { key: 'domain', label: 'Domain', type: 'text', standard: true },
+    { key: 'account_type', label: 'Type', type: 'picklist', standard: true, options: { choices: choices(ACCOUNT_TYPES) } },
     { key: 'industry', label: 'Industry', type: 'picklist', standard: true, options: { choices: choices(INDUSTRIES) } },
     { key: 'phone', label: 'Phone', type: 'phone', standard: true },
     { key: 'website', label: 'Website', type: 'url', standard: true },
@@ -73,6 +82,8 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'close_date', label: 'Close date', type: 'date', standard: true },
     { key: 'probability', label: 'Probability %', type: 'percent', standard: true },
     { key: 'closed_at', label: 'Closed at', type: 'datetime', standard: true, readOnly: true },
+    { key: 'referred_by_id', label: 'Referred by (architect / dealer)', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
+    { key: 'last_activity_at', label: 'Last activity', type: 'datetime', standard: true, readOnly: true },
     { key: 'forecast_category', label: 'Forecast category', type: 'picklist', standard: true, helpText: 'Leave empty to follow the stage probability', options: { choices: choices(FORECAST_CATEGORIES) } },
     owner,
   ],
@@ -103,6 +114,9 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'grand_total', label: 'Grand total', type: 'currency', standard: true, readOnly: true },
     { key: 'terms', label: 'Terms & conditions', type: 'textarea', standard: true },
     { key: 'notes', label: 'Notes for the customer', type: 'textarea', standard: true },
+    { key: 'revision', label: 'Revision', type: 'number', standard: true, readOnly: true },
+    { key: 'max_discount_pct', label: 'Highest line discount %', type: 'percent', standard: true, readOnly: true },
+    { key: 'approval_status', label: 'Approval', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(APPROVAL_STATUSES) } },
     { key: 'accepted_at', label: 'Accepted at', type: 'datetime', standard: true, readOnly: true },
     { key: 'accepted_by', label: 'Accepted by', type: 'text', standard: true, readOnly: true },
     owner,
@@ -126,23 +140,20 @@ export const RESERVED_FIELD_KEYS = new Set<string>([
   'tenant', 'owner', 'object', 'stage', 'pipeline',
 ]);
 
+const reg = (table: string, titleColumn: string, searchColumns: string[], hasPipeline = false): ObjectStorage => ({ table, titleColumn, searchColumns, hasPipeline, discriminated: false });
+
+/** Physical storage of every standard object (mirrored in SQL by app.object_table()). */
+export const OBJECT_STORAGE: Record<string, ObjectStorage> = {
+  lead: reg('leads', 'full_name', ['full_name', 'email', 'company'], true),
+  contact: reg('contacts', 'full_name', ['full_name', 'email']),
+  account: reg('accounts', 'name', ['name', 'domain']),
+  deal: reg('deals', 'name', ['name'], true),
+  product: reg('products', 'name', ['name', 'sku']),
+  quote: reg('quotes', 'name', ['name', 'quote_number']),
+};
+
 export function storageFor(objectKey: string): ObjectStorage {
-  switch (objectKey) {
-    case 'lead':
-      return { table: 'leads', titleColumn: 'full_name', searchColumns: ['full_name', 'email', 'company'], hasPipeline: true, discriminated: false };
-    case 'contact':
-      return { table: 'contacts', titleColumn: 'full_name', searchColumns: ['full_name', 'email'], hasPipeline: false, discriminated: false };
-    case 'account':
-      return { table: 'accounts', titleColumn: 'name', searchColumns: ['name', 'domain'], hasPipeline: false, discriminated: false };
-    case 'deal':
-      return { table: 'deals', titleColumn: 'name', searchColumns: ['name'], hasPipeline: true, discriminated: false };
-    case 'product':
-      return { table: 'products', titleColumn: 'name', searchColumns: ['name', 'sku'], hasPipeline: false, discriminated: false };
-    case 'quote':
-      return { table: 'quotes', titleColumn: 'name', searchColumns: ['name', 'quote_number'], hasPipeline: false, discriminated: false };
-    default:
-      return { table: 'records', titleColumn: 'name', searchColumns: ['name'], hasPipeline: true, discriminated: true };
-  }
+  return OBJECT_STORAGE[objectKey] ?? { table: 'records', titleColumn: 'name', searchColumns: ['name'], hasPipeline: true, discriminated: true };
 }
 
 export function isStandardObject(key: string): key is StandardObjectKey {

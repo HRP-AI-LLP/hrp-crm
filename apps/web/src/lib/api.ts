@@ -117,3 +117,17 @@ export async function download(path: string, fallbackName: string, retry = true)
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return res.headers;
 }
+
+/** Raw binary upload (files): the body is sent as-is, metadata goes in the query string. */
+export async function upload<T = unknown>(path: string, file: Blob, retry = true): Promise<T> {
+  const h = headers({ 'content-type': 'application/octet-stream' });
+  const res = await fetch(path, { method: 'POST', headers: h, body: file, credentials: 'same-origin' });
+  if (res.status === 401 && retry && (await refreshSession())) return upload<T>(path, file, false);
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : null;
+  if (!res.ok) {
+    const e = json?.error ?? {};
+    throw new ApiError(res.status, e.code ?? 'error', e.message ?? `Upload failed (${res.status})`, e.details);
+  }
+  return json as T;
+}

@@ -40,6 +40,48 @@ export interface TenantMeta {
   objects: ObjectMeta[];
   pipelines: PipelineMeta[];
   modules: { key: string; version: string; enabled: boolean }[];
+  /** routing, scoring and approval rules (server-evaluated; admins edit them in Settings) */
+  automation?: AutomationMeta;
+}
+
+export interface RuleCriterion {
+  field: string;
+  op: string;
+  value?: unknown;
+}
+
+export interface AssignmentRuleMeta {
+  id: string;
+  objectKey: string;
+  name: string;
+  criteria: RuleCriterion[];
+  strategy: 'round_robin' | 'load_balanced' | 'fixed';
+  userIds: string[];
+  teamId: string | null;
+}
+
+export interface ScoringRuleMeta {
+  id: string;
+  objectKey: string;
+  name: string;
+  criteria: RuleCriterion[];
+  points: number;
+}
+
+export interface ApprovalRuleMeta {
+  id: string;
+  objectKey: string;
+  name: string;
+  criteria: RuleCriterion[];
+  approverType: 'manager' | 'user' | 'role' | 'owner';
+  approverId: string | null;
+  approverRole: string | null;
+}
+
+export interface AutomationMeta {
+  assignment: AssignmentRuleMeta[];
+  scoring: { rules: ScoringRuleMeta[]; hot: number; warm: number };
+  approval: ApprovalRuleMeta[];
 }
 
 export interface SecurityPolicy {

@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ApiError, get, post, put } from '../lib/api';
 import { money2 } from '../lib/format';
 import { EmailComposer } from './EmailComposer';
@@ -51,6 +52,7 @@ const blank = (): QuoteLine => ({ name: '', quantity: 1, unitPrice: 0, discountP
 export function QuoteEditor({ quoteId, canEdit }: { quoteId: string; canEdit: boolean }) {
   const qc = useQueryClient();
   const toast = useToast();
+  const nav = useNavigate();
   const { data } = useQuery({ queryKey: ['quote', quoteId], queryFn: () => get<QuoteDoc>(`/api/v1/quotes/${quoteId}`) });
   const books = useQuery({ queryKey: ['price-books'], queryFn: () => get<{ items: PriceBook[] }>('/api/v1/price-books'), staleTime: 60_000 });
   const [lines, setLines] = useState<QuoteLine[]>([]);
@@ -72,7 +74,7 @@ export function QuoteEditor({ quoteId, canEdit }: { quoteId: string; canEdit: bo
   const calc = useMemo(() => computeLines(lines), [lines]);
   if (!data) return null;
   const q = data.quote;
-  const locked = q.status === 'accepted' || !canEdit;
+  const locked = q.status !== 'draft' || !canEdit;
   const cur = String(q.currency ?? 'INR');
   const intra = intraState(data.company.state, billTo.state);
 
@@ -144,15 +146,41 @@ export function QuoteEditor({ quoteId, canEdit }: { quoteId: string; canEdit: bo
               Update deal amount
             </button>
           )}
-          {canEdit && q.status !== 'accepted' && (
-            <button className="btn sm primary" disabled={dirty || !data.lines.length} title={dirty ? 'Save your changes first' : !data.lines.length ? 'Add lines first' : undefined} onClick={() => setSending(true)}>
+          {canEdit && ['sent', 'rejected', 'expired'].includes(String(q.status)) && (
+            <button
+              className="btn sm"
+              title="Copy this quote into a new draft revision; this one is marked superseded"
+              onClick={async () => {
+                if (!window.confirm('Create a new revision? The customer link of this version stops working.')) return;
+                try {
+                  const r = await post<{ id: string }>(`/api/v1/quotes/${quoteId}/revise`);
+                  toast('New revision created');
+                  qc.invalidateQueries({ queryKey: ['records', 'quote'] });
+                  nav(`/o/quote/${r.id}`);
+                } catch (e) {
+                  toast((e as Error).message, true);
+                }
+              }}
+            >
+              Create revision
+            </button>
+          )}
+          {canEdit && !['accepted', 'superseded'].includes(String(q.status)) && (
+            <button
+              className="btn sm primary"
+              disabled={dirty || !data.lines.length || ['required', 'pending', 'rejected'].includes(String(q.approval_status))}
+              title={dirty ? 'Save your changes first' : !data.lines.length ? 'Add lines first' : ['required', 'pending', 'rejected'].includes(String(q.approval_status)) ? 'Needs approval first' : undefined}
+              onClick={() => setSending(true)}
+            >
               {q.status === 'draft' ? 'Send to customer' : 'Send again'}
             </button>
           )}
         </div>
       </div>
       <div className="panel-body stack">
-        {locked && q.status === 'accepted' && <div className="notice">Accepted by {q.accepted_by} — the lines are locked. Clone the quote to revise it.</div>}
+        {q.status === 'accepted' && <div className="notice">Accepted by {String(q.accepted_by ?? 'the customer')} — the lines are locked.</div>}
+        {canEdit && ['sent', 'rejected', 'expired'].includes(String(q.status)) && <div className="notice small">This version went to the customer, so its lines are locked. Use “Create revision” to change prices or items.</div>}
+        {q.status === 'superseded' && <div className="notice small">A newer revision replaced this version.</div>}
         <div className="row" style={{ flexWrap: 'wrap', gap: 12 }}>
           <label className="field" style={{ minWidth: 200 }}>
             Price book

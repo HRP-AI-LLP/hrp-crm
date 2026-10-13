@@ -18,6 +18,7 @@ import { DashboardsPage } from './pages/Dashboards';
 import { ForecastPage } from './pages/Forecast';
 import { PublicQuotePage, QuotePrintPage } from './pages/QuotePages';
 import { ReportBuilderPage, ReportsPage } from './pages/Reports';
+import { ApprovalsPage } from './pages/Approvals';
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useAuth();
@@ -72,6 +73,7 @@ export function App() {
         <Route path="reports/:id" element={<ReportBuilderPage />} />
         <Route path="dashboards" element={<DashboardsPage />} />
         <Route path="dashboards/:id" element={<DashboardsPage />} />
+        <Route path="approvals" element={<ApprovalsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

@@ -4,7 +4,7 @@
  * The 5-minute cron first reads one KV key holding the earliest pending reminder across all
  * workspaces. Only when that time has passed does it touch Postgres (so Neon can scale to zero
  * between reminders). Each sweep turns due task/event reminders into in-app notifications,
- * expires overdue quotes, and writes the next due time back to KV. Creating or moving a
+ * lead follow-ups, expires overdue quotes, and writes the next due time back to KV. Creating or moving a
  * reminder earlier than the stored time updates the key.
  */
 import type { Env } from '../env';
@@ -55,11 +55,24 @@ export async function sweepTenant(tx: Tx, tenantId: string): Promise<Date | null
       ]);
     }
   }
+  const followUps = await tx.query<{ id: string; full_name: string; owner_id: string | null; next_follow_up_at: Date }>(
+    `update leads set follow_up_reminded_at = now()
+      where tenant_id = $1 and next_follow_up_at <= now() and follow_up_reminded_at is null and deleted_at is null and converted_at is null
+      returning id, full_name, owner_id, next_follow_up_at`,
+    [tenantId],
+  );
+  for (const l of followUps) {
+    if (!l.owner_id) continue;
+    await tx.query(`insert into notifications (tenant_id, user_id, kind, title, body, link) values ($1,$2,'follow_up',$3,$4,$5)`, [
+      tenantId, l.owner_id, `Follow up with ${l.full_name}`, `Planned for ${ist(l.next_follow_up_at)}`, `/o/lead/${l.id}`,
+    ]);
+  }
   await tx.query(`update quotes set status = 'expired' where tenant_id = $1 and status = 'sent' and valid_until < current_date and deleted_at is null`, [tenantId]);
   const next = await tx.one<{ t: Date | null }>(
     `select least(
        (select min(remind_at) from tasks  where tenant_id = $1 and reminded_at is null and remind_at is not null and status in ('open', 'in_progress')),
-       (select min(remind_at) from events where tenant_id = $1 and reminded_at is null and remind_at is not null and status = 'scheduled')
+       (select min(remind_at) from events where tenant_id = $1 and reminded_at is null and remind_at is not null and status = 'scheduled'),
+       (select min(next_follow_up_at) from leads where tenant_id = $1 and follow_up_reminded_at is null and next_follow_up_at is not null and deleted_at is null and converted_at is null)
      ) as t`,
     [tenantId],
   );

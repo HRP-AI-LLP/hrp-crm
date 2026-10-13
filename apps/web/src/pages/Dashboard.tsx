@@ -6,6 +6,7 @@ import { get } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { moneyShort } from '../lib/format';
 import { useMeta } from '../lib/hooks';
+import { LeadInsights } from '../components/LeadInsights';
 
 interface Stats {
   dealsByStage?: { stage_id: string; count: number; amount: number | null }[];
@@ -119,6 +120,7 @@ export function DashboardPage() {
           )}
         </section>
       </div>
+      {meta?.objects.some((o) => o.key === 'lead') && <LeadInsights />}
     </>
   );
 }

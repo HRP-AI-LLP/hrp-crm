@@ -191,8 +191,11 @@ export function RecordFormModal({ object, onClose, onSaved, initial }: { object:
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [dupes, setDupes] = useState<DuplicateMatch[] | null>(null);
+  const [autoAssign, setAutoAssign] = useState(false);
   const toast = useToast();
   const hasPipeline = usePipelines(object.key).length > 0;
+  const { data: meta } = useMeta();
+  const hasRules = !!meta?.automation?.assignment.some((r) => r.objectKey === object.key);
   const byKey = new Map(object.fields.map((f) => [f.key, f]));
   const editable = (f: FieldDef | undefined): f is FieldDef => !!f && !f.readOnly && !isComputed(f) && f.key !== 'pipeline_id' && (hasPipeline || f.key !== 'stage_id') && fieldVisible(f, values);
   const sections = resolveLayout(object)
@@ -226,7 +229,8 @@ export function RecordFormModal({ object, onClose, onSaved, initial }: { object:
           return;
         }
       }
-      const r = await post<RecordDto>(`/api/v1/records/${object.key}`, body);
+      if (autoAssign) delete body.owner_id;
+      const r = await post<RecordDto>(`/api/v1/records/${object.key}${autoAssign ? '?assign=1' : ''}`, body);
       toast(`${object.label} created`);
       onSaved(r);
     } catch (err) {
@@ -281,6 +285,11 @@ export function RecordFormModal({ object, onClose, onSaved, initial }: { object:
             ))}
           </fieldset>
         ))}
+        {hasRules && (
+          <label className="row wide small">
+            <input type="checkbox" checked={autoAssign} onChange={(e) => setAutoAssign(e.target.checked)} /> Assign by the workspace's assignment rules (instead of the owner above)
+          </label>
+        )}
         <button type="submit" hidden />
       </form>
     </Modal>

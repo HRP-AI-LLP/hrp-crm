@@ -5,6 +5,7 @@ import { LayoutBuilder } from '../components/builders/LayoutBuilder';
 import { RulesEditor } from '../components/builders/RulesEditor';
 import { SalesSetup } from '../components/SalesSetup';
 import { PeopleTab } from '../components/admin/People';
+import { RoutingTab } from '../components/admin/RoutingAdmin';
 import { ApiKeysTab, SecurityPolicyTab, SharingRulesTab, TeamsTab, UsageTab } from '../components/admin/SecurityAdmin';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -21,6 +22,7 @@ const GROUPS: [string, [string, string, string][]][] = [
     ['fields', 'Objects & fields', 'metadata'],
     ['pipelines', 'Pipelines', 'metadata'],
     ['workflows', 'Automations', 'workflows'],
+    ['routing', 'Routing & approvals', 'workflows'],
     ['forms', 'Web forms', 'metadata'],
     ['sales', 'Sales setup', 'metadata'],
     ['modules', 'Industry modules', 'modules'],
@@ -108,6 +110,7 @@ export function SettingsPage() {
           {tab === 'modules' && <ModulesTab />}
           {tab === 'ai' && <AiModelsTab />}
           {tab === 'workflows' && <AutomationsTab />}
+          {tab === 'routing' && <RoutingTab />}
           {tab === 'forms' && <FormsTab />}
           {tab === 'channels' && <ChannelsTab />}
           {tab === 'domains' && <DomainsTab />}
@@ -576,14 +579,16 @@ function ChannelsTab() {
         ? { channel: 'email', name: c.name, provider: 'resend', config: { from: c.from }, secrets: { apiKey: c.s1 } }
         : c.channel === 'whatsapp'
           ? { channel: 'whatsapp', name: c.name, provider: 'meta_cloud', config: { phoneNumberId: c.phoneNumberId }, secrets: { accessToken: c.s1, appSecret: c.s2, verifyToken: c.s3 } }
-          : { channel: 'webhook', name: c.name, provider: 'generic', config: { url: c.url }, secrets: c.s1 ? { signingSecret: c.s1 } : {} };
+          : c.channel === 'instagram'
+            ? { channel: 'instagram', name: c.name, provider: 'meta_cloud', config: { pageId: c.phoneNumberId }, secrets: { accessToken: c.s1, appSecret: c.s2, verifyToken: c.s3 } }
+            : { channel: 'webhook', name: c.name, provider: 'generic', config: { url: c.url }, secrets: c.s1 ? { signingSecret: c.s1 } : {} };
     if (await run(() => post('/api/admin/channels', body), 'Channel connected', [['admin-channels']])) setC(null);
   };
   return (
     <div className="stack">
       <div className="spread">
         <p className="muted" style={{ margin: 0 }}>
-          Connect email and WhatsApp so automations can message customers and replies land on the right timeline.
+          Connect email, WhatsApp and Instagram so automations can message customers, new enquiries become leads (routed by your assignment rules) and replies land on the right timeline.
         </p>
         <button className="btn primary" onClick={() => setC({ channel: 'whatsapp', name: '', from: '', phoneNumberId: '', url: '', s1: '', s2: '', s3: '' })}>
           Connect channel
@@ -618,6 +623,7 @@ function ChannelsTab() {
               Channel
               <select value={c.channel} onChange={(e) => setC({ ...c, channel: e.target.value })}>
                 <option value="whatsapp">WhatsApp (Cloud API)</option>
+                <option value="instagram">Instagram Direct (Meta)</option>
                 <option value="email">Email (Resend)</option>
                 <option value="webhook">Webhook</option>
               </select>
@@ -638,10 +644,10 @@ function ChannelsTab() {
                 </label>
               </>
             )}
-            {c.channel === 'whatsapp' && (
+            {(c.channel === 'whatsapp' || c.channel === 'instagram') && (
               <>
                 <label className="field">
-                  Phone number ID
+                  {c.channel === 'instagram' ? 'Facebook page ID (linked to the Instagram account)' : 'Phone number ID'}
                   <input value={c.phoneNumberId} onChange={(e) => setC({ ...c, phoneNumberId: e.target.value })} />
                 </label>
                 <label className="field">

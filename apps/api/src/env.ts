@@ -52,6 +52,8 @@ export interface Env {
   AI?: Ai;
   VECTORIZE?: VectorizeIndex;
   ASSETS?: Fetcher;
+  /** Cloudflare R2 bucket for attachments, delivery proofs and documents (optional) */
+  FILES?: R2Bucket;
 }
 
 export interface TenantInfo {

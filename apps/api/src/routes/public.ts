@@ -7,6 +7,7 @@ import { ApiError, badRequest, conflict, notFound } from '../lib/errors';
 import type { ChannelAccount } from '../services/channels';
 import { verifyMetaSignature, webhookVerifyToken } from '../services/channels';
 import { enqueue, eventJobs } from '../services/jobs';
+import { fileHeaders, verifyFileLink } from '../services/files';
 import { getQuote, respondToQuote } from '../services/quotes';
 import { createRecord, type RecordCtx } from '../services/records';
 import { attachWorkerDomain, signInUrl, vanityEnabled, vanityHost } from '../services/domains';
@@ -130,9 +131,10 @@ export const publicRoutes = new Hono<AppEnv>()
       for (const k of allowed) if (body[k] !== undefined) input[k] = body[k];
       if (form.object_key === 'lead' && !input.source) input.source = form.settings.source ?? 'website';
       const ownerId = form.settings.ownerId ?? (await tx.one<{ id: string }>(`select id from users where tenant_id = $1 and is_owner limit 1`, [route.tenant_id]))?.id ?? null;
-      input.owner_id = ownerId;
+      // a form without a fixed owner hands its records to the assignment rules (fallback: workspace owner)
+      input.owner_id = form.settings.ownerId ?? null;
       const principal = systemPrincipal(ownerId, meta.objects.map((o) => o.key));
-      const { record, events } = await createRecord({ tx, meta, principal, tenantId: route.tenant_id }, form.object_key, input, { bypassPermissions: true });
+      const { record, events } = await createRecord({ tx, meta, principal, tenantId: route.tenant_id }, form.object_key, input, { bypassPermissions: true, autoAssign: !form.settings.ownerId });
       if (form.object_key === 'lead' && body.consent === true) {
         await tx.query(`update leads set consent = $3 where tenant_id = $1 and id = $2`, [route.tenant_id, record.id, JSON.stringify({ marketing: { granted: true, at: new Date().toISOString(), source: 'web_form', ip: c.req.header('cf-connecting-ip') ?? null } })]);
       }
@@ -140,6 +142,26 @@ export const publicRoutes = new Hono<AppEnv>()
     });
     await enqueue(c.env, safeCtx(c), eventJobs(route.tenant_id, null, result.events));
     return c.json({ ok: true, message: result.message }, 201);
+  })
+
+  // ---------------------------------------------------------------------------------------------
+  // Signed file links (attachments shown in <img>/<a> tags; see services/files.ts)
+  // ---------------------------------------------------------------------------------------------
+  .get('/files/:tenant/:id', async (c) => {
+    const { tenant, id } = c.req.param();
+    if (!/^[0-9a-f-]{36}$/i.test(tenant) || !/^[0-9a-f-]{36}$/i.test(id)) throw notFound();
+    if (!(await verifyFileLink(c.env, tenant, id, c.req.query()))) throw new ApiError(403, 'link_expired', 'This file link has expired. Reload the page to get a new one.');
+    if (!c.env.FILES) throw notFound();
+    const f = await c.var.db.tx({ tenantId: tenant, readOnly: true }, (tx) =>
+      tx.one<{ name: string; content_type: string; size_bytes: string; storage_key: string }>(`select name, content_type, size_bytes, storage_key from files where tenant_id = $1 and id = $2 and deleted_at is null`, [tenant, id]),
+    );
+    if (!f) throw notFound();
+    const obj = await c.env.FILES.get(f.storage_key);
+    if (!obj) throw notFound();
+    const h = fileHeaders(f, c.req.query('d') === '1');
+    h['cross-origin-resource-policy'] = 'same-origin';
+    h['x-robots-tag'] = 'noindex';
+    return new Response(obj.body, { headers: h });
   })
 
   // ---------------------------------------------------------------------------------------------
@@ -197,7 +219,7 @@ export const publicRoutes = new Hono<AppEnv>()
     const acc = await loadChannel(c, route.tenant_id, route.target_id);
     const raw = await c.req.text();
     if (raw.length > 512_000) throw badRequest('Payload too large');
-    if (acc.channel === 'whatsapp' && !(await verifyMetaSignature(c.env, acc, raw, c.req.header('x-hub-signature-256') ?? null))) {
+    if ((acc.channel === 'whatsapp' || acc.channel === 'instagram') && !(await verifyMetaSignature(c.env, acc, raw, c.req.header('x-hub-signature-256') ?? null))) {
       throw new ApiError(401, 'bad_signature', 'Invalid signature');
     }
     let payload: unknown;

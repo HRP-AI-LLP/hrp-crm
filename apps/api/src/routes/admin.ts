@@ -429,7 +429,7 @@ export const adminRoutes = new Hono<AppEnv>()
   .post('/channels', requireAdmin('channels'), async (c) => {
     const b = z
       .object({
-        channel: z.enum(['email', 'whatsapp', 'sms', 'webhook']),
+        channel: z.enum(['email', 'whatsapp', 'instagram', 'sms', 'webhook']),
         name: z.string().min(1).max(80),
         provider: z.enum(['resend', 'meta_cloud', 'webhook', 'generic']),
         config: z.record(z.string(), z.unknown()).default({}),

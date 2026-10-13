@@ -24,6 +24,8 @@
     "CORS_ORIGINS": "http://localhost:5173",
     "AI_DAILY_LIMIT_PER_TENANT": "300"
   },
+  // local R2 is simulated by wrangler dev (attachments, delivery proofs, signatures)
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "synapse-files-local" }],
 
   "env": {
     // ---------------------------------------------------------------- dev (branch: dev)
