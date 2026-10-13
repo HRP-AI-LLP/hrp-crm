@@ -6,6 +6,7 @@ import { ApiError, forbidden, notFound } from '../lib/errors';
 import { requireAdmin, scope } from '../middleware';
 import { type AiCtx, analyzeSentiment, askKnowledgeBase, draftEmail, nextBestActions, scoreLead, summarizeRecord } from '../services/ai/features';
 import { AiUnavailableError, availableProviders } from '../services/ai/router';
+import { tenantAiSettings } from '../services/ai/tenant-providers';
 import { enqueue } from '../services/jobs';
 import { getRecord } from '../services/records';
 import { safeCtx } from './public';
@@ -25,9 +26,21 @@ const mapAiError = (e: unknown) => {
 };
 
 export const aiRoutes = new Hono<AppEnv>()
-  .get('/status', (c) =>
-    c.json({ providers: availableProviders(c.env, false), piiProviders: availableProviders(c.env, true), vectorSearch: !!c.env.VECTORIZE }),
-  )
+  .get('/status', async (c) => {
+    const { own, settings } = await c.var.db.tx(scope(c, true), async (tx) => ({
+      own: await tx.query<{ provider: string; model: string; allow_pii: boolean }>(
+        `select provider, model, allow_pii from tenant_ai_providers where tenant_id = $1 and is_enabled order by priority`,
+        [c.var.tenant.id],
+      ),
+      settings: await tenantAiSettings(tx, c.var.tenant.id),
+    }));
+    return c.json({
+      workspaceProviders: own,
+      platformFallback: settings.platformFallback,
+      platformProviders: settings.platformFallback ? availableProviders(c.env, false) : [],
+      vectorSearch: !!c.env.VECTORIZE,
+    });
+  })
   .post('/score/lead/:id', async (c) => {
     const id = c.req.param('id');
     if (objectPerm(c.var.principal.permissions, 'lead').update === 'none') throw forbidden();

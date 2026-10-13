@@ -6,7 +6,7 @@
      $env:CLOUDFLARE_API_TOKEN="..."
      $env:CLOUDFLARE_ACCOUNT_ID="..."
   Optional:
-     $env:BASE_DOMAIN="hrpsynapse.com"   # only if the zone is on your Cloudflare account
+     $env:ZONE_NAME="hrpai.in"            # defaults: hrpsynapse-dev.hrpai.in (dev), hrpsynapse.hrpai.in (prod)
      $env:GROQ_API_KEY="..."; $env:GEMINI_API_KEY="..."
 
   Then:  .\scripts\setup.ps1

@@ -7,7 +7,10 @@ import { ApiError, badRequest, conflict, notFound } from '../lib/errors';
 import { requireAdmin, scope } from '../middleware';
 import { createObject, createPipeline, installModule, objectSpecSchema, pipelineSpecSchema, upsertField } from '../services/metadata-admin';
 import { invalidatePrincipal } from '../services/tenancy';
+import { attachWorkerDomain, vanityEnabled, vanityHost } from '../services/domains';
 import { workflowSchema } from '../services/workflows';
+import { chatWith, tenantProvider } from '../services/ai/router';
+import { createProviderSchema, encryptKey, hint, loadTenantProviders, normaliseCreate, assertSafeBaseUrl, tenantAiSettings, updateProviderSchema } from '../services/ai/tenant-providers';
 
 const uuid = z.string().uuid();
 
@@ -387,9 +390,21 @@ export const adminRoutes = new Hono<AppEnv>()
     });
     const j = (await res.json()) as { success: boolean; errors?: { message: string }[]; result?: { id: string; ownership_verification?: unknown; ssl?: { validation_records?: unknown } } };
     if (!j.success || !j.result) throw badRequest(j.errors?.[0]?.message ?? 'Cloudflare rejected the hostname');
-    const verification = { ownership: j.result.ownership_verification ?? null, ssl: j.result.ssl?.validation_records ?? null, cname: `Point a CNAME for ${hostname} to customers.${c.env.BASE_DOMAIN}` };
+    const verification = { ownership: j.result.ownership_verification ?? null, ssl: j.result.ssl?.validation_records ?? null, cname: `Point a CNAME record for ${hostname} to ${c.env.SAAS_CNAME_TARGET ?? c.env.APP_HOST ?? c.env.BASE_DOMAIN}` };
     await c.var.db.tx(scope(c), (tx) => tx.query(`select app.add_custom_domain($1, $2, $3)`, [hostname, j.result!.id, JSON.stringify(verification)]));
     return c.json({ hostname, status: 'pending', verification }, 201);
+  })
+  .post('/domains/workspace-subdomain', requireAdmin('domains'), async (c) => {
+    // enables <slug>.<BASE_DOMAIN> for an existing workspace (Workers Custom Domain, own certificate)
+    if (!vanityEnabled(c.env)) throw new ApiError(501, 'not_configured', 'Workspace subdomains are not enabled on this deployment');
+    const hostname = vanityHost(c.env, c.var.tenant.slug);
+    const r = await attachWorkerDomain(c.env, hostname);
+    await c.var.db.tx(scope(c), async (tx) => {
+      await tx.query(`select app.add_workspace_subdomain($1)`, [hostname]);
+      await tx.query(`select app.set_domain_status($1, $2, $3)`, [hostname, r.ok ? 'active' : 'failed', JSON.stringify(r.ok ? {} : { error: r.error })]);
+    });
+    if (!r.ok) throw badRequest(`Cloudflare rejected ${hostname}: ${r.error}`);
+    return c.json({ hostname, status: 'active' });
   })
   .post('/domains/:hostname/refresh', requireAdmin('domains'), async (c) => {
     const hostname = c.req.param('hostname').toLowerCase();
@@ -401,6 +416,86 @@ export const adminRoutes = new Hono<AppEnv>()
     const active = j.result?.status === 'active' && j.result?.ssl?.status === 'active';
     await c.var.db.tx(scope(c), (tx) => tx.query(`select app.set_domain_status($1, $2, $3)`, [hostname, active ? 'active' : 'pending', JSON.stringify({ cfStatus: j.result?.status, sslStatus: j.result?.ssl?.status })]));
     return c.json({ hostname, status: active ? 'active' : 'pending' });
+  })
+
+  // ------------------------------------------------------------------ AI models (bring your own keys)
+  .get('/ai/providers', requireAdmin('ai'), async (c) => {
+    const data = await c.var.db.tx(scope(c, true), async (tx) => ({
+      items: await tx.query(
+        `select id, provider, label, model, base_url, key_hint, allow_pii, priority, is_enabled, last_used_at, last_error, created_at
+           from tenant_ai_providers where tenant_id = $1 order by priority, created_at`,
+        [c.var.tenant.id],
+      ),
+      settings: await tenantAiSettings(tx, c.var.tenant.id),
+    }));
+    return c.json({ ...data, encryptionConfigured: !!c.env.DATA_ENCRYPTION_KEY });
+  })
+  .post('/ai/providers', requireAdmin('ai'), async (c) => {
+    const b = createProviderSchema.parse(await c.req.json());
+    const n = normaliseCreate(b);
+    const cipher = await encryptKey(c.env, c.var.tenant.id, b.apiKey);
+    const row = await c.var.db.tx(scope(c), (tx) =>
+      tx.one(
+        `insert into tenant_ai_providers (tenant_id, provider, label, model, base_url, secret_ciphertext, key_hint, allow_pii, priority)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         returning id, provider, label, model, base_url, key_hint, allow_pii, priority, is_enabled`,
+        [c.var.tenant.id, b.provider, n.label, n.model, n.baseUrl, cipher, hint(b.apiKey), b.allowPii, b.priority],
+      ),
+    );
+    return c.json(row, 201);
+  })
+  .patch('/ai/providers/:id', requireAdmin('ai'), async (c) => {
+    const id = uuid.parse(c.req.param('id'));
+    const b = updateProviderSchema.parse(await c.req.json());
+    const cipher = b.apiKey ? await encryptKey(c.env, c.var.tenant.id, b.apiKey) : null;
+    const baseUrl = b.baseUrl ? assertSafeBaseUrl(b.baseUrl) : null;
+    const row = await c.var.db.tx(scope(c), (tx) =>
+      tx.one(
+        `update tenant_ai_providers set
+            label = coalesce($3, label), model = coalesce($4, model),
+            base_url = case when $5::boolean then $6 else base_url end,
+            secret_ciphertext = coalesce($7, secret_ciphertext), key_hint = coalesce($8, key_hint),
+            allow_pii = coalesce($9, allow_pii), priority = coalesce($10, priority), is_enabled = coalesce($11, is_enabled),
+            last_error = case when $7 is not null then null else last_error end
+          where tenant_id = $1 and id = $2
+          returning id, provider, label, model, base_url, key_hint, allow_pii, priority, is_enabled`,
+        [c.var.tenant.id, id, b.label ?? null, b.model ?? null, b.baseUrl !== undefined, baseUrl, cipher, b.apiKey ? hint(b.apiKey) : null, b.allowPii ?? null, b.priority ?? null, b.isEnabled ?? null],
+      ),
+    );
+    if (!row) throw notFound();
+    return c.json(row);
+  })
+  .delete('/ai/providers/:id', requireAdmin('ai'), async (c) => {
+    const rows = await c.var.db.tx(scope(c), (tx) => tx.query(`delete from tenant_ai_providers where tenant_id = $1 and id = $2 returning id`, [c.var.tenant.id, uuid.parse(c.req.param('id'))]));
+    if (!rows.length) throw notFound();
+    return c.json({ ok: true });
+  })
+  .post('/ai/providers/:id/test', requireAdmin('ai'), async (c) => {
+    const id = uuid.parse(c.req.param('id'));
+    const cfg = (await c.var.db.tx(scope(c, true), (tx) => loadTenantProviders(c.env, tx, c.var.tenant.id))).find((p) => p.id === id);
+    if (!cfg) throw notFound('Provider not found or disabled');
+    const started = Date.now();
+    try {
+      const r = await chatWith([{ ...tenantProvider(cfg), allowPii: true }], {
+        task: 'provider_test',
+        containsPii: false,
+        maxTokens: 20,
+        messages: [{ role: 'user', content: 'Reply with the single word OK.' }],
+      });
+      await c.var.db.tx(scope(c), (tx) => tx.query(`update tenant_ai_providers set last_used_at = now(), last_error = null where tenant_id = $1 and id = $2`, [c.var.tenant.id, id]));
+      return c.json({ ok: true, reply: r.text.slice(0, 60), latencyMs: Date.now() - started });
+    } catch (e) {
+      const msg = (e as Error).message.replace(/^All AI providers failed: /, '').slice(0, 300);
+      await c.var.db.tx(scope(c), (tx) => tx.query(`update tenant_ai_providers set last_error = $3 where tenant_id = $1 and id = $2`, [c.var.tenant.id, id, msg]));
+      return c.json({ ok: false, error: msg }, 200);
+    }
+  })
+  .put('/ai/settings', requireAdmin('ai'), async (c) => {
+    const b = z.object({ platformFallback: z.boolean() }).parse(await c.req.json());
+    await c.var.db.tx(scope(c), (tx) =>
+      tx.query(`update tenants set settings = jsonb_set(settings, '{ai}', coalesce(settings->'ai', '{}'::jsonb) || $2::jsonb) where id = $1`, [c.var.tenant.id, JSON.stringify({ platformFallback: b.platformFallback })]),
+    );
+    return c.json({ ok: true, ...b });
   })
 
   // ------------------------------------------------------------------ audit

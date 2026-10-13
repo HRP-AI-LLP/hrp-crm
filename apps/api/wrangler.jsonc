@@ -1,5 +1,6 @@
-// HRP Synapse gateway Worker.
-// Resource IDs marked __LIKE_THIS__ are filled in by `pnpm setup` (scripts/setup/provision.mjs).
+// HRP Synapse gateway Worker — TEMPLATE.
+// `pnpm run setup` renders this into wrangler.jsonc with your real resource IDs. Edit this file,
+// not wrangler.jsonc, then re-run setup (or replace the __PLACEHOLDERS__ by hand).
 // Bindings are NOT inherited by environments in Wrangler, so each env lists them explicitly.
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
@@ -30,6 +31,7 @@
     "dev": {
       "name": "synapse-dev",
       "workers_dev": true,
+      // __DEV_ROUTES__
       "assets": {
         "directory": "../web/dist",
         "binding": "ASSETS",
@@ -39,7 +41,12 @@
       "vars": {
         "APP_ENV": "dev",
         "CORS_ORIGINS": "",
-        "BASE_DOMAIN": "__DEV_BASE_DOMAIN__",
+        "APP_HOST": "__DEV_APP_HOST__",
+        "BASE_DOMAIN": "__DEV_APP_HOST__",
+        "SAAS_CNAME_TARGET": "__DEV_APP_HOST__",
+        "CF_ACCOUNT_ID": "__CF_ACCOUNT_ID__",
+        "CF_ZONE_NAME": "__ZONE_NAME__",
+        "WORKER_NAME": "synapse-dev",
         "ALLOW_TENANT_HEADER": "true",
         "SIGNUP_ENABLED": "true",
         "AI_DAILY_LIMIT_PER_TENANT": "300",
@@ -70,7 +77,12 @@
       "vars": {
         "APP_ENV": "production",
         "CORS_ORIGINS": "",
-        "BASE_DOMAIN": "__PROD_BASE_DOMAIN__",
+        "APP_HOST": "__PROD_APP_HOST__",
+        "BASE_DOMAIN": "__PROD_APP_HOST__",
+        "SAAS_CNAME_TARGET": "__PROD_APP_HOST__",
+        "CF_ACCOUNT_ID": "__CF_ACCOUNT_ID__",
+        "CF_ZONE_NAME": "__ZONE_NAME__",
+        "WORKER_NAME": "synapse-prod",
         "ALLOW_TENANT_HEADER": "false",
         "SIGNUP_ENABLED": "true",
         "AI_DAILY_LIMIT_PER_TENANT": "300",

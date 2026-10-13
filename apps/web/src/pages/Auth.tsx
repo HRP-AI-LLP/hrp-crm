@@ -8,7 +8,9 @@ interface TenantProbe {
   tenant: { slug: string; name: string } | null;
   signupEnabled: boolean;
   tenantHeaderAllowed: boolean;
-  baseDomain: string;
+  appHost: string | null;
+  /** set when each workspace can also get <slug>.<this domain> */
+  vanityDomains: string | null;
 }
 
 export function useTenantProbe() {
@@ -35,7 +37,7 @@ export function LoginPage() {
   const { login } = useAuth();
   const nav = useNavigate();
   const probe = useTenantProbe();
-  const [ws, setWs] = useState(getWorkspace() ?? '');
+  const [ws, setWs] = useState(() => new URLSearchParams(window.location.search).get('workspace') ?? getWorkspace() ?? '');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [err, setErr] = useState<string | null>(null);
@@ -68,10 +70,8 @@ export function LoginPage() {
           {needsWorkspace && (
             <label className="field">
               Workspace
-              <div className="ws-suffix">
-                <input value={ws} onChange={(e) => setWs(e.target.value)} placeholder="your-company" required autoComplete="organization" />
-                {probe.data?.baseDomain && probe.data.baseDomain !== 'localhost' && <span>.{probe.data.baseDomain}</span>}
-              </div>
+              <input value={ws} onChange={(e) => setWs(e.target.value)} placeholder="your-company" required autoComplete="organization" />
+              <span className="muted small">The workspace ID you chose when your company signed up.</span>
             </label>
           )}
           <label className="field">
@@ -111,13 +111,13 @@ export function SignupPage() {
     setErr(null);
     setBusy(true);
     try {
-      const r = await post<{ tenant: { slug: string }; url: string | null }>('/api/public/signup', f);
-      if (r.url && probe.data?.baseDomain && probe.data.baseDomain !== 'localhost' && !probe.data.tenantHeaderAllowed) {
-        window.location.href = `${r.url}/login`;
+      const r = await post<{ tenant: { slug: string }; url: string | null; vanityUrl: string | null }>('/api/public/signup', f);
+      setWorkspace(r.tenant.slug);
+      if (r.url && new URL(r.url).host !== window.location.host) {
+        window.location.href = r.url;
         return;
       }
-      setWorkspace(r.tenant.slug);
-      nav('/login');
+      nav(`/login?workspace=${encodeURIComponent(r.tenant.slug)}`);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -139,11 +139,16 @@ export function SignupPage() {
             <input value={f.workspaceName} onChange={(e) => setF((s) => ({ ...s, workspaceName: e.target.value, slug: s.slug && s.slug !== slugify(s.workspaceName) ? s.slug : slugify(e.target.value) }))} required />
           </label>
           <label className="field">
-            Workspace address
-            <div className="ws-suffix">
+            Workspace ID
+            {probe.data?.vanityDomains ? (
+              <div className="ws-suffix">
+                <input value={f.slug} onChange={set('slug')} required pattern="[a-z0-9][a-z0-9-]{1,38}[a-z0-9]" />
+                <span>.{probe.data.vanityDomains}</span>
+              </div>
+            ) : (
               <input value={f.slug} onChange={set('slug')} required pattern="[a-z0-9][a-z0-9-]{1,38}[a-z0-9]" />
-              {probe.data?.baseDomain && probe.data.baseDomain !== 'localhost' && <span>.{probe.data.baseDomain}</span>}
-            </div>
+            )}
+            <span className="muted small">Your team types this when signing in. Lowercase letters, digits and hyphens.</span>
           </label>
           <label className="field">
             Your name

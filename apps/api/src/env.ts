@@ -6,9 +6,19 @@ import type { Job } from './services/jobs';
 export interface Env {
   // --- config vars (wrangler.jsonc "vars") ---
   APP_ENV: 'local' | 'dev' | 'production';
-  BASE_DOMAIN: string; // e.g. hrpsynapse.com
-  /** non-prod only: allow selecting the tenant with the X-Tenant header (workers.dev / localhost) */
+  /** the shared app hostname, e.g. hrpsynapse.hrpai.in (dev: hrpsynapse-dev.hrpai.in).
+   *  On this host the workspace is chosen at sign-in and sent as X-Tenant. */
+  APP_HOST?: string;
+  /** parent for optional per-workspace vanity hosts: <slug>.<BASE_DOMAIN> (normally = APP_HOST) */
+  BASE_DOMAIN: string;
+  /** non-prod only: also accept X-Tenant on any host (workers.dev / localhost) */
   ALLOW_TENANT_HEADER?: string;
+  /** vanity subdomains via Workers Custom Domains (each gets its own free certificate) */
+  CF_ACCOUNT_ID?: string;
+  CF_ZONE_NAME?: string;
+  WORKER_NAME?: string;
+  /** CNAME target customers point their own domains at (Cloudflare for SaaS) */
+  SAAS_CNAME_TARGET?: string;
   SIGNUP_ENABLED?: string;
   CORS_ORIGINS?: string;
   AI_DAILY_LIMIT_PER_TENANT?: string;
@@ -28,6 +38,8 @@ export interface Env {
   GEMINI_API_KEY?: string;
   TURNSTILE_SECRET?: string;
   CF_SAAS_API_TOKEN?: string;
+  /** optional: token allowed to attach Workers Custom Domains (enables <slug>.<BASE_DOMAIN>) */
+  CF_TENANT_DOMAINS_TOKEN?: string;
 
   // --- bindings ---
   HYPERDRIVE?: Hyperdrive;

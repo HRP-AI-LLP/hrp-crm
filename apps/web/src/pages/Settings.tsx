@@ -15,6 +15,7 @@ const TABS = [
   ['users', 'Users', 'users'],
   ['roles', 'Roles & access', 'roles'],
   ['modules', 'Industry modules', 'modules'],
+  ['ai', 'AI models', 'ai'],
   ['workflows', 'Automations', 'workflows'],
   ['forms', 'Web forms', 'metadata'],
   ['channels', 'Channels', 'channels'],
@@ -48,6 +49,7 @@ export function SettingsPage() {
           {tab === 'users' && <UsersTab />}
           {tab === 'roles' && <RolesTab />}
           {tab === 'modules' && <ModulesTab />}
+          {tab === 'ai' && <AiModelsTab />}
           {tab === 'workflows' && <WorkflowsTab />}
           {tab === 'forms' && <FormsTab />}
           {tab === 'channels' && <ChannelsTab />}
@@ -916,10 +918,26 @@ function ChannelsTab() {
 
 function DomainsTab() {
   const run = useRun();
+  const { me } = useAuth();
   const { data } = useQuery({ queryKey: ['admin-domains'], queryFn: () => get<{ items: Json[] }>('/api/admin/domains') });
+  const { data: probe } = useQuery({ queryKey: ['tenant-probe'], queryFn: () => get<{ vanityDomains: string | null; appHost: string | null }>('/api/public/tenant'), staleTime: Infinity });
   const [host, setHost] = useState('');
+  const vanity = probe?.vanityDomains && me ? `${me.tenant.slug}.${probe.vanityDomains}` : null;
+  const hasVanity = vanity && data?.items.some((d) => d.hostname === vanity && d.status === 'active');
   return (
     <div className="stack">
+      {probe?.appHost && (
+        <p className="muted" style={{ margin: 0 }}>
+          Your team signs in at <b>{probe.appHost}</b> with workspace ID <b>{me?.tenant.slug}</b>.
+        </p>
+      )}
+      {vanity && !hasVanity && (
+        <div className="row">
+          <button className="btn" onClick={() => run(() => post('/api/admin/domains/workspace-subdomain'), `${vanity} is ready`, [['admin-domains']])}>
+            Give this workspace its own address: {vanity}
+          </button>
+        </div>
+      )}
       <form
         className="row"
         onSubmit={async (e) => {
@@ -988,6 +1006,238 @@ function AuditTab() {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ AI models (bring your own keys)
+const AI_PROVIDERS: { key: string; label: string; model: string; note: string }[] = [
+  { key: 'openai', label: 'OpenAI', model: 'gpt-4.1-mini', note: 'platform.openai.com → API keys' },
+  { key: 'anthropic', label: 'Anthropic (Claude)', model: 'claude-haiku-5-5', note: 'console.anthropic.com → API keys' },
+  { key: 'gemini', label: 'Google Gemini', model: 'gemini-2.5-flash', note: 'aistudio.google.com → Get API key' },
+  { key: 'groq', label: 'Groq', model: 'llama-3.3-70b-versatile', note: 'console.groq.com → API keys' },
+  { key: 'openrouter', label: 'OpenRouter', model: 'openrouter/auto', note: 'openrouter.ai → Keys' },
+  { key: 'openai_compatible', label: 'Other OpenAI-compatible endpoint', model: '', note: 'Together, Mistral, Azure OpenAI, a self-hosted vLLM…' },
+];
+
+function AiModelsTab() {
+  const run = useRun();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({ queryKey: ['admin-ai'], queryFn: () => get<{ items: Json[]; settings: { platformFallback: boolean }; encryptionConfigured: boolean }>('/api/admin/ai/providers') });
+  const [adding, setAdding] = useState<{ provider: string; model: string; apiKey: string; baseUrl: string; allowPii: boolean; label: string } | null>(null);
+  const [rotating, setRotating] = useState<Json | null>(null);
+  const [newKey, setNewKey] = useState('');
+  const [testing, setTesting] = useState<string | null>(null);
+  if (isLoading) return <Spinner />;
+  const def = AI_PROVIDERS.find((p) => p.key === adding?.provider);
+
+  const test = async (id: string) => {
+    setTesting(id);
+    try {
+      const r = await post<{ ok: boolean; error?: string; latencyMs?: number }>(`/api/admin/ai/providers/${id}/test`);
+      toast(r.ok ? `Connected (${r.latencyMs} ms)` : `Connection failed: ${r.error}`, !r.ok);
+    } finally {
+      setTesting(null);
+      qc.invalidateQueries({ queryKey: ['admin-ai'] });
+    }
+  };
+
+  return (
+    <div className="stack">
+      <p className="muted" style={{ margin: 0, maxWidth: '75ch' }}>
+        Use your own model accounts for Synapse AI. Your keys are tried first, in the order below; the built-in models are used as a backup unless you turn that off.
+        Keys are encrypted before they are stored and are never shown again, only their last four characters.
+      </p>
+      {!data?.encryptionConfigured && <div className="field-error">This deployment has no encryption key configured, so keys cannot be saved. Ask your platform administrator to set DATA_ENCRYPTION_KEY.</div>}
+      <div className="spread">
+        <label className="row">
+          <input
+            type="checkbox"
+            checked={data?.settings.platformFallback ?? true}
+            onChange={(e) => run(() => put('/api/admin/ai/settings', { platformFallback: e.target.checked }), e.target.checked ? 'Built-in models enabled as backup' : 'Only your own keys will be used', [['admin-ai']])}
+          />
+          Use built-in models when my keys fail or are not set
+        </label>
+        <button className="btn primary" disabled={!data?.encryptionConfigured} onClick={() => setAdding({ provider: 'openai', model: 'gpt-4.1-mini', apiKey: '', baseUrl: '', allowPii: false, label: '' })}>
+          Add API key
+        </button>
+      </div>
+      {data?.items.length ? (
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Order</th>
+              <th>Provider</th>
+              <th>Model</th>
+              <th>Key</th>
+              <th>Personal data</th>
+              <th>Status</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {data.items.map((p, i) => (
+              <tr key={p.id}>
+                <td>
+                  <div className="row">
+                    {i + 1}
+                    {i > 0 && (
+                      <button className="btn ghost sm" aria-label="Move up" onClick={() => run(() => patch(`/api/admin/ai/providers/${p.id}`, { priority: Math.max(1, data.items[i - 1]!.priority - 1) }), 'Order updated', [['admin-ai']])}>
+                        ↑
+                      </button>
+                    )}
+                  </div>
+                </td>
+                <td>
+                  <b>{p.label}</b>
+                  {p.base_url && <div className="muted small">{p.base_url}</div>}
+                </td>
+                <td>
+                  <button
+                    className="btn ghost sm"
+                    onClick={() => {
+                      const m = window.prompt('Model name', p.model);
+                      if (m && m !== p.model) run(() => patch(`/api/admin/ai/providers/${p.id}`, { model: m }), 'Model updated', [['admin-ai']]);
+                    }}
+                  >
+                    {p.model}
+                  </button>
+                </td>
+                <td className="muted">{p.key_hint}</td>
+                <td>
+                  <label className="row small">
+                    <input type="checkbox" checked={p.allow_pii} onChange={(e) => run(() => patch(`/api/admin/ai/providers/${p.id}`, { allowPii: e.target.checked }), 'Saved', [['admin-ai']])} />
+                    Allowed
+                  </label>
+                </td>
+                <td className="small" style={{ whiteSpace: 'normal', maxWidth: 220 }}>
+                  {!p.is_enabled ? <span className="chip">Paused</span> : p.last_error ? <span className="field-error">{p.last_error}</span> : p.last_used_at ? <span className="chip good">Used {relative(p.last_used_at)}</span> : <span className="muted">Not used yet</span>}
+                </td>
+                <td>
+                  <div className="row">
+                    <button className="btn sm" disabled={testing === p.id} onClick={() => test(p.id)}>
+                      {testing === p.id ? 'Testing…' : 'Test'}
+                    </button>
+                    <button className="btn sm" onClick={() => { setRotating(p); setNewKey(''); }}>
+                      Replace key
+                    </button>
+                    <button className="btn sm" onClick={() => run(() => patch(`/api/admin/ai/providers/${p.id}`, { isEnabled: !p.is_enabled }), p.is_enabled ? 'Paused' : 'Resumed', [['admin-ai']])}>
+                      {p.is_enabled ? 'Pause' : 'Resume'}
+                    </button>
+                    <button className="btn sm danger" onClick={() => window.confirm(`Remove the ${p.label} key?`) && run(() => del(`/api/admin/ai/providers/${p.id}`), 'Key removed', [['admin-ai']])}>
+                      Remove
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <Empty title="No API keys yet">Synapse AI runs on the built-in models until you add your own.</Empty>
+      )}
+
+      {adding && (
+        <Modal
+          title="Add AI API key"
+          onClose={() => setAdding(null)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setAdding(null)}>
+                Cancel
+              </button>
+              <button
+                className="btn primary"
+                disabled={adding.apiKey.length < 8 || !adding.model || (adding.provider === 'openai_compatible' && !adding.baseUrl)}
+                onClick={async () => {
+                  const r = (await run(
+                    () => post<{ id: string }>('/api/admin/ai/providers', { provider: adding.provider, model: adding.model, apiKey: adding.apiKey, baseUrl: adding.baseUrl || undefined, allowPii: adding.allowPii, label: adding.label || undefined, priority: (data?.items.length ?? 0) * 10 + 10 }),
+                    'Key saved',
+                    [['admin-ai']],
+                  )) as { id: string } | null;
+                  if (r) {
+                    setAdding(null);
+                    test(r.id);
+                  }
+                }}
+              >
+                Save and test
+              </button>
+            </>
+          }
+        >
+          <div className="modal-body">
+            <label className="field">
+              Provider
+              <select value={adding.provider} onChange={(e) => setAdding({ ...adding, provider: e.target.value, model: AI_PROVIDERS.find((p) => p.key === e.target.value)?.model ?? '' })}>
+                {AI_PROVIDERS.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              Model
+              <input value={adding.model} onChange={(e) => setAdding({ ...adding, model: e.target.value })} placeholder="model name" />
+            </label>
+            {(adding.provider === 'openai_compatible' || adding.provider === 'openai') && (
+              <label className="field wide">
+                {adding.provider === 'openai' ? 'Base URL (optional, e.g. Azure OpenAI)' : 'Base URL'}
+                <input value={adding.baseUrl} onChange={(e) => setAdding({ ...adding, baseUrl: e.target.value })} placeholder="https://api.example.com/v1" />
+              </label>
+            )}
+            <label className="field wide">
+              API key
+              <input type="password" autoComplete="off" value={adding.apiKey} onChange={(e) => setAdding({ ...adding, apiKey: e.target.value })} />
+              <span className="muted small">Where to find it: {def?.note}</span>
+            </label>
+            <label className="field wide">
+              Name (optional)
+              <input value={adding.label} onChange={(e) => setAdding({ ...adding, label: e.target.value })} placeholder={def?.label} />
+            </label>
+            <label className="row wide" style={{ alignItems: 'flex-start' }}>
+              <input type="checkbox" checked={adding.allowPii} onChange={(e) => setAdding({ ...adding, allowPii: e.target.checked })} style={{ marginTop: 3 }} />
+              <span>
+                Allow customer personal data (names, emails, phone numbers, message text) to be sent to this provider.
+                <span className="muted small" style={{ display: 'block' }}>
+                  Turn this on only if your agreement with the provider covers it. Without it, this key is used for tasks that send no personal data, such as lead scoring and next-best-action.
+                </span>
+              </span>
+            </label>
+          </div>
+        </Modal>
+      )}
+
+      {rotating && (
+        <Modal
+          title={`Replace ${rotating.label} key`}
+          onClose={() => setRotating(null)}
+          footer={
+            <button
+              className="btn primary"
+              disabled={newKey.length < 8}
+              onClick={async () => {
+                if (await run(() => patch(`/api/admin/ai/providers/${rotating.id}`, { apiKey: newKey }), 'Key replaced', [['admin-ai']])) {
+                  const id = rotating.id as string;
+                  setRotating(null);
+                  test(id);
+                }
+              }}
+            >
+              Replace and test
+            </button>
+          }
+        >
+          <div className="modal-body">
+            <label className="field wide">
+              New API key
+              <input type="password" autoComplete="off" value={newKey} onChange={(e) => setNewKey(e.target.value)} />
+            </label>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

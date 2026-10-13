@@ -2,7 +2,7 @@
  * End-to-end API tests: the real Hono app against a real Postgres (RLS on, runtime role),
  * with no Cloudflare bindings (jobs run inline, AI falls back to rule-based scoring).
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
 import type { Env } from '../src/env';
 import { clearL1 } from '../src/lib/cache';
@@ -330,5 +330,104 @@ describe('automation, forms, AI fallbacks, audit', () => {
     const r = await call('GET', '/api/v1/dashboard', { tenant: 'acme', token: acme.token });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     expect(r.json.leads.open).toBeGreaterThan(0);
+  });
+});
+
+describe('bring-your-own AI keys (per workspace)', () => {
+  let providerId: string;
+  const SECRET = 'sk-live-THIS-IS-A-TENANT-KEY-9xYz';
+
+  it('admin adds a key; the key is encrypted at rest and never returned', async () => {
+    const r = await call('POST', '/api/admin/ai/providers', { tenant: 'acme', token: acme.token, body: { provider: 'openai', apiKey: SECRET, allowPii: true, priority: 10 } });
+    expect(r.status, JSON.stringify(r.json)).toBe(201);
+    providerId = r.json.id;
+    expect(JSON.stringify(r.json)).not.toContain(SECRET);
+    expect(r.json.key_hint).toBe('…9xYz');
+    expect(r.json.model).toBe('gpt-4.1-mini');
+    const list = await call('GET', '/api/admin/ai/providers', { tenant: 'acme', token: acme.token });
+    expect(JSON.stringify(list.json)).not.toContain(SECRET);
+    expect(list.json.items).toHaveLength(1);
+  });
+
+  it('another workspace cannot see or use it', async () => {
+    const list = await call('GET', '/api/admin/ai/providers', { tenant: 'globex', token: globex.token });
+    expect(list.json.items).toEqual([]);
+    expect((await call('DELETE', `/api/admin/ai/providers/${providerId}`, { tenant: 'globex', token: globex.token })).status).toBe(404);
+  });
+
+  it('non-admins cannot manage keys', async () => {
+    const rep = await login('acme', 'rep@acme.test', PW);
+    expect((await call('GET', '/api/admin/ai/providers', { tenant: 'acme', token: rep.token })).status).toBe(403);
+  });
+
+  it('rejects internal or non-https custom endpoints', async () => {
+    const r = await call('POST', '/api/admin/ai/providers', { tenant: 'acme', token: acme.token, body: { provider: 'openai_compatible', apiKey: 'k-12345678', model: 'm', baseUrl: 'https://169.254.169.254/v1' } });
+    expect(r.status).toBe(400);
+  });
+
+  it("AI features run on the workspace's key, which does not consume the platform quota", async () => {
+    const seen: { url: string; auth: string | null }[] = [];
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      seen.push({ url: String(url), auth: new Headers(init.headers).get('authorization') });
+      const content = JSON.stringify({ summary: 'A promising lead.', key_points: ['Referred by partner'], risks: [] });
+      return new Response(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 10, completion_tokens: 5 } }), { status: 200 });
+    });
+    try {
+      const lead = (await call('GET', '/api/v1/records/lead?limit=1', { tenant: 'acme', token: acme.token })).json.items[0];
+      const r = await call('POST', `/api/ai/summarize/lead/${lead.id}`, { tenant: 'acme', token: acme.token });
+      expect(r.status, JSON.stringify(r.json)).toBe(200);
+      expect(r.json.summary).toBe('A promising lead.');
+      expect(r.json.model).toContain('your key');
+      expect(seen[0]).toEqual({ url: 'https://api.openai.com/v1/chat/completions', auth: `Bearer ${SECRET}` });
+      const status = await call('GET', '/api/ai/status', { tenant: 'acme', token: acme.token });
+      expect(status.json.workspaceProviders[0].provider).toBe('openai');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('test button reports provider errors without leaking the key', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: { message: `Incorrect API key provided: ${SECRET}` } }), { status: 401 }));
+    try {
+      const r = await call('POST', `/api/admin/ai/providers/${providerId}/test`, { tenant: 'acme', token: acme.token });
+      expect(r.json.ok).toBe(false);
+      expect(JSON.stringify(r.json)).not.toContain('THIS-IS-A-TENANT-KEY');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('platform fallback can be switched off per workspace', async () => {
+    expect((await call('PUT', '/api/admin/ai/settings', { tenant: 'acme', token: acme.token, body: { platformFallback: false } })).status).toBe(200);
+    const s = await call('GET', '/api/ai/status', { tenant: 'acme', token: acme.token });
+    expect(s.json.platformFallback).toBe(false);
+    await call('PUT', '/api/admin/ai/settings', { tenant: 'acme', token: acme.token, body: { platformFallback: true } });
+  });
+
+  it('rotating and deleting a key', async () => {
+    const u = await call('PATCH', `/api/admin/ai/providers/${providerId}`, { tenant: 'acme', token: acme.token, body: { apiKey: 'sk-rotated-key-AbCd', model: 'gpt-4.1' } });
+    expect(u.json.key_hint).toBe('…AbCd');
+    expect((await call('DELETE', `/api/admin/ai/providers/${providerId}`, { tenant: 'acme', token: acme.token })).status).toBe(200);
+  });
+});
+
+describe('shared app host (production routing)', () => {
+  const prod = () => ({ ...env, APP_ENV: 'production' as const, APP_HOST: 'hrpsynapse.synapse.test', ALLOW_TENANT_HEADER: 'false' });
+  const req = (host: string, path: string, init: RequestInit = {}) => app.request(`https://${host}${path}`, init, prod());
+
+  it('accepts the workspace chosen at sign-in on the app host', async () => {
+    const r = await req('hrpsynapse.synapse.test', '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', 'x-tenant': 'acme' }, body: JSON.stringify({ email: 'owner@acme.test', password: PW }) });
+    expect(r.status).toBe(200);
+    expect(r.headers.get('set-cookie')).toContain('__Host-synapse_rt_acme=');
+  });
+
+  it('ignores X-Tenant on any other host in production', async () => {
+    const r = await req('evil.example.com', '/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json', 'x-tenant': 'acme' }, body: JSON.stringify({ email: 'owner@acme.test', password: PW }) });
+    expect(r.status).toBe(404);
+  });
+
+  it('a token for one workspace cannot be replayed by switching X-Tenant', async () => {
+    const r = await req('hrpsynapse.synapse.test', '/api/v1/records/lead', { headers: { 'x-tenant': 'globex', authorization: `Bearer ${acme.token}` } });
+    expect(r.status).toBe(401);
   });
 });

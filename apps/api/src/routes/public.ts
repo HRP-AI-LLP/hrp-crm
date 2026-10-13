@@ -8,7 +8,8 @@ import type { ChannelAccount } from '../services/channels';
 import { verifyMetaSignature, webhookVerifyToken } from '../services/channels';
 import { enqueue, eventJobs } from '../services/jobs';
 import { createRecord } from '../services/records';
-import { loadMeta, resolveTenant } from '../services/tenancy';
+import { attachWorkerDomain, signInUrl, vanityEnabled, vanityHost } from '../services/domains';
+import { isAppHost, loadMeta, resolveTenant } from '../services/tenancy';
 import { systemPrincipal } from '../services/worker';
 
 const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'mail', 'smtp', 'status', 'docs', 'help', 'support', 'billing', 'static', 'assets', 'cdn', 'auth', 'login', 'signup', 'dev', 'staging', 'prod', 'hrp', 'synapse']);
@@ -43,8 +44,9 @@ export const publicRoutes = new Hono<AppEnv>()
     return c.json({
       tenant: tenant && tenant.status === 'active' ? { slug: tenant.slug, name: tenant.name } : null,
       signupEnabled: c.env.SIGNUP_ENABLED === 'true',
-      tenantHeaderAllowed: c.env.ALLOW_TENANT_HEADER === 'true' && c.env.APP_ENV !== 'production',
-      baseDomain: c.env.BASE_DOMAIN,
+      tenantHeaderAllowed: isAppHost(c.env, new URL(c.req.url).host),
+      appHost: c.env.APP_HOST ?? null,
+      vanityDomains: vanityEnabled(c.env) ? c.env.BASE_DOMAIN : null,
     });
   })
 
@@ -58,9 +60,19 @@ export const publicRoutes = new Hono<AppEnv>()
     const existing = await c.var.db.platform(`select 1 from app.resolve_tenant_by_slug($1)`, [body.slug]);
     if (existing.length) throw conflict('That workspace address is taken');
     const hash = await hashPassword(body.password);
-    const rows = await c.var.db.platform<{ id: string }>(`select app.create_tenant($1,$2,$3,$4,$5,$6) as id`, [body.slug, body.workspaceName, c.env.BASE_DOMAIN || null, body.email, body.fullName, hash]);
-    const url = c.env.BASE_DOMAIN ? `https://${body.slug}.${c.env.BASE_DOMAIN}` : null;
-    return c.json({ tenant: { id: rows[0]!.id, slug: body.slug }, url }, 201);
+    const vanity = vanityEnabled(c.env);
+    const rows = await c.var.db.platform<{ id: string }>(`select app.create_tenant($1,$2,$3,$4,$5,$6) as id`, [body.slug, body.workspaceName, vanity ? c.env.BASE_DOMAIN : null, body.email, body.fullName, hash]);
+    const tenantId = rows[0]!.id;
+    let hasVanity = false;
+    if (vanity) {
+      const r = await attachWorkerDomain(c.env, vanityHost(c.env, body.slug));
+      hasVanity = r.ok;
+      if (!r.ok) {
+        await c.var.db.tx({ tenantId }, (tx) => tx.query(`select app.set_domain_status($1, 'failed', $2)`, [vanityHost(c.env, body.slug), JSON.stringify({ error: r.error })]));
+      }
+    }
+    // a freshly issued certificate can take a minute; the shared app host works immediately
+    return c.json({ tenant: { id: tenantId, slug: body.slug }, url: signInUrl(c.env, body.slug, false), vanityUrl: hasVanity ? signInUrl(c.env, body.slug, true) : null }, 201);
   })
 
   // ---------------------------------------------------------------------------------------------

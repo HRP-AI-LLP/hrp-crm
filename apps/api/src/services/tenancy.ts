@@ -19,7 +19,19 @@ const TENANT_TTL = 60;
 type TenantRow = { tenant_id: string; slug: string; name: string; status: string; meta_version: number };
 const toInfo = (r: TenantRow): TenantInfo => ({ id: r.tenant_id, slug: r.slug, name: r.name, status: r.status, metaVersion: r.meta_version });
 
-/** Resolves the tenant for a request: custom domain / subdomain first, then the dev-only header. */
+/** True when the workspace may be chosen by the X-Tenant header on this host. */
+export function isAppHost(env: Env, host: string): boolean {
+  const h = host.toLowerCase().replace(/:\d+$/, '');
+  if (env.APP_HOST && h === env.APP_HOST.toLowerCase()) return true;
+  return env.APP_ENV !== 'production' && env.ALLOW_TENANT_HEADER === 'true';
+}
+
+/**
+ * Resolves the tenant for a request:
+ *   1. hostname registry (vanity <slug>.<BASE_DOMAIN> hosts and verified custom domains) — wins always
+ *   2. on the shared app host, the workspace chosen at sign-in (X-Tenant header)
+ * Either way the access token's audience must match the resolved tenant, and RLS applies.
+ */
 export async function resolveTenant(env: Env, db: Db, host: string, headerSlug: string | null): Promise<TenantInfo | null> {
   const cache = new EdgeCache(env);
   const h = host.toLowerCase().replace(/:\d+$/, '');
@@ -29,7 +41,7 @@ export async function resolveTenant(env: Env, db: Db, host: string, headerSlug: 
   });
   if (!('none' in byHost)) return byHost;
 
-  if (headerSlug && env.ALLOW_TENANT_HEADER === 'true' && env.APP_ENV !== 'production') {
+  if (headerSlug && isAppHost(env, h)) {
     const slug = headerSlug.toLowerCase();
     if (!/^[a-z0-9-]{3,40}$/.test(slug)) return null;
     const bySlug = await cache.getOrLoad<TenantInfo | { none: true }>(`p:slug:${slug}`, { ttlSeconds: TENANT_TTL }, async () => {

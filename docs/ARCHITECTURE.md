@@ -5,7 +5,8 @@
 ```mermaid
 flowchart TB
   subgraph Clients
-    A1["acme.hrpsynapse.com"]
+    A0["hrpsynapse.hrpai.in (shared app host, workspace chosen at sign-in)"]
+    A1["acme.hrpsynapse.hrpai.in (optional workspace host)"]
     A2["crm.customer.com (custom domain)"]
     A3["WhatsApp / email / web forms"]
   end
@@ -16,7 +17,7 @@ flowchart TB
     KV[("KV: versioned metadata bundles")]
     CA[("Cache API + isolate memory: t:{tenant}:… keys")]
     Q[["Queues: jobs + DLQ"]]
-    AI["AI router: Workers AI → Groq → Gemini (PII-aware)"]
+    AI["AI router: workspace keys → Workers AI → Groq → Gemini (PII-aware)"]
     VEC[("Vectorize: namespace = tenant id")]
     HD["Hyperdrive (query cache OFF)"]
   end
@@ -25,7 +26,8 @@ flowchart TB
     DEV[("dev")]
     PR[("preview/pr-N")]
   end
-  A1 & A2 --> SAAS --> GW
+  A0 & A1 --> GW
+  A2 --> SAAS --> GW
   A3 --> GW
   GW --> SPA
   GW <--> KV & CA
@@ -41,6 +43,15 @@ The SPA and the API are served by one Worker, using Workers Static Assets with `
 - Same-origin hosting removes CORS and third-party-cookie problems for the refresh token.
 
 Static asset requests are free and don't count against Worker invocations.
+
+### Hostnames
+
+`hrpsynapse.hrpai.in` (prod) and `hrpsynapse-dev.hrpai.in` (dev) are Workers Custom Domains. Cloudflare creates their DNS records and certificates.
+
+Workspace hosts like `acme.hrpsynapse.hrpai.in` sit two levels below `hrpai.in`. Cloudflare's free Universal SSL certificate only covers one level (`*.hrpai.in`), so a wildcard route would serve those hosts with an invalid certificate. Synapse avoids this in two ways:
+
+- Every workspace works on the shared host, chosen at sign-in.
+- Optionally, each workspace host is attached as its own Workers Custom Domain, which gets a free certificate for that exact name.
 
 ## Request lifecycle
 

@@ -31,6 +31,7 @@
     "dev": {
       "name": "synapse-dev",
       "workers_dev": true,
+      // __DEV_ROUTES__
       "assets": {
         "directory": "../web/dist",
         "binding": "ASSETS",
@@ -40,7 +41,12 @@
       "vars": {
         "APP_ENV": "dev",
         "CORS_ORIGINS": "",
-        "BASE_DOMAIN": "__DEV_BASE_DOMAIN__",
+        "APP_HOST": "__DEV_APP_HOST__",
+        "BASE_DOMAIN": "__DEV_APP_HOST__",
+        "SAAS_CNAME_TARGET": "__DEV_APP_HOST__",
+        "CF_ACCOUNT_ID": "__CF_ACCOUNT_ID__",
+        "CF_ZONE_NAME": "__ZONE_NAME__",
+        "WORKER_NAME": "synapse-dev",
         "ALLOW_TENANT_HEADER": "true",
         "SIGNUP_ENABLED": "true",
         "AI_DAILY_LIMIT_PER_TENANT": "300",
@@ -71,7 +77,12 @@
       "vars": {
         "APP_ENV": "production",
         "CORS_ORIGINS": "",
-        "BASE_DOMAIN": "__PROD_BASE_DOMAIN__",
+        "APP_HOST": "__PROD_APP_HOST__",
+        "BASE_DOMAIN": "__PROD_APP_HOST__",
+        "SAAS_CNAME_TARGET": "__PROD_APP_HOST__",
+        "CF_ACCOUNT_ID": "__CF_ACCOUNT_ID__",
+        "CF_ZONE_NAME": "__ZONE_NAME__",
+        "WORKER_NAME": "synapse-prod",
         "ALLOW_TENANT_HEADER": "false",
         "SIGNUP_ENABLED": "true",
         "AI_DAILY_LIMIT_PER_TENANT": "300",

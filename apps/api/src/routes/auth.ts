@@ -9,7 +9,8 @@ import { ACCESS_TTL_SECONDS, REFRESH_TTL_SECONDS, signAccessToken } from '../lib
 import { authenticate, scope } from '../middleware';
 import { invalidatePrincipal } from '../services/tenancy';
 
-const REFRESH_COOKIE = '__Host-synapse_rt';
+/** One refresh cookie per workspace, so several workspaces can be signed in on the shared app host. */
+const refreshCookie = (slug: string) => `__Host-synapse_rt_${slug}`;
 const MAX_FAILED = 5;
 const LOCK_MINUTES = 15;
 
@@ -19,8 +20,8 @@ function clientIp(c: { req: { header(n: string): string | undefined } }) {
   return c.req.header('cf-connecting-ip') ?? c.req.header('x-forwarded-for')?.split(',')[0]?.trim() ?? null;
 }
 
-function setRefreshCookie(c: Parameters<typeof setCookie>[0], token: string) {
-  setCookie(c, REFRESH_COOKIE, token, { path: '/', secure: true, httpOnly: true, sameSite: 'Strict', maxAge: REFRESH_TTL_SECONDS });
+function setRefreshCookie(c: Context<AppEnv>, token: string) {
+  setCookie(c, refreshCookie(c.var.tenant.slug), token, { path: '/', secure: true, httpOnly: true, sameSite: 'Strict', maxAge: REFRESH_TTL_SECONDS });
 }
 
 /** CSRF guard for cookie-authenticated endpoints: browsers cannot add custom headers cross-site without CORS preflight. */
@@ -82,7 +83,7 @@ export const authRoutes = new Hono<AppEnv>()
 
   .post('/refresh', async (c) => {
     requireCsrfHeader(c);
-    const token = getCookie(c, REFRESH_COOKIE);
+    const token = getCookie(c, refreshCookie(c.var.tenant.slug));
     if (!token) throw unauthorized('No session');
     const tenant = c.var.tenant;
     const hash = await sha256Hex(token);
@@ -106,7 +107,7 @@ export const authRoutes = new Hono<AppEnv>()
       return { ...next, user: { id: s.user_id, email: user.email, fullName: user.full_name } };
     });
     if (!result) {
-      deleteCookie(c, REFRESH_COOKIE, { path: '/', secure: true });
+      deleteCookie(c, refreshCookie(c.var.tenant.slug), { path: '/', secure: true });
       throw unauthorized('Session expired');
     }
     return c.json({ accessToken: result.accessToken, expiresIn: ACCESS_TTL_SECONDS, user: result.user, tenant: { id: tenant.id, slug: tenant.slug, name: tenant.name } });
@@ -114,14 +115,14 @@ export const authRoutes = new Hono<AppEnv>()
 
   .post('/logout', async (c) => {
     requireCsrfHeader(c);
-    const token = getCookie(c, REFRESH_COOKIE);
+    const token = getCookie(c, refreshCookie(c.var.tenant.slug));
     if (token) {
       const hash = await sha256Hex(token);
       await c.var.db.tx(scope(c), (tx) =>
         tx.query(`update sessions set revoked_at = now() where tenant_id = $1 and family_id = (select family_id from sessions where tenant_id = $1 and refresh_hash = $2)`, [c.var.tenant.id, hash]),
       );
     }
-    deleteCookie(c, REFRESH_COOKIE, { path: '/', secure: true });
+    deleteCookie(c, refreshCookie(c.var.tenant.slug), { path: '/', secure: true });
     return c.json({ ok: true });
   })
 
