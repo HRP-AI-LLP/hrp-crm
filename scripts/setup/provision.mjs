@@ -40,7 +40,8 @@ const step = (s) => console.log(`\n${c.bold('▸ ' + s)}`);
 const info = (s) => console.log(`  ${s}`);
 
 function need(name) {
-  const v = process.env[name];
+  // tolerate stray whitespace / quotes from copy-paste ("abc" or 'abc' or a trailing newline)
+  const v = (process.env[name] ?? '').trim().replace(/^["']|["']$/g, '').trim();
   if (!v) {
     console.error(c.err(`Missing environment variable ${name}.`));
     console.error(`In PowerShell:  $env:${name}="..."   then run  pnpm run setup  again.`);
@@ -95,6 +96,94 @@ async function waitForDb(url) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Cloudflare preflight: pinpoints token / account / permission problems before anything is created
+// ---------------------------------------------------------------------------------------------
+async function cfGet(token, path) {
+  try {
+    const r = await fetch(`https://api.cloudflare.com/client/v4${path}`, { headers: { authorization: `Bearer ${token}` } });
+    /** @type {any} */ let j = {};
+    try {
+      j = await r.json();
+    } catch {
+      /* non-JSON */
+    }
+    return { status: r.status, ok: r.ok && j.success !== false, errors: j.errors ?? [], result: j.result };
+  } catch (e) {
+    return { status: 0, ok: false, errors: [{ message: /** @type {Error} */ (e).message }], result: null };
+  }
+}
+
+async function cloudflarePreflight(token, accountId, zoneName) {
+  step('Checking the Cloudflare token');
+  const fmtErr = (r) => `${r.status} ${r.errors.map((e) => `${e.code ?? ''} ${e.message}`.trim()).join('; ')}`;
+
+  // 1. is the token itself valid? (user-owned and account-owned tokens use different verify endpoints)
+  let verify = await cfGet(token, '/user/tokens/verify');
+  if (!verify.ok) verify = await cfGet(token, `/accounts/${accountId}/tokens/verify`);
+  if (!verify.ok || (verify.result && verify.result.status && verify.result.status !== 'active')) {
+    console.error(c.err(`\nCloudflare does not accept this API token (${fmtErr(verify)}).`));
+    console.error(`  Token length seen by the script: ${token.length} characters.`);
+    console.error('  Common causes:');
+    console.error('   • The Global API Key or the token *ID* was copied instead of the token value shown once after "Create Token".');
+    console.error('   • The token was rolled/deleted, has expired, or has "Client IP Address Filtering" that excludes this network.');
+    console.error('   • Extra characters were pasted. Re-copy the token, then in this terminal run:');
+    console.error('       $env:CLOUDFLARE_API_TOKEN = (Get-Clipboard).Trim()');
+    console.error('  Quick check:  curl.exe -s -H "Authorization: Bearer $env:CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/user/tokens/verify');
+    process.exit(1);
+  }
+  info(`${c.ok('✓')} token is valid and active`);
+
+  // 2. can it see this account?
+  const acct = await cfGet(token, `/accounts/${accountId}`);
+  if (!acct.ok) {
+    console.error(c.err(`\nThe token is valid but cannot access account ${accountId} (${fmtErr(acct)}).`));
+    console.error('  • Check $env:CLOUDFLARE_ACCOUNT_ID: dashboard → Account home → ⋯ next to the account → Copy account ID (32 hex characters).');
+    console.error('  • In the token settings, "Account Resources" must include this account, and it needs "Account Settings: Read".');
+    process.exit(1);
+  }
+  info(`${c.ok('✓')} account "${acct.result?.name ?? accountId}"`);
+
+  // 3. per-permission probes (a successful read means the permission group is on the token)
+  const checks = [
+    ['Account · Workers Scripts', `/accounts/${accountId}/workers/scripts`],
+    ['Account · Workers KV Storage', `/accounts/${accountId}/storage/kv/namespaces?per_page=5`],
+    ['Account · Queues', `/accounts/${accountId}/queues`],
+    ['Account · Hyperdrive', `/accounts/${accountId}/hyperdrive/configs`],
+    ['Account · Vectorize', `/accounts/${accountId}/vectorize/v2/indexes`],
+  ];
+  const missing = [];
+  for (const [label, path] of checks) {
+    const r = await cfGet(token, path);
+    info(`${r.ok ? c.ok('✓') : c.err('✗')} ${label}${r.ok ? '' : `  (${fmtErr(r)})`}`);
+    if (!r.ok) missing.push(`${label} – Edit`);
+  }
+  const zones = await cfGet(token, `/zones?name=${encodeURIComponent(zoneName)}&account.id=${accountId}`);
+  const zone = zones.ok && Array.isArray(zones.result) ? zones.result.find((z) => z.name === zoneName) : null;
+  if (!zone) {
+    info(`${c.err('✗')} Zone · ${zoneName}  (${zones.ok ? 'not visible to this token — add the zone under "Zone Resources" or add the site to this account' : fmtErr(zones)})`);
+    missing.push(`Zone · Zone – Read (for ${zoneName})`);
+  } else {
+    info(`${c.ok('✓')} Zone · ${zoneName} (${zone.status})`);
+    for (const [label, path] of [
+      ['Zone · DNS', `/zones/${zone.id}/dns_records?per_page=1`],
+      ['Zone · Workers Routes', `/zones/${zone.id}/workers/routes`],
+    ]) {
+      const r = await cfGet(token, path);
+      info(`${r.ok ? c.ok('✓') : c.err('✗')} ${label}${r.ok ? '' : `  (${fmtErr(r)})`}`);
+      if (!r.ok) missing.push(`${label} – Edit`);
+    }
+  }
+  if (missing.length) {
+    console.error(c.err('\nThe token is missing these permissions. Edit the token in Cloudflare (My Profile → API Tokens → Edit) and add:'));
+    for (const m of missing) console.error(`   • ${m}`);
+    console.error('  Also needed (not testable by reading): Account Settings – Read, SSL and Certificates – Edit on the zone.');
+    console.error('  Saving the edited token keeps the same value, so just run setup again.');
+    process.exit(1);
+  }
+  info(c.dim('Read access confirmed. Make sure each permission is set to "Edit", not "Read".'));
+}
+
+// ---------------------------------------------------------------------------------------------
 async function main() {
   const NEON_API_KEY = need('NEON_API_KEY');
   const CF_TOKEN = need('CLOUDFLARE_API_TOKEN');
@@ -114,6 +203,8 @@ async function main() {
   }
   const dbName = process.env.NEON_DB_NAME ?? 'neondb';
   const ownerRole = process.env.NEON_OWNER_ROLE ?? 'neondb_owner';
+
+  await cloudflarePreflight(CF_TOKEN, CF_ACCOUNT, zoneName);
 
   const state = readJson(STATE_FILE, { neon: {}, cloudflare: { dev: {}, prod: {} } });
   const secrets = readJson(SECRETS_FILE, {});
@@ -171,8 +262,10 @@ async function main() {
   if (!main) throw new Error('Could not find the default Neon branch');
   state.neon.branches = { prod: main.id };
 
+  // Neon returns sslmode=require; pg treats that as verify-full anyway, so say so explicitly (silences pg's warning)
+  const strictSsl = (uri) => uri.replace(/sslmode=require/, 'sslmode=verify-full');
   const ownerUrl = async (branchId) =>
-    (await neon.getConnectionUri({ projectId, branch_id: branchId, database_name: dbName, role_name: ownerRole, pooled: false })).data.uri;
+    strictSsl((await neon.getConnectionUri({ projectId, branch_id: branchId, database_name: dbName, role_name: ownerRole, pooled: false })).data.uri);
 
   // prod (main branch) first, so the dev branch inherits the schema
   const prodOwner = await ownerUrl(main.id);
@@ -282,7 +375,7 @@ async function main() {
   info(`${c.ok('✓')} written`);
 
   // local dev vars (dev branch, pooled endpoint, runtime role)
-  const devPooled = new URL((await neon.getConnectionUri({ projectId, branch_id: dev.id, database_name: dbName, role_name: ownerRole, pooled: true })).data.uri);
+  const devPooled = new URL(strictSsl((await neon.getConnectionUri({ projectId, branch_id: dev.id, database_name: dbName, role_name: ownerRole, pooled: true })).data.uri));
   devPooled.username = 'synapse_app';
   devPooled.password = secrets.dev.APP_DB_PASSWORD;
   const devVars = join(ROOT, 'apps/api/.dev.vars');
