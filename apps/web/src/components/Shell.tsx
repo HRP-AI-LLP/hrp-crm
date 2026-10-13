@@ -1,12 +1,47 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { get, post } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { initials, relative } from '../lib/format';
 import { useMeta } from '../lib/hooks';
-import { Icon } from './ui';
+import { Icon, Spinner } from './ui';
 import { useApprovalCount } from './Approvals';
+import { useOnline } from '../lib/outbox';
+
+const svg = (d: string) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d={d} />
+  </svg>
+);
+
+/** Phone navigation: the five places people on the move need, thumb-reachable. */
+function TabBar({ onMenu }: { onMenu: () => void }) {
+  return (
+    <nav className="tabbar" aria-label="Quick">
+      <NavLink to="/field">
+        {svg('M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11zM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z')}
+        My day
+      </NavLink>
+      <NavLink to="/o/lead">
+        {svg('M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM19 8v6M22 11h-6')}
+        Leads
+      </NavLink>
+      <NavLink to="/tasks">
+        {svg('M9 11l3 3 8-8M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9')}
+        Tasks
+      </NavLink>
+      <NavLink to="/calendar">
+        {svg('M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z')}
+        Calendar
+      </NavLink>
+      <button type="button" onClick={onMenu}>
+        {svg('M4 6h16M4 12h16M4 18h16')}
+        More
+      </button>
+    </nav>
+  );
+}
 
 function GlobalSearch() {
   const [q, setQ] = useState('');
@@ -142,6 +177,7 @@ export function Shell() {
   const apps = new Set((meta?.modules ?? []).filter((m) => m.enabled && m.key.startsWith('app.')).map((m) => m.key.slice(4)));
   const opsObjects = opsKeys.map((k) => objects.find((o) => o.key === k)).filter((o): o is NonNullable<typeof o> => !!o);
   const approvals = useApprovalCount(!!me);
+  const online = useOnline();
   const admin = me && (can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains'));
 
   return (
@@ -157,6 +193,7 @@ export function Shell() {
         <NavLink to="/" end>
           Home
         </NavLink>
+        <NavLink to="/field">My day</NavLink>
         <NavLink to="/tasks">My tasks</NavLink>
         <div className="nav-group">
           <div>Sales</div>
@@ -226,11 +263,17 @@ export function Shell() {
             <Icon.menu />
           </button>
           <GlobalSearch />
+          <span className={`offline-pill${online ? '' : ' on'}`} role="status">
+            {online ? '' : 'Offline'}
+          </span>
           <Notifications />
         </header>
         <main className="content">
-          <Outlet />
+          <Suspense fallback={<Spinner />}>
+            <Outlet />
+          </Suspense>
         </main>
+        <TabBar onMenu={() => setNavOpen(true)} />
       </div>
     </div>
   );

@@ -7,6 +7,7 @@
  * lead follow-ups, expires overdue quotes, and writes the next due time back to KV. Creating or moving a
  * reminder earlier than the stored time updates the key.
  */
+import { dispatchPushTx, pushEnabled } from './webpush';
 import type { Env } from '../env';
 import type { Db, Tx } from '../lib/db';
 import { sweepOverdue } from './billing';
@@ -94,7 +95,12 @@ export async function reminderSweep(env: Env, db: Db, force = false): Promise<{ 
   const tenants = await db.platform<{ tenant_id: string }>(`select t as tenant_id from app.list_active_tenant_ids() t`);
   let earliest: number | null = null;
   for (const t of tenants) {
-    const n = await db.tx({ tenantId: t.tenant_id }, (tx) => sweepTenant(tx, t.tenant_id));
+    const n = await db.tx({ tenantId: t.tenant_id }, async (tx) => {
+      const next = await sweepTenant(tx, t.tenant_id);
+      // reminders written just now (and anything a write-time dispatch missed) go out as push
+      if (pushEnabled(env)) await dispatchPushTx(env, tx, t.tenant_id).catch(() => 0);
+      return next;
+    });
     if (n && (earliest === null || n.getTime() < earliest)) earliest = n.getTime();
   }
   const nextIso = new Date(earliest ?? now + IDLE_RECHECK_MS).toISOString();

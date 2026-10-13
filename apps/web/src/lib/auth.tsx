@@ -2,6 +2,7 @@ import type { EffectivePermissions } from '@synapse/shared';
 import { hasAdmin } from '@synapse/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from 'react';
+import { forgetDevice } from './pwa';
 import { api, onExpired, onMfaRequired, post, refreshSession, setAccessToken, setWorkspace } from './api';
 
 export interface Me {
@@ -69,6 +70,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    // this device must stop receiving the signed-out person's notifications
+    await forgetDevice();
     await post('/api/auth/logout').catch(() => undefined);
     setAccessToken(null);
     setMe(null);

@@ -1,29 +1,38 @@
-import type { ReactNode } from 'react';
+import { type ComponentType, lazy, type ReactNode, Suspense } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Shell } from './components/Shell';
 import { Spinner } from './components/ui';
 import { useAuth } from './lib/auth';
 import { AcceptInvitePage, ForgotPasswordPage, LoginPage, ResetPasswordPage, SignupPage } from './pages/Auth';
 import { AccountPage, MfaRequiredGate } from './pages/Account';
-import { DashboardPage } from './pages/Dashboard';
-import { KnowledgePage } from './pages/Knowledge';
-import { PipelinePage } from './pages/Pipeline';
-import { PublicFormPage } from './pages/PublicForm';
-import { RecordDetailPage } from './pages/RecordDetail';
-import { RecordListPage } from './pages/RecordList';
-import { SettingsPage } from './pages/Settings';
-import { TasksPage } from './pages/Tasks';
-import { CalendarPage } from './pages/Calendar';
-import { DashboardsPage } from './pages/Dashboards';
-import { ForecastPage } from './pages/Forecast';
-import { PublicQuotePage, QuotePrintPage } from './pages/QuotePages';
-import { ReportBuilderPage, ReportsPage } from './pages/Reports';
-import { ApprovalsPage } from './pages/Approvals';
-import { DocPrintPage } from './pages/DocPrint';
-import { InventoryRoute } from './pages/Operations';
-import { JobConfirmPage, TicketStatusPage } from './pages/CustomerPages';
-import { FieldSchedulePage } from './pages/FieldSchedule';
-import { BillingRoute } from './pages/Operations';
+
+
+/** Pages load on demand: the first paint (sign-in, my day on a phone) stays small. */
+const page = <K extends string>(load: () => Promise<Record<K, ComponentType<any>>>, name: K) => lazy(() => load().then((m) => ({ default: m[name] })));
+
+const DashboardPage = page(() => import('./pages/Dashboard'), 'DashboardPage');
+const KnowledgePage = page(() => import('./pages/Knowledge'), 'KnowledgePage');
+const PipelinePage = page(() => import('./pages/Pipeline'), 'PipelinePage');
+const PublicFormPage = page(() => import('./pages/PublicForm'), 'PublicFormPage');
+const RecordDetailPage = page(() => import('./pages/RecordDetail'), 'RecordDetailPage');
+const RecordListPage = page(() => import('./pages/RecordList'), 'RecordListPage');
+const SettingsPage = page(() => import('./pages/Settings'), 'SettingsPage');
+const TasksPage = page(() => import('./pages/Tasks'), 'TasksPage');
+const CalendarPage = page(() => import('./pages/Calendar'), 'CalendarPage');
+const DashboardsPage = page(() => import('./pages/Dashboards'), 'DashboardsPage');
+const ForecastPage = page(() => import('./pages/Forecast'), 'ForecastPage');
+const PublicQuotePage = page(() => import('./pages/QuotePages'), 'PublicQuotePage');
+const QuotePrintPage = page(() => import('./pages/QuotePages'), 'QuotePrintPage');
+const ReportBuilderPage = page(() => import('./pages/Reports'), 'ReportBuilderPage');
+const ReportsPage = page(() => import('./pages/Reports'), 'ReportsPage');
+const ApprovalsPage = page(() => import('./pages/Approvals'), 'ApprovalsPage');
+const DocPrintPage = page(() => import('./pages/DocPrint'), 'DocPrintPage');
+const InventoryRoute = page(() => import('./pages/Operations'), 'InventoryRoute');
+const BillingRoute = page(() => import('./pages/Operations'), 'BillingRoute');
+const JobConfirmPage = page(() => import('./pages/CustomerPages'), 'JobConfirmPage');
+const TicketStatusPage = page(() => import('./pages/CustomerPages'), 'TicketStatusPage');
+const FieldSchedulePage = page(() => import('./pages/FieldSchedule'), 'FieldSchedulePage');
+const FieldPage = page(() => import('./pages/Field'), 'FieldPage');
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useAuth();
@@ -42,6 +51,13 @@ function RequireAuth({ children }: { children: ReactNode }) {
 export function App() {
   const { me, ready } = useAuth();
   return (
+    <Suspense
+      fallback={
+        <div style={{ padding: 32 }}>
+          <Spinner />
+        </div>
+      }
+    >
     <Routes>
       <Route path="/f/:key" element={<PublicFormPage />} />
       <Route path="/q/:token" element={<PublicQuotePage />} />
@@ -77,6 +93,7 @@ export function App() {
         }
       >
         <Route index element={<DashboardPage />} />
+        <Route path="field" element={<FieldPage />} />
         <Route path="tasks" element={<TasksPage />} />
         <Route path="o/:object" element={<RecordListPage />} />
         <Route path="o/:object/:id" element={<RecordDetailPage />} />
@@ -97,5 +114,6 @@ export function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
+    </Suspense>
   );
 }

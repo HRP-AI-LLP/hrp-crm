@@ -13,6 +13,7 @@ import { flowRoutes, rulesAdminRoutes } from './routes/flow';
 import { appsAdminRoutes, opsRoutes } from './routes/ops';
 import { fieldRoutes, serviceAdminRoutes } from './routes/field';
 import { billingAdminRoutes, billingRoutes } from './routes/billing';
+import { mobileRoutes } from './routes/mobile';
 import { publicRoutes } from './routes/public';
 import { salesRoutes } from './routes/sales';
 import { securityRoutes } from './routes/security';
@@ -57,6 +58,7 @@ export function createApp() {
   app.route('/api/v1', opsRoutes);
   app.route('/api/v1', fieldRoutes);
   app.route('/api/v1', billingRoutes);
+  app.route('/api/v1', mobileRoutes);
   app.route('/api/ai', aiRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', securityRoutes);
@@ -67,6 +69,17 @@ export function createApp() {
 
   app.all('/api/*', () => {
     throw notFound('No such API route');
+  });
+
+  // Android Trusted Web Activity: proves the Play Store app and this domain belong together
+  app.get('/.well-known/assetlinks.json', (c) => {
+    const fingerprints = (c.env.ANDROID_CERT_SHA256 ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (!c.env.ANDROID_APP_ID || !fingerprints.length) return c.json([], 200, { 'cache-control': 'public, max-age=300' });
+    return c.json(
+      [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: c.env.ANDROID_APP_ID, sha256_cert_fingerprints: fingerprints } }],
+      200,
+      { 'cache-control': 'public, max-age=3600' },
+    );
   });
 
   // Everything else is the SPA (Workers Static Assets with SPA fallback)

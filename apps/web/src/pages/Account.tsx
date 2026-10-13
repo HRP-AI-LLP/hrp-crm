@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import qrcode from 'qrcode-generator';
 import { useMemo, useState } from 'react';
+import { PushDevices } from '../components/PushDevices';
 import { Modal, Spinner, useToast } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -162,6 +163,7 @@ export function AccountPage() {
         </div>
       </div>
       <div className="account-grid">
+        <PushDevices />
         <section className="panel">
           <div className="panel-head">
             <h2>Two-factor sign-in</h2>

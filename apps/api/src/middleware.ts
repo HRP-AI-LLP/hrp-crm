@@ -6,6 +6,7 @@ import { Db } from './lib/db';
 import { ApiError, forbidden, unauthorized } from './lib/errors';
 import { sha256Hex } from './lib/crypto';
 import { verifyAccessToken } from './lib/jwt';
+import { dispatchPush, pushEnabled } from './services/webpush';
 import { invalidateTenantCache, loadMeta, loadPrincipal, resolveTenant } from './services/tenancy';
 
 /** Request id + per-request DB handle (closed after the response is produced). */
@@ -18,7 +19,10 @@ export const requestContext: MiddlewareHandler<AppEnv> = async (c, next) => {
   try {
     await next();
   } finally {
-    const closing = db.close();
+    // writes may have produced notifications: push them to the users' devices on the same connection
+    const tenant = c.var.tenant;
+    const pushAfter = tenant && pushEnabled(c.env) && !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) && c.res.status < 400;
+    const closing = (pushAfter ? dispatchPush(c.env, db, tenant.id).catch(() => 0) : Promise.resolve(0)).then(() => db.close());
     try {
       c.executionCtx.waitUntil(closing);
     } catch {

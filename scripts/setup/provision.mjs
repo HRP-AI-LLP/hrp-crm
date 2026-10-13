@@ -21,13 +21,22 @@
  * don't rotate them by accident. Delete that file to rotate.
  */
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { generateKeyPairSync, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApiClient, EndpointType } from '@neondatabase/api-client';
 import Cloudflare from 'cloudflare';
 import pg from 'pg';
+
+/** P-256 key pair in the base64url shapes Web Push expects (65-byte public point, 32-byte private scalar). */
+function vapidKeys() {
+  const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const pub = publicKey.export({ format: 'jwk' });
+  const priv = privateKey.export({ format: 'jwk' });
+  const point = Buffer.concat([Buffer.from([4]), Buffer.from(pub.x, 'base64url'), Buffer.from(pub.y, 'base64url')]);
+  return { VAPID_PUBLIC_KEY: point.toString('base64url'), VAPID_PRIVATE_KEY: priv.d };
+}
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const INFRA = join(ROOT, 'infra');
@@ -214,6 +223,8 @@ async function main() {
     secrets[env].APP_DB_PASSWORD ??= secret(24);
     secrets[env].JWT_SECRET ??= secret(48);
     secrets[env].DATA_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
+    // Web Push (installable app): one VAPID key pair per environment, generated once and kept
+    if (!secrets[env].VAPID_PRIVATE_KEY) Object.assign(secrets[env], vapidKeys());
   }
   writeJson(SECRETS_FILE, secrets);
 
@@ -381,7 +392,7 @@ async function main() {
   devPooled.password = secrets.dev.APP_DB_PASSWORD;
   const devVars = join(ROOT, 'apps/api/.dev.vars');
   if (!existsSync(devVars)) {
-    writeFileSync(devVars, [`DATABASE_URL=${devPooled.toString()}`, `JWT_SECRET=${secret(48)}`, `DATA_ENCRYPTION_KEY=${randomBytes(32).toString('base64')}`, `GROQ_API_KEY=${process.env.GROQ_API_KEY ?? ''}`, `GEMINI_API_KEY=${process.env.GEMINI_API_KEY ?? ''}`, ''].join('\n'));
+    writeFileSync(devVars, [`DATABASE_URL=${devPooled.toString()}`, `JWT_SECRET=${secret(48)}`, `DATA_ENCRYPTION_KEY=${randomBytes(32).toString('base64')}`, `GROQ_API_KEY=${process.env.GROQ_API_KEY ?? ''}`, `GEMINI_API_KEY=${process.env.GEMINI_API_KEY ?? ''}`, ...Object.entries(vapidKeys()).map(([k, v]) => `${k}=${v}`), ''].join('\n'));
     info(`${c.ok('✓')} apps/api/.dev.vars for local development (git-ignored)`);
   }
 
@@ -393,7 +404,7 @@ async function main() {
       const wenv = env === 'prod' ? 'production' : 'dev';
       step(`Deploying Worker (${wenv})`);
       run(`pnpm --filter @synapse/api exec wrangler deploy --env ${wenv}`);
-      const bulk = { JWT_SECRET: secrets[env].JWT_SECRET, DATA_ENCRYPTION_KEY: secrets[env].DATA_ENCRYPTION_KEY };
+      const bulk = { JWT_SECRET: secrets[env].JWT_SECRET, DATA_ENCRYPTION_KEY: secrets[env].DATA_ENCRYPTION_KEY, VAPID_PUBLIC_KEY: secrets[env].VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: secrets[env].VAPID_PRIVATE_KEY };
       if (process.env.GROQ_API_KEY) bulk.GROQ_API_KEY = process.env.GROQ_API_KEY;
       if (process.env.GEMINI_API_KEY) bulk.GEMINI_API_KEY = process.env.GEMINI_API_KEY;
       if (process.env.CF_TENANT_DOMAINS_TOKEN) bulk.CF_TENANT_DOMAINS_TOKEN = process.env.CF_TENANT_DOMAINS_TOKEN;

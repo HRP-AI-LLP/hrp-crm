@@ -15,7 +15,7 @@
     "directory": "../web/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/.well-known/assetlinks.json"]
   },
   "vars": {
     "APP_ENV": "local",
@@ -38,7 +38,7 @@
         "directory": "../web/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/api/*"]
+        "run_worker_first": ["/api/*", "/.well-known/assetlinks.json"]
       },
       "vars": {
         "APP_ENV": "dev",
@@ -47,6 +47,7 @@
         "BASE_DOMAIN": "__DEV_APP_HOST__",
         "SAAS_CNAME_TARGET": "__DEV_APP_HOST__",
         "MAIL_FROM": "HRP Synapse <no-reply@hrpai.in>",
+        "VAPID_SUBJECT": "mailto:info@hrpai.in",
         "CF_ACCOUNT_ID": "__CF_ACCOUNT_ID__",
         "CF_ZONE_NAME": "__ZONE_NAME__",
         "WORKER_NAME": "synapse-dev",
@@ -75,7 +76,7 @@
         "directory": "../web/dist",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/api/*"]
+        "run_worker_first": ["/api/*", "/.well-known/assetlinks.json"]
       },
       "vars": {
         "APP_ENV": "production",
@@ -84,6 +85,7 @@
         "BASE_DOMAIN": "__PROD_APP_HOST__",
         "SAAS_CNAME_TARGET": "__PROD_APP_HOST__",
         "MAIL_FROM": "HRP Synapse <no-reply@hrpai.in>",
+        "VAPID_SUBJECT": "mailto:info@hrpai.in",
         "CF_ACCOUNT_ID": "__CF_ACCOUNT_ID__",
         "CF_ZONE_NAME": "__ZONE_NAME__",
         "WORKER_NAME": "synapse-prod",

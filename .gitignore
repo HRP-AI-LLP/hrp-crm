@@ -15,3 +15,12 @@ infra/.local/
 .DS_Store
 Thumbs.db
 sync-snapshot.tgz
+# native app shells (generated platform projects and signing material)
+mobile/capacitor/android/
+mobile/capacitor/ios/
+mobile/capacitor/node_modules/
+mobile/twa/app/
+mobile/twa/*.keystore
+mobile/twa/*.jks
+mobile/twa/*.apk
+mobile/twa/*.aab

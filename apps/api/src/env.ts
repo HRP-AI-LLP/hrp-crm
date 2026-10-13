@@ -44,6 +44,13 @@ export interface Env {
   RESEND_API_KEY?: string;
   /** sender for platform mail, e.g. "HRP Synapse <no-reply@hrpai.in>" (domain verified in Resend) */
   MAIL_FROM?: string;
+  /** web push (installable app): VAPID key pair — public as a var, private as a secret */
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_KEY?: string;
+  VAPID_SUBJECT?: string;
+  /** Android app (Trusted Web Activity) for /.well-known/assetlinks.json */
+  ANDROID_APP_ID?: string;
+  ANDROID_CERT_SHA256?: string;
 
   // --- bindings ---
   HYPERDRIVE?: Hyperdrive;

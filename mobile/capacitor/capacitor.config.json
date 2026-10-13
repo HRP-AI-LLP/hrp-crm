@@ -1,0 +1,12 @@
+{
+  "appId": "in.hrpai.synapse",
+  "appName": "HRP Synapse",
+  "webDir": "www",
+  "server": {
+    "url": "https://hrpsynapse.hrpai.in/field?source=app",
+    "cleartext": false,
+    "allowNavigation": ["hrpsynapse.hrpai.in", "*.hrpsynapse.hrpai.in"]
+  },
+  "android": { "allowMixedContent": false, "backgroundColor": "#ffffff" },
+  "ios": { "contentInset": "always", "backgroundColor": "#ffffff", "limitsNavigationsToAppBoundDomains": true }
+}
