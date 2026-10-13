@@ -1,0 +1,90 @@
+// HRP Synapse gateway Worker.
+// Resource IDs marked __LIKE_THIS__ are filled in by `pnpm setup` (scripts/setup/provision.mjs).
+// Bindings are NOT inherited by environments in Wrangler, so each env lists them explicitly.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "synapse-local",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // ---- local development (`pnpm dev`): DATABASE_URL + JWT_SECRET come from apps/api/.dev.vars
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "vars": {
+    "APP_ENV": "local",
+    "BASE_DOMAIN": "localhost",
+    "ALLOW_TENANT_HEADER": "true",
+    "SIGNUP_ENABLED": "true",
+    "CORS_ORIGINS": "http://localhost:5173",
+    "AI_DAILY_LIMIT_PER_TENANT": "300"
+  },
+
+  "env": {
+    // ---------------------------------------------------------------- dev (branch: dev)
+    "dev": {
+      "name": "synapse-dev",
+      "workers_dev": true,
+      "assets": {
+        "directory": "../web/dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/api/*"]
+      },
+      "vars": {
+        "APP_ENV": "dev",
+        "CORS_ORIGINS": "",
+        "BASE_DOMAIN": "__DEV_BASE_DOMAIN__",
+        "ALLOW_TENANT_HEADER": "true",
+        "SIGNUP_ENABLED": "true",
+        "AI_DAILY_LIMIT_PER_TENANT": "300",
+        "AI_PII_PROVIDERS": "workers-ai,groq"
+      },
+      "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "__DEV_HYPERDRIVE_ID__" }],
+      "kv_namespaces": [{ "binding": "CACHE_KV", "id": "__DEV_KV_ID__" }],
+      "queues": {
+        "producers": [{ "binding": "JOBS", "queue": "synapse-jobs-dev" }],
+        "consumers": [{ "queue": "synapse-jobs-dev", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 5, "dead_letter_queue": "synapse-jobs-dlq-dev" }]
+      },
+      "ai": { "binding": "AI" },
+      "vectorize": [{ "binding": "VECTORIZE", "index_name": "synapse-kb-dev" }],
+      "triggers": { "crons": ["17 3 * * *"] }
+    },
+
+    // ---------------------------------------------------------------- production (branch: prod)
+    "production": {
+      "name": "synapse-prod",
+      "workers_dev": true,
+      // __PROD_ROUTES__
+      "assets": {
+        "directory": "../web/dist",
+        "binding": "ASSETS",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/api/*"]
+      },
+      "vars": {
+        "APP_ENV": "production",
+        "CORS_ORIGINS": "",
+        "BASE_DOMAIN": "__PROD_BASE_DOMAIN__",
+        "ALLOW_TENANT_HEADER": "false",
+        "SIGNUP_ENABLED": "true",
+        "AI_DAILY_LIMIT_PER_TENANT": "300",
+        "AI_PII_PROVIDERS": "workers-ai,groq"
+      },
+      "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "__PROD_HYPERDRIVE_ID__" }],
+      "kv_namespaces": [{ "binding": "CACHE_KV", "id": "__PROD_KV_ID__" }],
+      "queues": {
+        "producers": [{ "binding": "JOBS", "queue": "synapse-jobs-prod" }],
+        "consumers": [{ "queue": "synapse-jobs-prod", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 5, "dead_letter_queue": "synapse-jobs-dlq-prod" }]
+      },
+      "ai": { "binding": "AI" },
+      "vectorize": [{ "binding": "VECTORIZE", "index_name": "synapse-kb-prod" }],
+      "triggers": { "crons": ["17 3 * * *"] }
+    }
+  }
+}

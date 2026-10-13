@@ -1,0 +1,47 @@
+name: Deploy dev
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Migrate Neon "dev" and deploy synapse-dev
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: dev
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Migrate dev database
+        run: |
+          export DATABASE_URL_OWNER="$(npx -y neonctl@latest connection-string dev --project-id "$NEON_PROJECT_ID" --role-name neondb_owner --database-name neondb)"
+          echo "::add-mask::$DATABASE_URL_OWNER"
+          pnpm --filter @synapse/db migrate
+      - name: Build web
+        run: pnpm --filter @synapse/web build
+      - name: Deploy Worker
+        working-directory: apps/api
+        run: pnpm exec wrangler deploy --env dev

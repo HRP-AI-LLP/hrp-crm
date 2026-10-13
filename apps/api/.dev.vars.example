@@ -1,0 +1,8 @@
+# Copy to apps/api/.dev.vars for `pnpm dev` (never commit .dev.vars)
+# synapse_app (runtime role) connection to your Neon *dev* branch, pooled endpoint:
+DATABASE_URL=postgres://synapse_app:PASSWORD@ep-xxxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+JWT_SECRET=replace-with-64-random-characters-replace-with-64-random-characters
+DATA_ENCRYPTION_KEY=replace-with-base64-32-bytes
+# optional AI providers
+GROQ_API_KEY=
+GEMINI_API_KEY=

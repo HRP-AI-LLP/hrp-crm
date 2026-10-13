@@ -1,0 +1,31 @@
+{
+  "name": "hrp-synapse",
+  "private": true,
+  "description": "HRP Synapse \u2014 multi-tenant, metadata-driven CRM by HRP AI LLP",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:db": "pnpm --filter @synapse/db test",
+    "db:migrate": "pnpm --filter @synapse/db migrate",
+    "db:seed": "pnpm --filter @synapse/db seed",
+    "setup": "node scripts/setup/provision.mjs",
+    "deploy:dev": "pnpm --filter @synapse/web build && pnpm --filter @synapse/api deploy:dev",
+    "deploy:prod": "pnpm --filter @synapse/web build && pnpm --filter @synapse/api deploy:prod",
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json"
+  },
+  "devDependencies": {
+    "@neondatabase/api-client": "^2.7.3",
+    "cloudflare": "^7.3.0",
+    "turbo": "^2.11.7",
+    "typescript": "^6.0.3",
+    "pg": "^8.23.1",
+    "@types/pg": "^8.23.1",
+    "@types/node": "^22.15.0"
+  }
+}

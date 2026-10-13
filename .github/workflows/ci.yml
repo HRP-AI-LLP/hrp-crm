@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, prod]
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_ADMIN_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: |
+          pnpm -r typecheck
+          pnpm typecheck:scripts
+      - name: Database tests (RLS isolation, audit, EAV index)
+        run: pnpm --filter @synapse/db test
+      - name: API end-to-end tests
+        run: pnpm --filter @synapse/api test
+      - name: Build web
+        run: pnpm --filter @synapse/web build
+      - name: Bundle Worker (dry run)
+        working-directory: apps/api
+        run: pnpm exec wrangler deploy --dry-run --env dev --outdir dist
+
+  preview-db:
+    # A throwaway Neon branch per pull request proves the migrations apply cleanly to real data.
+    name: Neon preview branch
+    if: github.event_name == 'pull_request' && vars.NEON_PROJECT_ID != ''
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+      BRANCH: preview/pr-${{ github.event.number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Create or reuse branch from dev
+        run: |
+          npx -y neonctl@latest branches get "$BRANCH" --project-id "$NEON_PROJECT_ID" >/dev/null 2>&1 \
+            || npx -y neonctl@latest branches create --project-id "$NEON_PROJECT_ID" --name "$BRANCH" --parent dev
+      - name: Apply migrations to the preview branch
+        run: |
+          export DATABASE_URL_OWNER="$(npx -y neonctl@latest connection-string "$BRANCH" --project-id "$NEON_PROJECT_ID" --role-name neondb_owner --database-name neondb)"
+          echo "::add-mask::$DATABASE_URL_OWNER"
+          pnpm --filter @synapse/db migrate
