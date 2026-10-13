@@ -26,6 +26,10 @@
   },
   // local R2 is simulated by wrangler dev (attachments, delivery proofs, signatures)
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "synapse-files-local" }],
+  // `pnpm local`: AI and knowledge-base search use the real dev resources in Cloudflare
+  // (needs CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID in the terminal)
+  "ai": { "binding": "AI", "remote": true },
+  "vectorize": [{ "binding": "VECTORIZE", "index_name": "synapse-kb-dev", "remote": true }],
 
   "env": {
     // ---------------------------------------------------------------- dev (branch: dev)

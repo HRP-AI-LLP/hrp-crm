@@ -62,6 +62,7 @@ Generated passwords and keys are written to `infra/.local/secrets.json`, which i
 
 | Command | What it does |
 |---|---|
+| `pnpm local` | **Test on this computer against the cloud dev environment, no GitHub Actions needed.** Migrates only the Neon `dev` branch, writes `.dev.vars` with the dev keys, builds the app and starts the API on http://localhost:8787 (built app with offline mode and push) and Vite on http://localhost:5173. AI and knowledge-base search use the real dev resources; KV, queue and files are simulated locally. Flags: `--no-migrate`, `--no-build` |
 | `pnpm dev` | Vite on http://localhost:5173 plus the Worker on :8787 (uses `apps/api/.dev.vars`, which points at the Neon dev branch) |
 | `pnpm test` | RLS isolation tests and API end-to-end tests. They need a local Postgres; set `TEST_ADMIN_DATABASE_URL` |
 | `pnpm db:migrate` | Apply migrations (`DATABASE_URL_OWNER` required) |
