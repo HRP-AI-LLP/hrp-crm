@@ -23,13 +23,25 @@
 - **Sales productivity**: products and price books, GST-ready quotes (HSN/SAC, CGST+SGST/IGST, amount in words) with a print/PDF view and customer accept/decline links, email templates and sending, a calendar with reminders, in-app notifications, a forecast with quotas and drill-down, and a report and dashboard builder (bar, line, donut, funnel, number, pivot).
 - **Security & admin**: TOTP two-factor with recovery codes and a workspace-wide requirement, email or link invitations and password resets, session management, teams, team-lead visibility, sharing rules, per-record sharing, scoped API keys, and a usage page.
 
+## Third round: the full furniture / interiors business suite (six phases)
+
+Built to cover everything in the ELVM Homes proposal on top of the CRM.
+
+- **Phase 5 — files, leads, quotes:** R2 attachments with signed links and quotas; lead sources (walk-in, WhatsApp, Instagram, referral, architect, dealer, campaign), assignment and scoring rules, follow-up reminders, lead aging and source conversion; quote revisions, discount approval rules and a generic approvals inbox.
+- **Phase 6 — orders, inventory, purchasing:** apps that switch on per workspace; sales orders with milestones and stock reservation; SKUs, categories, variants, warehouses, an append-only stock ledger, transfers and reorder alerts; vendors, purchase orders and goods receipts.
+- **Phase 7 — delivery, installation, service:** shipments and installation jobs with crews, checklists and customer sign-off (signature); service tickets with SLA policies, breach alerts, CSAT and a customer status page.
+- **Phase 8 — GST billing:** FY-wise invoice and credit-note series, CGST/SGST vs IGST by place of supply, immutable issued documents, receipts with allocation, receivables aging, overdue reminders, e-invoice JSON, GSTR-1 CSV and Tally XML.
+- **Phase 9 — phones:** installable app, My day (GPS check-in, walk-in leads, tasks, follow-ups, jobs), Web Push, offline outbox, code-split bundle, Android TWA and Capacitor shells.
+- **Phase 10 — admin:** role dashboards, IP/country restrictions, owner-only R2 backups (nightly option), CSV import templates and opening stock import; an independent security review with all findings fixed.
+
 ## Next (suggested order)
 
 1. **Argon2id hashing service on Oracle ARM.** This removes the PBKDF2 CPU risk.
 2. **Email sync (IMAP/Gmail)** on the Oracle worker, so replies land on the timeline automatically.
-3. **Scheduled report digests** by email, and dashboard sharing by link.
-4. **Approval processes** (discount approvals on quotes) built on the automation engine.
-5. **Mobile PWA**: offline-first record views and a click-to-call/WhatsApp dialer.
-6. **Platform admin console** for HRP staff, using a separate audited role (no RLS bypass inside the app).
-7. **Hash-chained audit export** for compliance customers.
-8. **Per-region data residency** (one Neon project per region, routed through the `tenants` registry).
+3. **E-invoice IRP / e-way bill API** through a GSP once a customer needs direct filing (today: JSON export + IRN capture).
+4. **Native push on iOS store builds** (`@capacitor/push-notifications`, APNs) and background location for field teams.
+5. **Restore from backup** (today: download and inspect; restore is done by HRP staff).
+6. **Scheduled report digests** by email, and dashboard sharing by link.
+7. **Platform admin console** for HRP staff, using a separate audited role (no RLS bypass inside the app).
+8. **Hash-chained audit export** for compliance customers.
+9. **Per-region data residency** (one Neon project per region, routed through the `tenants` registry).

@@ -6,14 +6,17 @@ Multi-tenant, metadata-driven CRM by **HRP AI LLP**. It runs on free tiers: Clou
 apps/
   api/        Edge gateway Worker (Hono): tenant routing, auth, RBAC/ABAC/FLS, CRM API,
               queue consumer, cron. Also serves the SPA through Workers Static Assets.
-  web/        React 19 + Vite SPA (records, views, builders, quotes, calendar, forecast, reports,
-              dashboards, settings) in the hrpai.in brand
+  web/        React 19 + Vite SPA (records, views, builders, quotes, orders, inventory, delivery,
+              service desk, GST billing, My day, role dashboards, settings) in the hrpai.in brand;
+              installable (PWA) with push and an offline outbox
+mobile/       Android (Trusted Web Activity) and Capacitor shells for the store apps — see mobile/README.md
 packages/
   db/         SQL migrations (RLS, audit, EAV index, platform functions), runner, seed, RLS tests
   shared/     Field types and validation, standard objects, permission engine, industry modules
 scripts/
   setup.ps1               Windows entry point for first-time setup
-  setup/provision.mjs     Idempotent Neon + Cloudflare provisioning and deployment
+  setup/provision.mjs     Idempotent Neon + Cloudflare provisioning and deployment (also VAPID push keys)
+  setup/enable-r2.mjs     `pnpm setup:r2` — creates the R2 buckets and adds the FILES binding
 .github/workflows/        ci.yml (PRs), deploy-dev.yml (dev branch), deploy-prod.yml (prod branch)
 docs/                     Architecture, security model, free-tier budget, roadmap
 ```
@@ -92,7 +95,14 @@ Workspace admins can add their own API keys in **Settings → AI models**. Suppo
 | Builders | Custom fields incl. formulas and roll-ups, validation rules, dependent picklists, conditional fields, drag-and-drop page layouts, visual automations with branches |
 | Selling | Pipeline board, GST quotes with PDF and accept links, price books, email templates, calendar & reminders, notifications, forecast vs quota, reports & dashboards |
 | AI | Lead scoring, summaries, next best actions, email drafts, knowledge-base answers; workspace-owned model keys |
-| Security | RLS isolation, RBAC/ABAC/FLS, teams & sharing rules, TOTP two-factor (optionally required), invitations, session control, scoped API keys, audit log |
+| Leads | Sources incl. walk-in, WhatsApp, Instagram, referral, architect, dealer, campaign; assignment rules (round-robin / least-loaded), scoring rules, follow-up reminders, lead aging and source conversion |
+| Quotations | Revisions with history, discount approval rules, PDF/print, customer accept links, convert to order |
+| Apps (switch on per workspace) | **Orders** (milestones, advances, reservations), **Inventory** (SKUs, categories, variants, warehouses, in/out/adjust/transfer, reorder alerts, opening stock import), **Purchasing** (vendors, POs, goods receipts), **Delivery & installation** (dispatch, crews, checklists, customer sign-off with signature), **Service desk** (tickets, SLA policies, CSAT, customer status page), **GST billing** (tax invoices, credit notes, receipts, receivables, e-invoice JSON, GSTR-1 CSV, Tally XML) |
+| Approvals | One inbox for quotes, orders, purchase orders and invoices; criteria-based rules; approver by user, role or manager |
+| Phone | Installable app with **My day** (GPS check-in, walk-in leads, tasks, follow-ups, jobs), Web Push reminders, offline outbox; Android TWA and Capacitor shells |
+| Dashboards | Role views for owner, sales head, operations, inventory and service — always scoped to what the viewer may see; custom report & dashboard builder |
+| Files | Attachments on any record in Cloudflare R2 with type sniffing, quotas and signed expiring links |
+| Security | RLS isolation, RBAC/ABAC/FLS, teams & sharing rules, TOTP two-factor (optionally required), IP / country restrictions, invitations, session control, scoped API keys, audit log, owner-only workspace backups |
 
 ### Optional email for invitations and password resets
 
@@ -105,6 +115,12 @@ npx wrangler secret put RESEND_API_KEY --env production
 ```
 
 The sender is `MAIL_FROM` in `wrangler.jsonc` (default `HRP Synapse <no-reply@hrpai.in>`).
+
+### File storage, backups and push (one-time switches)
+
+- **R2 (attachments, signatures, backups):** enable R2 once in the Cloudflare dashboard (R2 Object Storage → Get started), then run `pnpm setup:r2` and deploy. Until then the app works without uploads.
+- **Push notifications:** `pnpm setup` generates a VAPID key pair per environment and stores it as Worker secrets. Nothing else to do; people turn notifications on per device from My day or My account.
+- **Play Store app:** follow `mobile/README.md`, then set `ANDROID_APP_ID` and `ANDROID_CERT_SHA256` in the production vars so `/.well-known/assetlinks.json` vouches for the app.
 
 ### API for integrations
 

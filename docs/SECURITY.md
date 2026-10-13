@@ -48,7 +48,7 @@ Because several workspaces can share one app host, refresh cookies are named per
 
 ## Known gaps (tracked in ROADMAP.md)
 
-- No MFA or SSO yet (TOTP, then SAML/OIDC).
+- No SSO yet (SAML/OIDC). TOTP two-factor is built.
 - PBKDF2 is capped at 100k iterations on Workers, below the current OWASP recommendation for SHA-256. The plan is to move hashing to an Argon2id service on Oracle ARM. Hashes are versioned, so they migrate on next login.
 - The audit log has no hash chain or tamper-evident export yet.
 - Data residency: everything currently runs in Neon's Singapore region. Per-tenant region pinning needs a separate Neon project per region.
@@ -60,3 +60,28 @@ Because several workspaces can share one app host, refresh cookies are named per
 - **Teams and sharing.** "Team" access covers direct reports and the members of teams the user leads. Sharing rules (criteria → team or role, read or edit) and per-record shares only ever widen own/team access. They are compiled into the same SQL predicate as lists, reports, exports and record loads.
 - **API keys** have the form `syn_<workspace>_<secret>`; only a SHA-256 hash is stored. A key acts as one user with that user's permissions, is limited to `/api/v1`, and is read-only unless it was given write scope. Keys can expire, can be revoked, and record when they were last used.
 - **Audit redaction.** Password, MFA, token and key hashes never reach the audit log.
+
+## Third-round additions
+
+- **Files (R2).** The type is sniffed from the bytes; the sniffed type wins over the declared one, and active content is served as an attachment with `X-Content-Type-Options: nosniff`. Download links are HMAC-signed (`JWT_SECRET:files`), bound to tenant, file, expiry and disposition, and compared in constant time. Each workspace has a storage quota.
+- **Customer links** (quotes, deliveries, installations, ticket status) use 192-bit random tokens and only work while the record is in a state where the customer should act. Signatures must decode as real PNGs. Ticket replies through the public page are capped at 10 an hour per ticket.
+- **Financial integrity.** Issued invoices and their lines are frozen by a database trigger. Payment allocations are merged per invoice and re-checked against the open amount after insert. Credit notes are limited, per line and in value, to what earlier credit notes haven't already credited; this is checked again at issue under a row lock. The stock ledger is append-only (no UPDATE or DELETE grant).
+- **Approvals.** A requester can't approve their own request; the workspace owner is the only exception. Approval rule criteria stay on the server.
+- **Aggregates follow visibility.** Role dashboards, receivables aging and stock views are computed with the same visibility predicate as lists. Cost and stock value are hidden when the cost field is hidden.
+- **Network restrictions.** Workspaces can limit sign-in, the app and API keys to IPv4/IPv6 CIDR ranges and/or countries.
+  - Only Cloudflare's `cf-connecting-ip` and `cf-ipcountry` are trusted in production.
+  - A policy that would block the admin saving it is refused.
+  - Customer pages stay open.
+  - Members don't receive the rule list in metadata.
+- **Web Push.**
+  - Payloads are encrypted end to end (RFC 8291, aes128gcm) and signed with VAPID (ES256).
+  - Subscriptions must point at a known browser push service. Delivery has a 5-second timeout.
+  - Pushes go only to active users with a live session. Signing out on a device unsubscribes it, and disabling a user or signing them out everywhere drops their devices.
+  - Notification links are resolved same-origin before navigating.
+- **Offline outbox.** Queued visits, leads and task updates are stored in IndexedDB with their owner (`tenant:user`). Only that person can send them, after signing in again.
+- **Service worker.** It never caches `/api/*` responses; only the hashed app shell is cached.
+- **Backups.**
+  - Only the workspace owner can create, download or delete backups.
+  - Backups are stored under a per-tenant R2 prefix, and the stamp is validated.
+  - Excluded: sessions, tokens, API keys, push subscriptions and public route keys. Blanked: password, MFA, secret, token and key columns.
+  - Every start and download is audited.
