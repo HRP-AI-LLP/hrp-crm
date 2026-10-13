@@ -34,6 +34,19 @@ const concat = (...parts: Uint8Array[]) => {
   return out;
 };
 
+/** Browser push services (the only hosts a subscription may point at). */
+const PUSH_HOSTS = [/^fcm\.googleapis\.com$/, /^android\.googleapis\.com$/, /(^|\.)push\.apple\.com$/, /(^|\.)notify\.windows\.com$/, /^updates\.push\.services\.mozilla\.com$/, /(^|\.)push\.services\.mozilla\.com$/];
+export function isPushEndpoint(url: string, env?: Env): boolean {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443')) return false;
+    if (env?.APP_ENV !== 'production' && u.hostname.endsWith('.example.test')) return true; // tests
+    return PUSH_HOSTS.some((r) => r.test(u.hostname));
+  } catch {
+    return false;
+  }
+}
+
 export function pushEnabled(env: Env) {
   return !!(env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY);
 }
@@ -92,8 +105,11 @@ export interface PushMessage {
 
 /** Sends one message; returns 'gone' when the subscription expired (404/410). */
 export async function sendPush(env: Env, sub: { endpoint: string; p256dh: string; auth: string }, msg: PushMessage): Promise<'ok' | 'gone' | 'error'> {
+  if (!isPushEndpoint(sub.endpoint, env)) return 'gone';
   const body = await encryptPayload(enc.encode(JSON.stringify(msg).slice(0, 3000)), sub.p256dh, sub.auth);
   const res = await fetch(sub.endpoint, {
+    signal: AbortSignal.timeout(5000),
+    redirect: 'manual',
     method: 'POST',
     headers: { authorization: await vapidAuthorization(env, sub.endpoint), 'content-encoding': 'aes128gcm', 'content-type': 'application/octet-stream', ttl: '86400', urgency: 'normal' },
     body,
@@ -114,7 +130,12 @@ export async function dispatchPushTx(env: Env, tx: Tx, tenantId: string): Promis
   if (!due.length || !pushEnabled(env)) return 0;
   const users = [...new Set(due.map((d) => d.user_id))];
   const subs = await tx.query<{ id: string; user_id: string; endpoint: string; p256dh: string; auth: string }>(
-    `select id, user_id, endpoint, p256dh, auth from push_subscriptions where tenant_id = $1 and user_id = any($2::uuid[])`,
+    // only people who are still active and signed in somewhere: disabling someone, "sign out
+    // everywhere" and password resets stop their phones from receiving workspace data
+    `select s.id, s.user_id, s.endpoint, s.p256dh, s.auth from push_subscriptions s
+       join users u on u.tenant_id = s.tenant_id and u.id = s.user_id and u.status = 'active'
+      where s.tenant_id = $1 and s.user_id = any($2::uuid[])
+        and exists (select 1 from sessions x where x.tenant_id = s.tenant_id and x.user_id = s.user_id and x.revoked_at is null and x.expires_at > now())`,
     [tenantId, users],
   );
   let sent = 0;

@@ -320,6 +320,7 @@ export const adminRoutes = new Hono<AppEnv>()
         [c.var.tenant.id, id, b.fullName ?? null, b.status ?? null, b.attributes ? JSON.stringify(b.attributes) : null, b.managerId !== undefined, b.managerId ?? null],
       );
       if (b.status === 'disabled') await tx.query(`update sessions set revoked_at = now() where tenant_id = $1 and user_id = $2 and revoked_at is null`, [c.var.tenant.id, id]);
+      if (b.status === 'disabled') await tx.query(`delete from push_subscriptions where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, id]);
       // any status change voids outstanding invitation and reset links
       if (b.status) await tx.query(`update user_tokens set used_at = now() where tenant_id = $1 and user_id = $2 and kind in ('invite', 'reset') and used_at is null`, [c.var.tenant.id, id]);
       if (b.roles) {

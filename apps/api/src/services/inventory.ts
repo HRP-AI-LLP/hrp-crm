@@ -8,9 +8,9 @@
  * Every change locks the stock row, writes one ledger row and re-checks the reorder level.
  * Stock can't go negative unless the workspace allows it (settings.inventory.allowNegative).
  */
-import { hasAdmin, objectPerm } from '@synapse/shared';
+import { fieldAccess, hasAdmin, objectPerm } from '@synapse/shared';
 import { badRequest, forbidden, notFound } from '../lib/errors';
-import type { RecordCtx } from './records';
+import { Params, type RecordCtx, visibilityWhere } from './records';
 
 export type MovementType = 'in' | 'out' | 'adjust' | 'transfer_in' | 'transfer_out' | 'reserve' | 'release';
 
@@ -28,6 +28,13 @@ export interface Movement {
 }
 
 const n3 = (x: unknown) => Math.round(Number(x ?? 0) * 1000) / 1000;
+
+/** SQL condition: product `alias` is one the caller may see (same rules as the product list). */
+function visibleProducts(ctx: RecordCtx, vals: unknown[], alias: string) {
+  const p = new Params();
+  p.values = vals;
+  return `${alias}.id in (select r.id from products r where ${visibilityWhere(ctx, 'product', p).join(' and ')})`;
+}
 
 /** Stock changes need product edit rights for every product, or the operations admin area. */
 export function assertCanMoveStock(ctx: RecordCtx) {
@@ -132,7 +139,8 @@ async function checkReorder(ctx: RecordCtx, productId: string) {
 export async function stockOverview(ctx: RecordCtx, opts: { q?: string; warehouseId?: string; lowOnly?: boolean; categoryId?: string; limit?: number }) {
   if (objectPerm(ctx.principal.permissions, 'product').read === 'none') throw forbidden();
   const vals: unknown[] = [ctx.tenantId];
-  const where = [`p.tenant_id = $1`, `p.deleted_at is null`, `p.product_type = 'goods'`, `(p.track_inventory or exists (select 1 from stock_levels s where s.tenant_id = p.tenant_id and s.product_id = p.id))`];
+  const where = [`p.tenant_id = $1`, `p.deleted_at is null`, `p.product_type = 'goods'`, `(p.track_inventory or exists (select 1 from stock_levels s where s.tenant_id = p.tenant_id and s.product_id = p.id))`, visibleProducts(ctx, vals, 'p')];
+  const costHidden = fieldAccess(ctx.principal.permissions, 'product', 'cost_price') === 'hidden';
   if (opts.q) {
     vals.push(`%${opts.q.toLowerCase()}%`);
     where.push(`(lower(p.name) like $${vals.length} or lower(coalesce(p.sku, '')) like $${vals.length} or lower(coalesce(p.barcode, '')) like $${vals.length})`);
@@ -143,7 +151,7 @@ export async function stockOverview(ctx: RecordCtx, opts: { q?: string; warehous
   }
   const whFilter = opts.warehouseId ? (vals.push(opts.warehouseId), ` and s.warehouse_id = $${vals.length}::uuid`) : '';
   const rows = await ctx.tx.query<Record<string, unknown>>(
-    `select p.id, p.name, p.sku, p.unit, p.variant_options, p.reorder_level::float8 as reorder_level, p.reorder_qty::float8 as reorder_qty, p.cost_price::float8 as cost_price,
+    `select p.id, p.name, p.sku, p.unit, p.variant_options, p.reorder_level::float8 as reorder_level, p.reorder_qty::float8 as reorder_qty, ${costHidden ? 'null::float8' : 'p.cost_price::float8'} as cost_price,
             p.category_id,
             coalesce(sum(s.on_hand), 0)::float8 as on_hand, coalesce(sum(s.reserved), 0)::float8 as reserved,
             coalesce(sum(s.on_hand - s.reserved), 0)::float8 as available,
@@ -156,21 +164,23 @@ export async function stockOverview(ctx: RecordCtx, opts: { q?: string; warehous
       order by p.name limit ${Math.min(opts.limit ?? 500, 2000)}`,
     vals,
   );
+  const tv: unknown[] = [ctx.tenantId];
+  const vis = (alias: string) => visibleProducts(ctx, tv, alias);
   const totals = await ctx.tx.one<{ value: string; low: string; skus: string }>(
     `select coalesce(sum(s.on_hand * coalesce(p.cost_price, 0)), 0) as value,
-            (select count(*) from products p2 where p2.tenant_id = $1 and p2.deleted_at is null and p2.reorder_level is not null
+            (select count(*) from products p2 where p2.tenant_id = $1 and p2.deleted_at is null and p2.reorder_level is not null and ${vis('p2')}
                and coalesce((select sum(on_hand - reserved) from stock_levels s2 where s2.tenant_id = p2.tenant_id and s2.product_id = p2.id), 0) <= p2.reorder_level) as low,
-            (select count(*) from products p3 where p3.tenant_id = $1 and p3.deleted_at is null and p3.track_inventory) as skus
-       from stock_levels s join products p on p.tenant_id = s.tenant_id and p.id = s.product_id where s.tenant_id = $1`,
-    [ctx.tenantId],
+            (select count(*) from products p3 where p3.tenant_id = $1 and p3.deleted_at is null and p3.track_inventory and ${vis('p3')}) as skus
+       from stock_levels s join products p on p.tenant_id = s.tenant_id and p.id = s.product_id where s.tenant_id = $1 and ${vis('p')}`,
+    tv,
   );
-  return { items: rows, totals: { stockValue: Number(totals?.value ?? 0), lowStock: Number(totals?.low ?? 0), trackedProducts: Number(totals?.skus ?? 0) } };
+  return { items: rows, totals: { stockValue: costHidden ? null : Number(totals?.value ?? 0), lowStock: Number(totals?.low ?? 0), trackedProducts: Number(totals?.skus ?? 0) } };
 }
 
 export async function movements(ctx: RecordCtx, opts: { productId?: string; warehouseId?: string; limit?: number }) {
   if (objectPerm(ctx.principal.permissions, 'product').read === 'none') throw forbidden();
   const vals: unknown[] = [ctx.tenantId];
-  const where = ['m.tenant_id = $1'];
+  const where = ['m.tenant_id = $1', visibleProducts(ctx, vals, 'p')];
   if (opts.productId) {
     vals.push(opts.productId);
     where.push(`m.product_id = $${vals.length}::uuid`);

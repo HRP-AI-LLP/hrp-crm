@@ -187,7 +187,11 @@ export const securityRoutes = new Hono<AppEnv>()
   })
   .post('/users/:id/sign-out', requireAdmin('users'), async (c) => {
     const id = uuid.parse(c.req.param('id'));
-    await c.var.db.tx(scope(c), (tx) => tx.query(`update sessions set revoked_at = now() where tenant_id = $1 and user_id = $2 and revoked_at is null`, [c.var.tenant.id, id]));
+    await c.var.db.tx(scope(c), async (tx) => {
+      await tx.query(`update sessions set revoked_at = now() where tenant_id = $1 and user_id = $2 and revoked_at is null`, [c.var.tenant.id, id]);
+      // their phones stop receiving workspace notifications too
+      await tx.query(`delete from push_subscriptions where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, id]);
+    });
     return c.json({ ok: true });
   })
 

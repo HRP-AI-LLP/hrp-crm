@@ -9,14 +9,14 @@
  * and seller details are snapshotted at issue; the database refuses later edits of an issued
  * document (only payment state, e-invoice details and cancellation may change).
  */
-import { splitTax, stateCode, stateName, supplyType, validGstin } from '@synapse/shared';
+import { objectPerm, splitTax, stateCode, stateName, supplyType, validGstin } from '@synapse/shared';
 import { badRequest, conflict, notFound } from '../lib/errors';
 import { assertApproved, reevaluate } from './approvals';
 import { enabledApps } from './apps';
 import { assertProducts } from './lines';
 import { nextFyNumber } from './numbering';
 import { computeLines, letterhead, type LineInput } from './quotes';
-import { createRecord, loadRow, type RecordCtx, type RecordEvent, readRowSystem, toDto } from './records';
+import { createRecord, loadRow, Params, type RecordCtx, type RecordEvent, readRowSystem, toDto, visibilityWhere } from './records';
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -262,6 +262,10 @@ export async function issueInvoice(ctx: RecordCtx, id: string): Promise<RecordEv
   if (!acc) throw badRequest('The customer no longer exists');
   if (acc.gstin && !validGstin(acc.gstin)) throw badRequest(`The customer's GSTIN ${acc.gstin} is not valid (check digit). Fix it on the account first.`);
   await recompute(ctx, id, row);
+  if (row.doc_type === 'credit_note') {
+    if (!row.original_invoice_id) throw badRequest('A credit note must refer to an invoice');
+    await assertCreditFits(ctx, id, String(row.original_invoice_id));
+  }
   const tc = await taxContext(ctx, row);
   if (tc.company.gstin && !validGstin(tc.company.gstin)) throw badRequest('Your company GSTIN in Sales setup is not valid');
   const settings = await billingSettings(ctx);
@@ -293,6 +297,45 @@ export async function issueInvoice(ctx: RecordCtx, id: string): Promise<RecordEv
 function invoicedSql(byValue: boolean, sign: 1 | -1) {
   const delta = byValue ? `round(quantity * $3 / nullif(line_subtotal, 0), 3)` : `$3`;
   return `update sales_order_lines set invoiced_qty = least(quantity, greatest(invoiced_qty ${sign > 0 ? '+' : '-'} ${delta}, 0)) where tenant_id = $1 and id = $2`;
+}
+
+const creditKey = (l: { productId: string | null; name: string; unitPrice: number }) => `${l.productId ?? ''}|${l.name.trim().toLowerCase()}|${Number(l.unitPrice).toFixed(2)}`;
+
+/** Quantities of an invoice's lines already credited by issued credit notes (optionally excluding one). */
+async function creditedQuantities(ctx: RecordCtx, invoiceId: string, exceptId?: string): Promise<Map<string, number>> {
+  const rows = await ctx.tx.query<{ product_id: string | null; name: string; unit_price: string; quantity: string }>(
+    `select l.product_id, l.name, l.unit_price, l.quantity from invoice_lines l join invoices c on c.tenant_id = l.tenant_id and c.id = l.order_id
+      where c.tenant_id = $1 and c.original_invoice_id = $2 and c.doc_type = 'credit_note' and c.status not in ('draft', 'cancelled') and c.deleted_at is null and c.id <> coalesce($3::uuid, '00000000-0000-0000-0000-000000000000')`,
+    [ctx.tenantId, invoiceId, exceptId ?? null],
+  );
+  const m = new Map<string, number>();
+  for (const r of rows) {
+    const k = creditKey({ productId: r.product_id, name: r.name, unitPrice: Number(r.unit_price) });
+    m.set(k, (m.get(k) ?? 0) + Number(r.quantity));
+  }
+  return m;
+}
+
+/** A credit note may never credit more than the original invoice — per line and in value. */
+async function assertCreditFits(ctx: RecordCtx, creditNoteId: string, originalId: string) {
+  const orig = await ctx.tx.one<{ grand_total: string; status: string; doc_type: string }>(`select grand_total, status, doc_type from invoices where tenant_id = $1 and id = $2 and deleted_at is null for update`, [ctx.tenantId, originalId]);
+  if (!orig || orig.doc_type !== 'tax_invoice' || !['issued', 'partially_paid', 'paid'].includes(orig.status)) throw badRequest('The original invoice is not an issued tax invoice');
+  const cn = await ctx.tx.one<{ grand_total: string }>(`select grand_total from invoices where tenant_id = $1 and id = $2`, [ctx.tenantId, creditNoteId]);
+  const other = await ctx.tx.one<{ v: string }>(
+    `select coalesce(sum(grand_total), 0) as v from invoices where tenant_id = $1 and original_invoice_id = $2 and doc_type = 'credit_note' and status not in ('draft', 'cancelled') and deleted_at is null and id <> $3`,
+    [ctx.tenantId, originalId, creditNoteId],
+  );
+  const room = Math.round((Number(orig.grand_total) - Number(other?.v ?? 0)) * 100) / 100;
+  if (Number(cn?.grand_total ?? 0) > room + 0.01) throw badRequest(`Credit notes cannot exceed the invoice: only ${room.toFixed(2)} is left to credit`);
+  const origLines = await invoiceLines(ctx, originalId);
+  const done = await creditedQuantities(ctx, originalId, creditNoteId);
+  const want = new Map<string, number>();
+  for (const l of await invoiceLines(ctx, creditNoteId)) want.set(creditKey(l), (want.get(creditKey(l)) ?? 0) + Number(l.quantity));
+  for (const [k, q] of want) {
+    const total = origLines.filter((l) => creditKey(l) === k).reduce((n, l) => n + Number(l.quantity), 0);
+    if (!total) throw badRequest('A credit note line does not match any line of the original invoice');
+    if (q + (done.get(k) ?? 0) > total + 1e-9) throw badRequest(`${k.split('|')[1]}: only ${Math.max(0, total - (done.get(k) ?? 0))} left to credit`);
+  }
 }
 
 /** Credit notes reduce what the original invoice still owes. */
@@ -375,12 +418,26 @@ export async function creditNoteFrom(ctx: RecordCtx, invoiceId: string, opts: { 
   const { row } = await loadRow(ctx, 'invoice', invoiceId, 'read');
   if (row.doc_type !== 'tax_invoice' || !['issued', 'partially_paid', 'paid'].includes(String(row.status))) throw badRequest('Credit notes can only be raised against issued tax invoices');
   const lines = await invoiceLines(ctx, invoiceId);
-  const pick = opts.lines?.length ? opts.lines : lines.map((l) => ({ lineId: l.id, quantity: l.quantity }));
+  // what earlier credit notes already took back
+  const done = await creditedQuantities(ctx, invoiceId);
+  const left = new Map(lines.map((l) => [l.id, 0]));
+  {
+    const pool = new Map(done);
+    for (const l of lines) {
+      const k = creditKey(l);
+      const used = Math.min(Number(l.quantity), pool.get(k) ?? 0);
+      pool.set(k, (pool.get(k) ?? 0) - used);
+      left.set(l.id, Math.round((Number(l.quantity) - used) * 1000) / 1000);
+    }
+  }
+  const pick = opts.lines?.length ? opts.lines : lines.filter((l) => (left.get(l.id) ?? 0) > 0).map((l) => ({ lineId: l.id, quantity: left.get(l.id)! }));
+  if (!pick.length) throw badRequest('This invoice is already fully credited');
   const input: LineInput[] = [];
   for (const p of pick) {
     const l = lines.find((x) => x.id === p.lineId);
     if (!l) throw badRequest('A line does not belong to this invoice');
-    if (!(p.quantity > 0) || p.quantity > l.quantity + 1e-9) throw badRequest(`${l.name}: credit between 0 and ${l.quantity}`);
+    const max = left.get(l.id) ?? 0;
+    if (!(p.quantity > 0) || p.quantity > max + 1e-9) throw badRequest(max > 0 ? `${l.name}: credit between 0 and ${max}` : `${l.name} is already fully credited`);
     input.push({ productId: l.productId, name: l.name, description: l.description, hsnSac: l.hsnSac, unit: l.unit, quantity: p.quantity, unitPrice: l.unitPrice, discountPct: l.discountPct, taxRate: l.taxRate });
   }
   const r = await createRecord(ctx, 'invoice', {
@@ -457,7 +514,15 @@ export async function allocatePayment(ctx: RecordCtx, paymentId: string, allocat
       }
     }
     left = r2(Number(p.amount) - Number(p.amount_allocated));
-  } else plan = allocations;
+  } else {
+    // one entry per invoice: duplicates are added up before any check
+    const merged = new Map<string, number>();
+    for (const a of allocations) {
+      if (!(a.amount > 0)) throw badRequest('Allocation amounts must be positive');
+      merged.set(a.invoiceId, r2((merged.get(a.invoiceId) ?? 0) + a.amount));
+    }
+    plan = [...merged].map(([invoiceId, amount]) => ({ invoiceId, amount }));
+  }
   const total = r2(plan.reduce((s, a) => s + a.amount, 0));
   if (total > left + 0.009) throw badRequest(`Only ${left} of this payment is left to apply`);
   const touched = new Set<string>();
@@ -476,6 +541,13 @@ export async function allocatePayment(ctx: RecordCtx, paymentId: string, allocat
        on conflict (tenant_id, payment_id, invoice_id) do update set amount = payment_allocations.amount + excluded.amount`,
       [ctx.tenantId, paymentId, a.invoiceId, a.amount],
     );
+    // belt and braces: received allocations never exceed what the invoice can take
+    const cap = await ctx.tx.one<{ over: boolean }>(
+      `select coalesce((select sum(x.amount) from payment_allocations x join payments p on p.tenant_id = x.tenant_id and p.id = x.payment_id where x.tenant_id = i.tenant_id and x.invoice_id = i.id and p.status = 'received'), 0) > i.grand_total - i.amount_credited + 0.009 as over
+         from invoices i where i.tenant_id = $1 and i.id = $2`,
+      [ctx.tenantId, a.invoiceId],
+    );
+    if (cap?.over) throw badRequest('That is more than the invoice balance');
     touched.add(a.invoiceId);
   }
   await ctx.tx.query(`update payments set amount_allocated = (select coalesce(sum(amount), 0) from payment_allocations where tenant_id = $1 and payment_id = $2) where tenant_id = $1 and id = $2`, [ctx.tenantId, paymentId]);
@@ -530,6 +602,10 @@ export async function milestoneReceipt(ctx: RecordCtx, orderId: string, mileston
 
 // ---------------------------------------------------------------------------------- receivables
 export async function receivables(ctx: RecordCtx) {
+  // aging covers the invoices (and receipts) this person may see
+  const p = new Params();
+  p.add(ctx.tenantId);
+  const vis = `i.id in (select r.id from invoices r where ${visibilityWhere(ctx, 'invoice', p).join(' and ')})`;
   const rows = await ctx.tx.query<Record<string, unknown>>(
     `select a.id as account_id, a.name, count(*)::int as invoices,
             sum(i.balance_due)::float8 as outstanding,
@@ -540,11 +616,19 @@ export async function receivables(ctx: RecordCtx) {
             sum(i.balance_due) filter (where current_date - i.due_date > 90)::float8 as d90,
             min(i.due_date) as oldest_due
        from invoices i join accounts a on a.tenant_id = i.tenant_id and a.id = i.account_id
-      where i.tenant_id = $1 and i.doc_type = 'tax_invoice' and i.status in ('issued', 'partially_paid') and i.deleted_at is null and i.balance_due > 0
+      where i.tenant_id = $1 and i.doc_type = 'tax_invoice' and i.status in ('issued', 'partially_paid') and i.deleted_at is null and i.balance_due > 0 and ${vis}
       group by a.id, a.name order by outstanding desc limit 500`,
-    [ctx.tenantId],
+    p.values,
   );
-  const unapplied = await ctx.tx.one<{ v: string }>(`select coalesce(sum(unallocated), 0) v from payments where tenant_id = $1 and status = 'received' and deleted_at is null`, [ctx.tenantId]);
+  let unapplied: { v: string } | null = { v: '0' };
+  if (objectPerm(ctx.principal.permissions, 'payment').read !== 'none') {
+    const pp = new Params();
+    pp.add(ctx.tenantId);
+    unapplied = await ctx.tx.one<{ v: string }>(
+      `select coalesce(sum(x.unallocated), 0) v from payments x where x.tenant_id = $1 and x.status = 'received' and x.deleted_at is null and x.id in (select r.id from payments r where ${visibilityWhere(ctx, 'payment', pp).join(' and ')})`,
+      pp.values,
+    );
+  }
   const totals = rows.reduce<Record<string, number>>((t, r) => {
     for (const k of ['outstanding', 'not_due', 'd1_30', 'd31_60', 'd61_90', 'd90']) t[k] = r2((t[k] ?? 0) + Number(r[k] ?? 0));
     return t;

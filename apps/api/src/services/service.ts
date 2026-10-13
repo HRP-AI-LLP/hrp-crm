@@ -3,7 +3,7 @@
  * Ticket SLA clocks themselves are set in hooks.ts when tickets are created or re-prioritised.
  */
 import type { Tx } from '../lib/db';
-import { badRequest, notFound } from '../lib/errors';
+import { ApiError, badRequest, notFound } from '../lib/errors';
 import type { RecordCtx, RecordEvent } from './records';
 import { Params, visibilityWhere } from './records';
 
@@ -115,6 +115,12 @@ export async function customerReply(ctx: RecordCtx, id: string, input: { message
     events.push({ objectKey: 'ticket', recordId: id, kind: 'updated', changes: { satisfaction: [null, input.rating] } });
   }
   if (input.message?.trim()) {
+    // the status link is public: cap replies so a leaked link cannot flood the team
+    const recent = await ctx.tx.one<{ n: number }>(
+      `select count(*)::int as n from activities where tenant_id = $1 and related_object = 'ticket' and related_id = $2 and direction = 'in' and subject = 'Customer reply' and created_at > now() - interval '1 hour'`,
+      [ctx.tenantId, id],
+    );
+    if ((recent?.n ?? 0) >= 10) throw new ApiError(429, 'rate_limited', 'Too many messages on this ticket — please wait a while or call us.');
     await ctx.tx.query(`insert into activities (tenant_id, kind, subject, body, direction, related_object, related_id) values ($1,'note','Customer reply',$3,'in','ticket',$2)`, [ctx.tenantId, id, input.message.trim()]);
     // a reply on a resolved ticket reopens it; waiting-on-customer goes back to the team
     if (['resolved', 'closed', 'waiting_customer'].includes(t.status)) {

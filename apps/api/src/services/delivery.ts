@@ -10,7 +10,7 @@
  */
 import { badRequest, notFound } from '../lib/errors';
 import type { Env } from '../env';
-import { saveFile } from './files';
+import { saveFile, sniffType } from './files';
 import { LINE_DOCS, readLines } from './lines';
 import { markInstalled, returnLines, shipLines } from './orders';
 import { createRecord, loadRow, type RecordCtx, type RecordEvent, readRowSystem, toDto } from './records';
@@ -339,6 +339,8 @@ export async function confirmByCustomer(
     const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(input.signature);
     if (m && m[1]!.length < 700_000) {
       const bytes = Uint8Array.from(atob(m[1]!), (c) => c.charCodeAt(0));
+      // only a real PNG is kept as a signature, whatever the data URL claims
+      if (sniffType(bytes, 'signature.png') !== 'image/png') throw badRequest('The signature must be a PNG image');
       await saveFile(ctx, env, { objectKey: kind, recordId: id, name: `signature-${input.name.replace(/[^A-Za-z0-9]+/g, '-').slice(0, 40)}.png`, bytes, kind: 'signature', description: `Signed by ${input.name}` }, { system: true });
     }
   }

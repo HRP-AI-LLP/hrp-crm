@@ -11,7 +11,7 @@ import { badRequest } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import { listRecords, type RecordCtx } from '../services/records';
-import { pushEnabled, sendPush } from '../services/webpush';
+import { isPushEndpoint, pushEnabled, sendPush } from '../services/webpush';
 
 const iso = z.string().datetime({ offset: true });
 
@@ -53,6 +53,7 @@ export const mobileRoutes = new Hono<AppEnv>()
   .post('/push/subscriptions', async (c) => {
     if (!pushEnabled(c.env)) throw badRequest('Push notifications are not configured on this server');
     const body = subSchema.parse(await c.req.json());
+    if (!isPushEndpoint(body.endpoint, c.env)) throw badRequest('This is not a browser push service address');
     const ua = (c.req.header('user-agent') ?? '').slice(0, 300);
     const row = await c.var.db.tx(scope(c), async (tx) => {
       const n = await tx.one<{ n: number }>(

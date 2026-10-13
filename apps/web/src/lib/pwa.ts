@@ -20,7 +20,13 @@ export function registerServiceWorker(navigate: Navigate) {
   // a notification was tapped while the app was open: route inside the SPA
   navigator.serviceWorker.addEventListener('message', (e) => {
     const d = e.data as { type?: string; link?: string } | null;
-    if (d?.type === 'navigate' && typeof d.link === 'string' && d.link.startsWith('/') && !d.link.startsWith('//')) navigateTo?.(d.link);
+    if (d?.type !== 'navigate' || typeof d.link !== 'string') return;
+    try {
+      const u = new URL(d.link, window.location.origin);
+      if (u.origin === window.location.origin) navigateTo?.(u.pathname + u.search);
+    } catch {
+      /* ignore */
+    }
   });
 }
 

@@ -14,8 +14,8 @@ import type { Db, Tx } from '../lib/db';
 import { badRequest, notFound } from '../lib/errors';
 import { enqueue, type Waiter } from './jobs';
 
-const SKIP_TABLES = new Set(['sessions', 'user_tokens', 'api_keys', 'push_subscriptions', 'ai_usage', 'record_index', 'assignment_cursors', 'kb_chunks', 'quotas', 'tenant_counters']);
-const BLANK_COLUMNS = /(password|secret|_hash(es)?$|token|mfa_|ciphertext|key_hint)/i;
+const SKIP_TABLES = new Set(['public_routes', 'sessions', 'user_tokens', 'api_keys', 'push_subscriptions', 'ai_usage', 'record_index', 'assignment_cursors', 'kb_chunks', 'quotas', 'tenant_counters']);
+const BLANK_COLUMNS = /(password|secret|_hash(es)?$|token|mfa_|ciphertext|key_hint|inbound_key|route_key|public_key)/i;
 const PAGE = 2000;
 const KEEP = 7;
 

@@ -62,7 +62,13 @@ self.addEventListener('push', (event) => {
   } catch {
     msg = { title: 'HRP Synapse', body: event.data ? event.data.text() : '' };
   }
-  const link = typeof msg.link === 'string' && msg.link.startsWith('/') && !msg.link.startsWith('//') ? msg.link : '/field';
+  let link = '/field';
+  try {
+    const u = new URL(String(msg.link || '/field'), self.location.origin);
+    if (u.origin === self.location.origin) link = u.pathname + u.search;
+  } catch {
+    /* keep the default */
+  }
   event.waitUntil(
     self.registration.showNotification(msg.title || 'HRP Synapse', {
       body: msg.body || '',

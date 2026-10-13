@@ -144,6 +144,7 @@ describe('payments and receivables', () => {
     expect((await acct('POST', `/api/v1/invoices/${ids.inv1}/cancel`, { reason: 'Wrong customer' })).status).toBe(400);
     const cn = await acct('POST', `/api/v1/invoices/${ids.inv2}/credit-note`, { reason: 'One leg damaged', lines: [] });
     expect(cn.status, JSON.stringify(cn.json)).toBe(201);
+    ids.cnFull = cn.json.id;
     const inv2 = (await acct('GET', `/api/v1/invoices/${ids.inv2}`)).json;
     const partial = await acct('POST', `/api/v1/invoices/${ids.inv2}/credit-note`, { reason: 'Discount after delivery', lines: [{ lineId: inv2.lines[0].id, quantity: 0.25 }] });
     expect(partial.status, JSON.stringify(partial.json)).toBe(201);
@@ -153,6 +154,30 @@ describe('payments and receivables', () => {
     expect((await acct('GET', `/api/v1/invoices/${ids.inv2}`)).json.invoice).toMatchObject({ status: 'partially_paid', amount_credited: 11800, balance_due: 35400 });
     expect((await acct('POST', `/api/v1/invoices/${ids.inv2}/cancel`, { reason: 'x' })).status).toBe(400); // too short and credit notes exist
     expect((await acct('POST', `/api/v1/invoices/${ids.inv2}/cancel`, { reason: 'Customer cancelled' })).status).toBe(400);
+  });
+
+  it('credit notes can never exceed the invoice, and one payment cannot be applied twice', async () => {
+    // the full-invoice draft from before no longer fits: a quarter was credited since
+    const full = await acct('POST', `/api/v1/invoices/${ids.cnFull}/issue`);
+    expect(full.status).toBe(400);
+    expect(full.json.error.message).toMatch(/left to credit/);
+    const inv2 = (await acct('GET', `/api/v1/invoices/${ids.inv2}`)).json;
+    const over = await acct('POST', `/api/v1/invoices/${ids.inv2}/credit-note`, { reason: 'Second discount', lines: [{ lineId: inv2.lines[0].id, quantity: 0.8 }] });
+    expect(over.status).toBe(400);
+    expect(over.json.error.message).toContain('0.75');
+    // a draft whose lines are inflated afterwards is caught at issue
+    const d = await acct('POST', `/api/v1/invoices/${ids.inv2}/credit-note`, { reason: 'Small goodwill credit', lines: [{ lineId: inv2.lines[0].id, quantity: 0.1 }] });
+    expect(d.status).toBe(201);
+    const l0 = inv2.lines[0];
+    await acct('PUT', `/api/v1/invoices/${d.json.id}/lines`, { lines: [{ productId: l0.productId, name: l0.name, hsnSac: l0.hsnSac, quantity: 5, unitPrice: l0.unitPrice, taxRate: l0.taxRate }] });
+    expect((await acct('POST', `/api/v1/invoices/${d.json.id}/issue`)).status).toBe(400);
+    await acct('DELETE', `/api/v1/records/invoice/${d.json.id}`);
+    // duplicate allocation lines are added up before the balance check
+    const p = await acct('POST', '/api/v1/payments', { accountId: ids.ka, amount: 60000 });
+    const dup = await acct('POST', `/api/v1/payments/${p.json.id}/allocate`, { allocations: [{ invoiceId: ids.inv2, amount: 20000 }, { invoiceId: ids.inv2, amount: 20000 }] });
+    expect(dup.status).toBe(400);
+    expect((await acct('GET', `/api/v1/invoices/${ids.inv2}`)).json.invoice).toMatchObject({ balance_due: 35400 });
+    expect((await acct('POST', `/api/v1/payments/${p.json.id}/void`, { reason: 'Test receipt' })).status).toBe(200);
   });
 
   it('orders bill per milestone and pick up payments; the order shows what was received', async () => {

@@ -156,6 +156,32 @@ describe('push subscriptions', () => {
   });
 });
 
+describe('push hygiene', () => {
+  it('refuses non push-service endpoints', async () => {
+    const r = await api('POST', '/api/v1/push/subscriptions', { endpoint: 'https://internal.corp.example/hook', keys: { p256dh: device.pub, auth: b64uEncode(authSecret) } });
+    expect(r.status).toBe(400);
+  });
+
+  it('stops pushing to someone whose sessions were all revoked', async () => {
+    const sub = { endpoint: 'https://push.example.test/z', keys: { p256dh: device.pub, auth: b64uEncode(authSecret) } };
+    expect((await api('POST', '/api/v1/push/subscriptions', sub)).status).toBe(201);
+    sent.length = 0;
+    await sql(`insert into notifications (tenant_id, user_id, kind, title) values ($1, $2, 'x', 'Secret figures')`, [tenantId, me]);
+    // a background sweep after everyone was signed out (e.g. the person left the company)
+    await sql(`update sessions set revoked_at = now() where tenant_id = $1 and user_id = $2`, [tenantId, me]);
+    const db = Db.fromEnv(h.env);
+    try {
+      const { dispatchPush } = await import('../src/services/webpush');
+      await dispatchPush(h.env, db, tenantId);
+    } finally {
+      await db.close();
+    }
+    expect(sent).toHaveLength(0);
+    // sign back in for the remaining tests
+    api = h.as('acme', (await h.login('acme', 'owner@acme.test')).token);
+  });
+});
+
 describe('field/today', () => {
   it('collects my tasks, follow-ups and today’s visits', async () => {
     const start = new Date();
