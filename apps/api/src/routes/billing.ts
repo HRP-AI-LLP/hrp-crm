@@ -174,6 +174,8 @@ const settingsSchema = z.object({
   dueDays: z.number().int().min(0).max(365).optional(),
   roundOff: z.boolean().optional(),
   bankDetails: z.string().max(1000).optional(),
+  upiVpa: z.union([z.literal(''), z.string().trim().regex(/^[A-Za-z0-9._-]{2,256}@[A-Za-z][A-Za-z0-9.-]{1,64}$/, 'A UPI ID looks like business@okhdfcbank')]).optional(),
+  upiPayee: z.string().trim().max(50).optional(),
   ledgers: z.object({ sales: z.string().max(80), cgst: z.string().max(80), sgst: z.string().max(80), igst: z.string().max(80), roundOff: z.string().max(80), bank: z.string().max(80) }).partial().optional(),
 });
 

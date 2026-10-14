@@ -31,6 +31,7 @@ const InventoryRoute = page(() => import('./pages/Operations'), 'InventoryRoute'
 const BillingRoute = page(() => import('./pages/Operations'), 'BillingRoute');
 const JobConfirmPage = page(() => import('./pages/CustomerPages'), 'JobConfirmPage');
 const TicketStatusPage = page(() => import('./pages/CustomerPages'), 'TicketStatusPage');
+const PaidPage = page(() => import('./pages/CustomerPages'), 'PaidPage');
 const FieldSchedulePage = page(() => import('./pages/FieldSchedule'), 'FieldSchedulePage');
 const FieldPage = page(() => import('./pages/Field'), 'FieldPage');
 
@@ -64,6 +65,7 @@ export function App() {
       <Route path="/d/:token" element={<JobConfirmPage kind="shipment" />} />
       <Route path="/i/:token" element={<JobConfirmPage kind="installation" />} />
       <Route path="/t/:token" element={<TicketStatusPage />} />
+      <Route path="/paid" element={<PaidPage />} />
       <Route
         path="/print/quote/:id"
         element={

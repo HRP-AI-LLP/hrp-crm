@@ -27,6 +27,9 @@ export interface BillingSettings {
   dueDays: number;
   roundOff: boolean;
   bankDetails: string;
+  /** UPI ID printed as a pay-by-QR on invoices (no gateway needed) */
+  upiVpa: string;
+  upiPayee: string;
   ledgers: { sales: string; cgst: string; sgst: string; igst: string; roundOff: string; bank: string };
 }
 
@@ -40,6 +43,8 @@ export async function billingSettings(ctx: RecordCtx): Promise<BillingSettings> 
     dueDays: Number.isFinite(Number(b.dueDays)) ? Number(b.dueDays) : 15,
     roundOff: b.roundOff !== false,
     bankDetails: b.bankDetails ?? '',
+    upiVpa: b.upiVpa ?? '',
+    upiPayee: b.upiPayee ?? '',
     ledgers: { sales: 'Sales', cgst: 'Output CGST', sgst: 'Output SGST', igst: 'Output IGST', roundOff: 'Round Off', bank: 'Bank', ...(b.ledgers ?? {}) },
   };
 }
@@ -153,6 +158,11 @@ export async function getInvoice(ctx: RecordCtx, id: string) {
     account,
     company: await letterhead(ctx),
     bankDetails: settings.bankDetails,
+    // a UPI QR for what is still owed on an issued tax invoice
+    upi:
+      settings.upiVpa && row.doc_type === 'tax_invoice' && ['issued', 'partially_paid'].includes(String(row.status)) && Number(row.balance_due) > 0
+        ? { vpa: settings.upiVpa, payee: settings.upiPayee || (await letterhead(ctx)).name, amount: Number(row.balance_due), note: String(row.invoice_number ?? '') }
+        : null,
   };
 }
 

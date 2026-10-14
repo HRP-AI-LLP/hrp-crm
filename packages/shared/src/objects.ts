@@ -16,7 +16,7 @@ export interface ObjectStorage {
   discriminated: boolean;
 }
 
-export const LEAD_SOURCES = ['website', 'whatsapp', 'instagram', 'facebook', 'walk_in', 'referral', 'architect', 'interior_designer', 'dealer', 'campaign', 'event', 'cold_call', 'partner', 'manual', 'other'];
+export const LEAD_SOURCES = ['website', 'whatsapp', 'instagram', 'facebook', 'google_ads', 'phone_call', 'walk_in', 'referral', 'architect', 'interior_designer', 'dealer', 'campaign', 'event', 'cold_call', 'partner', 'manual', 'other'];
 export const ACCOUNT_TYPES = ['customer', 'prospect', 'architect', 'interior_designer', 'dealer', 'builder', 'partner', 'other'];
 export const APPROVAL_STATUSES = ['not_required', 'required', 'pending', 'approved', 'rejected'] as const;
 const INDUSTRIES = ['technology', 'finance', 'healthcare', 'real_estate', 'retail', 'manufacturing', 'education', 'services', 'other'];

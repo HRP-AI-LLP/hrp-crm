@@ -12,6 +12,7 @@ import { useObject, usePipelines } from '../lib/hooks';
 import { TaskList } from './Tasks';
 import { DuplicateBanner, RelatedPanel } from '../components/RecordData';
 import { EmailComposer } from '../components/EmailComposer';
+import { placeCall, useIntegrationStatus } from '../components/MailboxPanel';
 import { ShareModal } from '../components/ShareModal';
 import { QuoteEditor } from '../components/QuoteEditor';
 import { EventModal } from './Calendar';
@@ -44,7 +45,18 @@ interface Activity {
   sentiment: string | null;
   occurred_at: string;
   actor_name: string | null;
-  metadata?: { location?: { lat: number; lng: number; accuracy?: number }; outcome?: string; durationMinutes?: number } | null;
+  metadata?: {
+    location?: { lat: number; lng: number; accuracy?: number };
+    outcome?: string;
+    durationMinutes?: number;
+    // calls (telephony) and synced email
+    provider?: string;
+    status?: string;
+    recordingUrl?: string | null;
+    from?: string;
+    to?: string[] | string;
+    synced?: boolean;
+  } | null;
 }
 
 const KIND_MARK: Record<string, string> = { note: 'N', call: 'C', email: '@', meeting: 'M', whatsapp: 'W', instagram: 'IG', visit: 'V', sms: 'S', stage_change: '→', system: '•', ai: 'AI', webhook: '⇄' };
@@ -118,6 +130,7 @@ export function RecordDetailPage() {
           </div>
         </div>
         <div className="row" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {['lead', 'contact', 'account', 'ticket'].includes(object) && <CallButton object={object} id={id} phone={(rec.phone ?? rec.customer_phone) as string | null} />}
           {['lead', 'contact', 'account', 'deal', 'quote'].includes(object) || obj.fields.some((f) => f.type === 'email') ? (
             <button className="btn" onClick={() => setComposing(true)}>
               Email
@@ -427,7 +440,20 @@ function Timeline({ object, id, canLog }: { object: string; id: string; canLog: 
                   {a.actor_name ?? (a.direction === 'in' ? 'Customer' : 'Automation')}
                   {a.sentiment ? ` · sentiment ${a.sentiment}` : ''}
                 </div>
+                {a.kind === 'email' && a.metadata?.from && (
+                  <div className="muted small">
+                    {a.direction === 'in' ? `From ${a.metadata.from}` : `To ${Array.isArray(a.metadata.to) ? a.metadata.to.join(', ') : (a.metadata.to ?? '')}`}
+                    {a.metadata.synced ? ' · from mailbox' : ''}
+                  </div>
+                )}
                 {a.body && <div className="body">{a.body}</div>}
+                {a.kind === 'call' && a.metadata?.recordingUrl?.startsWith('https://') && (
+                  <audio className="call-rec" controls preload="none" src={a.metadata.recordingUrl}>
+                    <a href={a.metadata.recordingUrl} target="_blank" rel="noopener noreferrer">
+                      Recording
+                    </a>
+                  </audio>
+                )}
                 {(a.metadata?.location || a.metadata?.outcome) && (
                   <div className="small muted">
                     {a.metadata.outcome ? `Outcome: ${a.metadata.outcome}` : ''}
@@ -637,5 +663,42 @@ function ConvertModal({ leadId, company, onClose }: { leadId: string; company: s
         )}
       </div>
     </Modal>
+  );
+}
+
+/** Click-to-call through the workspace's telephony (Exotel), else the phone's own dialer. */
+function CallButton({ object, id, phone }: { object: string; id: string; phone: string | null }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const st = useIntegrationStatus();
+  const [busy, setBusy] = useState(false);
+  if (!phone) return null;
+  if (!st.data?.telephony) {
+    return (
+      <a className="btn" href={`tel:${phone.replace(/[^\d+]/g, '')}`}>
+        Call
+      </a>
+    );
+  }
+  return (
+    <button
+      className="btn"
+      disabled={busy}
+      title={`Synapse rings your phone${st.data.myPhone ? ` (${st.data.myPhone})` : ''}, then connects ${phone}`}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await placeCall(object, id);
+          toast('Calling — pick up your phone; the customer is connected next');
+          setTimeout(() => qc.invalidateQueries({ queryKey: ['timeline', object, id] }), 1500);
+        } catch (e) {
+          toast((e as Error).message, true);
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {busy ? 'Calling…' : 'Call'}
+    </button>
   );
 }

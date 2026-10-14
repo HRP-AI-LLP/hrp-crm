@@ -48,6 +48,16 @@ export interface Env {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
+  /** Gmail + Google Calendar (OAuth app registered by HRP AI) */
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  /** Outlook / Microsoft 365 mail + calendar (Entra app registration, multi-tenant) */
+  MS_CLIENT_ID?: string;
+  MS_CLIENT_SECRET?: string;
+  /** Meta (Facebook) app for lead ads: app secret signs the leadgen webhook */
+  META_APP_ID?: string;
+  META_APP_SECRET?: string;
+  META_VERIFY_TOKEN?: string;
   /** Android app (Trusted Web Activity) for /.well-known/assetlinks.json */
   ANDROID_APP_ID?: string;
   ANDROID_CERT_SHA256?: string;

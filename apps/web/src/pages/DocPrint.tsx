@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
+import qrcode from 'qrcode-generator';
 import { Link, useParams } from 'react-router-dom';
 import { type DocLabels, QuoteDocument, type QuoteDoc } from '../components/QuoteDocument';
 import { Spinner } from '../components/ui';
@@ -88,6 +89,30 @@ export function DocPrintPage() {
         </button>
       </div>
       <QuoteDocument doc={s.doc} labels={s.labels} />
+      {kind === 'invoice' && data?.upi && <UpiQr upi={data.upi} />}
+    </div>
+  );
+}
+
+/** Pay-by-UPI QR for the balance (built locally; scanned by any UPI app). */
+function UpiQr({ upi }: { upi: { vpa: string; payee: string; amount: number; note: string } }) {
+  const link = `upi://pay?${new URLSearchParams({ pa: upi.vpa, pn: upi.payee.slice(0, 50), am: upi.amount.toFixed(2), cu: 'INR', tn: upi.note.slice(0, 50) })}`;
+  const svg = useMemo(() => {
+    const q = qrcode(0, 'M');
+    q.addData(link);
+    q.make();
+    return q.createSvgTag({ cellSize: 3, margin: 1, scalable: true });
+  }, [link]);
+  return (
+    <div className="upi-qr">
+      <div className="qr" role="img" aria-label="UPI payment QR code" dangerouslySetInnerHTML={{ __html: svg }} />
+      <div>
+        <b>Scan to pay ₹{upi.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })} with any UPI app</b>
+        <div className="small">
+          {upi.payee} · {upi.vpa}
+        </div>
+        <div className="small muted">Reference: {upi.note}</div>
+      </div>
     </div>
   );
 }

@@ -1,4 +1,6 @@
 import type { FieldDef } from '@synapse/shared';
+import { IntegrationsTab } from '../components/admin/IntegrationsAdmin';
+import { useOAuthReturn } from '../lib/oauthReturn';
 import { AutomationsTab } from '../components/builders/AutomationBuilder';
 import { FieldEditor, TYPE_LABELS } from '../components/builders/FieldEditor';
 import { LayoutBuilder } from '../components/builders/LayoutBuilder';
@@ -40,6 +42,7 @@ const GROUPS: [string, [string, string, string][]][] = [
   ]],
   ['Connect', [
     ['ai', 'AI models', 'ai'],
+    ['integrations', 'Integrations', 'channels'],
     ['channels', 'Channels', 'channels'],
     ['apikeys', 'API keys', 'users'],
     ['domains', 'Domains', 'domains'],
@@ -52,10 +55,11 @@ const GROUPS: [string, [string, string, string][]][] = [
 
 export function SettingsPage() {
   const { can } = useAuth();
+  useOAuthReturn();
   const groups = GROUPS.map(([g, items]) => [g, items.filter(([, , area]) => can(area))] as const).filter(([, items]) => items.length);
   const all = groups.flatMap(([, items]) => items);
   const initial = (() => {
-    const h = window.location.hash.slice(1);
+    const h = new URLSearchParams(window.location.search).get('integration') ? 'integrations' : window.location.hash.slice(1);
     return all.some(([k]) => k === h) ? h : (all[0]?.[0] ?? 'fields');
   })();
   const [tab, setTabState] = useState<string>(initial);
@@ -118,6 +122,7 @@ export function SettingsPage() {
           {tab === 'routing' && <RoutingTab />}
           {tab === 'service' && <ServiceSettingsTab />}
           {tab === 'forms' && <FormsTab />}
+          {tab === 'integrations' && <IntegrationsTab />}
           {tab === 'channels' && <ChannelsTab />}
           {tab === 'domains' && <DomainsTab />}
           {tab === 'audit' && <AuditTab />}

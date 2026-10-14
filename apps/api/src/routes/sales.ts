@@ -4,6 +4,7 @@
  */
 import { fieldAccess, hasAdmin, objectPerm, type ObjectMeta, valueType } from '@synapse/shared';
 import { Hono } from 'hono';
+import { mailboxOf } from '../services/integrations';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
 import { badRequest, forbidden, notFound } from '../lib/errors';
@@ -105,6 +106,23 @@ async function runReport(ctx: RecordCtx, objectKey: string, d: ReportDefinition)
 
 const canSeeShared = (c: { var: AppEnv['Variables'] }) => hasAdmin(c.var.principal.permissions, 'reports');
 
+/** Mail goes out through the sender's own Gmail / Outlook when connected, else the workspace channel. */
+async function pickSender(tx: RecordCtx['tx'], tenantId: string, userId: string) {
+  const mb = await mailboxOf(tx, tenantId, userId);
+  if (mb) return { mailboxId: mb.id, channelAccountId: null, from: mb.account_ref };
+  const acc = await tx.one<{ id: string }>(`select id from channel_accounts where tenant_id = $1 and channel = 'email' and status = 'active' order by created_at limit 1`, [tenantId]);
+  return acc ? { mailboxId: null, channelAccountId: acc.id, from: null } : null;
+}
+
+/** Mirrors an event into the owner's connected calendar (background). */
+async function mirrorEvent(c: Parameters<typeof safeCtx>[0] & { env: AppEnv['Bindings']; var: AppEnv['Variables'] }, row: Record<string, any> | null | undefined) {
+  if (!row?.owner_id) return;
+  const has = await c.var.db.tx(scope(c as never, true), (tx) =>
+    tx.one(`select 1 from integrations where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft') and status = 'active' and coalesce((config ->> 'calendar')::boolean, true)`, [c.var.tenant.id, row.owner_id]),
+  );
+  if (has) await enqueue(c.env, safeCtx(c), [{ type: 'calendar.push', tenantId: c.var.tenant.id, eventId: row.id, ownerId: row.owner_id }]);
+}
+
 export const salesRoutes = new Hono<AppEnv>()
   // ============================================================================ quotes
   .get('/quotes/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => getQuote(rctx(c, tx), c.req.param('id')))))
@@ -127,15 +145,17 @@ export const salesRoutes = new Hono<AppEnv>()
       const link = `${new URL(c.req.url).origin}/q/${s.token}`;
       let messageId: string | null = null;
       if (b.to && b.subject && b.body) {
-        const acc = await tx.one<{ id: string }>(`select id from channel_accounts where tenant_id = $1 and channel = 'email' and status = 'active' order by created_at limit 1`, [c.var.tenant.id]);
-        if (acc) {
+        const sender = await pickSender(tx, c.var.tenant.id, c.var.principal.user.id);
+        if (sender) {
           const body = b.body.includes(link) ? b.body : `${b.body}\n\n${link}`;
           const m = await tx.one<{ id: string }>(
-            `insert into messages (tenant_id, channel_account_id, channel, direction, to_addr, subject, body, related_object, related_id) values ($1,$2,'email','out',$3,$4,$5,'quote',$6) returning id`,
-            [c.var.tenant.id, acc.id, b.to, b.subject, body, c.req.param('id')],
+            `insert into messages (tenant_id, channel_account_id, mailbox_id, channel, direction, from_addr, to_addr, subject, body, related_object, related_id) values ($1,$2,$3,'email','out',$4,$5,$6,$7,'quote',$8) returning id`,
+            [c.var.tenant.id, sender.channelAccountId, sender.mailboxId, sender.from, b.to, b.subject, body, c.req.param('id')],
           );
           messageId = m!.id;
-          await tx.query(`insert into activities (tenant_id, kind, subject, body, direction, related_object, related_id) values ($1,'email',$2,$3,'out','quote',$4)`, [c.var.tenant.id, b.subject, body, c.req.param('id')]);
+          await tx.query(`insert into activities (tenant_id, kind, subject, body, direction, related_object, related_id, metadata) values ($1,'email',$2,$3,'out','quote',$4,$5)`, [
+            c.var.tenant.id, b.subject, body, c.req.param('id'), JSON.stringify({ to: b.to, messageId: m!.id, from: sender.from }),
+          ]);
         }
       }
       return { link, messageId, events: s.events };
@@ -267,14 +287,21 @@ export const salesRoutes = new Hono<AppEnv>()
     const b = z.object({ to: z.string().trim().email(), cc: z.string().max(500).nullish(), subject: z.string().trim().min(1).max(300), body: z.string().min(1).max(20_000), templateId: uuid.nullish() }).parse(await c.req.json());
     const out = await c.var.db.tx(scope(c), async (tx) => {
       await loadRow(rctx(c, tx), object, id, 'read');
-      const acc = await tx.one<{ id: string }>(`select id from channel_accounts where tenant_id = $1 and channel = 'email' and status = 'active' order by created_at limit 1`, [c.var.tenant.id]);
-      if (!acc) throw badRequest('Connect an email channel in Settings → Channels to send from Synapse');
+      const sender = await pickSender(tx, c.var.tenant.id, c.var.principal.user.id);
+      if (!sender) throw badRequest('Connect your Gmail or Outlook in My account (or ask an admin to add an email channel) to send from Synapse');
+      // a reply continues the conversation thread in the person's mailbox
+      const thread = sender.mailboxId
+        ? await tx.one<{ t: string | null }>(
+            `select metadata ->> 'threadId' as t from activities where tenant_id = $1 and related_object = $2 and related_id = $3 and kind = 'email' and metadata ->> 'mailbox' = $4 and lower(metadata ->> 'from') = lower($5) order by occurred_at desc limit 1`,
+            [c.var.tenant.id, object, id, sender.mailboxId, b.to],
+          )
+        : null;
       const m = await tx.one<{ id: string }>(
-        `insert into messages (tenant_id, channel_account_id, channel, direction, to_addr, subject, body, related_object, related_id) values ($1,$2,'email','out',$3,$4,$5,$6,$7) returning id`,
-        [c.var.tenant.id, acc.id, b.to, b.subject, b.body, object, id],
+        `insert into messages (tenant_id, channel_account_id, mailbox_id, channel, direction, from_addr, to_addr, subject, body, related_object, related_id, thread_ref) values ($1,$2,$3,'email','out',$4,$5,$6,$7,$8,$9,$10) returning id`,
+        [c.var.tenant.id, sender.channelAccountId, sender.mailboxId, sender.from, b.cc ? `${b.to}, ${b.cc}` : b.to, b.subject, b.body, object, id, thread?.t ?? null],
       );
       await tx.query(`insert into activities (tenant_id, kind, subject, body, direction, related_object, related_id, metadata) values ($1,'email',$2,$3,'out',$4,$5,$6)`, [
-        c.var.tenant.id, b.subject, b.body, object, id, JSON.stringify({ to: b.to, messageId: m!.id, templateId: b.templateId ?? null }),
+        c.var.tenant.id, b.subject, b.body, object, id, JSON.stringify({ to: b.to, cc: b.cc ?? null, messageId: m!.id, templateId: b.templateId ?? null, from: sender.from }),
       ]);
       if (b.templateId) await tx.query(`update email_templates set use_count = use_count + 1 where tenant_id = $1 and id = $2`, [c.var.tenant.id, b.templateId]);
       return m!.id;
@@ -312,6 +339,7 @@ export const salesRoutes = new Hono<AppEnv>()
       );
     });
     await noteReminder(c.env, row?.remind_at);
+    await mirrorEvent(c, row as Record<string, any> | null);
     return c.json(row, 201);
   })
   .patch('/events/:id', async (c) => {
@@ -353,12 +381,21 @@ export const salesRoutes = new Hono<AppEnv>()
       return r;
     });
     await noteReminder(c.env, row?.remind_at);
+    await mirrorEvent(c, row);
     return c.json(row);
   })
   .delete('/events/:id', async (c) => {
     const admin = objectPerm(c.var.principal.permissions, 'deal').update === 'all';
-    const rows = await c.var.db.tx(scope(c), (tx) => tx.query(`delete from events where tenant_id = $1 and id = $2 and (owner_id = $3 or $4::boolean) returning id`, [c.var.tenant.id, uuid.parse(c.req.param('id')), c.var.principal.user.id, admin]));
+    const rows = await c.var.db.tx(scope(c), (tx) =>
+      tx.query<{ id: string; owner_id: string | null; calendar_ref: { integrationId: string; id: string } | null }>(
+        `delete from events where tenant_id = $1 and id = $2 and (owner_id = $3 or $4::boolean) returning id, owner_id, calendar_ref`,
+        [c.var.tenant.id, uuid.parse(c.req.param('id')), c.var.principal.user.id, admin],
+      ),
+    );
     if (!rows.length) throw notFound();
+    if (rows[0]!.calendar_ref) {
+      await enqueue(c.env, safeCtx(c), [{ type: 'calendar.push', tenantId: c.var.tenant.id, eventId: rows[0]!.id, ownerId: rows[0]!.owner_id, removeRef: rows[0]!.calendar_ref }]);
+    }
     return c.json({ ok: true });
   })
 

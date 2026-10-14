@@ -14,6 +14,7 @@ import { appsAdminRoutes, opsRoutes } from './routes/ops';
 import { fieldRoutes, serviceAdminRoutes } from './routes/field';
 import { billingAdminRoutes, billingRoutes } from './routes/billing';
 import { mobileRoutes } from './routes/mobile';
+import { integrationAdminRoutes, integrationPublicRoutes, integrationRoutes } from './routes/integrations';
 import { publicRoutes } from './routes/public';
 import { salesRoutes } from './routes/sales';
 import { securityRoutes } from './routes/security';
@@ -44,6 +45,7 @@ export function createApp() {
   });
 
   app.route('/api/public', publicRoutes);
+  app.route('/api/public', integrationPublicRoutes);
 
   app.use('/api/auth/*', tenantResolver);
   app.route('/api/auth', authRoutes);
@@ -59,6 +61,7 @@ export function createApp() {
   app.route('/api/v1', fieldRoutes);
   app.route('/api/v1', billingRoutes);
   app.route('/api/v1', mobileRoutes);
+  app.route('/api/v1', integrationRoutes);
   app.route('/api/ai', aiRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', securityRoutes);
@@ -66,6 +69,7 @@ export function createApp() {
   app.route('/api/admin', appsAdminRoutes);
   app.route('/api/admin', serviceAdminRoutes);
   app.route('/api/admin', billingAdminRoutes);
+  app.route('/api/admin', integrationAdminRoutes);
 
   app.all('/api/*', () => {
     throw notFound('No such API route');

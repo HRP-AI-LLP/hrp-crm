@@ -16,7 +16,14 @@ export type Job =
   /** re-evaluate formula / roll-up fields of every record of an object, 200 at a time */
   | { type: 'meta.recompute'; tenantId: string; objectKey: string; after?: string }
   /** one page of one table of a workspace backup (see services/backup.ts) */
-  | { type: 'backup.step'; tenantId: string; stamp: string; table: number; after?: string | null };
+  | { type: 'backup.step'; tenantId: string; stamp: string; table: number; after?: string | null }
+  /** integrations (services/integrations.ts and friends) */
+  | { type: 'mail.sync'; tenantId: string; integrationId: string }
+  | { type: 'calendar.push'; tenantId: string; eventId: string; ownerId: string | null; removeRef?: { integrationId: string; id: string } | null }
+  | { type: 'leadads.meta'; tenantId: string; integrationId: string; leadgenId: string }
+  | { type: 'leadads.google'; tenantId: string; integrationId: string; body: unknown }
+  | { type: 'payment.razorpay'; tenantId: string; integrationId: string; event: unknown }
+  | { type: 'telephony.incoming'; tenantId: string; integrationId: string; params: Record<string, string> };
 
 export interface Waiter {
   waitUntil(p: Promise<unknown>): void;

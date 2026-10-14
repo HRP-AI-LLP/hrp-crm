@@ -1,4 +1,5 @@
 import type { RecordDto } from '@synapse/shared';
+import { PaymentLinks } from './PayOnline';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -169,6 +170,7 @@ export function InvoicePanel({ id, canEdit }: { id: string; canEdit: boolean }) 
         </div>
       </div>
       <div className="panel-body stack">
+        {!isCn && ['issued', 'partially_paid', 'paid'].includes(status) && <PaymentLinks invoiceId={id} due={Number(inv.balance_due)} canCreate={canEdit && status !== 'paid'} />}
         <div className="row small" style={{ gap: 18, flexWrap: 'wrap' }}>
           <span>
             Place of supply: <b>{inv.place_of_supply ?? '—'}</b> ({inv.supply_type === 'intra' ? 'CGST + SGST' : inv.supply_type === 'inter' ? 'IGST' : '—'})
@@ -514,6 +516,7 @@ export function OrderBilling({ order, milestones, canEdit }: { order: Json; mile
             ))}
         </div>
       )}
+      {open && <PaymentLinks salesOrderId={orderId} milestones={milestones} due={Number(order.balance_due ?? 0)} canCreate={canEdit} />}
       {paying && <PaymentModal orderId={orderId} accountId={order.account_id} onClose={() => setPaying(false)} onDone={() => act(async () => undefined, 'Order updated')} />}
     </div>
   );
@@ -738,6 +741,14 @@ function BillingSettingsForm() {
           Bank details (printed on invoices)
           <textarea value={v.bankDetails} onChange={(e) => set('bankDetails', e.target.value)} placeholder={'Bank: HDFC Bank, Andheri East\nA/c: 50200012345678 · IFSC: HDFC0000123\nUPI: elvmcraft@hdfcbank'} />
         </label>
+        <label className="field">
+          UPI ID for the pay-by-QR on invoices
+          <input value={v.upiVpa ?? ''} onChange={(e) => set('upiVpa', e.target.value.trim())} placeholder="business@okhdfcbank" />
+        </label>
+        <label className="field">
+          Payee name shown in UPI apps
+          <input value={v.upiPayee ?? ''} maxLength={50} onChange={(e) => set('upiPayee', e.target.value)} placeholder="Your business name" />
+        </label>
         <h3 className="wide">Tally ledger names</h3>
         {(
           [
@@ -764,7 +775,7 @@ function BillingSettingsForm() {
           disabled={!f}
           onClick={async () => {
             try {
-              await put('/api/admin/billing/settings', { invoicePrefix: v.invoicePrefix, creditNotePrefix: v.creditNotePrefix, receiptPrefix: v.receiptPrefix, dueDays: v.dueDays, roundOff: v.roundOff, bankDetails: v.bankDetails, ledgers: v.ledgers });
+              await put('/api/admin/billing/settings', { invoicePrefix: v.invoicePrefix, creditNotePrefix: v.creditNotePrefix, receiptPrefix: v.receiptPrefix, dueDays: v.dueDays, roundOff: v.roundOff, bankDetails: v.bankDetails, upiVpa: v.upiVpa ?? '', upiPayee: v.upiPayee ?? '', ledgers: v.ledgers });
               toast('Billing settings saved');
               setF(null);
               qc.invalidateQueries({ queryKey: ['billing-settings'] });

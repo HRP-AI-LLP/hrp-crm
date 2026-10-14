@@ -311,3 +311,21 @@ export function TicketStatusPage() {
     </div>
   );
 }
+
+/** Where Razorpay sends the customer after paying a payment link. */
+export function PaidPage() {
+  const q = new URLSearchParams(window.location.search);
+  const ok = q.get('razorpay_payment_link_status') !== 'cancelled' && !q.get('error');
+  return (
+    <div className="public-wrap customer-page">
+      <div className="cp-card" style={{ textAlign: 'center' }}>
+        <h1>{ok ? 'Thank you — payment received' : 'Payment not completed'}</h1>
+        <p className="muted">
+          {ok ? 'Your payment reference is ' : 'You can use the same payment link to try again.'}
+          {ok && <b>{q.get('razorpay_payment_id') ?? '—'}</b>}
+        </p>
+        {ok && <p className="muted small">A receipt will follow from the business. You can close this page.</p>}
+      </div>
+    </div>
+  );
+}

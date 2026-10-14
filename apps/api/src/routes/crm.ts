@@ -176,16 +176,23 @@ export const crmRoutes = new Hono<AppEnv>()
   // ---------------------------------------------------------------- timeline
   .get('/records/:object/:id/timeline', async (c) => {
     const { object, id } = c.req.param();
-    const items = await c.var.db.tx(scope(c, true), async (tx) => {
+    const { items, stale } = await c.var.db.tx(scope(c, true), async (tx) => {
       await getRecord(rctx(c, tx), object, id); // permission check
-      return tx.query(
+      const items = await tx.query(
         `select a.id, a.kind, a.subject, a.body, a.direction, a.sentiment, a.metadata, a.occurred_at, u.full_name as actor_name
            from activities a left join users u on u.tenant_id = a.tenant_id and u.id = a.actor_id
           where a.tenant_id = $1 and a.related_object = $2 and a.related_id = $3
           order by a.occurred_at desc limit 100`,
         [c.var.tenant.id, object, id],
       );
+      // looking at a customer is a good moment to pull in fresh mail from the viewer's mailbox
+      const stale = await tx.one<{ id: string }>(
+        `select id from integrations where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft') and status = 'active' and (last_sync_at is null or last_sync_at < now() - interval '3 minutes') limit 1`,
+        [c.var.tenant.id, c.var.principal.user.id],
+      );
+      return { items, stale };
     });
+    if (stale) await enqueue(c.env, safeCtx(c), [{ type: 'mail.sync', tenantId: c.var.tenant.id, integrationId: stale.id }]);
     return c.json({ items });
   })
   .post('/records/:object/:id/activities', async (c) => {

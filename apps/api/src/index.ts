@@ -9,6 +9,7 @@ import type { Env } from './env';
 import { Db } from './lib/db';
 import type { Job } from './services/jobs';
 import { dailyBackups } from './services/backup';
+import { mailSweep } from './services/mail';
 import { reminderSweep } from './services/reminders';
 import { processJob } from './services/worker';
 
@@ -36,6 +37,8 @@ export default {
       if (controller.cron === '*/5 * * * *') {
         // reminders: a KV read decides whether the database needs waking at all
         await reminderSweep(env, db);
+        // connected Gmail / Outlook mailboxes (each at most every ~15 minutes)
+        await mailSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'mail-sweep', msg: (e as Error).message })));
         return;
       }
       await reminderSweep(env, db, true);

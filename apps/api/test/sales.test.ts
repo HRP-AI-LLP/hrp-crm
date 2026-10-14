@@ -169,7 +169,7 @@ describe('email templates', () => {
     expect((await api('GET', '/api/v1/email-templates')).json.items.some((x: Json) => x.name === 'Mine')).toBe(false);
     const send = await api('POST', `/api/v1/records/deal/${dealId}/send-email`, { to: 'asha@skyline.test', subject: 'x', body: 'y' });
     expect(send.status).toBe(400);
-    expect(send.json.error.message).toMatch(/Connect an email channel/);
+    expect(send.json.error.message).toMatch(/Connect your Gmail or Outlook/);
   });
 });
 

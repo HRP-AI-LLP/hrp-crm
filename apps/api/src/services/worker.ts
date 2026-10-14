@@ -5,23 +5,23 @@ import { mergePermissions, storageFor } from '@synapse/shared';
 import type { Env, Principal, TenantInfo } from '../env';
 import { hmacSha256Hex } from '../lib/crypto';
 import { backupStep } from './backup';
+import { claimRef, type Integration, mailboxOf, markError, markOk } from './integrations';
+import { fromGoogle, ingestAdLead, processMetaLead } from './leadads';
+import { pushCalendarEvent, sendFromMailbox, syncMailbox } from './mail';
+import { applyRazorpayEvent } from './payments-online';
+import { logIncomingCall } from './telephony';
 import { Db } from '../lib/db';
 import { analyzeSentiment, indexDocument, scoreLead } from './ai/features';
 import { AiUnavailableError } from './ai/router';
 import { type ChannelAccount, matchOrCreateSender, parseInbound, sendViaChannel } from './channels';
-import { enqueue, type Job, type Waiter } from './jobs';
+import { enqueue, eventJobs, type Job, type Waiter } from './jobs';
 import { recomputeRecord } from './computed';
 import { routeInserted } from './routing';
 import { loadMeta } from './tenancy';
 import { runWorkflows } from './workflows';
 
-export function systemPrincipal(userId: string | null, objectKeys: string[]): Principal {
-  return {
-    user: { id: userId ?? '00000000-0000-0000-0000-000000000000', email: 'system@synapse', fullName: 'Automation', isOwner: false, status: 'active', attributes: {}, roles: ['system'] },
-    permissions: mergePermissions([{ objects: { '*': { read: 'all', create: true, update: 'all', delete: 'all' } }, admin: ['*'] }], objectKeys),
-    sessionId: 'system',
-  };
-}
+export { systemPrincipal } from './system';
+import { systemPrincipal } from './system';
 
 async function tenantFor(db: Db, tenantId: string): Promise<TenantInfo | null> {
   const r = await db.tx({ tenantId, readOnly: true }, (tx) =>
@@ -65,12 +65,30 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
       }
       case 'message.send': {
         const m = await db.tx(sc, (tx) =>
-          tx.one<{ id: string; to_addr: string; subject: string | null; body: string; channel_account_id: string | null; status: string }>(
-            `select id, to_addr, subject, body, channel_account_id, status from messages where tenant_id = $1 and id = $2 for update`,
+          tx.one<{ id: string; to_addr: string; subject: string | null; body: string; channel_account_id: string | null; mailbox_id: string | null; thread_ref: string | null; status: string }>(
+            `select id, to_addr, subject, body, channel_account_id, mailbox_id, thread_ref, status from messages where tenant_id = $1 and id = $2 for update`,
             [tenant.id, job.messageId],
           ),
         );
-        if (!m || m.status !== 'queued' || !m.channel_account_id) return;
+        if (!m || m.status !== 'queued') return;
+        if (m.mailbox_id) {
+          // the person's own Gmail / Outlook: replies come back to them and are synced
+          await db.tx(sc, async (tx) => {
+            const mb = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and id = $2 and status = 'active'`, [tenant.id, m.mailbox_id]);
+            try {
+              if (!mb) throw new Error('The mailbox was disconnected');
+              const r = await sendFromMailbox(env, tx, mb, { to: m.to_addr, subject: m.subject ?? '', body: m.body, threadRef: m.thread_ref });
+              await tx.query(`update messages set status = 'sent', external_id = $3 where tenant_id = $1 and id = $2`, [tenant.id, m.id, r.messageId]);
+              const act = await tx.one<{ id: string }>(`select id from activities where tenant_id = $1 and metadata ->> 'messageId' = $2::text limit 1`, [tenant.id, m.id]);
+              // the synced copy of this message is recognised and not logged twice
+              if (act) await claimRef(tx, tenant.id, 'email-msgid', r.messageId, 'activity', act.id);
+            } catch (e) {
+              await tx.query(`update messages set status = 'failed', error = $3 where tenant_id = $1 and id = $2`, [tenant.id, m.id, (e as Error).message.slice(0, 500)]);
+            }
+          });
+          return;
+        }
+        if (!m.channel_account_id) return;
         const acc = await db.tx({ ...sc, readOnly: true }, (tx) => tx.one<ChannelAccount>(`select * from channel_accounts where tenant_id = $1 and id = $2`, [tenant.id, m.channel_account_id]));
         if (!acc) return;
         try {
@@ -79,6 +97,67 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
         } catch (e) {
           await db.tx(sc, (tx) => tx.query(`update messages set status = 'failed', error = $3 where tenant_id = $1 and id = $2`, [tenant.id, m.id, (e as Error).message.slice(0, 500)]));
         }
+        return;
+      }
+      case 'mail.sync':
+        await syncMailbox(env, db, tenant.id, job.integrationId);
+        return;
+      case 'calendar.push': {
+        await db.tx(sc, async (tx) => {
+          const ev = await tx.one<Record<string, any>>(`select id, title, description, location, starts_at, ends_at, all_day, status, owner_id, calendar_ref from events where tenant_id = $1 and id = $2`, [tenant.id, job.eventId]);
+          const ownerId = (ev?.owner_id as string | null) ?? job.ownerId;
+          if (!ownerId) return;
+          const mb = await mailboxOf(tx, tenant.id, ownerId);
+          if (!mb || mb.config.calendar === false) return;
+          const removeRef = job.removeRef && job.removeRef.integrationId === mb.id ? job.removeRef : null;
+          if (!ev && !removeRef) return;
+          try {
+            const out = await pushCalendarEvent(env, tx, mb, ev as never, removeRef);
+            if (ev) await tx.query(`update events set calendar_ref = $3 where tenant_id = $1 and id = $2`, [tenant.id, ev.id, out ? JSON.stringify({ integrationId: mb.id, id: out.id }) : null]);
+          } catch (e) {
+            await markError(tx, mb, `Calendar: ${(e as Error).message}`);
+          }
+        });
+        return;
+      }
+      case 'leadads.meta': {
+        const events = await db.tx(sc, async (tx) => {
+          const i = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and id = $2 and provider = 'meta_leads' and status <> 'disabled'`, [tenant.id, job.integrationId]);
+          if (!i) return [];
+          return (await processMetaLead(env, { tx, meta, tenantId: tenant.id }, i, job.leadgenId)).events;
+        });
+        await enqueue(env, waiter, eventJobs(tenant.id, null, events));
+        return;
+      }
+      case 'leadads.google': {
+        const events = await db.tx(sc, async (tx) => {
+          const i = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and id = $2 and provider = 'google_leads' and status <> 'disabled'`, [tenant.id, job.integrationId]);
+          if (!i) return [];
+          const r = await ingestAdLead({ tx, meta, tenantId: tenant.id }, i, fromGoogle(job.body));
+          await markOk(tx, i, { event: true });
+          return r.events;
+        });
+        await enqueue(env, waiter, eventJobs(tenant.id, null, events));
+        return;
+      }
+      case 'payment.razorpay': {
+        const events = await db.tx(sc, async (tx) => {
+          const i = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and id = $2 and provider = 'razorpay'`, [tenant.id, job.integrationId]);
+          if (!i) return [];
+          return applyRazorpayEvent({ ...base, tx }, i, job.event);
+        });
+        await enqueue(env, waiter, eventJobs(tenant.id, null, events));
+        return;
+      }
+      case 'telephony.incoming': {
+        const events = await db.tx(sc, async (tx) => {
+          const i = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and id = $2 and provider = 'exotel' and status <> 'disabled'`, [tenant.id, job.integrationId]);
+          if (!i) return [];
+          const r = await logIncomingCall({ tx, meta, tenantId: tenant.id }, i, job.params);
+          await markOk(tx, i, { event: true });
+          return r;
+        });
+        await enqueue(env, waiter, eventJobs(tenant.id, null, events));
         return;
       }
       case 'message.inbound': {

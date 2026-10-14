@@ -767,3 +767,17 @@ a.role-tile:hover { border-color: var(--brand-500); }
 .role-chart .bar-b, .legend-inline i.bar-b { fill: var(--accent); background: var(--accent); }
 .legend-inline i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 .role-chart figcaption { display: flex; gap: 14px; margin-top: 6px; }
+
+/* integrations */
+.integ { max-width: 980px; }
+.integ-card { border: 1px solid var(--line); border-radius: var(--r-md); padding: 16px; background: var(--surface); display: grid; gap: 12px; }
+.integ-card h3 { margin: 0 0 2px; font-size: 15px; }
+.integ-card p { margin: 0; }
+.integ-logo { width: 38px; height: 38px; flex: none; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 18px; background: var(--brand-50); color: var(--brand-800); border: 1px solid var(--brand-100); }
+.integ-body { display: grid; gap: 10px; padding-top: 10px; border-top: 1px solid var(--line-2); }
+.pay-links { display: grid; gap: 8px; padding: 12px; border: 1px dashed var(--line); border-radius: var(--r-sm); background: var(--paper); }
+.call-rec { width: 100%; max-width: 360px; height: 32px; margin-top: 6px; }
+.upi-qr { display: flex; gap: 16px; align-items: center; width: min(210mm, 100%); margin: 0 auto 24px; padding: 12px 18px; border: 1px solid #d5dbe5; border-radius: 8px; background: #fff; }
+.upi-qr .qr { width: 110px; height: 110px; flex: none; }
+.upi-qr .qr svg { width: 100%; height: 100%; }
+@media print { .upi-qr { break-inside: avoid; border-color: #999; } }

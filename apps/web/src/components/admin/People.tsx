@@ -178,6 +178,16 @@ export function PeopleTab() {
                       >
                         Edit attributes
                       </button>
+                      <button
+                        role="menuitem"
+                        onClick={() => {
+                          const v = window.prompt(`Phone number for ${u.full_name} (rings first for click-to-call). Leave empty to remove.`, u.phone ?? '');
+                          if (v === null) return;
+                          void act(() => patch(`/api/admin/users/${u.id}`, { phone: v.trim() || null }), 'Phone saved');
+                        }}
+                      >
+                        Set phone number
+                      </button>
                       {!u.is_owner && (
                         <button role="menuitem" className="danger" onClick={() => act(() => patch(`/api/admin/users/${u.id}`, { status: u.status === 'disabled' ? 'active' : 'disabled' }), u.status === 'disabled' ? 'User enabled' : 'User disabled')}>
                           {u.status === 'disabled' ? 'Enable' : 'Disable'}

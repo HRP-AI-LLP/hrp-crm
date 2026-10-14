@@ -13,6 +13,8 @@
  *   NEON_REGION        default "aws-ap-southeast-1" (Singapore — lowest latency to India)
  *   GROQ_API_KEY, GEMINI_API_KEY   optional AI fallbacks, stored as Worker secrets
  *   RESEND_API_KEY           optional: emails invitations and password resets (resend.com free tier)
+ *   GOOGLE_CLIENT_ID/SECRET, MS_CLIENT_ID/SECRET, META_APP_ID/SECRET, META_VERIFY_TOKEN
+ *                            optional: Gmail/Outlook sync and Facebook lead ads (docs/INTEGRATIONS.md)
  *   SEED_DEMO          "false" to skip the demo workspace on dev
  *   SKIP_DEPLOY        "true" to provision without deploying
  *
@@ -409,6 +411,10 @@ async function main() {
       if (process.env.GEMINI_API_KEY) bulk.GEMINI_API_KEY = process.env.GEMINI_API_KEY;
       if (process.env.CF_TENANT_DOMAINS_TOKEN) bulk.CF_TENANT_DOMAINS_TOKEN = process.env.CF_TENANT_DOMAINS_TOKEN;
       if (process.env.RESEND_API_KEY) bulk.RESEND_API_KEY = process.env.RESEND_API_KEY;
+      // integrations: OAuth apps registered by HRP AI (see docs/INTEGRATIONS.md)
+      for (const k of ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'MS_CLIENT_ID', 'MS_CLIENT_SECRET', 'META_APP_ID', 'META_APP_SECRET', 'META_VERIFY_TOKEN']) {
+        if (process.env[k]) bulk[k] = process.env[k];
+      }
       const tmp = join(LOCAL, `secrets-${env}.tmp.json`);
       writeJson(tmp, bulk);
       try {

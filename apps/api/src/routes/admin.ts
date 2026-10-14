@@ -259,7 +259,7 @@ export const adminRoutes = new Hono<AppEnv>()
     c.json({
       items: await c.var.db.tx(scope(c, true), (tx) =>
         tx.query(
-          `select u.id, u.email, u.full_name, u.status, u.is_owner, u.attributes, u.manager_id, u.last_login_at, u.created_at, (u.mfa_enabled_at is not null) as mfa_enabled,
+          `select u.id, u.email, u.full_name, u.status, u.is_owner, u.attributes, u.manager_id, u.phone, u.last_login_at, u.created_at, (u.mfa_enabled_at is not null) as mfa_enabled,
                   coalesce(array_agg(r.key) filter (where r.key is not null), '{}') as roles
              from users u left join user_roles ur on ur.tenant_id = u.tenant_id and ur.user_id = u.id
              left join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
@@ -306,6 +306,7 @@ export const adminRoutes = new Hono<AppEnv>()
         roles: z.array(z.string()).min(1).optional(),
         attributes: z.record(z.string(), z.unknown()).optional(),
         managerId: uuid.nullish(),
+        phone: z.string().trim().regex(/^\+?[0-9 ()-]{6,20}$/, 'Use digits, e.g. +91 98100 00000').nullish(),
       })
       .parse(await c.req.json());
     await c.var.db.tx(scope(c), async (tx) => {
@@ -321,6 +322,9 @@ export const adminRoutes = new Hono<AppEnv>()
       );
       if (b.status === 'disabled') await tx.query(`update sessions set revoked_at = now() where tenant_id = $1 and user_id = $2 and revoked_at is null`, [c.var.tenant.id, id]);
       if (b.status === 'disabled') await tx.query(`delete from push_subscriptions where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, id]);
+      // their connected mailbox stops syncing into the CRM
+      if (b.status === 'disabled') await tx.query(`update integrations set status = 'disabled' where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, id]);
+      if (b.phone !== undefined) await tx.query(`update users set phone = $3 where tenant_id = $1 and id = $2`, [c.var.tenant.id, id, b.phone]);
       // any status change voids outstanding invitation and reset links
       if (b.status) await tx.query(`update user_tokens set used_at = now() where tenant_id = $1 and user_id = $2 and kind in ('invite', 'reset') and used_at is null`, [c.var.tenant.id, id]);
       if (b.roles) {

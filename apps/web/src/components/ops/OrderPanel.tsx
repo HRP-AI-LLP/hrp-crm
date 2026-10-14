@@ -8,6 +8,7 @@ import { Modal, useToast } from '../ui';
 import { type DocLine, LinesEditor, toLineInput } from './LinesEditor';
 import { OrderFulfilment } from './FieldPanels';
 import { OrderBilling } from './BillingPanels';
+import { PaymentLinks } from './PayOnline';
 
 type Json = Record<string, any>;
 const FLOW = ['draft', 'confirmed', 'in_production', 'ready', 'dispatched', 'delivered', 'installed', 'completed'];
@@ -145,6 +146,9 @@ export function OrderPanel({ orderId, canEdit }: { orderId: string; canEdit: boo
 
         {apps.has('delivery') && <OrderFulfilment order={o} lines={data.lines} canEdit={canEdit} />}
         {apps.has('billing') && <OrderBilling order={o} milestones={data.milestones} canEdit={canEdit} />}
+        {!apps.has('billing') && !['draft', 'cancelled'].includes(String(o.status)) && (
+          <PaymentLinks salesOrderId={String(o.id)} milestones={data.milestones} due={Number(o.balance_due ?? 0)} canCreate={canEdit} />
+        )}
         <div className="spread" style={{ marginTop: 6 }}>
           <h3>Payment milestones</h3>
           {canEdit && !['cancelled', 'completed'].includes(status) && (

@@ -106,6 +106,14 @@ const vars = {
   GROQ_API_KEY: process.env.GROQ_API_KEY ?? '',
   GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? '',
   RESEND_API_KEY: process.env.RESEND_API_KEY ?? '',
+  // integrations (optional): your OAuth apps; add http://localhost:5173 and :8787 callback URLs in each console
+  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID ?? '',
+  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ?? '',
+  MS_CLIENT_ID: process.env.MS_CLIENT_ID ?? '',
+  MS_CLIENT_SECRET: process.env.MS_CLIENT_SECRET ?? '',
+  META_APP_ID: process.env.META_APP_ID ?? '',
+  META_APP_SECRET: process.env.META_APP_SECRET ?? '',
+  META_VERIFY_TOKEN: process.env.META_VERIFY_TOKEN ?? '',
 };
 writeFileSync(
   join(ROOT, 'apps', 'api', '.dev.vars'),
