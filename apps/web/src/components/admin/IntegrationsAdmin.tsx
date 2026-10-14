@@ -201,6 +201,10 @@ export function IntegrationsTab() {
                 <input type="checkbox" checked={exo.config.record !== false} onChange={(e) => run(() => patch(`/api/admin/integrations/${exo.id}`, { record: e.target.checked }), 'Saved')} />
                 Record click-to-call calls
               </label>
+              <label className="row">
+                <input type="checkbox" checked={!!exo.config.allowInternational} onChange={(e) => run(() => patch(`/api/admin/integrations/${exo.id}`, { allowInternational: e.target.checked }), 'Saved')} />
+                Allow international numbers (off protects against toll fraud)
+              </label>
             </div>
             {ownerSelect(exo)}
             <p className="muted small" style={{ margin: 0 }}>

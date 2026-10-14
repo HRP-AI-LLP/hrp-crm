@@ -102,6 +102,7 @@ Workspace admins can add their own API keys in **Settings → AI models**. Suppo
 | Approvals | One inbox for quotes, orders, purchase orders and invoices; criteria-based rules; approver by user, role or manager |
 | Phone | Installable app with **My day** (GPS check-in, walk-in leads, tasks, follow-ups, jobs), Web Push reminders, offline outbox; Android TWA and Capacitor shells |
 | Dashboards | Role views for owner, sales head, operations, inventory and service — always scoped to what the viewer may see; custom report & dashboard builder |
+| Integrations | Gmail / Outlook mail + calendar sync and send-as-yourself, Razorpay payment links and a UPI QR on invoices, Facebook / Instagram and Google Ads lead forms, Exotel click-to-call with recordings and missed-call follow-ups — see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) |
 | Files | Attachments on any record in Cloudflare R2 with type sniffing, quotas and signed expiring links |
 | Security | RLS isolation, RBAC/ABAC/FLS, teams & sharing rules, TOTP two-factor (optionally required), IP / country restrictions, invitations, session control, scoped API keys, audit log, owner-only workspace backups |
 
@@ -140,4 +141,5 @@ Repository secrets: `NEON_API_KEY`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): diagrams, request lifecycle, data model, metadata engine
 - [docs/SECURITY.md](docs/SECURITY.md): tenant isolation layers, auth, RBAC/ABAC/FLS, AI data handling
 - [docs/FREE-TIER.md](docs/FREE-TIER.md): current free-tier limits and how the platform stays inside them
+- [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md): setting up Gmail/Outlook, Razorpay, lead ads and Exotel
 - [docs/ROADMAP.md](docs/ROADMAP.md): what is built and what comes next

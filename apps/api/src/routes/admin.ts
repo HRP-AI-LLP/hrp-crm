@@ -1,4 +1,5 @@
 import { hashPassword, MODULES, passwordPolicyError, rolePermissionsSchema, fieldSpecSchema, KEY_PATTERN } from '@synapse/shared';
+import { type Integration, revokeTokens } from '../services/integrations';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
@@ -323,7 +324,11 @@ export const adminRoutes = new Hono<AppEnv>()
       if (b.status === 'disabled') await tx.query(`update sessions set revoked_at = now() where tenant_id = $1 and user_id = $2 and revoked_at is null`, [c.var.tenant.id, id]);
       if (b.status === 'disabled') await tx.query(`delete from push_subscriptions where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, id]);
       // their connected mailbox stops syncing into the CRM
-      if (b.status === 'disabled') await tx.query(`update integrations set status = 'disabled' where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, id]);
+      if (b.status === 'disabled') {
+        const mailboxes = await tx.query<Integration>(`select * from integrations where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, id]);
+        for (const m of mailboxes) await revokeTokens(c.env, m);
+        await tx.query(`update integrations set status = 'disabled', secret_ciphertext = null where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, id]);
+      }
       if (b.phone !== undefined) await tx.query(`update users set phone = $3 where tenant_id = $1 and id = $2`, [c.var.tenant.id, id, b.phone]);
       // any status change voids outstanding invitation and reset links
       if (b.status) await tx.query(`update user_tokens set used_at = now() where tenant_id = $1 and user_id = $2 and kind in ('invite', 'reset') and used_at is null`, [c.var.tenant.id, id]);

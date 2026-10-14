@@ -7,6 +7,7 @@
  *            allocated to the invoice or milestone — once, however often Razorpay retries
  *   UPI QR   printed invoices carry a UPI QR for the balance when a UPI ID is set (no gateway)
  */
+import { hasAdmin } from '@synapse/shared';
 import type { Env } from '../env';
 import { hmacSha256Hex, timingSafeEqual } from '../lib/crypto';
 import type { Tx } from '../lib/db';
@@ -60,8 +61,10 @@ export async function createPaymentLink(env: Env, ctx: RecordCtx, t: LinkTarget,
   let accountId: string | null = null;
   let reference = '';
   let orderId: string | null = t.salesOrderId ?? null;
+  // sending a customer a payment request is a billing action: edit rights on the document, or the billing admin area
+  const mode = hasAdmin(ctx.principal.permissions, 'billing') ? 'read' : 'update';
   if (t.invoiceId) {
-    const { row } = await loadRow(ctx, 'invoice', t.invoiceId, 'read');
+    const { row } = await loadRow(ctx, 'invoice', t.invoiceId, mode);
     if (row.doc_type !== 'tax_invoice' || !['issued', 'partially_paid'].includes(String(row.status))) throw badRequest('Only issued, unpaid invoices can be paid online');
     due = Number(row.balance_due);
     purpose = `Invoice ${row.invoice_number}`;
@@ -69,7 +72,7 @@ export async function createPaymentLink(env: Env, ctx: RecordCtx, t: LinkTarget,
     accountId = (row.account_id as string) ?? null;
     orderId = (row.sales_order_id as string | null) ?? null;
   } else if (t.salesOrderId) {
-    const { row } = await loadRow(ctx, 'sales_order', t.salesOrderId, 'read');
+    const { row } = await loadRow(ctx, 'sales_order', t.salesOrderId, mode);
     if (['draft', 'cancelled'].includes(String(row.status))) throw badRequest('Confirm the order before collecting payments');
     accountId = (row.account_id as string) ?? null;
     reference = String(row.order_number);
@@ -83,6 +86,14 @@ export async function createPaymentLink(env: Env, ctx: RecordCtx, t: LinkTarget,
       purpose = `Order ${row.order_number}`;
     }
   } else throw badRequest('Choose an invoice or an order');
+  // one open link per invoice / milestone, so the customer cannot pay the same amount twice
+  const open = await ctx.tx.one<{ id: string }>(
+    `select id from payment_links where tenant_id = $1 and status = 'created' and (expires_at is null or expires_at > now())
+        and (($2::uuid is not null and invoice_id = $2::uuid) or ($2::uuid is null and sales_order_id = $3::uuid and milestone_id is not distinct from $4::uuid))
+      limit 1`,
+    [ctx.tenantId, t.invoiceId ?? null, orderId, t.milestoneId ?? null],
+  );
+  if (open) throw badRequest('A payment link for this is already open — cancel it first to send a new one');
   const amount = r2(t.amount ?? due);
   if (!(amount > 0)) throw badRequest('Nothing is due');
   if (amount > due + 0.01) throw badRequest(`That is more than what is due (${due.toFixed(2)})`);
@@ -148,8 +159,9 @@ export async function cancelPaymentLink(env: Env, ctx: RecordCtx, id: string) {
     [ctx.tenantId, id],
   );
   if (!l) throw notFound();
-  if (l.invoice_id) await loadRow(ctx, 'invoice', l.invoice_id, 'read');
-  else if (l.sales_order_id) await loadRow(ctx, 'sales_order', l.sales_order_id, 'read');
+  const mode = hasAdmin(ctx.principal.permissions, 'billing') ? 'read' : 'update';
+  if (l.invoice_id) await loadRow(ctx, 'invoice', l.invoice_id, mode);
+  else if (l.sales_order_id) await loadRow(ctx, 'sales_order', l.sales_order_id, mode);
   if (l.status !== 'created') throw badRequest('Only open links can be cancelled');
   const i = await ctx.tx.one<Integration>(`select * from integrations where tenant_id = $1 and id = $2`, [ctx.tenantId, l.integration_id]);
   if (i && l.external_id) {

@@ -31,6 +31,17 @@ const gmailMsg = (id: string, h: Record<string, string>, text: string, labelIds:
 });
 let inbox: ReturnType<typeof gmailMsg>[] = [];
 
+/** Starts an OAuth flow as `who`; returns the state and the browser-binding cookie. */
+async function startOAuth(who: ReturnType<typeof h.as>, provider: string, body: unknown = {}) {
+  const r = await who('POST', `/api/v1/integrations/oauth/${provider}/start`, body);
+  expect(r.status, JSON.stringify(r.json)).toBe(200);
+  const cookie = (r.headers.get('set-cookie') ?? '').split(';')[0]!;
+  expect(cookie).toMatch(/^__Host-synapse_oauth=/);
+  return { url: new URL(r.json.url), state: new URL(r.json.url).searchParams.get('state')!, cookie };
+}
+const callback = (provider: string, state: string, cookie: string | null, code = 'abc') =>
+  h.call('GET', `/api/public/oauth/${provider}/callback?code=${code}&state=${encodeURIComponent(state)}`, { raw: true, ...(cookie ? { cookie } : {}) });
+
 async function sql(q: string, params: unknown[] = []) {
   const db = Db.fromEnv(h.env);
   try {
@@ -93,7 +104,9 @@ beforeAll(async () => {
   on(/POST https:\/\/api\.exotel\.com\/v1\/Accounts\/acmesid\/Calls\/connect\.json/, () => json({ Call: { Sid: 'call-sid-1', Status: 'in-progress' } }));
   // Meta
   on(/GET https:\/\/graph\.facebook\.com\/v21\.0\/oauth\/access_token/, () => json({ access_token: 'fb-user-token', expires_in: 5_000_000 }));
-  on(/GET https:\/\/graph\.facebook\.com\/v21\.0\/me\/accounts/, () => json({ data: [{ id: '1122334455667788', name: 'Acme Interiors', access_token: 'page-token' }] }));
+  on(/GET https:\/\/graph\.facebook\.com\/v21\.0\/me\/accounts/, () =>
+    json({ data: [{ id: '1122334455667788', name: 'Acme Interiors', access_token: 'page-token', tasks: ['ADVERTISE', 'MANAGE'] }, { id: '99887766554433', name: 'Fan page', access_token: 'p2', tasks: ['MODERATE'] }] }),
+  );
   on(/POST https:\/\/graph\.facebook\.com\/v21\.0\/1122334455667788\/subscribed_apps/, () => json({ success: true }));
   on(/GET https:\/\/graph\.facebook\.com\/v21\.0\/lead-77\?/, () =>
     json({
@@ -118,15 +131,17 @@ describe('Gmail / Outlook mailbox', () => {
   it('connects through OAuth with a signed state and returns to the app', async () => {
     const st = await api('GET', '/api/v1/integrations/status');
     expect(st.json).toMatchObject({ mailbox: null, available: { google: true, microsoft: true, meta: true }, telephony: false, payments: false });
-    const start = await api('POST', '/api/v1/integrations/oauth/google/start', { returnTo: '/account' });
-    const u = new URL(start.json.url);
+    const { url: u, state, cookie } = await startOAuth(api, 'google', { returnTo: '/account' });
     expect(u.host).toBe('accounts.google.com');
     expect(u.searchParams.get('scope')).toContain('gmail.readonly');
     expect(u.searchParams.get('access_type')).toBe('offline');
-    const state = u.searchParams.get('state')!;
     // a forged or altered state is refused
-    expect((await h.call('GET', `/api/public/oauth/google/callback?code=abc&state=${encodeURIComponent(state.slice(0, -2) + 'aa')}`)).status).toBe(400);
-    const cb = await h.call('GET', `/api/public/oauth/google/callback?code=abc&state=${encodeURIComponent(state)}`, { raw: true });
+    expect((await callback('google', state.slice(0, -2) + 'aa', cookie)).status).toBe(400);
+    // the link only completes in the browser that started it (a forwarded link cannot attach someone else's mailbox)
+    expect((await callback('google', state, null)).status).toBe(400);
+    const other = await startOAuth(api, 'google', { returnTo: '/account' });
+    expect((await callback('google', state, other.cookie)).status).toBe(400);
+    const cb = await callback('google', state, cookie);
     expect(cb.status).toBe(302);
     const back = new URL(cb.headers.get('location')!);
     expect(back.pathname).toBe('/account');
@@ -137,8 +152,8 @@ describe('Gmail / Outlook mailbox', () => {
     const row = (await sql(`select secret_ciphertext from integrations where provider = 'google'`))[0]!;
     expect(row.secret_ciphertext).toMatch(/^v1\./);
     // a colleague cannot connect the same mailbox
-    const s2 = new URL((await rep('POST', '/api/v1/integrations/oauth/google/start', {})).json.url).searchParams.get('state')!;
-    const cb2 = await h.call('GET', `/api/public/oauth/google/callback?code=abc&state=${encodeURIComponent(s2)}`, { raw: true });
+    const s2 = await startOAuth(rep, 'google');
+    const cb2 = await callback('google', s2.state, s2.cookie);
     expect(new URL(cb2.headers.get('location')!).searchParams.get('error')).toContain('already connected');
   });
 
@@ -225,6 +240,7 @@ describe('Outlook (Microsoft 365)', () => {
       return json({
         value: [
           { id: 'g1', conversationId: 'conv1', internetMessageId: '<g1@kapoor.test>', subject: 'Re: Site visit', from: { emailAddress: { address: 'anita@kapoor.test' } }, toRecipients: [{ emailAddress: { address: 'rita@acme.test' } }], receivedDateTime: new Date().toISOString(), body: { contentType: 'text', content: 'Friday works.' } },
+          { id: 'g3', conversationId: 'conv3', internetMessageId: '<g3@law.test>', subject: 'Confidential', from: { emailAddress: { address: 'counsel@law.test' } }, toRecipients: [{ emailAddress: { address: 'rita@acme.test' } }], receivedDateTime: new Date().toISOString(), body: { contentType: 'text', content: 'private' } },
           { id: 'g2', isDraft: true, subject: 'draft', from: { emailAddress: { address: 'rita@acme.test' } }, toRecipients: [{ emailAddress: { address: 'anita@kapoor.test' } }] },
         ],
       });
@@ -232,10 +248,13 @@ describe('Outlook (Microsoft 365)', () => {
     on(/POST https:\/\/graph\.microsoft\.com\/v1\.0\/me\/messages$/, () => json({ id: 'draft-1', internetMessageId: '<draft-1@outlook.test>' }, 201));
     on(/POST https:\/\/graph\.microsoft\.com\/v1\.0\/me\/messages\/draft-1\/send/, () => new Response(null, { status: 202 }));
     await api('PATCH', `/api/v1/records/lead/${ids.lead}`, { owner_id: repId });
-    const state = new URL((await rep('POST', '/api/v1/integrations/oauth/microsoft/start', {})).json.url).searchParams.get('state')!;
-    const cb = await h.call('GET', `/api/public/oauth/microsoft/callback?code=ms-code&state=${encodeURIComponent(state)}`, { raw: true });
-    expect(new URL(cb.headers.get('location')!).searchParams.get('connected')).toBe('rita@acme.test');
-    expect((await rep('POST', '/api/v1/integrations/mailbox/sync')).json).toEqual({ fetched: 1, logged: 1 });
+    const ms = await startOAuth(rep, 'microsoft');
+    const cb = await callback('microsoft', ms.state, ms.cookie, 'ms-code');
+    expect(new URL(cb.headers.get('location')!).searchParams.get('connected')).toBe('rita@acme.onmicrosoft.com');
+    // the owner's private lead: Rita cannot see it, so her mail with that address is not pulled onto it
+    await api('POST', '/api/v1/records/lead', { last_name: 'Counsel', email: 'counsel@law.test' });
+    expect((await rep('POST', '/api/v1/integrations/mailbox/sync')).json).toEqual({ fetched: 2, logged: 1 });
+    expect((await sql(`select count(*)::int n from activities a join leads l on l.id = a.related_id where l.email = 'counsel@law.test'`))[0]!.n).toBe(0);
     const r = await rep('POST', `/api/v1/records/lead/${ids.lead}/send-email`, { to: 'anita@kapoor.test', subject: 'Re: Site visit', body: 'See you then.' });
     expect(r.status, JSON.stringify(r.json)).toBe(201);
     const draft = JSON.parse(sent(/graph\.microsoft\.com\/v1\.0\/me\/messages$/).at(-1)!.body);
@@ -271,8 +290,10 @@ describe('Razorpay payment links', () => {
     expect(full.upi).toMatchObject({ vpa: 'acme@okhdfcbank', amount: 11800 });
 
     expect((await api('POST', '/api/v1/payment-links', { invoiceId: inv, amount: 20000 })).status).toBe(400);
+    expect([403, 404]).toContain((await rep('POST', '/api/v1/payment-links', { invoiceId: inv })).status);
     const l = await api('POST', '/api/v1/payment-links', { invoiceId: inv });
     expect(l.status, JSON.stringify(l.json)).toBe(201);
+    expect((await api('POST', '/api/v1/payment-links', { invoiceId: inv })).json.error.message).toContain('already open');
     expect(l.json).toMatchObject({ url: 'https://rzp.io/i/abc', amount: 11800 });
     const req = JSON.parse(sent(/POST https:\/\/api\.razorpay\.com\/v1\/payment_links$/.source ? /api\.razorpay\.com\/v1\/payment_links$/ : /x/).at(-1)!.body);
     expect(req).toMatchObject({ amount: 1180000, currency: 'INR', customer: { name: 'Mehta Residence', contact: '+919820012345' }, notify: { sms: true } });
@@ -317,9 +338,18 @@ describe('telephony (Exotel)', () => {
     expect(req.get('To')).toBe('09845022222');
     expect(req.get('CallerId')).toBe('08047112233');
     expect(req.get('StatusCallback')).toContain(ids.exoStatus);
+    // a free-form number cannot be dialled — only the record's own
+    const req2 = await api('POST', '/api/v1/telephony/call', { object: 'contact', id: ids.contact, phone: '+44 900 000 0000' });
+    expect(req2.status).toBe(201);
+    expect(new URLSearchParams(sent(/Calls\/connect/).at(-1)!.body).get('To')).toBe('09845022222');
+    await api('PATCH', `/api/v1/records/contact/${ids.contact}`, { phone: '+44 20 7946 0000' });
+    expect((await api('POST', '/api/v1/telephony/call', { object: 'contact', id: ids.contact })).json.error.message).toContain('Only Indian numbers');
+    await api('PATCH', `/api/v1/records/contact/${ids.contact}`, { phone: '98450 22222' });
+    // a recording link elsewhere than Exotel's storage is dropped
+    await h.call('POST', ids.exoStatus!, { body: { CallSid: 'call-sid-1', Status: 'completed', ConversationDuration: 5, RecordingUrl: 'https://evil.example/track.mp3' } });
     const st = await h.call('POST', ids.exoStatus!, { body: { CallSid: 'call-sid-1', Status: 'completed', ConversationDuration: 125, RecordingUrl: 'https://recordings.exotel.com/x.mp3' } });
     expect(st.status).toBe(200);
-    const act = (await api('GET', `/api/v1/records/contact/${ids.contact}/timeline`)).json.items.find((a: Json) => a.kind === 'call');
+    const act = (await api('GET', `/api/v1/records/contact/${ids.contact}/timeline`)).json.items.filter((a: Json) => a.kind === 'call').at(-1);
     expect(act).toMatchObject({ direction: 'out', body: 'Connected · 2m 5s' });
     expect(act.metadata).toMatchObject({ status: 'completed', durationSeconds: 125, recordingUrl: 'https://recordings.exotel.com/x.mp3' });
     // status for a call this workspace did not place is ignored
@@ -346,11 +376,12 @@ describe('telephony (Exotel)', () => {
 describe('lead ads', () => {
   it('Facebook pages connect through OAuth and leadgen webhooks become leads (signed, once)', async () => {
     expect((await rep('POST', '/api/v1/integrations/oauth/meta/start', {})).status).toBe(403);
-    const state = new URL((await api('POST', '/api/v1/integrations/oauth/meta/start', { returnTo: '/settings' })).json.url).searchParams.get('state')!;
-    const cb = await h.call('GET', `/api/public/oauth/meta/callback?code=fb-code&state=${encodeURIComponent(state)}`, { raw: true });
+    const fb = await startOAuth(api, 'meta', { returnTo: '/settings' });
+    const cb = await callback('meta', fb.state, fb.cookie, 'fb-code');
     const back = new URL(cb.headers.get('location')!);
     expect(back.pathname).toBe('/settings');
     expect(back.searchParams.get('connected')).toBe('Acme Interiors');
+    expect(back.searchParams.get('failed')).toContain('Fan page');
     expect(sent(/1122334455667788\/subscribed_apps/)).toHaveLength(1);
 
     // webhook verification handshake

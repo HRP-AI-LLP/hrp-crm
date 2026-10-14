@@ -116,7 +116,8 @@ async function pickSender(tx: RecordCtx['tx'], tenantId: string, userId: string)
 
 /** Mirrors an event into the owner's connected calendar (background). */
 async function mirrorEvent(c: Parameters<typeof safeCtx>[0] & { env: AppEnv['Bindings']; var: AppEnv['Variables'] }, row: Record<string, any> | null | undefined) {
-  if (!row?.owner_id) return;
+  // only your own events reach your calendar: nobody can drop entries into a colleague's real calendar
+  if (!row?.owner_id || row.owner_id !== c.var.principal.user.id) return;
   const has = await c.var.db.tx(scope(c as never, true), (tx) =>
     tx.one(`select 1 from integrations where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft') and status = 'active' and coalesce((config ->> 'calendar')::boolean, true)`, [c.var.tenant.id, row.owner_id]),
   );
@@ -372,6 +373,13 @@ export const salesRoutes = new Hono<AppEnv>()
           where tenant_id = $1 and id = $2 returning *`,
         [c.var.tenant.id, cur.id, next.title, next.kind, next.starts_at, next.ends_at, next.all_day, next.location, next.description, JSON.stringify(next.attendees), next.reminder_minutes, next.status, next.outcome, next.owner_id, moved],
       );
+      // handed to someone else: the copy in the previous owner's calendar goes away
+      if (cur.owner_id !== next.owner_id && cur.calendar_ref) {
+        await tx.query(`update events set calendar_ref = null where tenant_id = $1 and id = $2`, [c.var.tenant.id, cur.id]);
+        r!.moved_from_owner = cur.owner_id;
+        r!.old_calendar_ref = cur.calendar_ref;
+        r!.calendar_ref = null;
+      }
       // a completed meeting with an outcome lands on the related record's timeline
       if (b.status === 'done' && cur.status !== 'done' && cur.related_object && cur.related_id) {
         await tx.query(`insert into activities (tenant_id, kind, subject, body, related_object, related_id, occurred_at) values ($1,'meeting',$2,$3,$4,$5,$6)`, [
@@ -381,6 +389,13 @@ export const salesRoutes = new Hono<AppEnv>()
       return r;
     });
     await noteReminder(c.env, row?.remind_at);
+    if (row?.moved_from_owner && row.old_calendar_ref) {
+      await enqueue(c.env, safeCtx(c), [{ type: 'calendar.push', tenantId: c.var.tenant.id, eventId: row.id, ownerId: row.moved_from_owner, removeRef: row.old_calendar_ref }]);
+    }
+    if (row) {
+      delete row.moved_from_owner;
+      delete row.old_calendar_ref;
+    }
     await mirrorEvent(c, row);
     return c.json(row);
   })

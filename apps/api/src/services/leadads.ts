@@ -101,6 +101,11 @@ export async function connectMetaPages(env: Env, tx: Tx, tenantId: string, userT
   const connected: string[] = [];
   const failed: string[] = [];
   for (const p of pages.data ?? []) {
+    // only pages this person actually runs (manage or advertise) — not ones they merely moderate
+    if (p.tasks && !p.tasks.some((t) => t === 'MANAGE' || t === 'ADVERTISE')) {
+      failed.push(`${p.name} (you need Manage or Advertise access to the page)`);
+      continue;
+    }
     try {
       await providerFetch(`${META_GRAPH}/${encodeURIComponent(p.id)}/subscribed_apps?${form({ subscribed_fields: 'leadgen', access_token: p.access_token })}`, { method: 'POST' });
       const secret = await sealSecret(env, tenantId, { pageToken: p.access_token });

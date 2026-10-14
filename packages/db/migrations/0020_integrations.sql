@@ -155,5 +155,7 @@ begin
   return null;
 end
 $$;
-create trigger integrations_audit after insert or delete or update of status, account_ref, secret_ciphertext on integrations
+-- token refreshes rewrite secret_ciphertext hourly, so credential changes are audited by the API instead
+create trigger integrations_audit after insert or delete or update of status, account_ref on integrations
   for each row execute function app.audit_integration();
+

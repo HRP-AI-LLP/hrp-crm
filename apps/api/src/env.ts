@@ -58,6 +58,8 @@ export interface Env {
   META_APP_ID?: string;
   META_APP_SECRET?: string;
   META_VERIFY_TOKEN?: string;
+  /** "true" = background mailbox sync around the clock (default: 07:00–21:00 IST) */
+  MAIL_SYNC_ALWAYS?: string;
   /** Android app (Trusted Web Activity) for /.well-known/assetlinks.json */
   ANDROID_APP_ID?: string;
   ANDROID_CERT_SHA256?: string;

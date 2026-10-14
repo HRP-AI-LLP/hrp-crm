@@ -26,6 +26,11 @@ export interface ExotelSecret {
 const host = (i: Integration) => (i.config.subdomain === 'api.in.exotel.com' ? 'api.in.exotel.com' : 'api.exotel.com');
 const auth = (s: ExotelSecret) => `Basic ${btoa(`${s.apiKey}:${s.apiToken}`)}`;
 export const phoneKey = (p: string | null | undefined) => (p ?? '').replace(/\D/g, '').slice(-10) || null;
+/** +91 / 0-prefixed / bare 10-digit Indian numbers (mobile or landline with STD code). */
+export const isIndian = (p: string) => {
+  const d = p.replace(/[^\d+]/g, '');
+  return /^(\+91|0091|91)?[6-9]\d{9}$/.test(d) || /^0?[1-9]\d{9,10}$/.test(d) || /^\+91[1-9]\d{9}$/.test(d);
+};
 const e164ish = (p: string) => {
   const d = p.replace(/[^\d+]/g, '');
   if (d.startsWith('+')) return d;
@@ -64,15 +69,25 @@ export async function findByPhone(tx: Tx, tenantId: string, phone: string): Prom
 }
 
 /** Click-to-call: rings the agent, then the customer. */
-export async function clickToCall(env: Env, ctx: RecordCtx, i: Integration, target: { object: string; id: string; phone?: string | null }, callbackBase: string) {
+export async function clickToCall(env: Env, ctx: RecordCtx, i: Integration, target: { object: string; id: string }, callbackBase: string) {
   if (!['lead', 'contact', 'account', 'deal', 'ticket'].includes(target.object)) throw badRequest('Calls can be placed from leads, contacts, accounts, deals and tickets');
   const { row } = await loadRow(ctx, target.object, target.id, 'read');
   const me = await ctx.tx.one<{ phone: string | null }>(`select phone from users where tenant_id = $1 and id = $2`, [ctx.tenantId, ctx.principal.user.id]);
   if (!me?.phone) throw badRequest('Add your phone number in My account first — Synapse rings it before connecting the customer');
-  let to = target.phone ?? (row.phone as string | null) ?? (row.customer_phone as string | null) ?? null;
+  // only the record's own number can be dialled: no free-form numbers (toll fraud)
+  let to = (row.phone as string | null) ?? (row.customer_phone as string | null) ?? null;
   if (!to && target.object === 'deal' && row.contact_id) to = (await ctx.tx.one<{ phone: string | null }>(`select phone from contacts where tenant_id = $1 and id = $2`, [ctx.tenantId, row.contact_id]))?.phone ?? null;
   if (!to || (phoneKey(to)?.length ?? 0) < 8) throw badRequest('This record has no phone number to call');
   if (!i.config.callerId) throw badRequest('Set the ExoPhone (caller ID) for Exotel in Settings → Integrations');
+  if (!i.config.allowInternational) {
+    if (!isIndian(to)) throw badRequest('Only Indian numbers can be called (an admin can allow international calls in Settings → Integrations)');
+    if (!isIndian(me.phone)) throw badRequest('Your phone number must be an Indian number for click-to-call');
+  }
+  const recent = await ctx.tx.one<{ n: number }>(
+    `select count(*)::int as n from activities where tenant_id = $1 and kind = 'call' and direction = 'out' and actor_id = $2 and metadata ->> 'provider' = 'exotel' and created_at > now() - interval '1 hour'`,
+    [ctx.tenantId, ctx.principal.user.id],
+  );
+  if ((recent?.n ?? 0) >= Number(i.config.maxCallsPerHour ?? 60)) throw badRequest('Call limit reached for this hour — try again a little later');
   const s = await readSecret<ExotelSecret>(env, i);
   const act = await ctx.tx.one<{ id: string }>(
     `insert into activities (tenant_id, kind, subject, direction, related_object, related_id, metadata) values ($1,'call',$2,'out',$3,$4,$5) returning id`,
@@ -107,6 +122,20 @@ export async function clickToCall(env: Env, ctx: RecordCtx, i: Integration, targ
   return { activityId: act!.id, sid };
 }
 
+/** Recording links are kept only when they point at Exotel's own storage. */
+export function recordingUrl(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  try {
+    const u = new URL(v);
+    if (u.protocol !== 'https:') return null;
+    const h = u.hostname;
+    if (h.endsWith('.exotel.com') || h.endsWith('.exotel.in') || (h.endsWith('.amazonaws.com') && /exotel/i.test(u.pathname + h))) return u.toString();
+  } catch {
+    /* not a URL */
+  }
+  return null;
+}
+
 const OUTCOME: Record<string, string> = { completed: 'Connected', busy: 'Busy', 'no-answer': 'No answer', failed: 'Failed', canceled: 'Cancelled', 'call-attempt': 'Missed' };
 
 /** Exotel status callback for a call we placed. */
@@ -123,7 +152,7 @@ export async function applyExotelStatus(tx: Tx, i: Integration, b: Record<string
     [
       i.tenant_id,
       ref.record_id,
-      JSON.stringify({ status, durationSeconds: duration, recordingUrl: typeof b.RecordingUrl === 'string' && b.RecordingUrl.startsWith('https://') ? b.RecordingUrl : null, legs: legs.map((l: any) => ({ status: l.Status ?? null })) }),
+      JSON.stringify({ status, durationSeconds: duration, recordingUrl: recordingUrl(b.RecordingUrl), legs: legs.map((l: any) => ({ status: l.Status ?? null })) }),
       `${OUTCOME[status] ?? status}${duration ? ` · ${Math.floor(duration / 60)}m ${duration % 60}s` : ''}`,
     ],
   );
@@ -164,7 +193,7 @@ export async function logIncomingCall(ctx: Omit<RecordCtx, 'principal'>, i: Inte
     from: phoneKey(from),
     to: phoneKey(p.CallTo ?? p.To),
     durationSeconds: duration,
-    recordingUrl: typeof p.RecordingUrl === 'string' && p.RecordingUrl.startsWith('https://') ? p.RecordingUrl : null,
+    recordingUrl: recordingUrl(p.RecordingUrl),
     answeredBy: agent?.id ?? null,
   };
   if (party) {

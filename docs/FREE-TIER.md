@@ -12,6 +12,7 @@ These limits were checked in October 2026. Providers change them, so re-check th
 | Workers AI | Daily free allowance measured in neurons | Per-tenant daily cap (`AI_DAILY_LIMIT_PER_TENANT`). Lead scoring always has a rule-based fallback, and Groq and Gemini act as overflow. |
 | Vectorize | Free allowance on stored and queried dimensions | 1024-dim bge-m3 vectors, ~900-character chunks, one namespace per tenant. |
 | R2 | **10 GB storage**, 1M writes and 10M reads per month, no egress fees | Attachments, signatures and backups. Per-workspace quota (`settings.storageQuotaMb`, default 1 GB); backups keep the newest 7 and are written in small parts so each step fits the CPU limit. |
+| Mailbox sync | Neon compute | Background sync every ~15 min only 07:00–21:00 IST (≈35 CU-h/month while any mailbox is connected); on-demand sync otherwise. `MAIL_SYNC_ALWAYS=true` for 24h (≈60 CU-h). |
 | Web Push | Free (browser push services) | Sent after writes and by the 5-minute cron; at most 50 notifications per workspace per run. |
 | Cloudflare for SaaS | **100 custom hostnames** included, then $0.10 each | Self-serve custom domains for up to 100 tenants at no cost. |
 

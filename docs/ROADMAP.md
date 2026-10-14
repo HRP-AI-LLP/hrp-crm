@@ -34,14 +34,23 @@ Built to cover everything in the ELVM Homes proposal on top of the CRM.
 - **Phase 9 — phones:** installable app, My day (GPS check-in, walk-in leads, tasks, follow-ups, jobs), Web Push, offline outbox, code-split bundle, Android TWA and Capacitor shells.
 - **Phase 10 — admin:** role dashboards, IP/country restrictions, owner-only R2 backups (nightly option), CSV import templates and opening stock import; an independent security review with all findings fixed.
 
+## Integrations Indian SMB buyers ask for first (Oct 2026)
+
+- **Gmail / Outlook:** per-person OAuth. Mail with visible contacts and leads is logged once per Message-ID. People send from their own address with threading, CRM meetings are mirrored to their calendar, and background sync runs during business hours.
+- **Razorpay:** payment links for invoices, orders and milestones, recorded automatically through a signed webhook. Printed invoices carry a UPI pay-by-QR.
+- **Lead ads:** Facebook and Instagram leads arrive through Facebook Login and the signed leadgen webhook; Google Ads lead forms arrive through a keyed webhook. Repeat enquiries attach to the existing record.
+- **Exotel:** click-to-call that rings the agent first, recordings, inbound call logging, leads for unknown callers and missed-call tasks, with toll-fraud guards.
+
 ## Next (suggested order)
 
-1. **Argon2id hashing service on Oracle ARM.** This removes the PBKDF2 CPU risk.
-2. **Email sync (IMAP/Gmail)** on the Oracle worker, so replies land on the timeline automatically.
-3. **E-invoice IRP / e-way bill API** through a GSP once a customer needs direct filing (today: JSON export + IRN capture).
-4. **Native push on iOS store builds** (`@capacitor/push-notifications`, APNs) and background location for field teams.
-5. **Restore from backup** (today: download and inspect; restore is done by HRP staff).
-6. **Scheduled report digests** by email, and dashboard sharing by link.
-7. **Platform admin console** for HRP staff, using a separate audited role (no RLS bypass inside the app).
-8. **Hash-chained audit export** for compliance customers.
-9. **Per-region data residency** (one Neon project per region, routed through the `tenants` registry).
+1. **Platform app reviews:** Google OAuth verification with the CASA assessment for Gmail, Meta App Review with business verification, and Microsoft publisher verification.
+2. **More telephony and payment providers:** Knowlarity, MyOperator and Ozonetel behind the same interface; Cashfree and PhonePe as alternatives to Razorpay.
+3. **Argon2id hashing service on Oracle ARM.** This removes the PBKDF2 CPU risk.
+4. **IMAP mailboxes** (Zoho Mail, GoDaddy, cPanel hosts) on the Oracle worker, alongside Gmail and Outlook.
+5. **E-invoice IRP / e-way bill API** through a GSP once a customer needs direct filing (today: JSON export + IRN capture).
+6. **Native push on iOS store builds** (`@capacitor/push-notifications`, APNs) and background location for field teams.
+7. **Restore from backup** (today: download and inspect; restore is done by HRP staff).
+8. **Scheduled report digests** by email, and dashboard sharing by link.
+9. **Platform admin console** for HRP staff, using a separate audited role (no RLS bypass inside the app).
+10. **Hash-chained audit export** for compliance customers.
+11. **Per-region data residency** (one Neon project per region, routed through the `tenants` registry).

@@ -105,15 +105,24 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
       case 'calendar.push': {
         await db.tx(sc, async (tx) => {
           const ev = await tx.one<Record<string, any>>(`select id, title, description, location, starts_at, ends_at, all_day, status, owner_id, calendar_ref from events where tenant_id = $1 and id = $2`, [tenant.id, job.eventId]);
-          const ownerId = (ev?.owner_id as string | null) ?? job.ownerId;
+          // removals act on the previous owner's calendar; everything else on the event owner's
+          const ownerId = job.removeRef ? job.ownerId : ((ev?.owner_id as string | null) ?? null);
           if (!ownerId) return;
           const mb = await mailboxOf(tx, tenant.id, ownerId);
-          if (!mb || mb.config.calendar === false) return;
-          const removeRef = job.removeRef && job.removeRef.integrationId === mb.id ? job.removeRef : null;
-          if (!ev && !removeRef) return;
+          if (!mb) return;
+          if (job.removeRef) {
+            if (job.removeRef.integrationId !== mb.id) return;
+            try {
+              await pushCalendarEvent(env, tx, mb, null, job.removeRef);
+            } catch (e) {
+              await markError(tx, mb, `Calendar: ${(e as Error).message}`);
+            }
+            return;
+          }
+          if (!ev || mb.config.calendar === false) return;
           try {
-            const out = await pushCalendarEvent(env, tx, mb, ev as never, removeRef);
-            if (ev) await tx.query(`update events set calendar_ref = $3 where tenant_id = $1 and id = $2`, [tenant.id, ev.id, out ? JSON.stringify({ integrationId: mb.id, id: out.id }) : null]);
+            const out = await pushCalendarEvent(env, tx, mb, ev as never, null);
+            await tx.query(`update events set calendar_ref = $3 where tenant_id = $1 and id = $2`, [tenant.id, ev.id, out ? JSON.stringify({ integrationId: mb.id, id: out.id }) : null]);
           } catch (e) {
             await markError(tx, mb, `Calendar: ${(e as Error).message}`);
           }

@@ -12,7 +12,10 @@
 import type { Env } from '../env';
 import type { Db, Tx } from '../lib/db';
 import { badRequest } from '../lib/errors';
+import { objectPerm } from '@synapse/shared';
 import { claimRef, type Integration, mailboxToken, markError, markOk, ProviderError, providerFetch } from './integrations';
+import { Params, type RecordCtx, visibilityWhere } from './records';
+import { actAs } from './system';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const GRAPH = 'https://graph.microsoft.com/v1.0/me';
@@ -145,10 +148,6 @@ async function graphFetch(token: string, since: Date, limit: number): Promise<Ma
     }));
 }
 
-export async function fetchMail(env: Env, tx: Tx, i: Integration, since: Date, limit = 50): Promise<MailItem[]> {
-  const token = await mailboxToken(env, tx, i);
-  return i.provider === 'google' ? gmailFetch(token, since, limit) : graphFetch(token, since, limit);
-}
 
 // ---------------------------------------------------------------------------------- log
 interface Match {
@@ -159,32 +158,42 @@ interface Match {
   email: string;
 }
 
-/** CRM people behind these addresses (contacts first, then open leads). */
-async function matchPeople(tx: Tx, tenantId: string, addresses: string[]): Promise<Match[]> {
+/** CRM people behind these addresses that the mailbox owner may see (contacts first, then open leads). */
+async function matchPeople(ctx: RecordCtx, addresses: string[]): Promise<Match[]> {
   if (!addresses.length) return [];
-  const contacts = await tx.query<Match>(
-    `select 'contact' as object, id, owner_id, full_name as name, lower(email) as email from contacts where tenant_id = $1 and deleted_at is null and lower(email) = any($2::text[])`,
-    [tenantId, addresses],
-  );
-  const known = new Set(contacts.map((c) => c.email));
-  const rest = addresses.filter((a) => !known.has(a));
-  const leads = rest.length
-    ? await tx.query<Match>(
-        `select 'lead' as object, id, owner_id, full_name as name, lower(email) as email from leads where tenant_id = $1 and deleted_at is null and converted_at is null and lower(email) = any($2::text[])`,
-        [tenantId, rest],
-      )
-    : [];
-  return [...contacts, ...leads];
+  const out: Match[] = [];
+  const known = new Set<string>();
+  for (const [object, table, extra] of [
+    ['contact', 'contacts', ''],
+    ['lead', 'leads', ' and r.converted_at is null'],
+  ] as const) {
+    if (objectPerm(ctx.principal.permissions, object).read === 'none') continue;
+    const rest = addresses.filter((a) => !known.has(a));
+    if (!rest.length) break;
+    const p = new Params();
+    const where = visibilityWhere(ctx, object, p);
+    const rows = await ctx.tx.query<Match>(
+      `select '${object}' as object, r.id, r.owner_id, r.full_name as name, lower(r.email) as email from ${table} r
+        where ${where.join(' and ')}${extra} and lower(r.email) = any(${p.add(rest)}::text[])`,
+      p.values,
+    );
+    for (const r of rows) known.add(r.email);
+    out.push(...rows);
+  }
+  return out;
 }
 
 /** Logs one message on the matching record; returns true when it was new and matched someone. */
-export async function logMail(tx: Tx, i: Integration, m: MailItem, colleagues: Set<string>): Promise<boolean> {
-  const own = i.account_ref.toLowerCase();
+export async function logMail(ctx: RecordCtx, i: Integration, m: MailItem, colleagues: Set<string>): Promise<boolean> {
+  const tx = ctx.tx;
+  const ownAddrs = new Set<string>([i.account_ref.toLowerCase(), ...((i.config.addresses as string[] | undefined) ?? []).map((x) => x.toLowerCase())]);
+  const own = m.from && ownAddrs.has(m.from) ? m.from : i.account_ref.toLowerCase();
   const ignore = new Set<string>((i.config.ignore ?? []).map((x: string) => x.toLowerCase()));
-  const ignored = (a: string) => ignore.has(a) || ignore.has(a.split('@')[1] ?? '') || colleagues.has(a) || a === own;
-  const outbound = m.from === own;
+  const ignored = (a: string) => ignore.has(a) || ignore.has(a.split('@')[1] ?? '') || colleagues.has(a) || ownAddrs.has(a);
+  const outbound = ownAddrs.has(m.from);
   const counterparts = [...new Set(outbound ? [...m.to, ...m.cc] : [m.from, ...m.to, ...m.cc])].filter((a) => !ignored(a));
-  const people = await matchPeople(tx, i.tenant_id, counterparts);
+  // only people the mailbox owner may see: a colleague cannot pull someone's mail onto their own record
+  const people = await matchPeople(ctx, counterparts);
   if (!people.length) return false;
   // the primary person: the sender of inbound mail, else the first addressee who is in the CRM
   const primary = (outbound ? people.find((p) => m.to.includes(p.email)) : people.find((p) => p.email === m.from)) ?? people[0]!;
@@ -218,42 +227,66 @@ export async function logMail(tx: Tx, i: Integration, m: MailItem, colleagues: S
   return true;
 }
 
-/** Syncs one mailbox: fetch since the last run (with overlap), log matching mail. */
+/**
+ * Syncs one mailbox: fetch since the last run (with overlap), log matching mail.
+ * Three short transactions (claim, token, write) so no row lock is held while the provider answers.
+ */
 export async function syncMailbox(env: Env, db: Db, tenantId: string, integrationId: string): Promise<{ fetched: number; logged: number }> {
-  return db.tx({ tenantId }, async (tx) => {
-    const i = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and id = $2 and provider in ('google','microsoft') for update skip locked`, [tenantId, integrationId]);
-    if (!i || i.status === 'disabled') return { fetched: 0, logged: 0 };
-    const started = new Date();
-    const since = i.sync_state.since ? new Date(Date.parse(i.sync_state.since) - 5 * 60_000) : new Date(Date.now() - FIRST_SYNC_DAYS * 86400_000);
-    let items: MailItem[];
-    try {
-      items = await fetchMail(env, tx, i, since);
-    } catch (e) {
-      await markError(tx, i, (e as Error).message, e instanceof ProviderError && e.status === 401);
-      return { fetched: 0, logged: 0 };
-    }
-    const colleagues = new Set(
-      (await tx.query<{ email: string }>(`select lower(email) as email from users where tenant_id = $1`, [tenantId])).map((u) => u.email),
+  const claimed = await db.tx({ tenantId }, async (tx) => {
+    const i = await tx.one<Integration>(
+      `update integrations set sync_state = sync_state || jsonb_build_object('lockedUntil', now() + interval '3 minutes')
+        where id = (select id from integrations where tenant_id = $1 and id = $2 and provider in ('google','microsoft') and status <> 'disabled'
+                      and coalesce((sync_state ->> 'lockedUntil')::timestamptz, '-infinity') < now() for update skip locked)
+        returning *`,
+      [tenantId, integrationId],
     );
-    let logged = 0;
+    return i;
+  });
+  if (!claimed || !claimed.user_id) return { fetched: 0, logged: 0 };
+  const i = claimed;
+  const started = new Date();
+  const since = i.sync_state.since ? new Date(Date.parse(i.sync_state.since) - 5 * 60_000) : new Date(Date.now() - FIRST_SYNC_DAYS * 86400_000);
+  const release = (fields: Record<string, unknown>, ok: boolean, err?: Error) =>
+    db.tx({ tenantId }, async (tx) => {
+      await tx.query(`update integrations set sync_state = (sync_state - 'lockedUntil') || $3::jsonb where tenant_id = $1 and id = $2`, [tenantId, i.id, JSON.stringify(fields)]);
+      if (ok) await markOk(tx, i, { sync: true });
+      else if (err) await markError(tx, i, err.message, err instanceof ProviderError && err.status === 401);
+    });
+  let items: MailItem[];
+  try {
+    const token = await db.tx({ tenantId }, (tx) => mailboxToken(env, tx, i));
+    items = i.provider === 'google' ? await gmailFetch(token, since, 50) : await graphFetch(token, since, 50);
+  } catch (e) {
+    await release({}, false, e as Error);
+    return { fetched: 0, logged: 0 };
+  }
+  const logged = await db.tx({ tenantId, userId: i.user_id }, async (tx) => {
+    const ctx = await actAs(env, tx, tenantId, i.user_id!, 'mail-sync');
+    if (!ctx) return 0;
+    const colleagues = new Set((await tx.query<{ email: string }>(`select lower(email) as email from users where tenant_id = $1`, [tenantId])).map((u) => u.email));
+    let n = 0;
     for (const m of items) {
       await tx.query('savepoint mail_item');
       try {
-        if (await logMail(tx, i, m, colleagues)) logged++;
+        if (await logMail(ctx, i, m, colleagues)) n++;
         await tx.query('release savepoint mail_item');
       } catch {
         await tx.query('rollback to savepoint mail_item');
       }
     }
-    await tx.query(`update integrations set sync_state = sync_state || $3::jsonb where tenant_id = $1 and id = $2`, [tenantId, i.id, JSON.stringify({ since: started.toISOString() })]);
-    await markOk(tx, i, { sync: true });
-    return { fetched: items.length, logged };
+    return n;
   });
+  await release({ since: started.toISOString() }, true);
+  return { fetched: items.length, logged };
 }
 
 /** Cron: mailboxes not synced for 15 minutes, a few per workspace per run. */
 export async function mailSweep(env: Env, db: Db) {
   if (!(env.GOOGLE_CLIENT_ID || env.MS_CLIENT_ID)) return;
+  // background sync runs in Indian business hours (07:00–21:00 IST) so an idle database can sleep
+  // overnight on the free tier; opening a customer or "Sync now" still syncs at any hour
+  const istHour = (new Date().getUTCHours() + 5 + (new Date().getUTCMinutes() + 30 >= 60 ? 1 : 0)) % 24;
+  if (env.MAIL_SYNC_ALWAYS !== 'true' && (istHour < 7 || istHour >= 21)) return;
   // a KV marker avoids waking the database every five minutes when nobody has a mailbox connected
   if (env.CACHE_KV && (await env.CACHE_KV.get('mail:any').catch(() => null)) === '0') return;
   const tenants = await db.platform<{ tenant_id: string }>(`select t as tenant_id from app.list_active_tenant_ids() t`);
@@ -356,7 +389,8 @@ export async function pushCalendarEvent(env: Env, tx: Tx, i: Integration, ev: Ca
   const auth = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
   const google = i.provider === 'google';
   const base = google ? 'https://www.googleapis.com/calendar/v3/calendars/primary/events' : `${GRAPH}/events`;
-  const ref = removeRef ?? (ev?.status === 'cancelled' ? ev.calendar_ref : null);
+  const ref = removeRef ?? (ev?.status === 'cancelled' && ev.calendar_ref?.integrationId === i.id ? ev.calendar_ref : null);
+  if (!removeRef && ev?.status === 'cancelled' && !ref) return null;
   if (ref?.id) {
     await providerFetch(`${base}/${encodeURIComponent(ref.id)}`, { method: 'DELETE', headers: auth }).catch((e) => {
       if (!(e instanceof ProviderError && (e.status === 404 || e.status === 410))) throw e;

@@ -8,7 +8,7 @@ import { hasAdmin } from '@synapse/shared';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
-import { hmacSha256Hex, randomToken, timingSafeEqual } from '../lib/crypto';
+import { hmacSha256Hex, randomToken, sha256Hex, timingSafeEqual } from '../lib/crypto';
 import { ApiError, badRequest, forbidden, notFound } from '../lib/errors';
 import { requireAdmin, scope } from '../middleware';
 import {
@@ -37,8 +37,10 @@ import type { RecordCtx } from '../services/records';
 import { applyExotelStatus, clickToCall, verifyExotel } from '../services/telephony';
 import { invalidatePrincipal, resolveTenant } from '../services/tenancy';
 import { resolveRoute, safeCtx } from './public';
+import { actAs } from '../services/system';
 
 const uuid = z.string().uuid();
+const OAUTH_COOKIE = '__Host-synapse_oauth';
 
 function rctx(c: { var: AppEnv['Variables'] }, tx: RecordCtx['tx']): RecordCtx {
   return { tx, meta: c.var.meta, principal: c.var.principal, tenantId: c.var.tenant.id };
@@ -81,7 +83,11 @@ export const integrationRoutes = new Hono<AppEnv>()
     const provider = z.enum(['google', 'microsoft', 'meta']).parse(c.req.param('provider'));
     if (provider === 'meta' && !hasAdmin(c.var.principal.permissions, 'channels')) throw forbidden('Connecting Facebook pages needs the Channels admin permission');
     const { returnTo } = z.object({ returnTo: z.enum(['/account', '/settings']).default('/account') }).parse(await c.req.json().catch(() => ({})));
-    const state = await signState(c.env, { t: c.var.tenant.id, u: c.var.principal.user.id, p: provider, o: origin(c), r: returnTo });
+    // the callback only completes in the browser that started the flow: a link forwarded to someone
+    // else cannot attach their mailbox (or pages) to this account
+    const binding = randomToken(24);
+    c.header('set-cookie', `${OAUTH_COOKIE}=${binding}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
+    const state = await signState(c.env, { t: c.var.tenant.id, u: c.var.principal.user.id, p: provider, o: origin(c), r: returnTo, h: await sha256Hex(binding) });
     return c.json({ url: authorizeUrl(c.env, provider, redirectUri(c.env, c.req.url, provider), state) });
   })
   .patch('/integrations/mailbox', async (c) => {
@@ -116,7 +122,7 @@ export const integrationRoutes = new Hono<AppEnv>()
 
   // ---------------------------------------------------------------- telephony
   .post('/telephony/call', async (c) => {
-    const b = z.object({ object: z.string().max(60), id: uuid, phone: z.string().trim().max(30).nullish() }).parse(await c.req.json());
+    const b = z.object({ object: z.string().max(60), id: uuid }).parse(await c.req.json());
     const out = await c.var.db.tx(scope(c), async (tx) => {
       const i = await activeOf(tx, c.var.tenant.id, 'exotel');
       if (!i) throw badRequest('Calling is not set up — an admin can connect Exotel in Settings → Integrations');
@@ -150,6 +156,12 @@ export const integrationRoutes = new Hono<AppEnv>()
     await c.var.db.tx(scope(c), (tx) => cancelPaymentLink(c.env, rctx(c, tx), uuid.parse(c.req.param('id'))));
     return c.json({ ok: true });
   });
+
+async function audit(c: { var: AppEnv['Variables'] }, i: Integration, action: string) {
+  await c.var.db.tx(scope(c as never), (tx) =>
+    tx.query(`insert into audit_logs (tenant_id, action, object_key, record_id, changes) values ($1,$2,'integration',$3,$4)`, [c.var.tenant.id, `integration_${action}`, i.id, JSON.stringify({ provider: i.provider, account: i.account_ref })]),
+  );
+}
 
 // ====================================================================== admin
 const razorpaySchema = z.object({
@@ -198,6 +210,7 @@ export const integrationAdminRoutes = new Hono<AppEnv>()
         [c.var.tenant.id, b.keyId.startsWith('rzp_test_') ? 'Razorpay (test mode)' : 'Razorpay', b.keyId, secret, JSON.stringify({ mode: b.keyId.startsWith('rzp_test_') ? 'test' : 'live' })],
       );
     });
+    await audit(c, row!, 'credentials_saved');
     return c.json({ ...publicView(row!), urls: hookUrls(c, row!) }, 201);
   })
   .post('/integrations/exotel', async (c) => {
@@ -214,6 +227,7 @@ export const integrationAdminRoutes = new Hono<AppEnv>()
         [c.var.tenant.id, b.sid, secret, JSON.stringify({ subdomain: b.subdomain, callerId: b.callerId, record: b.record, createLeads: b.createLeads, ownerId: b.ownerId ?? null })],
       );
     });
+    await audit(c, row!, 'credentials_saved');
     return c.json({ ...publicView(row!), urls: hookUrls(c, row!) }, 201);
   })
   .post('/integrations/google-leads', async (c) => {
@@ -244,6 +258,8 @@ export const integrationAdminRoutes = new Hono<AppEnv>()
         callerId: z.string().trim().regex(/^\+?[0-9]{6,15}$/).optional(),
         record: z.boolean().optional(),
         createLeads: z.boolean().optional(),
+        allowInternational: z.boolean().optional(),
+        maxCallsPerHour: z.number().int().min(1).max(500).optional(),
         enabled: z.boolean().optional(),
       })
       .parse(await c.req.json());
@@ -278,12 +294,31 @@ export const integrationAdminRoutes = new Hono<AppEnv>()
 // ====================================================================== public: OAuth + webhooks
 const MAX_HOOK = 256 * 1024;
 
-async function rawBody(c: { req: { text(): Promise<string>; header(n: string): string | undefined } }) {
+/** Reads a webhook body with a hard byte cap (also for chunked requests without content-length). */
+async function rawBody(c: { req: { raw: Request; header(n: string): string | undefined } }) {
   const len = Number(c.req.header('content-length') ?? 0);
   if (len > MAX_HOOK) throw new ApiError(413, 'too_large', 'Payload too large');
-  const raw = await c.req.text();
-  if (raw.length > MAX_HOOK) throw new ApiError(413, 'too_large', 'Payload too large');
-  return raw;
+  const reader = c.req.raw.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_HOOK) {
+      await reader.cancel().catch(() => undefined);
+      throw new ApiError(413, 'too_large', 'Payload too large');
+    }
+    chunks.push(value);
+  }
+  const all = new Uint8Array(total);
+  let o = 0;
+  for (const ch of chunks) {
+    all.set(ch, o);
+    o += ch.byteLength;
+  }
+  return new TextDecoder().decode(all);
 }
 
 export const integrationPublicRoutes = new Hono<AppEnv>()
@@ -291,6 +326,15 @@ export const integrationPublicRoutes = new Hono<AppEnv>()
     const provider = z.enum(['google', 'microsoft', 'meta']).parse(c.req.param('provider')) as OAuthProvider;
     const s = await verifyState(c.env, c.req.query('state'));
     if (s.p !== provider) throw badRequest('Mismatched sign-in');
+    const binding = /(?:^|;\s*)__Host-synapse_oauth=([A-Za-z0-9_-]+)/.exec(c.req.header('cookie') ?? '')?.[1];
+    if (!binding || !timingSafeEqual(await sha256Hex(binding), s.h)) throw badRequest('Finish connecting in the same browser where you started. Start again from Synapse.');
+    c.header('set-cookie', `${OAUTH_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    // each sign-in link works once
+    if (c.env.CACHE_KV) {
+      const k = `oauth:used:${s.n}`;
+      if (await c.env.CACHE_KV.get(k).catch(() => null)) throw badRequest('This sign-in link was already used. Start again from Synapse.');
+      await c.env.CACHE_KV.put(k, '1', { expirationTtl: 900 }).catch(() => undefined);
+    }
     // the browser is sent back only to this app or one of this workspace's own addresses
     const back = new URL(s.o);
     const sameHost = back.host === new URL(c.req.url).host || back.host === c.env.APP_HOST;
@@ -303,14 +347,24 @@ export const integrationPublicRoutes = new Hono<AppEnv>()
     if (!code) return done({ integration: provider, error: 'No authorisation code' });
     try {
       const tokens = await exchangeCode(c.env, provider, code, redirectUri(c.env, c.req.url, provider));
+      let msAliases: string[] = [];
       const result = await c.var.db.tx({ tenantId: s.t, userId: s.u }, async (tx) => {
-        const u = await tx.one<{ id: string }>(`select id from users where tenant_id = $1 and id = $2 and status = 'active'`, [s.t, s.u]);
-        if (!u) throw forbidden();
-        if (provider === 'meta') return connectMetaPages(c.env, tx, s.t, tokens.accessToken, s.u);
+        const who = await actAs(c.env, tx, s.t, s.u, 'oauth');
+        if (!who) throw forbidden();
+        if (provider === 'meta') {
+          // re-checked now, not only when the flow started
+          if (!hasAdmin(who.principal.permissions, 'channels')) throw forbidden('Connecting Facebook pages needs the Channels admin permission');
+          return connectMetaPages(c.env, tx, s.t, tokens.accessToken, s.u);
+        }
         const address =
           provider === 'google'
             ? (await providerFetch<{ emailAddress: string }>('https://gmail.googleapis.com/gmail/v1/users/me/profile', { headers: { authorization: `Bearer ${tokens.accessToken}` } })).emailAddress
-            : await providerFetch<{ mail?: string; userPrincipalName?: string }>('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', { headers: { authorization: `Bearer ${tokens.accessToken}` } }).then((m) => m.mail || m.userPrincipalName || '');
+            : await providerFetch<{ mail?: string; userPrincipalName?: string }>('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', { headers: { authorization: `Bearer ${tokens.accessToken}` } }).then((m) => {
+                // the sign-in name (UPN) is tied to a verified domain of the account's directory; `mail`
+                // is settable by that directory's admins, so it only counts as an extra own address
+                msAliases = m.mail && m.mail.toLowerCase() !== (m.userPrincipalName ?? '').toLowerCase() ? [m.mail.toLowerCase()] : [];
+                return /^[^@\s]+@[^@\s]+$/.test(m.userPrincipalName ?? '') ? m.userPrincipalName! : m.mail || '';
+              });
         if (!address) throw badRequest('The mailbox address could not be read');
         const taken = await tx.one<{ user_id: string | null }>(`select user_id from integrations where tenant_id = $1 and provider = $2 and account_ref = $3`, [s.t, provider, address.toLowerCase()]);
         if (taken && taken.user_id !== s.u) throw badRequest(`${address} is already connected by a colleague`);
@@ -318,7 +372,7 @@ export const integrationPublicRoutes = new Hono<AppEnv>()
         await tx.query(`delete from integrations where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft')`, [s.t, s.u]);
         await tx.query(
           `insert into integrations (tenant_id, provider, user_id, label, account_ref, secret_ciphertext, config, created_by) values ($1,$2,$3,$4,$5,$6,$7,$3)`,
-          [s.t, provider, s.u, provider === 'google' ? 'Gmail' : 'Outlook', address.toLowerCase(), await sealSecret(c.env, s.t, tokens as unknown as Record<string, unknown>), JSON.stringify({ calendar: true, ignore: [] })],
+          [s.t, provider, s.u, provider === 'google' ? 'Gmail' : 'Outlook', address.toLowerCase(), await sealSecret(c.env, s.t, tokens as unknown as Record<string, unknown>), JSON.stringify({ calendar: true, ignore: [], addresses: msAliases })],
         );
         return { connected: [address], failed: [] as string[] };
       });

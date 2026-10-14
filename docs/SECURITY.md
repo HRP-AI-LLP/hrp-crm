@@ -85,3 +85,29 @@ Because several workspaces can share one app host, refresh cookies are named per
   - Backups are stored under a per-tenant R2 prefix, and the stamp is validated.
   - Excluded: sessions, tokens, API keys, push subscriptions and public route keys. Blanked: password, MFA, secret, token and key columns.
   - Every start and download is audited.
+
+## Integrations (Oct 2026)
+
+- **OAuth (Google, Microsoft, Meta):**
+  - The state is HMAC-signed, carries the workspace, user, provider and return address, expires after 10 minutes, and can be used once (KV).
+  - It is also bound to the starting browser through an HttpOnly `__Host-` cookie, so a link forwarded to someone else cannot attach their mailbox or pages to another account.
+  - The return address must be this app or the workspace's own domain.
+  - Microsoft mailboxes are identified by their sign-in name (a verified domain), not the editable `mail` attribute.
+  - Tokens are AES-GCM encrypted with the workspace id as additional authenticated data. They are revoked when someone disconnects or a user is disabled.
+- **Mail privacy:**
+  - Only mail with contacts and open leads **that the mailbox owner can see** is stored, so a colleague cannot pull someone's mail onto their own record.
+  - Mail between colleagues is never stored, each person can exclude addresses and domains, and each message is logged once.
+  - Sync never holds a database lock while the provider answers.
+- **Webhooks:**
+  - Meta is verified by `X-Hub-Signature-256` with the app secret; a page routes to exactly one workspace and needs Manage or Advertise access to connect.
+  - Razorpay is verified by an HMAC of the raw body with the workspace's webhook secret.
+  - Google Ads is checked against its key in constant time.
+  - Exotel callbacks don't arrive signed; they are accepted only at the workspace's unguessable route key, and status updates apply only to calls this workspace placed.
+  - Bodies are capped at 256 KB (streamed), and provider ids are processed once (`external_refs`).
+- **Payments:**
+  - Links need edit rights on the document or the Billing admin permission, and only one link per invoice or milestone can be open at a time.
+  - Amounts are capped at what is due, and the receipt is recorded once per Razorpay payment id.
+- **Calls:**
+  - Only the record's own number can be dialled, only Indian numbers unless an admin allows international calls, and each person has an hourly limit.
+  - Recording links are kept only for Exotel storage hosts, matching the CSP `media-src`.
+- **Calendar:** only a person's own events are mirrored to their calendar; reassigning an event removes the previous owner's copy.

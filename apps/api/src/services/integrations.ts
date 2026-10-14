@@ -149,6 +149,7 @@ interface OAuthState {
   p: OAuthProvider;
   o: string; // origin to return to
   r: string; // path to return to
+  h: string; // hash of the browser-binding cookie set when the flow started
   e: number; // expiry (epoch seconds)
   n: string; // nonce
 }
