@@ -42,6 +42,32 @@ function run(cmd, opts = {}) {
   if (r.status !== 0) fail(`${opts.display ?? cmd} failed`);
 }
 
+/** Ends whatever still listens on these local ports (wrangler's workerd, Vite) from an earlier run. */
+export function freePorts(ports) {
+  for (const port of ports) {
+    if (win) {
+      const out = spawnSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8' }).stdout ?? '';
+      const pids = new Set(
+        out
+          .split(/\r?\n/)
+          .filter((l) => /LISTENING/i.test(l) && new RegExp(`:${port}\\s`).test(l))
+          .map((l) => l.trim().split(/\s+/).pop())
+          .filter((p) => p && p !== '0'),
+      );
+      for (const pid of pids) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      const out = spawnSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).stdout ?? '';
+      for (const pid of out.split(/\s+/).filter(Boolean)) {
+        try {
+          process.kill(Number(pid), 'SIGTERM');
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+  }
+}
+
 const SECRETS = join(ROOT, 'infra', '.local', 'secrets.json');
 const STATE = join(ROOT, 'infra', 'state.json');
 if (!existsSync(SECRETS)) fail('infra/.local/secrets.json is missing — run `pnpm setup` once on this computer first.');
@@ -128,10 +154,16 @@ if (!args.has('--no-build')) {
   run('pnpm --filter @synapse/web build');
 }
 
+// a previous run that did not shut down cleanly would keep the ports busy
+freePorts([8787, 5173]);
+
 step('Starting the API (wrangler dev) and the UI (Vite)');
+// the children get no keyboard: wrangler's and Vite's hotkeys put the terminal in raw mode and
+// swallow Ctrl+C. Ctrl+C now reaches this script, which stops both.
+const quiet = /** @type {import('node:child_process').StdioOptions} */ (['ignore', 'inherit', 'inherit']);
 const procs = [
-  spawn(`pnpm exec wrangler dev --port 8787 --ip 127.0.0.1 --test-scheduled`, { cwd: join(ROOT, 'apps', 'api'), stdio: 'inherit', shell: true }),
-  spawn(`pnpm exec vite --port 5173 --strictPort`, { cwd: join(ROOT, 'apps', 'web'), stdio: 'inherit', shell: true }),
+  spawn(`pnpm exec wrangler dev --port 8787 --ip 127.0.0.1 --test-scheduled --show-interactive-dev-session=false`, { cwd: join(ROOT, 'apps', 'api'), stdio: quiet, shell: true }),
+  spawn(`pnpm exec vite --port 5173 --strictPort`, { cwd: join(ROOT, 'apps', 'web'), stdio: quiet, shell: true }),
 ];
 setTimeout(() => {
   console.log(`
@@ -147,13 +179,19 @@ setTimeout(() => {
   Ctrl+C stops both.
 `);
 }, 8000);
+let stopping = false;
 const stop = () => {
+  if (stopping) return;
+  stopping = true;
+  console.log('\nStopping…');
   for (const p of procs) {
     if (win && p.pid) spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' });
     else p.kill('SIGINT');
   }
+  freePorts([8787, 5173]);
   process.exit(0);
 };
 process.on('SIGINT', stop);
 process.on('SIGTERM', stop);
+process.on('SIGHUP', stop);
 for (const p of procs) p.on('exit', (code) => code && code !== 0 && console.error(`a process exited with code ${code}`));
