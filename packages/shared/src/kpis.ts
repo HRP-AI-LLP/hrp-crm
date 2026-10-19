@@ -2,7 +2,7 @@
  * The KPI library behind "Business health". Each KPI is computed by the API over the records the
  * viewer can see; definitions here give the UI its label, format, direction and explanation.
  */
-export type KpiFormat = 'number' | 'money' | 'percent' | 'minutes' | 'hours' | 'days' | 'money_per_day';
+export type KpiFormat = 'number' | 'money' | 'percent' | 'minutes' | 'hours' | 'days' | 'money_per_day' | 'ratio';
 export type KpiArea = 'acquisition' | 'sales' | 'operations' | 'finance' | 'service' | 'engagement';
 
 export interface KpiDef {
@@ -38,7 +38,7 @@ export const KPIS: KpiDef[] = [
   { key: 'avg_deal_size', label: 'Average deal size', area: 'sales', format: 'money', better: 'higher', how: 'Average amount of deals won in the period' },
   { key: 'sales_cycle_days', label: 'Sales cycle', area: 'sales', format: 'days', better: 'lower', how: 'Average days from opening to winning a deal' },
   { key: 'revenue_won', label: 'Revenue won', area: 'sales', format: 'money', better: 'higher', how: 'Amount of deals won in the period' },
-  { key: 'pipeline_coverage', label: 'Pipeline coverage', area: 'sales', format: 'number', better: 'higher', how: 'Open pipeline divided by the revenue target (3× is healthy)' },
+  { key: 'pipeline_coverage', label: 'Pipeline coverage', area: 'sales', format: 'ratio', better: 'higher', how: 'Open pipeline divided by the revenue target (3× is healthy)' },
   { key: 'sales_velocity', label: 'Sales velocity', area: 'sales', format: 'money_per_day', better: 'higher', how: 'Open deals × win rate × average deal size ÷ sales cycle' },
   { key: 'orders_booked', label: 'Orders booked', area: 'operations', format: 'money', better: 'higher', how: 'Value of orders confirmed in the period', app: 'orders' },
   { key: 'on_time_delivery', label: 'On-time delivery', area: 'operations', format: 'percent', better: 'higher', how: 'Deliveries made on or before the planned date', app: 'delivery' },

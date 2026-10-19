@@ -160,7 +160,8 @@ function Webhooks({ events }: { events: Json[] }) {
                   )}
                   {w.failure_count > 0 && <div className="bad-text">{w.failure_count} failures in a row</div>}
                 </td>
-                <td className="row" style={{ justifyContent: 'flex-end' }}>
+                <td>
+                  <div className="row" style={{ justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                   <button className="btn sm" onClick={() => setLog(w)}>
                     Deliveries
                   </button>
@@ -173,6 +174,7 @@ function Webhooks({ events }: { events: Json[] }) {
                   <button className="btn sm danger" onClick={() => window.confirm('Remove this webhook?') && act(() => del(`/api/v1/hooks/${w.id}`), 'Removed')}>
                     Remove
                   </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -245,7 +247,7 @@ function DeliveryLog({ hook, onClose }: { hook: Json; onClose: () => void }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <Modal wide title={`Deliveries · ${hook.name || hook.url}`} onClose={onClose}>
-      <div className="modal-body">
+      <div className="modal-body one">
         {!q.data ? (
           <Spinner />
         ) : !q.data.items.length ? (

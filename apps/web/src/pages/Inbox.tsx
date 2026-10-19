@@ -342,7 +342,7 @@ export function WhatsAppButton({ object, id, name }: { object: string; id: strin
 function WaModal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
     <Modal title={title} onClose={onClose}>
-      <div className="modal-body">{children}</div>
+      <div className="modal-body one">{children}</div>
     </Modal>
   );
 }

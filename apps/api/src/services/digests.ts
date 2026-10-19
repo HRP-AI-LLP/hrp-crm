@@ -45,6 +45,7 @@ function fmt(v: number | null, f: string): string {
   if (v === null || v === undefined) return '—';
   if (f === 'money') return inr(v);
   if (f === 'money_per_day') return `${inr(v)}/day`;
+  if (f === 'ratio') return `${v}×`;
   if (f === 'percent') return `${v}%`;
   if (f === 'minutes') return `${v} min`;
   if (f === 'hours') return `${v} h`;

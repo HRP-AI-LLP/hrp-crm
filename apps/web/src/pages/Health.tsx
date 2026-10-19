@@ -25,6 +25,8 @@ export function fmtKpi(v: number | null | undefined, f: KpiFormat): string {
   switch (f) {
     case 'money':
       return moneyShort(v);
+    case 'ratio':
+      return `${v}×`;
     case 'money_per_day':
       return `${moneyShort(v)}/day`;
     case 'percent':
@@ -124,7 +126,7 @@ export function HealthPage() {
               </div>
               <div className="health-bar" aria-hidden="true">
                 {judged.map((i) => (
-                  <span key={i.key} className={i.status} title={KPI_BY_KEY[i.key]?.label} />
+                  <span key={i.key} className={`st-${i.status}`} title={KPI_BY_KEY[i.key]?.label} />
                 ))}
               </div>
               <div className="small muted">
@@ -156,10 +158,10 @@ export function HealthPage() {
                 {list.map((i) => {
                   const d = KPI_BY_KEY[i.key]!;
                   return (
-                    <div key={i.key} className={`panel kpi-card ${i.status ?? ''}`}>
+                    <div key={i.key} className={`panel kpi-card ${i.status ? `st-${i.status}` : ''}`}>
                       <div className="spread">
                         <span className="l">{d.label}</span>
-                        {i.status && <span className={`dot-status ${i.status}`} title={i.status === 'good' ? 'On target' : i.status === 'warn' ? 'Close to target' : 'Off target'} />}
+                        {i.status && <span className={`dot-status st-${i.status}`} title={i.status === 'good' ? 'On target' : i.status === 'warn' ? 'Close to target' : 'Off target'} />}
                       </div>
                       <div className="v">{fmtKpi(i.value, d.format)}</div>
                       <div className="spread small">
@@ -208,7 +210,7 @@ function TargetsModal({ items, onClose }: { items: Json[]; onClose: () => void }
         </button>
       }
     >
-      <div className="modal-body">
+      <div className="modal-body one">
         <table className="data">
           <tbody>
             {items.map((i) => {
@@ -222,7 +224,7 @@ function TargetsModal({ items, onClose }: { items: Json[]; onClose: () => void }
                   <td className="row" style={{ whiteSpace: 'nowrap' }}>
                     {d.better === 'lower' ? 'at most' : 'at least'}
                     <input type="number" min={0} step="any" style={{ width: 110 }} value={t[i.key] ?? ''} onChange={(e) => setT({ ...t, [i.key]: e.target.value })} aria-label={`${d.label} target`} />
-                    <span className="muted small">{{ percent: '%', minutes: 'min', hours: 'h', days: 'days', money: '₹', money_per_day: '₹/day', number: '' }[d.format]}</span>
+                    <span className="muted small">{{ percent: '%', minutes: 'min', hours: 'h', days: 'days', money: '₹', money_per_day: '₹/day', ratio: '×', number: '' }[d.format]}</span>
                   </td>
                 </tr>
               );

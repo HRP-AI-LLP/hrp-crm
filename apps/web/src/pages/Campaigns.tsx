@@ -120,7 +120,8 @@ function CampaignEditor() {
   const obj = meta?.objects.find((o) => o.key === f.object) as ObjectMeta | undefined;
   const textFields = useMemo(() => (obj?.fields ?? []).filter((x) => ['text', 'email', 'phone', 'picklist', 'number', 'currency', 'date', 'url'].includes(x.type)), [obj]);
   const audience = { object: f.object, filters };
-  const purpose = f.channel === 'email' || tpl?.category === 'MARKETING' ? 'marketing' : 'transactional';
+  // until a utility template is chosen, assume marketing (consent needed)
+  const purpose = f.channel === 'email' || !tpl || tpl.category === 'MARKETING' ? 'marketing' : 'transactional';
   const body = () => ({
     name: f.name,
     channel: f.channel,
@@ -469,7 +470,7 @@ function CampaignDetail({ id }: { id: string }) {
             </button>
           }
         >
-          <div className="modal-body">
+          <div className="modal-body one">
             <label className="field">
               Send at
               <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />

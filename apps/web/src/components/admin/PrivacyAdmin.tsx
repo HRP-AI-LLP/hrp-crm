@@ -486,7 +486,7 @@ function Notices({ data }: { data: Json }) {
       )}
       {view && (
         <Modal wide title={`v${view.version} · ${view.title}`} onClose={() => setView(null)}>
-          <div className="modal-body">
+          <div className="modal-body one">
             <Markdown source={view.body} />
           </div>
         </Modal>
@@ -810,8 +810,7 @@ export function ConsentPanel({ object, id }: { object: 'lead' | 'contact'; id: s
                 {reason && <span className="chip bad" style={{ marginLeft: 6 }}>{reason === 'erasure' ? 'erased' : reason.replace('_', ' ')}</span>}
               </span>
               <label className="switch" title={reason === 'erasure' ? 'This address belongs to an erased person' : undefined}>
-                <input type="checkbox" checked={on} disabled={reason === 'erasure' || reason === 'manual'} onChange={(e) => set(k, e.target.checked)} />
-                <span>{on ? 'Yes' : 'No'}</span>
+                <input type="checkbox" aria-label={l} checked={on} disabled={reason === 'erasure' || reason === 'manual'} onChange={(e) => set(k, e.target.checked)} />
               </label>
             </div>
           );

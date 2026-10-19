@@ -174,7 +174,10 @@ const FNS: Record<string, Fn> = {
   },
   async sales_velocity(ctx, r) {
     const back = { from: new Date(r.to.getTime() - 90 * 86400_000), to: r.to };
-    const [wr, size, cycle] = await Promise.all([FNS.win_rate!(ctx, back), FNS.avg_deal_size!(ctx, back), FNS.sales_cycle_days!(ctx, back)]);
+    // one connection: queries run one after another
+    const wr = await FNS.win_rate!(ctx, back);
+    const size = await FNS.avg_deal_size!(ctx, back);
+    const cycle = await FNS.sales_cycle_days!(ctx, back);
     const open = await q1(ctx, 'deal', (vis) => `select count(*)::int as v from deals r where ${vis} and ${OPEN} = 'open'`);
     if (!open || wr === null || size === null || !cycle) return null;
     return Math.round((Number(open.v) * (wr / 100) * size) / cycle);

@@ -881,9 +881,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .health-summary b { font-size: 22px; }
 .health-bar { display: flex; gap: 3px; height: 8px; }
 .health-bar span { flex: 1; border-radius: 4px; background: #cbd5e1; }
-.health-bar .good { background: var(--good); }
-.health-bar .warn { background: #f59e0b; }
-.health-bar .bad { background: var(--bad); }
+.health-bar .st-good { background: var(--good); }
+.health-bar .st-warn { background: #f59e0b; }
+.health-bar .st-bad { background: var(--bad); }
 .value-strip { margin-bottom: 20px; }
 .value-strip h2, .kpi-area h2 { font-size: 15px; margin: 0 0 10px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }
 .value-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
@@ -893,16 +893,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .kpi-area { margin-bottom: 20px; }
 .kpi-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
 .kpi-card { padding: 12px 14px; display: grid; gap: 6px; border-top: 3px solid transparent; }
-.kpi-card.good { border-top-color: var(--good); }
-.kpi-card.warn { border-top-color: #f59e0b; }
-.kpi-card.bad { border-top-color: var(--bad); }
+.kpi-card.st-good { border-top-color: var(--good); }
+.kpi-card.st-warn { border-top-color: #f59e0b; }
+.kpi-card.st-bad { border-top-color: var(--bad); }
 .kpi-card .l { font-weight: 600; font-size: 13.5px; }
 .kpi-card .v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .kpi-card .how { font-size: 11.5px; line-height: 1.35; max-width: 70%; }
 .dot-status { width: 9px; height: 9px; border-radius: 50%; background: #cbd5e1; }
-.dot-status.good { background: var(--good); }
-.dot-status.warn { background: #f59e0b; }
-.dot-status.bad { background: var(--bad); }
+.dot-status.st-good { background: var(--good); }
+.dot-status.st-warn { background: #f59e0b; }
+.dot-status.st-bad { background: var(--bad); }
 .delta { font-size: 12px; font-weight: 600; color: var(--ink-3); white-space: nowrap; }
 .delta.good { color: var(--good); }
 .delta.bad { color: var(--bad); }
@@ -933,3 +933,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .event-cloud code { background: var(--brand-50); color: var(--brand-700); padding: 2px 8px; border-radius: 8px; font-size: 12px; }
 .payload { margin: 0; max-height: 280px; overflow: auto; font-size: 12px; background: #f8fafc; padding: 10px; border-radius: 8px; }
 @media (max-width: 860px) { .dev-grid { grid-template-columns: 1fr; } }
+.modal-body.stack { display: flex; flex-direction: column; }
+.modal-body.one { grid-template-columns: 1fr; }
+.dev-grid > * { min-width: 0; }
+.dev-grid p, .dev-grid li { overflow-wrap: anywhere; }
