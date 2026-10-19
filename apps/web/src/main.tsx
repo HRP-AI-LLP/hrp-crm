@@ -8,11 +8,13 @@ import { ToastProvider } from './components/ui';
 import { ApiError } from './lib/api';
 import { AuthProvider } from './lib/auth';
 import { registerServiceWorker } from './lib/pwa';
+import { initNativePush } from './lib/native';
 
 /** Registers the service worker once; notification taps route inside the SPA. */
 function Pwa() {
   const nav = useNavigate();
   useEffect(() => registerServiceWorker((to) => nav(to)), [nav]);
+  useEffect(() => initNativePush((to) => nav(to)), [nav]);
   return null;
 }
 import './styles.css';

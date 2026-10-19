@@ -10,6 +10,7 @@
  * fresh, unpushed ones for a workspace (after writes and on the 5-minute cron) and sends them.
  */
 import type { Env } from '../env';
+import { fcmEnabled, sendNative } from './fcm';
 import type { Db, Tx } from '../lib/db';
 
 const enc = new TextEncoder();
@@ -127,8 +128,11 @@ export async function dispatchPushTx(env: Env, tx: Tx, tenantId: string): Promis
       returning n.id, n.user_id, n.title, n.body, n.link, n.kind`,
     [tenantId],
   );
-  if (!due.length || !pushEnabled(env)) return 0;
+  if (!due.length || (!pushEnabled(env) && !fcmEnabled(env))) return 0;
   const users = [...new Set(due.map((d) => d.user_id))];
+  let sent = 0;
+  if (fcmEnabled(env)) sent += await dispatchNative(env, tx, tenantId, due, users);
+  if (!pushEnabled(env)) return sent;
   const subs = await tx.query<{ id: string; user_id: string; endpoint: string; p256dh: string; auth: string }>(
     // only people who are still active and signed in somewhere: disabling someone, "sign out
     // everywhere" and password resets stop their phones from receiving workspace data
@@ -138,7 +142,6 @@ export async function dispatchPushTx(env: Env, tx: Tx, tenantId: string): Promis
         and exists (select 1 from sessions x where x.tenant_id = s.tenant_id and x.user_id = s.user_id and x.revoked_at is null and x.expires_at > now())`,
     [tenantId, users],
   );
-  let sent = 0;
   for (const n of due) {
     for (const s of subs.filter((x) => x.user_id === n.user_id)) {
       const r = await sendPush(env, s, { title: n.title, body: n.body, link: n.link, tag: n.kind });
@@ -156,4 +159,28 @@ export async function dispatchPushTx(env: Env, tx: Tx, tenantId: string): Promis
 
 export async function dispatchPush(env: Env, db: Db, tenantId: string): Promise<number> {
   return db.tx({ tenantId }, (tx) => dispatchPushTx(env, tx, tenantId));
+}
+
+/** The same notifications to the Android app (FCM), with the same "still signed in" rule. */
+async function dispatchNative(env: Env, tx: Tx, tenantId: string, due: { user_id: string; title: string; body: string | null; link: string | null; kind: string }[], users: string[]) {
+  const tokens = await tx.query<{ id: string; user_id: string; token: string }>(
+    `select t.id, t.user_id, t.token from native_push_tokens t
+       join users u on u.tenant_id = t.tenant_id and u.id = t.user_id and u.status = 'active'
+      where t.tenant_id = $1 and t.user_id = any($2::uuid[])
+        and exists (select 1 from sessions x where x.tenant_id = t.tenant_id and x.user_id = t.user_id and x.revoked_at is null and x.expires_at > now())`,
+    [tenantId, users],
+  );
+  let sent = 0;
+  for (const n of due) {
+    for (const t of tokens.filter((x) => x.user_id === n.user_id)) {
+      const r = await sendNative(env, t.token, { title: n.title, body: n.body, link: n.link, tag: n.kind });
+      if (r === 'gone') await tx.query(`delete from native_push_tokens where tenant_id = $1 and id = $2`, [tenantId, t.id]);
+      else if (r === 'ok') {
+        sent++;
+        await tx.query(`update native_push_tokens set failures = 0, last_success_at = now() where tenant_id = $1 and id = $2`, [tenantId, t.id]);
+      } else await tx.query(`update native_push_tokens set failures = failures + 1 where tenant_id = $1 and id = $2`, [tenantId, t.id]);
+    }
+  }
+  await tx.query(`delete from native_push_tokens where tenant_id = $1 and failures >= 20`, [tenantId]);
+  return sent;
 }

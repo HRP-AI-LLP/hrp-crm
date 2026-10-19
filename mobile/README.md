@@ -64,3 +64,21 @@ npx cap open android       # build / run / sign from Android Studio
   - Web Push isn't delivered inside an iOS WKWebView. For iOS store builds, add `@capacitor/push-notifications` (APNs) when needed.
   - Until then, iPhone users who need reminders can use the home-screen web app.
 - To point a build at the dev environment, change `server.url` to `https://hrpsynapse-dev.hrpai.in/field`.
+
+### Android notifications (Firebase Cloud Messaging)
+
+Inside the Capacitor app, notifications come through Firebase rather than browser push. The web app detects that it is running inside the app and offers **Turn on notifications** in My account. Tapping a notification opens the page it is about.
+
+1. In the [Firebase console](https://console.firebase.google.com), create a project and add an **Android app** with package name `in.hrpai.synapse`.
+2. Download `google-services.json` into `mobile/capacitor/android/app/`. Keep it out of git.
+3. Run `npm install && npx cap sync android` (this installs `@capacitor/push-notifications`) and build.
+4. In Firebase → Project settings → **Service accounts**, generate a private key (JSON). Upload the whole file as the Worker secret `FCM_SERVICE_ACCOUNT` for each environment:
+   ```powershell
+   cd apps/api
+   Get-Content service-account.json -Raw | npx wrangler secret put FCM_SERVICE_ACCOUNT --env production
+   ```
+5. Android 13 and later ask the person for permission the first time they turn notifications on.
+
+Every in-app notification also goes to the person's phones while they stay signed in there. Signing out, being disabled or "sign out everywhere" stops it. Tokens of uninstalled apps are removed automatically.
+
+iOS store builds need an APNs key in Firebase and the Firebase iOS SDK. That is not set up yet; iPhone users can use the home-screen web app for reminders.

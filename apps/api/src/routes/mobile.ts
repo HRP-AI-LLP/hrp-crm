@@ -12,6 +12,7 @@ import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import { listRecords, type RecordCtx } from '../services/records';
 import { isPushEndpoint, pushEnabled, sendPush } from '../services/webpush';
+import { fcmEnabled, sendNative } from '../services/fcm';
 
 const iso = z.string().datetime({ offset: true });
 
@@ -48,7 +49,36 @@ export const mobileRoutes = new Hono<AppEnv>()
         [c.var.tenant.id, me],
       ),
     );
-    return c.json({ enabled: pushEnabled(c.env), publicKey: pushEnabled(c.env) ? c.env.VAPID_PUBLIC_KEY : null, devices });
+    const apps = await c.var.db.tx(scope(c, true), (tx) =>
+      tx.query(`select id, platform, label, created_at, last_success_at from native_push_tokens where tenant_id = $1 and user_id = $2 order by created_at desc`, [c.var.tenant.id, me]),
+    );
+    return c.json({ enabled: pushEnabled(c.env), publicKey: pushEnabled(c.env) ? c.env.VAPID_PUBLIC_KEY : null, devices, nativeEnabled: fcmEnabled(c.env), apps });
+  })
+  /** The Android app registers its Firebase token after the person allows notifications. */
+  .post('/push/native', async (c) => {
+    if (!fcmEnabled(c.env)) throw badRequest('App notifications are not configured on this server');
+    const b = z.object({ token: z.string().min(20).max(4096).regex(/^[A-Za-z0-9_:\-.]+$/), platform: z.enum(['android', 'ios']), label: z.string().trim().max(120).optional() }).parse(await c.req.json());
+    const row = await c.var.db.tx(scope(c), async (tx) => {
+      const n = await tx.one<{ n: number }>(`select count(*)::int as n from native_push_tokens where tenant_id = $1 and user_id = $2 and token <> $3`, [c.var.tenant.id, c.var.principal.user.id, b.token]);
+      if ((n?.n ?? 0) >= 10) throw badRequest('Too many phones registered — remove one first');
+      // a phone handed to someone else re-registers under the new person
+      return tx.one<{ id: string }>(
+        `insert into native_push_tokens (tenant_id, user_id, platform, token, label) values ($1,$2,$3,$4,$5)
+         on conflict (tenant_id, token) do update set user_id = excluded.user_id, platform = excluded.platform, label = coalesce(excluded.label, native_push_tokens.label), failures = 0
+         returning id`,
+        [c.var.tenant.id, c.var.principal.user.id, b.platform, b.token, b.label ?? null],
+      );
+    });
+    return c.json(row, 201);
+  })
+  .delete('/push/native/:id', async (c) => {
+    await c.var.db.tx(scope(c), (tx) => tx.query(`delete from native_push_tokens where tenant_id = $1 and user_id = $2 and id = $3::uuid`, [c.var.tenant.id, c.var.principal.user.id, z.string().uuid().parse(c.req.param('id'))]));
+    return c.body(null, 204);
+  })
+  .post('/push/native/unregister', async (c) => {
+    const { token } = z.object({ token: z.string().max(4096) }).parse(await c.req.json());
+    await c.var.db.tx(scope(c), (tx) => tx.query(`delete from native_push_tokens where tenant_id = $1 and user_id = $2 and token = $3`, [c.var.tenant.id, c.var.principal.user.id, token]));
+    return c.body(null, 204);
   })
   .post('/push/subscriptions', async (c) => {
     if (!pushEnabled(c.env)) throw badRequest('Push notifications are not configured on this server');
@@ -84,13 +114,16 @@ export const mobileRoutes = new Hono<AppEnv>()
     return c.body(null, 204);
   })
   .post('/push/test', async (c) => {
-    if (!pushEnabled(c.env)) throw badRequest('Push notifications are not configured on this server');
-    const subs = await c.var.db.tx(scope(c, true), (tx) =>
-      tx.query<{ id: string; endpoint: string; p256dh: string; auth: string }>(`select id, endpoint, p256dh, auth from push_subscriptions where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, c.var.principal.user.id]),
-    );
+    if (!pushEnabled(c.env) && !fcmEnabled(c.env)) throw badRequest('Push notifications are not configured on this server');
+    const { subs, apps } = await c.var.db.tx(scope(c, true), async (tx) => ({
+      subs: pushEnabled(c.env) ? await tx.query<{ id: string; endpoint: string; p256dh: string; auth: string }>(`select id, endpoint, p256dh, auth from push_subscriptions where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, c.var.principal.user.id]) : [],
+      apps: fcmEnabled(c.env) ? await tx.query<{ token: string }>(`select token from native_push_tokens where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, c.var.principal.user.id]) : [],
+    }));
     let sent = 0;
-    for (const s of subs) if ((await sendPush(c.env, s, { title: 'HRP Synapse', body: 'Notifications are working on this device.', link: '/field', tag: 'test' })) === 'ok') sent++;
-    return c.json({ devices: subs.length, sent });
+    const msg = { title: 'HRP Synapse', body: 'Notifications are working on this device.', link: '/field', tag: 'test' };
+    for (const s of subs) if ((await sendPush(c.env, s, msg)) === 'ok') sent++;
+    for (const a of apps) if ((await sendNative(c.env, a.token, msg)) === 'ok') sent++;
+    return c.json({ devices: subs.length + apps.length, sent });
   })
 
   // ============================================================================ my day

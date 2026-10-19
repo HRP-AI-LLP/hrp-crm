@@ -3,6 +3,7 @@ import { post } from '../lib/api';
 import { relative } from '../lib/format';
 import { enablePush, forgetDevice, isStandalone, pushConfig, pushSupported, removeDevice, useCurrentEndpoint, useInstallPrompt } from '../lib/pwa';
 import { useToast } from './ui';
+import { enableNativePush, forgetNativeToken, hasNativeToken, nativePushAvailable } from '../lib/native';
 
 /** "Phone & notifications" panel on My account: install the app, enrol devices for push. */
 export function PushDevices() {
@@ -38,7 +39,9 @@ export function PushDevices() {
             )}
           </p>
         )}
-        {!cfg.data?.enabled ? (
+        {nativePushAvailable() ? (
+          <NativeToggle enabled={!!(cfg.data as { nativeEnabled?: boolean } | undefined)?.nativeEnabled} onChange={reload} />
+        ) : !cfg.data?.enabled ? (
           <p className="muted small">Push notifications are not configured for this server yet.</p>
         ) : !pushSupported() ? (
           <p className="muted small">This browser cannot receive push notifications.</p>
@@ -124,5 +127,43 @@ export function PushDevices() {
         )}
       </div>
     </section>
+  );
+}
+
+/** Inside the Android app: real notifications through Firebase. */
+function NativeToggle({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
+  const toast = useToast();
+  if (!enabled) return <p className="muted small">App notifications are not configured for this server yet.</p>;
+  return hasNativeToken() ? (
+    <div className="row">
+      <span className="chip good">On for this phone</span>
+      <button
+        className="btn sm"
+        onClick={async () => {
+          const t = await post<{ sent: number }>('/api/v1/push/test').catch((e) => (toast((e as Error).message, true), null));
+          if (t) toast(t.sent ? 'Test notification sent' : 'The phone did not accept it', !t.sent);
+        }}
+      >
+        Send a test
+      </button>
+      <button className="btn sm ghost" onClick={async () => (await forgetNativeToken(), onChange())}>
+        Turn off
+      </button>
+    </div>
+  ) : (
+    <button
+      className="btn primary"
+      onClick={async () => {
+        try {
+          await enableNativePush();
+          toast('Notifications are on for this phone');
+          onChange();
+        } catch (e) {
+          toast((e as Error).message, true);
+        }
+      }}
+    >
+      Turn on notifications
+    </button>
   );
 }

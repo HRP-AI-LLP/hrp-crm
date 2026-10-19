@@ -48,6 +48,8 @@ export interface Env {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_KEY?: string;
   VAPID_SUBJECT?: string;
+  /** native push for the Android app: Firebase service-account JSON key (secret) */
+  FCM_SERVICE_ACCOUNT?: string;
   /** Gmail + Google Calendar (OAuth app registered by HRP AI) */
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
