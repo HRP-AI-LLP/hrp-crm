@@ -41,16 +41,28 @@ Built to cover everything in the ELVM Homes proposal on top of the CRM.
 - **Lead ads:** Facebook and Instagram leads arrive through Facebook Login and the signed leadgen webhook; Google Ads lead forms arrive through a keyed webhook. Repeat enquiries attach to the existing record.
 - **Exotel:** click-to-call that rings the agent first, recordings, inbound call logging, leads for unknown callers and missed-call tasks, with toll-fraud guards.
 
+## Fifth round: competing on fit, not feature count (Oct 2026)
+
+- **Privacy & DPDP Act:** consent ledger with evidence, do-not-contact list, versioned notices, a public request portal with email verification, access exports, erasure (tax records kept), retention rules, breach register with the 72-hour clock, hash-chained audit export.
+- **WhatsApp Business:** template sync and submission (marketing templates get a Stop button), shared inbox with assignment, the 24-hour window and read receipts, STOP opt-outs, quotes / invoices / orders sent as links, consent-checked WhatsApp and email campaigns with a delivery funnel and business won in 30 days.
+- **Industry solutions:** interior fit-out, modular kitchens, rooftop solar, fabrication, signage: fields, pipelines, apps, payment plans, checklists and KPI targets in one click.
+- **Business health:** 24 KPIs with targets, previous period and six-month trend; measured value delivered; revenue projection on the forecast.
+- **Reporting:** scheduled email digests that run as each recipient; expiring dashboard share links.
+- **Tally:** two-way sync through a zero-dependency Node connector on the accountant's PC.
+- **Developer platform:** per-workspace OpenAPI 3.1, REST hooks, webhook delivery log and redelivery, timestamped signatures, per-key rate limits.
+- **Android notifications** through Firebase Cloud Messaging.
+
 ## Next (suggested order)
 
-1. **Platform app reviews:** Google OAuth verification with the CASA assessment for Gmail, Meta App Review with business verification, and Microsoft publisher verification.
-2. **More telephony and payment providers:** Knowlarity, MyOperator and Ozonetel behind the same interface; Cashfree and PhonePe as alternatives to Razorpay.
-3. **Argon2id hashing service on Oracle ARM.** This removes the PBKDF2 CPU risk.
-4. **IMAP mailboxes** (Zoho Mail, GoDaddy, cPanel hosts) on the Oracle worker, alongside Gmail and Outlook.
-5. **E-invoice IRP / e-way bill API** through a GSP once a customer needs direct filing (today: JSON export + IRN capture).
-6. **Native push on iOS store builds** (`@capacitor/push-notifications`, APNs) and background location for field teams.
-7. **Restore from backup** (today: download and inspect; restore is done by HRP staff).
-8. **Scheduled report digests** by email, and dashboard sharing by link.
-9. **Platform admin console** for HRP staff, using a separate audited role (no RLS bypass inside the app).
-10. **Hash-chained audit export** for compliance customers.
+1. **Pilots with 2–3 made-to-order businesses** on dev: what they ask for decides the next round.
+2. **Platform app reviews:** Google OAuth verification with the CASA assessment for Gmail, Meta App Review with business verification (also needed for WhatsApp templates at scale), and Microsoft publisher verification.
+3. **Test the Tally connector against a live Tally Prime** and adjust tags if a Tally release differs; add stock-item sync for inventory-tracked invoices.
+4. **More telephony and payment providers:** Knowlarity, MyOperator and Ozonetel behind the same interface; Cashfree and PhonePe as alternatives to Razorpay.
+5. **Argon2id hashing service on Oracle ARM.** This removes the PBKDF2 CPU risk.
+6. **IMAP mailboxes** (Zoho Mail, GoDaddy, cPanel hosts) on the Oracle worker.
+7. **E-invoice IRP / e-way bill API** through a GSP once a customer needs direct filing.
+8. **iOS store build** with APNs through Firebase, and background location for field teams.
+9. **Restore from backup** (today: download and inspect; restore is done by HRP staff).
+10. **Platform admin console** for HRP staff, using a separate audited role.
 11. **Per-region data residency** (one Neon project per region, routed through the `tenants` registry).
+12. **Certifications** (ISO 27001 / SOC 2) once paying customers ask; the audit chain, DPDP tooling and access controls are the groundwork.

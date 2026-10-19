@@ -1,6 +1,6 @@
 # Integrations
 
-Synapse connects to five outside services:
+Synapse connects to these outside services:
 
 | Integration | What it does | Who sets it up |
 |---|---|---|
@@ -10,6 +10,10 @@ Synapse connects to five outside services:
 | **Facebook & Instagram lead ads** | Lead form submissions become leads within seconds | **HRP AI once:** Meta app and app review. **Then each workspace admin** clicks *Connect with Facebook*. |
 | **Google Ads lead forms** | Lead form assets post leads by webhook | Each workspace (*Create webhook*), then paste the URL and key into Google Ads |
 | **Exotel** | Click-to-call, call recordings, inbound call logging, missed-call follow-ups | Each workspace, with its own Exotel account |
+| **WhatsApp Business (Cloud API)** | Shared inbox, approved templates, campaigns, documents, read receipts, STOP opt-outs | Each workspace, with its own WhatsApp Business number (*Settings → Channels*) |
+| **Tally Prime / ERP 9** | Ledgers, invoices, credit notes and receipts into Tally; receipts from Tally back | Each workspace's accountant runs the connector (*Billing & GST → Tally*) |
+| **Zapier / Make / n8n / your code** | REST API, OpenAPI file, webhooks | Each workspace (*Developers*, *Settings → API keys*) |
+| **Firebase Cloud Messaging** | Notifications in the Android app | **HRP AI once** (see `mobile/README.md`) |
 
 All provider credentials are stored encrypted (AES-GCM, with the workspace id as AAD) and the API never returns them. Every inbound webhook is either signed or reached through an unguessable per-workspace key. Each payment, lead, call and email is processed only once, however often the provider retries it.
 
@@ -134,6 +138,40 @@ In *My account → Email, calendar & calls*, click **Connect Gmail** or **Connec
 - **Disconnecting:** disconnecting, or an admin disabling the user, revokes access. If Google or Microsoft revoke access, the card shows *Reconnect*.
 
 ---
+
+### WhatsApp Business
+
+1. In Meta Business Suite → WhatsApp Manager, add the business number. Note the **Phone number ID** and the **WhatsApp Business Account ID**. Create a **system user** token with `whatsapp_business_messaging` and `whatsapp_business_management`.
+2. In *Settings → Channels → Connect channel*, choose WhatsApp and enter the phone number ID, the business account ID, the token, the app secret and a verify token of your choice.
+3. In the Meta app's WhatsApp → Configuration, set the callback URL to the channel's *Inbound URL* with the same verify token, and subscribe to **messages**. Message status updates (delivered, read, failed) arrive on the same subscription.
+4. *Templates → Sync from WhatsApp* brings in approved templates; *New template* submits one for approval. Marketing templates always carry a **Stop promotions** button, and tapping it (or replying STOP) opts the number out.
+5. **Rules Synapse enforces:**
+   - free text only within 24 hours of the customer's last message, templates otherwise;
+   - marketing templates and campaigns only to people with recorded consent who have not opted out;
+   - quotes go as their public link; invoices and orders as a signed link valid for 30 days, with *Pay online* when a Razorpay link is open.
+6. **Campaigns** (*Campaigns*, needs the campaigns permission): pick a template, map its variables to fields, choose the audience with filters, *Check who will receive it*, then send or schedule. Up to 5,000 people per campaign, sent in batches every few minutes. Results show delivered, read, replied, why people were skipped, and deals won within 30 days.
+
+### Tally
+
+1. On the PC that runs Tally, install Node.js 18 or newer. In Tally: F1 Help → Settings → Connectivity → TallyPrime acts as **Server** (or Both) on port **9000**, and keep the company open.
+2. In *Billing & GST → Tally*, click **Connect Tally**. Copy the token (shown once) and download the connector.
+3. Run it: `node synapse-tally.mjs --url <connector URL> --token <token>`. Add `--once` for a single run or `--dry-run` to see what it would do. To run it at log-on, create a Windows Task Scheduler task with the same command.
+4. **What happens:**
+   - customer ledgers go first (under *Sundry Debtors*, with GSTIN, state and address), then sales invoices and credit notes with bill references, then receipts allocated to invoices;
+   - ledger names for sales, GST, round-off and bank come from *Billing & GST → Settings*; create those ledgers in Tally first;
+   - anything Tally rejects shows under *Tally* with Tally's message; fix it in Tally and click *Retry failed*;
+   - an invoice cancelled in Synapse after it reached Tally is flagged *Check in Tally*, so the accountant cancels it there;
+   - receipts entered in Tally are recorded here and settle the invoices named in their bill references; parties that match no customer are listed.
+5. Only documents dated on or after *Sync documents dated from* (default: the start of the financial year) are synced.
+
+> The connector has been tested against sample Tally XML, not yet against a live Tally Prime install. Try it on a copy of the company first.
+
+### Developers (Zapier, Make, n8n, your code)
+
+- **Developers** in the menu shows the base URL, examples, the workspace's OpenAPI file (with its own custom fields) and the event list.
+- **Webhooks** can be added there, or by integrations through `POST /api/v1/hooks` (REST hooks). Every delivery is logged for 30 days, failed ones can be sent again, and a test ping is one click.
+- Verify `X-Synapse-Signature-V2: t=<unix>,v1=<hex>`, where `v1 = HMAC-SHA256(secret, "<t>.<raw body>")`, and reject deliveries older than five minutes.
+- Each API key has a per-minute limit (60–3,000; default 600).
 
 ## 3. Free-tier note
 

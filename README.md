@@ -100,9 +100,16 @@ Workspace admins can add their own API keys in **Settings → AI models**. Suppo
 | Quotations | Revisions with history, discount approval rules, PDF/print, customer accept links, convert to order |
 | Apps (switch on per workspace) | **Orders** (milestones, advances, reservations), **Inventory** (SKUs, categories, variants, warehouses, in/out/adjust/transfer, reorder alerts, opening stock import), **Purchasing** (vendors, POs, goods receipts), **Delivery & installation** (dispatch, crews, checklists, customer sign-off with signature), **Service desk** (tickets, SLA policies, CSAT, customer status page), **GST billing** (tax invoices, credit notes, receipts, receivables, e-invoice JSON, GSTR-1 CSV, Tally XML) |
 | Approvals | One inbox for quotes, orders, purchase orders and invoices; criteria-based rules; approver by user, role or manager |
-| Phone | Installable app with **My day** (GPS check-in, walk-in leads, tasks, follow-ups, jobs), Web Push reminders, offline outbox; Android TWA and Capacitor shells |
+| Phone | Installable app with **My day** (GPS check-in, walk-in leads, tasks, follow-ups, jobs), Web Push reminders, offline outbox; Android TWA and Capacitor shells with native Android notifications (FCM) |
 | Dashboards | Role views for owner, sales head, operations, inventory and service — always scoped to what the viewer may see; custom report & dashboard builder |
 | Integrations | Gmail / Outlook mail + calendar sync and send-as-yourself, Razorpay payment links and a UPI QR on invoices, Facebook / Instagram and Google Ads lead forms, Exotel click-to-call with recordings and missed-call follow-ups — see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) |
+| Industry solutions | One-click setups for **interior fit-out, modular kitchens, rooftop solar, fabrication and signage**: lead fields, pipeline, apps, payment plan, installation checklist and KPI targets |
+| Business health | 24 KPIs (response time, conversion, win rate, enquiry-to-quote, sales cycle, velocity, on-time delivery, first-time-right installs, DSO, collection efficiency, SLA, CSAT…) against targets with trends; measured value delivered; revenue projection |
+| WhatsApp & campaigns | Approved templates, shared inbox with the 24-hour window and read receipts, STOP opt-outs, quotes/invoices/orders sent as links; consent-checked WhatsApp and email campaigns with funnel and attributed revenue |
+| Privacy (DPDP Act) | Consent ledger and do-not-contact list, versioned privacy notices, public request portal with email verification, access exports and erasure, retention rules, breach register, tamper-evident audit export |
+| Tally | Two-way sync through a connector on the accountant's PC: ledgers, invoices, credit notes and receipts with bill references; receipts entered in Tally come back |
+| Developers | Per-workspace OpenAPI, REST hooks for Zapier/Make/n8n, webhook delivery log and redelivery, signed timestamps, per-key rate limits |
+| Reporting | Scheduled email digests (each recipient sees their own numbers), expiring dashboard share links |
 | Files | Attachments on any record in Cloudflare R2 with type sniffing, quotas and signed expiring links |
 | Security | RLS isolation, RBAC/ABAC/FLS, teams & sharing rules, TOTP two-factor (optionally required), IP / country restrictions, invitations, session control, scoped API keys, audit log, owner-only workspace backups |
 
@@ -126,7 +133,7 @@ The sender is `MAIL_FROM` in `wrangler.jsonc` (default `HRP Synapse <no-reply@hr
 
 ### API for integrations
 
-Settings → API keys creates keys such as `syn_acme_…`. Call `https://hrpsynapse.hrpai.in/api/v1/records/lead` with `Authorization: Bearer <key>`. The workspace is read from the key, and the key acts as the person it was created for.
+Settings → API keys creates keys such as `syn_acme_…`. Call `https://hrpsynapse.hrpai.in/api/v1/records/lead` with `Authorization: Bearer <key>`. The workspace is read from the key, and the key acts as the person it was created for. The **Developers** page has the workspace's OpenAPI file, the event list and webhooks.
 
 ## Branching and CI/CD
 

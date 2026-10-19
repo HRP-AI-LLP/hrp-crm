@@ -29,7 +29,7 @@ Because several workspaces can share one app host, refresh cookies are named per
 - **RBAC:** each role grants per-object `read`, `update` and `delete` scope (`none`, `own`, `team` = me and my direct reports, or `all`) plus `create`. When a user has several roles, the most permissive grant wins.
 - **ABAC:** role conditions such as `{"field":"city","op":"eq","value":"$user.region"}` are compiled into SQL. A role with no conditions is unrestricted. Condition groups from different roles are OR-ed.
 - **Field-level security:** a field can be `hidden` or `read` per role. Hidden fields are removed from responses and from metadata, and filtering, sorting or searching on them is refused, which prevents inferring their values. Writes to read-only fields are rejected.
-- **Admin areas:** `users`, `roles`, `metadata`, `modules`, `workflows`, `domains`, `audit`, `channels` and `ai`. The workspace owner always keeps full access, so a tenant can't lock itself out.
+- **Admin areas:** `users`, `roles`, `metadata`, `modules`, `workflows`, `domains`, `audit`, `channels`, `ai`, `operations`, `billing`, `privacy`, `developers` and `campaigns`. The workspace owner always keeps full access, so a tenant can't lock itself out.
 
 ## Data protection (DPDP / GDPR posture)
 
@@ -50,7 +50,6 @@ Because several workspaces can share one app host, refresh cookies are named per
 
 - No SSO yet (SAML/OIDC). TOTP two-factor is built.
 - PBKDF2 is capped at 100k iterations on Workers, below the current OWASP recommendation for SHA-256. The plan is to move hashing to an Argon2id service on Oracle ARM. Hashes are versioned, so they migrate on next login.
-- The audit log has no hash chain or tamper-evident export yet.
 - Data residency: everything currently runs in Neon's Singapore region. Per-tenant region pinning needs a separate Neon project per region.
 
 ## Second-round additions
@@ -111,3 +110,18 @@ Because several workspaces can share one app host, refresh cookies are named per
   - Only the record's own number can be dialled, only Indian numbers unless an admin allows international calls, and each person has an hourly limit.
   - Recording links are kept only for Exotel storage hosts, matching the CSP `media-src`.
 - **Calendar:** only a person's own events are mirrored to their calendar; reassigning an event removes the previous owner's copy.
+
+## Fifth round (Oct 2026): privacy, WhatsApp, Tally, developer platform
+
+- **Consent and opt-outs.** Every consent change is an append-only `consent_events` row (the app role has no UPDATE or DELETE) with source, notice version and evidence. Withdrawals put the address on `suppressions`. Every outbound WhatsApp and email path (1:1 sends, campaigns, automations) goes through `canContact()`: marketing needs consent and no opt-out; service messages are blocked only for erased or fully blocked addresses. Erased people stay blocked through a hashed address, so the address itself is not kept.
+- **Data-principal requests.** Portal requests are confirmed through a single-use email link (only its hash is stored, 48-hour expiry) or verified by staff with a recorded note before anyone acts. The portal caps submissions per workspace per day and supports Turnstile. Status links are random keys.
+- **Erasure** anonymises the person's record, messages, timeline and files (R2 objects are deleted after the transaction commits). Tax invoices are kept, as GST law requires. The audit trail cannot be rewritten, so entries about erased records are shown and exported masked.
+- **Audit export** is hash-chained (each NDJSON line carries the SHA-256 of the previous hash plus its content); the final hash is returned so a later copy can be checked.
+- **Signed links.** Unsubscribe links and customer document links (invoice / order, 30 days) are HMAC-signed with a purpose-specific key derived from `JWT_SECRET`; dashboard share links are random tokens with an expiry, run as the person who shared them and can be revoked.
+- **Shared inbox.** People see conversations assigned to them or about records they can see; inbox admins (`channels`) see all. Media is proxied from Meta only for allowed hosts and served with a sandboxing CSP.
+- **Campaigns** resolve their audience with the creator's permissions (record visibility and field-level security), at most 5,000 people, and re-check consent before each message. A broken token or paused number stops the campaign.
+- **Digests** run as each recipient, and only active workspace users can receive them.
+- **Tally connector** authenticates with a random token shown once; only its SHA-256 is stored. Vouchers carry a `REMOTEID`, so receipts Synapse sent are not imported back, and every Tally receipt is applied once (by GUID).
+- **Webhooks** carry `X-Synapse-Signature-V2: t=…,v1=HMAC(secret, "t.body")` (the v1 header remains). Targets must be public HTTPS hosts; redirects are not followed and deliveries time out after 10 seconds. Every attempt is logged for 30 days.
+- **API keys** have a per-minute limit (default 600) with `X-RateLimit-*` headers and 429 + `Retry-After`. An optional Workers rate-limiting binding (`API_RATE_LIMITER`) adds a ceiling shared across isolates.
+- **Native push** uses a Firebase service account (secret `FCM_SERVICE_ACCOUNT`); tokens of signed-out, disabled or uninstalled devices are dropped.

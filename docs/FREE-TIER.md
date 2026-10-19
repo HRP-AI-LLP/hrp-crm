@@ -14,6 +14,9 @@ These limits were checked in October 2026. Providers change them, so re-check th
 | R2 | **10 GB storage**, 1M writes and 10M reads per month, no egress fees | Attachments, signatures and backups. Per-workspace quota (`settings.storageQuotaMb`, default 1 GB); backups keep the newest 7 and are written in small parts so each step fits the CPU limit. |
 | Mailbox sync | Neon compute | Background sync every ~15 min only 07:00–21:00 IST (≈35 CU-h/month while any mailbox is connected); on-demand sync otherwise. `MAIL_SYNC_ALWAYS=true` for 24h (≈60 CU-h). |
 | Web Push | Free (browser push services) | Sent after writes and by the 5-minute cron; at most 50 notifications per workspace per run. |
+| WhatsApp campaigns | Workers CPU / Neon compute | Sent in batches of up to 80 per campaign every 5 minutes (first batch at once). A KV flag keeps the cron from waking the database when no campaign is running. WhatsApp's own pricing applies per conversation. |
+| Email digests | Resend free tier (3,000/month, 100/day) | Each recipient is one email. A KV timestamp keeps the database asleep until the next digest is due. |
+| Webhook log | Neon storage | Deliveries are kept 30 days. |
 | Cloudflare for SaaS | **100 custom hostnames** included, then $0.10 each | Self-serve custom domains for up to 100 tenants at no cost. |
 
 ## When to start paying
