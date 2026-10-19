@@ -1,4 +1,5 @@
 import type { FieldDef, RecordDto } from '@synapse/shared';
+import { ConsentPanel } from '../components/admin/PrivacyAdmin';
 import { allowedChoices, fieldVisible, objectPerm, resolveLayout } from '@synapse/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -267,6 +268,7 @@ export function RecordDetailPage() {
               ))}
             </DetailSection>
           ))}
+          {(object === 'lead' || object === 'contact') && <ConsentPanel object={object} id={id} />}
         </div>
 
         <section className="panel">

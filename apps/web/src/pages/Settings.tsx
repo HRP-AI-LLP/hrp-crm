@@ -1,5 +1,6 @@
 import type { FieldDef } from '@synapse/shared';
 import { IntegrationsTab } from '../components/admin/IntegrationsAdmin';
+import { PrivacyTab } from '../components/admin/PrivacyAdmin';
 import { useOAuthReturn } from '../lib/oauthReturn';
 import { AutomationsTab } from '../components/builders/AutomationBuilder';
 import { FieldEditor, TYPE_LABELS } from '../components/builders/FieldEditor';
@@ -14,7 +15,7 @@ import { ApiKeysTab, SecurityPolicyTab, SharingRulesTab, TeamsTab, UsageTab } fr
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
-import { del, get, patch, post, put } from '../lib/api';
+import { del, download, get, patch, post, put } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { dateTime, relative } from '../lib/format';
 import { useMeta } from '../lib/hooks';
@@ -48,6 +49,7 @@ const GROUPS: [string, [string, string, string][]][] = [
     ['domains', 'Domains', 'domains'],
   ]],
   ['Monitor', [
+    ['privacy', 'Privacy & DPDP', 'privacy'],
     ['usage', 'Usage', 'users'],
     ['audit', 'Audit log', 'audit'],
   ]],
@@ -126,6 +128,7 @@ export function SettingsPage() {
           {tab === 'channels' && <ChannelsTab />}
           {tab === 'domains' && <DomainsTab />}
           {tab === 'audit' && <AuditTab />}
+          {tab === 'privacy' && <PrivacyTab />}
         </div>
       </section>
       </div>
@@ -756,10 +759,41 @@ function DomainsTab() {
   );
 }
 
+function AuditExport() {
+  const toast = useToast();
+  const today = new Date().toISOString().slice(0, 10);
+  const [from, setFrom] = useState(new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10));
+  const [to, setTo] = useState(today);
+  const [head, setHead] = useState<string | null>(null);
+  return (
+    <div className="row audit-export" style={{ flexWrap: 'wrap' }}>
+      <span className="small muted">Tamper-evident export (each line carries the hash of the one before):</span>
+      <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} aria-label="From" style={{ width: 'auto' }} />
+      <input type="date" value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} aria-label="To" style={{ width: 'auto' }} />
+      <button
+        className="btn sm"
+        onClick={async () => {
+          try {
+            const h = await download(`/api/admin/audit/export?from=${from}&to=${to}`, `audit-${from}-to-${to}.ndjson`);
+            setHead(h.get('x-audit-head'));
+          } catch (e) {
+            toast((e as Error).message, true);
+          }
+        }}
+      >
+        Download
+      </button>
+      {head && <span className="small mono" title="Keep this fingerprint: recomputing the chain must end with it">Final hash {head.slice(0, 16)}…</span>}
+    </div>
+  );
+}
+
 function AuditTab() {
   const { data, isLoading } = useQuery({ queryKey: ['admin-audit'], queryFn: () => get<{ items: Json[] }>('/api/admin/audit?limit=200') });
   if (isLoading) return <Spinner />;
   return (
+    <div className="stack">
+    <AuditExport />
     <div className="table-wrap" style={{ maxHeight: '65vh' }}>
       <table className="data">
         <thead>
@@ -785,6 +819,7 @@ function AuditTab() {
           ))}
         </tbody>
       </table>
+    </div>
     </div>
   );
 }

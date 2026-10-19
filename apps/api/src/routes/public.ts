@@ -15,6 +15,7 @@ import { createRecord, type RecordCtx } from '../services/records';
 import { attachWorkerDomain, signInUrl, vanityEnabled, vanityHost } from '../services/domains';
 import { isAppHost, loadMeta, resolveTenant } from '../services/tenancy';
 import { noteReminder } from '../services/reminders';
+import { recordConsent } from '../services/privacy';
 import { systemPrincipal } from '../services/worker';
 
 const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'mail', 'smtp', 'status', 'docs', 'help', 'support', 'billing', 'static', 'assets', 'cdn', 'auth', 'login', 'signup', 'dev', 'staging', 'prod', 'hrp', 'synapse']);
@@ -27,7 +28,7 @@ async function systemCtx(c: { env: AppEnv['Bindings'] }, tx: RecordCtx['tx'], te
   return { tx, meta, tenantId, principal: systemPrincipal(owner?.id ?? null, meta.objects.map((o) => o.key)) };
 }
 
-async function verifyTurnstile(secret: string | undefined, token: string | undefined, ip: string | undefined): Promise<boolean> {
+export async function verifyTurnstile(secret: string | undefined, token: string | undefined, ip: string | undefined): Promise<boolean> {
   if (!secret) return true; // not configured (dev)
   if (!token) return false;
   const form = new FormData();
@@ -138,8 +139,14 @@ export const publicRoutes = new Hono<AppEnv>()
       input.owner_id = form.settings.ownerId ?? null;
       const principal = systemPrincipal(ownerId, meta.objects.map((o) => o.key));
       const { record, events } = await createRecord({ tx, meta, principal, tenantId: route.tenant_id }, form.object_key, input, { bypassPermissions: true, autoAssign: !form.settings.ownerId });
-      if (form.object_key === 'lead' && body.consent === true) {
-        await tx.query(`update leads set consent = $3 where tenant_id = $1 and id = $2`, [route.tenant_id, record.id, JSON.stringify({ marketing: { granted: true, at: new Date().toISOString(), source: 'web_form', ip: c.req.header('cf-connecting-ip') ?? null } })]);
+      if ((form.object_key === 'lead' || form.object_key === 'contact') && body.consent === true) {
+        // consent evidence: what was shown, when, from where (DPDP: free, specific, informed)
+        await recordConsent(tx, route.tenant_id, { object: form.object_key, id: record.id }, {
+          purpose: 'marketing',
+          granted: true,
+          source: 'web_form',
+          evidence: { form: route.target_id, text: (form.settings as { consentText?: string }).consentText ?? null, ip: c.req.header('cf-connecting-ip') ?? null, userAgent: c.req.header('user-agent')?.slice(0, 200) ?? null },
+        });
       }
       return { events, message: form.settings.successMessage ?? 'Thank you! We will be in touch shortly.', due: (record.first_response_due as string | undefined) ?? null, statusToken: form.object_key === 'ticket' ? ((await tx.one<{ t: string }>(`select share_token as t from tickets where tenant_id = $1 and id = $2`, [route.tenant_id, record.id]))?.t ?? null) : null };
     });
@@ -280,7 +287,7 @@ export const publicRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   });
 
-export async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form' | 'channel' | 'quote' | 'shipment' | 'installation' | 'ticket' | 'integration' | 'meta_page', key: string) {
+export async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form' | 'channel' | 'quote' | 'shipment' | 'installation' | 'ticket' | 'integration' | 'meta_page' | 'privacy' | 'privacy_request' | 'campaign' | 'dashboard', key: string) {
   if (!/^[A-Za-z0-9_-]{16,80}$/.test(key)) throw notFound();
   const rows = await c.var.db.platform<{ tenant_id: string; target_id: string; tenant_status: string }>(`select * from app.resolve_public_route($1, $2)`, [kind, key]);
   const r = rows[0];

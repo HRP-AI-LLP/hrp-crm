@@ -24,3 +24,12 @@ export async function actAs(env: Env, tx: Tx, tenantId: string, userId: string, 
   if (!principal || principal.user.status !== 'active') return null;
   return { tx, meta, principal, tenantId };
 }
+
+/** Background work inside one workspace with full access (scheduled jobs). Acts as the workspace owner. */
+export async function systemCtxFor(env: Env, tx: Tx, tenantId: string): Promise<RecordCtx | null> {
+  const t = await tx.one<{ id: string; slug: string; name: string; status: string; meta_version: number }>(`select id, slug, name, status, meta_version from tenants where id = $1`, [tenantId]);
+  if (!t) return null;
+  const meta = await loadMeta(env, tx, { id: t.id, slug: t.slug, name: t.name, status: t.status, metaVersion: t.meta_version });
+  const owner = await tx.one<{ id: string }>(`select id from users where tenant_id = $1 and is_owner limit 1`, [tenantId]);
+  return { tx, meta, tenantId, principal: systemPrincipal(owner?.id ?? null, meta.objects.map((o) => o.key)) };
+}

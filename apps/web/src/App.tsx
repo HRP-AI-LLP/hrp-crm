@@ -34,6 +34,10 @@ const TicketStatusPage = page(() => import('./pages/CustomerPages'), 'TicketStat
 const PaidPage = page(() => import('./pages/CustomerPages'), 'PaidPage');
 const FieldSchedulePage = page(() => import('./pages/FieldSchedule'), 'FieldSchedulePage');
 const FieldPage = page(() => import('./pages/Field'), 'FieldPage');
+const PrivacyPortalPage = page(() => import('./pages/PrivacyPages'), 'PrivacyPortalPage');
+const PrivacyVerifyPage = page(() => import('./pages/PrivacyPages'), 'PrivacyVerifyPage');
+const PrivacyStatusPage = page(() => import('./pages/PrivacyPages'), 'PrivacyStatusPage');
+const UnsubscribePage = page(() => import('./pages/PrivacyPages'), 'UnsubscribePage');
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useAuth();
@@ -66,6 +70,10 @@ export function App() {
       <Route path="/i/:token" element={<JobConfirmPage kind="installation" />} />
       <Route path="/t/:token" element={<TicketStatusPage />} />
       <Route path="/paid" element={<PaidPage />} />
+      <Route path="/privacy/verify/:token" element={<PrivacyVerifyPage />} />
+      <Route path="/privacy/status/:token" element={<PrivacyStatusPage />} />
+      <Route path="/privacy/:key" element={<PrivacyPortalPage />} />
+      <Route path="/unsubscribe/:token" element={<UnsubscribePage />} />
       <Route
         path="/print/quote/:id"
         element={

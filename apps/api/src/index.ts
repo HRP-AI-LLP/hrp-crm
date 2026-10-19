@@ -11,6 +11,8 @@ import type { Job } from './services/jobs';
 import { dailyBackups } from './services/backup';
 import { mailSweep } from './services/mail';
 import { reminderSweep } from './services/reminders';
+import { privacyDailySweep } from './services/privacy';
+import { systemCtxFor } from './services/system';
 import { processJob } from './services/worker';
 
 const app = createApp();
@@ -48,6 +50,10 @@ export default {
           await tx.query(`delete from sessions where tenant_id = $1 and (expires_at < now() - interval '7 days' or revoked_at < now() - interval '7 days')`, [t.tenant_id]);
           await tx.query(`delete from ai_usage where tenant_id = $1 and created_at < now() - interval '90 days'`, [t.tenant_id]);
         });
+        // privacy: request deadlines and the workspace's own retention rules
+        await privacyDailySweep(env, db, t.tenant_id, async (tx) => (await systemCtxFor(env, tx, t.tenant_id))!).catch((e) =>
+          console.error(JSON.stringify({ level: 'error', job: 'privacy-sweep', tenant: t.tenant_id, msg: (e as Error).message })),
+        );
       }
       // workspaces with automatic backups enabled get one a day (kept: newest 7)
       await dailyBackups(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'daily-backups', msg: (e as Error).message })));

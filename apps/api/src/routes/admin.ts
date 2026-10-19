@@ -6,6 +6,7 @@ import type { AppEnv } from '../env';
 import { encryptSecret, randomToken } from '../lib/crypto';
 import { ApiError, badRequest, conflict, notFound } from '../lib/errors';
 import { requireAdmin, scope } from '../middleware';
+import { maskErased } from '../services/privacy';
 import { createObject, createPipeline, installModule, objectSpecSchema, pipelineSpecSchema, upsertField } from '../services/metadata-admin';
 import { invalidatePrincipal } from '../services/tenancy';
 import { attachWorkerDomain, vanityEnabled, vanityHost } from '../services/domains';
@@ -598,13 +599,17 @@ export const adminRoutes = new Hono<AppEnv>()
   // ------------------------------------------------------------------ audit
   .get('/audit', requireAdmin('audit'), async (c) => {
     const q = z.object({ object: z.string().optional(), record: uuid.optional(), action: z.string().optional(), before: z.string().datetime({ offset: true }).optional(), limit: z.coerce.number().int().min(1).max(200).default(100) }).parse(c.req.query());
-    const rows = await c.var.db.tx(scope(c, true), (tx) =>
-      tx.query(
-        `select a.*, u.full_name as actor_name from audit_logs a left join users u on u.tenant_id = a.tenant_id and u.id = a.actor_id
-          where a.tenant_id = $1 and ($2::text is null or a.object_key = $2) and ($3::uuid is null or a.record_id = $3)
-            and ($4::text is null or a.action = $4) and ($5::timestamptz is null or a.created_at < $5)
-          order by a.created_at desc limit $6`,
-        [c.var.tenant.id, q.object ?? null, q.record ?? null, q.action ?? null, q.before ?? null, q.limit],
+    const rows = await c.var.db.tx(scope(c, true), async (tx) =>
+      maskErased(
+        tx,
+        c.var.tenant.id,
+        await tx.query<{ object_key: string | null; record_id: string | null; changes: unknown }>(
+          `select a.*, u.full_name as actor_name from audit_logs a left join users u on u.tenant_id = a.tenant_id and u.id = a.actor_id
+            where a.tenant_id = $1 and ($2::text is null or a.object_key = $2) and ($3::uuid is null or a.record_id = $3)
+              and ($4::text is null or a.action = $4) and ($5::timestamptz is null or a.created_at < $5)
+            order by a.created_at desc limit $6`,
+          [c.var.tenant.id, q.object ?? null, q.record ?? null, q.action ?? null, q.before ?? null, q.limit],
+        ),
       ),
     );
     return c.json({ items: rows });
