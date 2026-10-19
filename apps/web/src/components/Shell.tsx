@@ -252,6 +252,7 @@ export function Shell() {
         <div className="nav-group">
           <div>Assist</div>
           <NavLink to="/knowledge">Knowledge base</NavLink>
+          {(can('developers') || can('channels') || can('users')) && <NavLink to="/developers">Developers</NavLink>}
           {admin && <NavLink to="/settings">Settings</NavLink>}
         </div>
         <div className="nav-foot">

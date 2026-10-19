@@ -1,7 +1,7 @@
 /**
  * Job processor shared by the Queue consumer and the inline (waitUntil) fallback.
  */
-import { mergePermissions, storageFor } from '@synapse/shared';
+import { mergePermissions, storageFor, type TenantMeta } from '@synapse/shared';
 import type { Env, Principal, TenantInfo } from '../env';
 import { hmacSha256Hex } from '../lib/crypto';
 import { backupStep } from './backup';
@@ -18,6 +18,7 @@ import { afterInbound, applyStatuses } from './whatsapp';
 import { canContact, type ConsentState, isSuppressed } from './privacy';
 import { enqueue, eventJobs, type Job, type Waiter } from './jobs';
 import { recomputeRecord } from './computed';
+import { readRowSystem, toDto } from './records';
 import { routeInserted } from './routing';
 import { loadMeta } from './tenancy';
 import { runWorkflows } from './workflows';
@@ -46,7 +47,7 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
     switch (job.type) {
       case 'record.event': {
         const followUps = await runWorkflows(env, db, base, job.event, null);
-        followUps.push(...(await outboundWebhookJobs(db, sc, job)));
+        followUps.push(...(await outboundWebhookJobs(db, sc, job, base)));
         // new leads are scored automatically (cheap rule-based score even without AI keys)
         if (job.event.objectKey === 'lead' && job.event.kind === 'created') followUps.push({ type: 'ai.score_lead', tenantId: tenant.id, leadId: job.event.recordId });
         await enqueue(env, waiter, followUps);
@@ -255,22 +256,54 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
         return;
       case 'webhook.deliver': {
         const sub = await db.tx({ ...sc, readOnly: true }, (tx) => tx.one<{ url: string; secret: string; is_enabled: boolean }>(`select url, secret, is_enabled from webhook_subscriptions where tenant_id = $1 and id = $2`, [tenant.id, job.subscriptionId]));
-        if (!sub?.is_enabled) return;
-        const body = JSON.stringify({ event: job.event, tenantId: tenant.id, data: job.payload, sentAt: new Date().toISOString() });
-        const res = await fetch(sub.url, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'user-agent': 'HRP-Synapse-Webhook/1', 'x-synapse-event': job.event, 'x-synapse-signature': `sha256=${await hmacSha256Hex(sub.secret, body)}` },
-          body,
-        }).catch(() => null);
-        await db.tx(sc, (tx) =>
-          tx.query(
-            `update webhook_subscriptions set failure_count = case when $3 then 0 else failure_count + 1 end,
+        if (!sub?.is_enabled && !job.redeliveryOf) return;
+        if (!sub) return;
+        const sentAt = new Date().toISOString();
+        const body = JSON.stringify({ event: job.event, tenantId: tenant.id, data: job.payload, sentAt, ...(job.deliveryId ? { deliveryId: job.deliveryId } : {}) });
+        const ts = Math.floor(Date.now() / 1000);
+        const started = Date.now();
+        let status: number | null = null;
+        let error: string | null = null;
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 10_000);
+        try {
+          const res = await fetch(sub.url, {
+            method: 'POST',
+            redirect: 'manual',
+            signal: ctl.signal,
+            headers: {
+              'content-type': 'application/json',
+              'user-agent': 'HRP-Synapse-Webhook/1',
+              'x-synapse-event': job.event,
+              'x-synapse-timestamp': String(ts),
+              // v1: HMAC of the body; v2 also covers the timestamp so old deliveries cannot be replayed
+              'x-synapse-signature': `sha256=${await hmacSha256Hex(sub.secret, body)}`,
+              'x-synapse-signature-v2': `t=${ts},v1=${await hmacSha256Hex(sub.secret, `${ts}.${body}`)}`,
+            },
+            body,
+          });
+          status = res.status;
+          if (!res.ok) error = `HTTP ${res.status}`;
+        } catch (e) {
+          error = (e as Error).name === 'AbortError' ? 'Timed out after 10 seconds' : (e as Error).message.slice(0, 300);
+        } finally {
+          clearTimeout(timer);
+        }
+        const ok = !error;
+        await db.tx(sc, async (tx) => {
+          await tx.query(
+            `insert into webhook_deliveries (tenant_id, subscription_id, event, payload, status_code, ok, duration_ms, error, attempt, redelivery_of) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            [tenant.id, job.subscriptionId, job.event, JSON.stringify(job.payload ?? {}), status, ok, Date.now() - started, error, (job.attempt ?? 0) + 1, job.redeliveryOf ?? null],
+          );
+          await tx.query(
+            `update webhook_subscriptions set failure_count = case when $3 then 0 else failure_count + 1 end, last_delivery_at = now(), last_status = $4,
                     is_enabled = case when not $3 and failure_count + 1 >= 50 then false else is_enabled end
               where tenant_id = $1 and id = $2`,
-            [tenant.id, job.subscriptionId, !!res?.ok],
-          ),
-        );
-        if (!res?.ok) throw new Error(`webhook delivery failed (${res?.status ?? 'network'})`);
+            [tenant.id, job.subscriptionId, ok, status],
+          );
+        });
+        // manual redeliveries are not retried by the queue
+        if (!ok && !job.redeliveryOf) throw new Error(`webhook delivery failed (${error})`);
         return;
       }
     }
@@ -279,10 +312,20 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
   }
 }
 
-async function outboundWebhookJobs(db: Db, sc: { tenantId: string; userId: string | null; requestId: null }, job: Extract<Job, { type: 'record.event' }>): Promise<Job[]> {
+async function outboundWebhookJobs(db: Db, sc: { tenantId: string; userId: string | null; requestId: null }, job: Extract<Job, { type: 'record.event' }>, base: { meta: TenantMeta; principal: Principal; tenantId: string }): Promise<Job[]> {
   const name = `${job.event.objectKey}.${job.event.kind}`;
   const subs = await db.tx({ ...sc, readOnly: true }, (tx) =>
     tx.query<{ id: string }>(`select id from webhook_subscriptions where tenant_id = $1 and is_enabled and ($2 = any(events) or '*' = any(events))`, [sc.tenantId, name]),
   );
-  return subs.map((s) => ({ type: 'webhook.deliver', tenantId: sc.tenantId, subscriptionId: s.id, event: name, payload: { recordId: job.event.recordId, changes: job.event.changes ?? {} } }));
+  if (!subs.length) return [];
+  // the record itself rides along (as it is now), so integrations need no second call
+  const obj = base.meta.objects.find((o) => o.key === job.event.objectKey);
+  const record =
+    job.event.kind === 'deleted' || !obj
+      ? null
+      : await db.tx({ ...sc, readOnly: true }, async (tx) => {
+          const row = await readRowSystem({ ...base, tx }, job.event.objectKey, job.event.recordId);
+          return row ? toDto(obj, row, base.principal.permissions) : null;
+        });
+  return subs.map((s) => ({ type: 'webhook.deliver', tenantId: sc.tenantId, subscriptionId: s.id, event: name, payload: { object: job.event.objectKey, recordId: job.event.recordId, changes: job.event.changes ?? {}, record } }));
 }

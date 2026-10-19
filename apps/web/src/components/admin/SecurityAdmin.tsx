@@ -560,16 +560,16 @@ export function ApiKeysTab() {
   const { data } = useQuery({ queryKey: ['admin-api-keys'], queryFn: () => get<{ items: Json[] }>('/api/admin/api-keys') });
   const { data: users } = useUsers();
   const { me } = useAuth();
-  const [creating, setCreating] = useState<{ name: string; userId: string; write: boolean; expires: string } | null>(null);
+  const [creating, setCreating] = useState<{ name: string; userId: string; write: boolean; expires: string; rate: string } | null>(null);
   const [shown, setShown] = useState<string | null>(null);
   const origin = window.location.origin;
   return (
     <div className="stack">
       <div className="spread">
         <p className="muted small" style={{ margin: 0 }}>
-          Keys let other systems (your website, Zapier, Make, n8n, a data warehouse) use the <code>/api/v1</code> API as a chosen person, with that person’s access. Read keys can only read.
+          Keys let other systems (your website, Zapier, Make, n8n, a data warehouse) use the <code>/api/v1</code> API as a chosen person, with that person’s access. Read keys can only read. See <a href="/developers">Developers</a> for the API reference and webhooks.
         </p>
-        <button className="btn primary" onClick={() => setCreating({ name: '', userId: me?.user.id ?? '', write: false, expires: '365' })}>
+        <button className="btn primary" onClick={() => setCreating({ name: '', userId: me?.user.id ?? '', write: false, expires: '365', rate: '600' })}>
           New API key
         </button>
       </div>
@@ -597,7 +597,10 @@ export function ApiKeysTab() {
                   <div className="mono small muted">{k.prefix}</div>
                 </td>
                 <td>{k.user_name}</td>
-                <td>{k.scopes.includes('write') ? 'Read & write' : 'Read only'}</td>
+                <td>
+                  {k.scopes.includes('write') ? 'Read & write' : 'Read only'}
+                  <div className="muted small">{k.rate_limit_per_min ?? 600}/min</div>
+                </td>
                 <td className="small">{k.last_used_at ? `${relative(k.last_used_at)} · ${number(k.use_count)} calls` : 'Never'}</td>
                 <td className="small">{k.revoked_at ? <span className="chip bad">Revoked</span> : k.expires_at ? date(k.expires_at) : 'Never'}</td>
                 <td>
@@ -642,7 +645,7 @@ curl -X POST ${origin}/api/v1/records/lead \\
               disabled={!creating.name.trim()}
               onClick={async () => {
                 try {
-                  const r = await post<{ key: string }>('/api/admin/api-keys', { name: creating.name.trim(), userId: creating.userId, scopes: creating.write ? ['read', 'write'] : ['read'], expiresInDays: creating.expires ? Number(creating.expires) : null });
+                  const r = await post<{ key: string }>('/api/admin/api-keys', { name: creating.name.trim(), userId: creating.userId, scopes: creating.write ? ['read', 'write'] : ['read'], expiresInDays: creating.expires ? Number(creating.expires) : null, rateLimitPerMin: Number(creating.rate) || 600 });
                   setCreating(null);
                   setShown(r.key);
                   qc.invalidateQueries({ queryKey: ['admin-api-keys'] });
@@ -677,6 +680,16 @@ curl -X POST ${origin}/api/v1/records/lead \\
                 <option value="90">In 90 days</option>
                 <option value="365">In 1 year</option>
                 <option value="">Never</option>
+              </select>
+            </label>
+            <label className="field">
+              Requests per minute
+              <select value={creating.rate} onChange={(e) => setCreating({ ...creating, rate: e.target.value })}>
+                {['60', '300', '600', '1200', '3000'].map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
               </select>
             </label>
             <label className="row wide">

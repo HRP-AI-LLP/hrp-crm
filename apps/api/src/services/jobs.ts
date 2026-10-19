@@ -12,7 +12,7 @@ export type Job =
   | { type: 'kb.index'; tenantId: string; documentId: string }
   | { type: 'message.send'; tenantId: string; messageId: string }
   | { type: 'message.inbound'; tenantId: string; channelAccountId: string; payload: unknown }
-  | { type: 'webhook.deliver'; tenantId: string; subscriptionId: string; event: string; payload: unknown }
+  | { type: 'webhook.deliver'; tenantId: string; subscriptionId: string; event: string; payload: unknown; redeliveryOf?: string; deliveryId?: string; attempt?: number }
   /** re-evaluate formula / roll-up fields of every record of an object, 200 at a time */
   | { type: 'meta.recompute'; tenantId: string; objectKey: string; after?: string }
   /** one page of one table of a workspace backup (see services/backup.ts) */

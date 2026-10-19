@@ -275,7 +275,7 @@ export const securityRoutes = new Hono<AppEnv>()
     c.json({
       items: await c.var.db.tx(scope(c, true), (tx) =>
         tx.query(
-          `select k.id, k.name, k.prefix, k.scopes, k.expires_at, k.revoked_at, k.last_used_at, k.last_used_ip, k.use_count, k.created_at, k.user_id, u.full_name as user_name
+          `select k.id, k.name, k.prefix, k.scopes, k.rate_limit_per_min, k.expires_at, k.revoked_at, k.last_used_at, k.last_used_ip, k.use_count, k.created_at, k.user_id, u.full_name as user_name
              from api_keys k join users u on u.tenant_id = k.tenant_id and u.id = k.user_id where k.tenant_id = $1 order by k.revoked_at nulls first, k.created_at desc`,
           [c.var.tenant.id],
         ),
@@ -283,7 +283,7 @@ export const securityRoutes = new Hono<AppEnv>()
     }),
   )
   .post('/api-keys', requireAdmin('users'), async (c) => {
-    const b = z.object({ name: z.string().trim().min(1).max(80), userId: uuid.nullish(), scopes: z.array(z.enum(['read', 'write'])).min(1).default(['read']), expiresInDays: z.number().int().min(1).max(730).nullish() }).parse(await c.req.json());
+    const b = z.object({ name: z.string().trim().min(1).max(80), userId: uuid.nullish(), scopes: z.array(z.enum(['read', 'write'])).min(1).default(['read']), expiresInDays: z.number().int().min(1).max(730).nullish(), rateLimitPerMin: z.number().int().min(10).max(6000).default(600) }).parse(await c.req.json());
     const userId = b.userId ?? c.var.principal.user.id;
     const secret = randomToken(32);
     const key = `syn_${c.var.tenant.slug}_${secret}`;
@@ -293,8 +293,8 @@ export const securityRoutes = new Hono<AppEnv>()
       if (!u || u.status !== 'active') throw badRequest('The key must act as an active user');
       if (u.is_owner && !c.var.principal.user.isOwner) throw badRequest('Only the owner can create keys that act as the owner');
       return tx.one<{ id: string }>(
-        `insert into api_keys (tenant_id, name, prefix, key_hash, user_id, scopes, expires_at) values ($1,$2,$3,$4,$5,$6, case when $7::int is null then null else now() + make_interval(days => $7::int) end) returning id`,
-        [c.var.tenant.id, b.name, `${key.slice(0, 12 + c.var.tenant.slug.length)}…`, await sha256Hex(key), userId, scopes, b.expiresInDays ?? null],
+        `insert into api_keys (tenant_id, name, prefix, key_hash, user_id, scopes, expires_at, rate_limit_per_min) values ($1,$2,$3,$4,$5,$6, case when $7::int is null then null else now() + make_interval(days => $7::int) end, $8) returning id`,
+        [c.var.tenant.id, b.name, `${key.slice(0, 12 + c.var.tenant.slug.length)}…`, await sha256Hex(key), userId, scopes, b.expiresInDays ?? null, b.rateLimitPerMin],
       );
     });
     // the full key is shown exactly once

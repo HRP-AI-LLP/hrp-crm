@@ -1,5 +1,6 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import type { AdminArea } from '@synapse/shared';
+import { takeToken } from './lib/ratelimit';
 import { hasAdmin, type SecurityPolicy } from '@synapse/shared';
 import { assertNetworkAllowed } from './lib/ip';
 import type { AppEnv } from './env';
@@ -63,8 +64,8 @@ async function authenticateApiKey(c: Context<AppEnv>, key: string) {
   if (!path.startsWith('/api/v1/')) throw forbidden('API keys can only call /api/v1');
   const hash = await sha256Hex(key);
   const { meta, principal, row } = await c.var.db.tx({ tenantId: tenant.id, readOnly: true }, async (tx) => {
-    const row = await tx.one<{ id: string; user_id: string; scopes: string[]; last_used_at: Date | null }>(
-      `select id, user_id, scopes, last_used_at from api_keys where tenant_id = $1 and key_hash = $2 and revoked_at is null and (expires_at is null or expires_at > now())`,
+    const row = await tx.one<{ id: string; user_id: string; scopes: string[]; last_used_at: Date | null; rate_limit_per_min: number }>(
+      `select id, user_id, scopes, last_used_at, rate_limit_per_min from api_keys where tenant_id = $1 and key_hash = $2 and revoked_at is null and (expires_at is null or expires_at > now())`,
       [tenant.id, hash],
     );
     if (!row) return { meta: null, principal: null, row: null };
@@ -77,6 +78,16 @@ async function authenticateApiKey(c: Context<AppEnv>, key: string) {
   if (meta.tenant.security?.requireMfa && !principal.user.mfaEnabled) throw forbidden('The person this key acts as must turn on two-factor sign-in');
   const write = !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method);
   if (write && !row.scopes.includes('write')) throw forbidden('This API key is read-only');
+  // per-key rate limit (requests per minute), with the standard headers integrations read
+  const rl = takeToken(row.id, row.rate_limit_per_min ?? 600);
+  const shared = c.env.API_RATE_LIMITER ? await c.env.API_RATE_LIMITER.limit({ key: `${tenant.id}:${row.id}` }).catch(() => ({ success: true })) : { success: true };
+  c.header('x-ratelimit-limit', String(rl.limit));
+  c.header('x-ratelimit-remaining', String(rl.remaining));
+  c.header('x-ratelimit-reset', String(rl.resetSeconds));
+  if (!rl.ok || !shared.success) {
+    c.header('retry-after', String(rl.resetSeconds || 60));
+    throw new ApiError(429, 'rate_limited', `Too many requests: this API key allows ${rl.limit} a minute`);
+  }
   // usage bookkeeping, at most once a minute per key
   if (!row.last_used_at || Date.now() - new Date(row.last_used_at).getTime() > 60_000) {
     const work = c.var.db

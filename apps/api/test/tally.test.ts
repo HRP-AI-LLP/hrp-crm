@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Db } from '../src/lib/db';
 import { type Json, makeHarness, PW } from './harness';
 // the connector that runs on the accountant's PC
+// @ts-expect-error plain JavaScript (it runs on the accountant's PC without a build step)
 import { parseImportResponse, parseReceipts, receiptsRequest } from '../../web/public/downloads/synapse-tally.mjs';
 
 const CH = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';

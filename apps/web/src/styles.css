@@ -922,3 +922,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .shared-dash { max-width: 1200px; margin: 0 auto; padding: 20px 16px; }
 .recipient-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 4px 12px; max-height: 180px; overflow: auto; padding: 6px; border: 1px solid var(--line); border-radius: 8px; }
 .steps-list { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+
+/* ---------------------------------------------------------------- developers */
+.dev-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.dev-grid h2 { margin: 0; font-size: 16px; }
+.code-block { position: relative; }
+.code-block pre { margin: 0; padding: 12px 14px; background: #0b1726; color: #e2e8f0; border-radius: 10px; font-size: 12.5px; line-height: 1.5; overflow-x: auto; white-space: pre; }
+.code-block .btn { position: absolute; top: 6px; right: 6px; }
+.event-cloud { display: flex; flex-wrap: wrap; gap: 6px; }
+.event-cloud code { background: var(--brand-50); color: var(--brand-700); padding: 2px 8px; border-radius: 8px; font-size: 12px; }
+.payload { margin: 0; max-height: 280px; overflow: auto; font-size: 12px; background: #f8fafc; padding: 10px; border-radius: 8px; }
+@media (max-width: 860px) { .dev-grid { grid-template-columns: 1fr; } }

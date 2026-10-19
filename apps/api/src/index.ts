@@ -54,6 +54,7 @@ export default {
         await db.tx({ tenantId: t.tenant_id }, async (tx) => {
           await tx.query(`delete from sessions where tenant_id = $1 and (expires_at < now() - interval '7 days' or revoked_at < now() - interval '7 days')`, [t.tenant_id]);
           await tx.query(`delete from ai_usage where tenant_id = $1 and created_at < now() - interval '90 days'`, [t.tenant_id]);
+          await tx.query(`delete from webhook_deliveries where tenant_id = $1 and created_at < now() - interval '30 days'`, [t.tenant_id]);
         });
         // privacy: request deadlines and the workspace's own retention rules
         await privacyDailySweep(env, db, t.tenant_id, async (tx) => (await systemCtxFor(env, tx, t.tenant_id))!).catch((e) =>

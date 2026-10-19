@@ -67,6 +67,8 @@ export interface Env {
   // --- bindings ---
   HYPERDRIVE?: Hyperdrive;
   CACHE_KV?: KVNamespace;
+  /** optional Workers rate-limiting binding: a shared ceiling for API keys */
+  API_RATE_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   JOBS?: Queue<Job>;
   AI?: Ai;
   VECTORIZE?: VectorizeIndex;

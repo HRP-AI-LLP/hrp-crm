@@ -7,6 +7,7 @@ import { encryptSecret, randomToken } from '../lib/crypto';
 import { ApiError, badRequest, conflict, notFound } from '../lib/errors';
 import { requireAdmin, scope } from '../middleware';
 import { maskErased } from '../services/privacy';
+import { assertHookUrl } from './developers';
 import { createObject, createPipeline, installModule, objectSpecSchema, pipelineSpecSchema, upsertField } from '../services/metadata-admin';
 import { invalidatePrincipal } from '../services/tenancy';
 import { attachWorkerDomain, vanityEnabled, vanityHost } from '../services/domains';
@@ -466,7 +467,7 @@ export const adminRoutes = new Hono<AppEnv>()
   )
   .post('/webhooks', requireAdmin('channels'), async (c) => {
     const b = z.object({ url: z.string().url().startsWith('https://'), events: z.array(z.string().regex(/^(\*|[a-z_]+\.(created|updated|stage_changed|deleted))$/)).min(1) }).parse(await c.req.json());
-    const row = await c.var.db.tx(scope(c), (tx) => tx.one(`insert into webhook_subscriptions (tenant_id, url, events) values ($1,$2,$3) returning id, url, events, secret`, [c.var.tenant.id, b.url, b.events]));
+    const row = await c.var.db.tx(scope(c), (tx) => tx.one(`insert into webhook_subscriptions (tenant_id, url, events) values ($1,$2,$3) returning id, url, events, secret`, [c.var.tenant.id, assertHookUrl(b.url), b.events]));
     return c.json(row, 201); // secret shown once for signature verification
   })
   .delete('/webhooks/:id', requireAdmin('channels'), async (c) => {
