@@ -38,6 +38,9 @@ const PrivacyPortalPage = page(() => import('./pages/PrivacyPages'), 'PrivacyPor
 const PrivacyVerifyPage = page(() => import('./pages/PrivacyPages'), 'PrivacyVerifyPage');
 const PrivacyStatusPage = page(() => import('./pages/PrivacyPages'), 'PrivacyStatusPage');
 const UnsubscribePage = page(() => import('./pages/PrivacyPages'), 'UnsubscribePage');
+const PublicDocPage = page(() => import('./pages/DocPrint'), 'PublicDocPage');
+const InboxPage = page(() => import('./pages/Inbox'), 'InboxPage');
+const CampaignsPage = page(() => import('./pages/Campaigns'), 'CampaignsPage');
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useAuth();
@@ -74,6 +77,7 @@ export function App() {
       <Route path="/privacy/status/:token" element={<PrivacyStatusPage />} />
       <Route path="/privacy/:key" element={<PrivacyPortalPage />} />
       <Route path="/unsubscribe/:token" element={<UnsubscribePage />} />
+      <Route path="/doc/:token" element={<PublicDocPage />} />
       <Route
         path="/print/quote/:id"
         element={
@@ -121,6 +125,9 @@ export function App() {
         <Route path="schedule" element={<FieldSchedulePage />} />
         <Route path="billing" element={<BillingRoute />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="inbox" element={<InboxPage />} />
+        <Route path="campaigns" element={<CampaignsPage />} />
+        <Route path="campaigns/:id" element={<CampaignsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

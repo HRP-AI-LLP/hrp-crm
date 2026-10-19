@@ -1,6 +1,7 @@
 import type { FieldDef } from '@synapse/shared';
 import { IntegrationsTab } from '../components/admin/IntegrationsAdmin';
 import { PrivacyTab } from '../components/admin/PrivacyAdmin';
+import { QuickReplies, TemplatesModal } from '../components/admin/WhatsAppAdmin';
 import { useOAuthReturn } from '../lib/oauthReturn';
 import { AutomationsTab } from '../components/builders/AutomationBuilder';
 import { FieldEditor, TYPE_LABELS } from '../components/builders/FieldEditor';
@@ -585,14 +586,15 @@ function FormsTab() {
 function ChannelsTab() {
   const run = useRun();
   const { data } = useQuery({ queryKey: ['admin-channels'], queryFn: () => get<{ items: Json[] }>('/api/admin/channels') });
-  const [c, setC] = useState<{ channel: string; name: string; from: string; phoneNumberId: string; url: string; s1: string; s2: string; s3: string } | null>(null);
+  const [c, setC] = useState<{ channel: string; name: string; from: string; phoneNumberId: string; wabaId?: string; url: string; s1: string; s2: string; s3: string } | null>(null);
+  const [templatesFor, setTemplatesFor] = useState<Json | null>(null);
   const save = async () => {
     if (!c) return;
     const body =
       c.channel === 'email'
         ? { channel: 'email', name: c.name, provider: 'resend', config: { from: c.from }, secrets: { apiKey: c.s1 } }
         : c.channel === 'whatsapp'
-          ? { channel: 'whatsapp', name: c.name, provider: 'meta_cloud', config: { phoneNumberId: c.phoneNumberId }, secrets: { accessToken: c.s1, appSecret: c.s2, verifyToken: c.s3 } }
+          ? { channel: 'whatsapp', name: c.name, provider: 'meta_cloud', config: { phoneNumberId: c.phoneNumberId, ...(c.wabaId ? { wabaId: c.wabaId } : {}) }, secrets: { accessToken: c.s1, appSecret: c.s2, verifyToken: c.s3 } }
           : c.channel === 'instagram'
             ? { channel: 'instagram', name: c.name, provider: 'meta_cloud', config: { pageId: c.phoneNumberId }, secrets: { accessToken: c.s1, appSecret: c.s2, verifyToken: c.s3 } }
             : { channel: 'webhook', name: c.name, provider: 'generic', config: { url: c.url }, secrets: c.s1 ? { signingSecret: c.s1 } : {} };
@@ -621,7 +623,12 @@ function ChannelsTab() {
               <td className="small" style={{ whiteSpace: 'normal' }}>
                 Inbound URL: <code>{x.inboundUrl}</code>
               </td>
-              <td>
+              <td className="row" style={{ justifyContent: 'flex-end' }}>
+                {x.channel === 'whatsapp' && (
+                  <button className="btn sm" onClick={() => setTemplatesFor(x)}>
+                    Templates
+                  </button>
+                )}
                 <button className="btn sm danger" onClick={() => run(() => del(`/api/admin/channels/${x.id}`), 'Channel removed', [['admin-channels']])}>
                   Remove
                 </button>
@@ -664,6 +671,12 @@ function ChannelsTab() {
                   {c.channel === 'instagram' ? 'Facebook page ID (linked to the Instagram account)' : 'Phone number ID'}
                   <input value={c.phoneNumberId} onChange={(e) => setC({ ...c, phoneNumberId: e.target.value })} />
                 </label>
+                {c.channel === 'whatsapp' && (
+                  <label className="field">
+                    WhatsApp Business Account ID (for templates)
+                    <input value={c.wabaId ?? ''} onChange={(e) => setC({ ...c, wabaId: e.target.value })} />
+                  </label>
+                )}
                 <label className="field">
                   Access token
                   <input type="password" value={c.s1} onChange={(e) => setC({ ...c, s1: e.target.value })} />
@@ -694,6 +707,8 @@ function ChannelsTab() {
           </div>
         </Modal>
       )}
+      {templatesFor && <TemplatesModal account={templatesFor} onClose={() => setTemplatesFor(null)} />}
+      <QuickReplies />
     </div>
   );
 }

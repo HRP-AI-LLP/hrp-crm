@@ -177,8 +177,9 @@ export function Shell() {
   const apps = new Set((meta?.modules ?? []).filter((m) => m.enabled && m.key.startsWith('app.')).map((m) => m.key.slice(4)));
   const opsObjects = opsKeys.map((k) => objects.find((o) => o.key === k)).filter((o): o is NonNullable<typeof o> => !!o);
   const approvals = useApprovalCount(!!me);
+  const inbox = useQuery({ queryKey: ['inbox-badge'], queryFn: () => get<{ counts: { unread: number } }>('/api/v1/inbox?view=mine&status=open'), enabled: !!me, refetchInterval: 60_000, staleTime: 30_000 });
   const online = useOnline();
-  const admin = me && (can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains'));
+  const admin = me && (can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains') || can('privacy') || can('developers') || can('ai'));
 
   return (
     <div className="shell">
@@ -220,6 +221,13 @@ export function Shell() {
             {apps.has('billing') && <NavLink to="/billing">Billing &amp; GST</NavLink>}
           </div>
         )}
+        <div className="nav-group">
+          <div>Engage</div>
+          <NavLink to="/inbox">
+            Inbox{inbox.data?.counts?.unread ? <span className="nav-badge">{inbox.data.counts.unread}</span> : null}
+          </NavLink>
+          {can('campaigns') && <NavLink to="/campaigns">Campaigns</NavLink>}
+        </div>
         <div className="nav-group">
           <div>Plan</div>
           <NavLink to="/calendar">Calendar</NavLink>

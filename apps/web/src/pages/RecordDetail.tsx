@@ -1,5 +1,6 @@
 import type { FieldDef, RecordDto } from '@synapse/shared';
 import { ConsentPanel } from '../components/admin/PrivacyAdmin';
+import { WhatsAppButton } from './Inbox';
 import { allowedChoices, fieldVisible, objectPerm, resolveLayout } from '@synapse/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -132,6 +133,7 @@ export function RecordDetailPage() {
         </div>
         <div className="row" style={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           {['lead', 'contact', 'account', 'ticket'].includes(object) && <CallButton object={object} id={id} phone={(rec.phone ?? rec.customer_phone) as string | null} />}
+          {['lead', 'contact', 'account', 'deal', 'quote', 'sales_order', 'invoice', 'ticket'].includes(object) && <WhatsAppButton object={object} id={id} name={rec.title} />}
           {['lead', 'contact', 'account', 'deal', 'quote'].includes(object) || obj.fields.some((f) => f.type === 'email') ? (
             <button className="btn" onClick={() => setComposing(true)}>
               Email

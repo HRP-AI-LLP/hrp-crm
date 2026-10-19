@@ -24,6 +24,10 @@ export interface OutboundMessage {
   body: string;
 }
 
+export async function channelSecret(env: Env, acc: ChannelAccount): Promise<Record<string, string>> {
+  return secretOf(env, acc);
+}
+
 async function secretOf(env: Env, acc: ChannelAccount): Promise<Record<string, string>> {
   if (!acc.secret_ciphertext) return {};
   if (!env.DATA_ENCRYPTION_KEY) throw new Error('DATA_ENCRYPTION_KEY is not configured');
@@ -102,6 +106,40 @@ export interface InboundItem {
   text: string;
   subject?: string;
   externalId?: string;
+  /** WhatsApp media (image, document, audio, video, sticker): fetched on demand through the API */
+  media?: { type: string; id: string; mime?: string; filename?: string; caption?: string };
+  /** id of the message this one replies to (WhatsApp context) */
+  replyTo?: string;
+  at?: string;
+}
+
+export interface StatusItem {
+  externalId: string;
+  status: 'sent' | 'delivered' | 'read' | 'failed';
+  at: string;
+  recipient: string;
+  error?: string;
+}
+
+/** WhatsApp delivery receipts: sent → delivered → read, or failed with a reason. */
+export function parseStatuses(acc: ChannelAccount, payload: unknown): StatusItem[] {
+  if (acc.channel !== 'whatsapp') return [];
+  const out: StatusItem[] = [];
+  const entries = ((payload as Record<string, unknown>)?.entry as { changes?: { value?: { statuses?: { id: string; status: string; timestamp?: string; recipient_id?: string; errors?: { code?: number; title?: string; message?: string; error_data?: { details?: string } }[] }[] } }[] }[]) ?? [];
+  for (const e of entries)
+    for (const ch of e.changes ?? [])
+      for (const s of ch.value?.statuses ?? []) {
+        if (!['sent', 'delivered', 'read', 'failed'].includes(s.status)) continue;
+        const err = s.errors?.[0];
+        out.push({
+          externalId: s.id,
+          status: s.status as StatusItem['status'],
+          at: s.timestamp ? new Date(Number(s.timestamp) * 1000).toISOString() : new Date().toISOString(),
+          recipient: s.recipient_id ?? '',
+          ...(err ? { error: `${err.code ?? ''} ${err.title ?? err.message ?? ''}${err.error_data?.details ? `: ${err.error_data.details}` : ''}`.trim().slice(0, 300) } : {}),
+        });
+      }
+  return out;
 }
 
 /** Normalises provider payloads into inbound items. */
@@ -109,12 +147,41 @@ export function parseInbound(acc: ChannelAccount, payload: unknown): InboundItem
   const p = payload as Record<string, unknown>;
   if (acc.channel === 'whatsapp') {
     const items: InboundItem[] = [];
-    const entries = (p.entry as { changes?: { value?: { contacts?: { profile?: { name?: string }; wa_id?: string }[]; messages?: { from: string; id: string; type: string; text?: { body: string } }[] } }[] }[]) ?? [];
+    type Media = { id: string; mime_type?: string; filename?: string; caption?: string };
+    type WaMsg = {
+      from: string;
+      id: string;
+      type: string;
+      timestamp?: string;
+      text?: { body: string };
+      button?: { text?: string; payload?: string };
+      interactive?: { button_reply?: { title?: string }; list_reply?: { title?: string } };
+      location?: { latitude?: number; longitude?: number; name?: string; address?: string };
+      context?: { id?: string };
+      image?: Media; document?: Media; audio?: Media; video?: Media; sticker?: Media;
+    };
+    const entries = (p.entry as { changes?: { value?: { contacts?: { profile?: { name?: string }; wa_id?: string }[]; messages?: WaMsg[] } }[] }[]) ?? [];
     for (const e of entries)
       for (const ch of e.changes ?? []) {
         const names = new Map((ch.value?.contacts ?? []).map((c) => [c.wa_id, c.profile?.name]));
         for (const m of ch.value?.messages ?? []) {
-          items.push({ from: m.from, name: names.get(m.from) ?? undefined, text: m.type === 'text' ? (m.text?.body ?? '') : `[${m.type} message]`, externalId: m.id });
+          const media = m.image ?? m.document ?? m.audio ?? m.video ?? m.sticker;
+          const text =
+            m.type === 'text' ? (m.text?.body ?? '')
+            : m.type === 'button' ? (m.button?.text ?? m.button?.payload ?? '')
+            : m.type === 'interactive' ? (m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title ?? '')
+            : m.type === 'location' ? `📍 ${[m.location?.name, m.location?.address].filter(Boolean).join(', ') || `${m.location?.latitude}, ${m.location?.longitude}`}`
+            : media ? (media.caption ?? `[${m.type}${media.filename ? `: ${media.filename}` : ''}]`)
+            : `[${m.type} message]`;
+          items.push({
+            from: m.from,
+            name: names.get(m.from) ?? undefined,
+            text,
+            externalId: m.id,
+            ...(media ? { media: { type: m.type, id: media.id, mime: media.mime_type, filename: media.filename, caption: media.caption } } : {}),
+            ...(m.context?.id ? { replyTo: m.context.id } : {}),
+            ...(m.timestamp ? { at: new Date(Number(m.timestamp) * 1000).toISOString() } : {}),
+          });
         }
       }
     return items;

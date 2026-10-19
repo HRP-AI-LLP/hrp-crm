@@ -13,7 +13,9 @@ import { logIncomingCall } from './telephony';
 import { Db } from '../lib/db';
 import { analyzeSentiment, indexDocument, scoreLead } from './ai/features';
 import { AiUnavailableError } from './ai/router';
-import { type ChannelAccount, matchOrCreateSender, parseInbound, sendViaChannel } from './channels';
+import { type ChannelAccount, matchOrCreateSender, parseInbound, parseStatuses, sendViaChannel } from './channels';
+import { afterInbound, applyStatuses } from './whatsapp';
+import { canContact, type ConsentState, isSuppressed } from './privacy';
 import { enqueue, eventJobs, type Job, type Waiter } from './jobs';
 import { recomputeRecord } from './computed';
 import { routeInserted } from './routing';
@@ -91,6 +93,22 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
         if (!m.channel_account_id) return;
         const acc = await db.tx({ ...sc, readOnly: true }, (tx) => tx.one<ChannelAccount>(`select * from channel_accounts where tenant_id = $1 and id = $2`, [tenant.id, m.channel_account_id]));
         if (!acc) return;
+        // automations respect opt-outs and erasures like every other send
+        if (acc.channel === 'whatsapp' || acc.channel === 'email' || acc.channel === 'sms') {
+          const block = await db.tx({ ...sc, readOnly: true }, async (tx) => {
+            const meta2 = await tx.one<{ purpose: string; related_object: string | null; related_id: string | null }>(`select purpose, related_object, related_id from messages where tenant_id = $1 and id = $2`, [tenant.id, m.id]);
+            const t = meta2?.related_object === 'lead' ? 'leads' : meta2?.related_object === 'contact' ? 'contacts' : null;
+            const consent = t && meta2?.related_id ? ((await tx.one<{ consent: ConsentState }>(`select consent from ${t} where tenant_id = $1 and id = $2`, [tenant.id, meta2.related_id]))?.consent ?? null) : null;
+            const ok = await canContact(tx, tenant.id, acc.channel as 'whatsapp' | 'email' | 'sms', m.to_addr, { marketing: meta2?.purpose === 'marketing', consent });
+            // an opt-out of a channel also stops automated messages on it
+            if (ok.ok && meta2?.purpose !== 'marketing' && (await isSuppressed(tx, tenant.id, acc.channel as 'whatsapp' | 'email' | 'sms', m.to_addr))) return 'opted_out';
+            return ok.ok ? null : ok.reason;
+          });
+          if (block) {
+            await db.tx(sc, (tx) => tx.query(`update messages set status = 'failed', error = $3 where tenant_id = $1 and id = $2`, [tenant.id, m.id, `Not sent: recipient ${block.replace('_', ' ')}`]));
+            return;
+          }
+        }
         try {
           const r = await sendViaChannel(env, acc, { to: m.to_addr, subject: m.subject, body: m.body });
           await db.tx(sc, (tx) => tx.query(`update messages set status = 'sent', external_id = $3 where tenant_id = $1 and id = $2`, [tenant.id, m.id, r.externalId]));
@@ -174,6 +192,8 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
         if (!acc) return;
         const defaultOwner = (acc.config.defaultOwnerId as string | undefined) ?? null;
         const events: Job[] = [];
+        const statuses = parseStatuses(acc, job.payload);
+        if (statuses.length) await db.tx(sc, (tx) => applyStatuses(tx, tenant.id, statuses));
         for (const item of parseInbound(acc, job.payload)) {
           const saved = await db.tx(sc, async (tx) => {
             if (item.externalId) {
@@ -193,6 +213,8 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
             );
             // leads created from a message go through assignment (unless the channel names an owner) and scoring
             if (target.created) await routeInserted({ ...base, tx }, 'lead', target.id, !defaultOwner);
+            // shared inbox thread, STOP opt-outs, campaign replies, owner notification
+            await afterInbound(tx, tenant.id, acc, item, { msgId: msg!.id, target });
             return { target, msgId: msg!.id, activityId: act!.id };
           });
           if (!saved) continue;

@@ -19,7 +19,7 @@ import { z } from 'zod';
 export const ACCESS_LEVELS = ['none', 'own', 'team', 'all'] as const;
 export type Access = (typeof ACCESS_LEVELS)[number];
 export type FieldAccess = 'hidden' | 'read' | 'edit';
-export const ADMIN_AREAS = ['users', 'roles', 'metadata', 'modules', 'workflows', 'domains', 'audit', 'channels', 'ai', 'operations', 'billing', 'privacy', 'developers'] as const;
+export const ADMIN_AREAS = ['users', 'roles', 'metadata', 'modules', 'workflows', 'domains', 'audit', 'channels', 'ai', 'operations', 'billing', 'privacy', 'developers', 'campaigns'] as const;
 export type AdminArea = (typeof ADMIN_AREAS)[number];
 
 export interface ObjectPerm {

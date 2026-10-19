@@ -116,3 +116,43 @@ function UpiQr({ upi }: { upi: { vpa: string; payee: string; amount: number; not
     </div>
   );
 }
+
+/** Customer view of an invoice or order from a signed link (WhatsApp, email). No sign-in. */
+export function PublicDocPage() {
+  const { token = '' } = useParams();
+  const { data, error } = useQuery({
+    queryKey: ['public-doc', token],
+    queryFn: async () => {
+      const r = await fetch(`/api/public/docs/${encodeURIComponent(token)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error?.message ?? 'This link is not valid');
+      return j as { kind: string; data: Json };
+    },
+    retry: false,
+  });
+  const s = data ? shape(data.kind, data.data) : null;
+  useEffect(() => {
+    if (s) document.title = `${s.labels.number ?? s.labels.title} — ${s.doc.company?.name ?? ''}`;
+  }, [s]);
+  if (error) return <p style={{ padding: 32 }}>{(error as Error).message}</p>;
+  if (!s || !data) return <div style={{ padding: 32 }}><Spinner /></div>;
+  return (
+    <div className="print-page">
+      <div className="print-bar no-print">
+        <span className="muted small">{s.doc.company?.name}</span>
+        <div className="row">
+          {data.data.payUrl && (
+            <a className="btn primary" href={data.data.payUrl} target="_blank" rel="noopener noreferrer">
+              Pay online
+            </a>
+          )}
+          <button className="btn" onClick={() => window.print()}>
+            Download PDF
+          </button>
+        </div>
+      </div>
+      <QuoteDocument doc={s.doc} labels={s.labels} />
+      {data.kind === 'invoice' && data.data.upi && <UpiQr upi={data.data.upi} />}
+    </div>
+  );
+}
