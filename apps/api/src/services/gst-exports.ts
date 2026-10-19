@@ -173,7 +173,7 @@ const entry = (ledger: string, amount: number, debit: boolean, bills?: { name: s
   `</ALLLEDGERENTRIES.LIST>`;
 
 /** A sales invoice or credit note as an accounting voucher; the party entry carries the bill reference. */
-export function salesVoucherXml(L: TallyLedgers, i: Record<string, any>, opts: { remoteId?: string; billWise?: boolean } = {}) {
+export function salesVoucherXml(L: TallyLedgers, i: Record<string, any>, opts: { remoteId?: string; billWise?: boolean; action?: 'Create' | 'Alter' } = {}) {
   const credit = i.doc_type === 'credit_note';
   const total = Number(i.grand_total);
   // sales: party debit / sales + taxes credit; credit notes are the mirror image
@@ -186,7 +186,7 @@ export function salesVoucherXml(L: TallyLedgers, i: Record<string, any>, opts: {
     ...(Number(i.round_off) ? [entry(L.roundOff, Math.abs(Number(i.round_off)), credit ? Number(i.round_off) > 0 : Number(i.round_off) < 0)] : []),
   ];
   return (
-    `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER${opts.remoteId ? ` REMOTEID="${x(opts.remoteId)}"` : ''} VCHTYPE="${credit ? 'Credit Note' : 'Sales'}" ACTION="Create" OBJVIEW="Accounting Voucher View">` +
+    `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER${opts.remoteId ? ` REMOTEID="${x(opts.remoteId)}"` : ''} VCHTYPE="${credit ? 'Credit Note' : 'Sales'}" ACTION="${opts.action ?? 'Create'}" OBJVIEW="Accounting Voucher View">` +
     `<DATE>${ymd(i.invoice_date).replace(/-/g, '')}</DATE><VOUCHERTYPENAME>${credit ? 'Credit Note' : 'Sales'}</VOUCHERTYPENAME><VOUCHERNUMBER>${x(i.invoice_number)}</VOUCHERNUMBER>` +
     `<PARTYLEDGERNAME>${x(i.buyer_name)}</PARTYLEDGERNAME><PARTYGSTIN>${x(i.buyer_gstin ?? '')}</PARTYGSTIN><PLACEOFSUPPLY>${x(i.place_of_supply ?? '')}</PLACEOFSUPPLY>` +
     `<NARRATION>${x(i.name)}</NARRATION>${lines.join('')}</VOUCHER></TALLYMESSAGE>`
@@ -194,14 +194,14 @@ export function salesVoucherXml(L: TallyLedgers, i: Record<string, any>, opts: {
 }
 
 /** A receipt; with bill-wise details it settles the invoices it was allocated to. */
-export function receiptVoucherXml(L: TallyLedgers, p: Record<string, any>, party: string, bills: { name: string; amount: number }[] = [], remoteId?: string) {
+export function receiptVoucherXml(L: TallyLedgers, p: Record<string, any>, party: string, bills: { name: string; amount: number }[] = [], remoteId?: string, action: 'Create' | 'Alter' = 'Create') {
   const amount = Number(p.amount);
   const allocated = bills.reduce((a, b) => a + b.amount, 0);
   const refs: { name: string; type: 'New Ref' | 'Agst Ref'; amount: number }[] = bills.map((b) => ({ name: b.name, type: 'Agst Ref', amount: b.amount }));
   // anything not allocated to an invoice stays as an advance (on account) in Tally
   if (bills.length && amount - allocated > 0.009) refs.push({ name: `${p.payment_number} advance`, type: 'New Ref', amount: r2(amount - allocated) });
   return (
-    `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER${remoteId ? ` REMOTEID="${x(remoteId)}"` : ''} VCHTYPE="Receipt" ACTION="Create" OBJVIEW="Accounting Voucher View">` +
+    `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER${remoteId ? ` REMOTEID="${x(remoteId)}"` : ''} VCHTYPE="Receipt" ACTION="${action}" OBJVIEW="Accounting Voucher View">` +
     `<DATE>${ymd(p.payment_date).replace(/-/g, '')}</DATE><VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME><VOUCHERNUMBER>${x(p.payment_number)}</VOUCHERNUMBER>` +
     `<PARTYLEDGERNAME>${x(party)}</PARTYLEDGERNAME><NARRATION>${x([p.mode, p.reference].filter(Boolean).join(' '))}</NARRATION>` +
     entry(L.bank, amount, true) +

@@ -98,22 +98,28 @@ export async function pendingForTally(ctx: RecordCtx, i: Integration, limit = 50
     return true;
   };
   const items: (PendingItem & { hash: string })[] = [];
+  // a voucher Tally already has must not vanish quietly when cancelled here
+  await tx.query(
+    `update tally_sync s set status = 'needs_attention', error = 'Cancelled in Synapse: cancel voucher ' || i.invoice_number || ' in Tally'
+       from invoices i
+      where s.tenant_id = $1 and i.tenant_id = s.tenant_id and i.id = s.record_id and s.kind in ('sales', 'credit_note')
+        and s.status in ('synced', 'sent') and i.status = 'cancelled'`,
+    [tenantId],
+  );
+  // only what is new or changed since it last went to Tally, so old synced invoices never crowd
+  // out new ones (the hash check below still catches edits that did not change the voucher)
   const invoices = await tx.query<Record<string, any>>(
     `select i.*, o.invoice_number as original_invoice_number, a.name as account_name, a.address as account_address, a.state as account_state, a.pincode as account_pincode
        from invoices i left join invoices o on o.tenant_id = i.tenant_id and o.id = i.original_invoice_id
        left join accounts a on a.tenant_id = i.tenant_id and a.id = i.account_id
-      where i.tenant_id = $1 and i.doc_type in ('tax_invoice', 'credit_note') and i.status <> 'draft' and i.deleted_at is null and i.invoice_date >= $2::date
-      order by i.invoice_date, i.invoice_number limit 2000`,
+      where i.tenant_id = $1 and i.doc_type in ('tax_invoice', 'credit_note') and i.status not in ('draft', 'cancelled') and i.deleted_at is null and i.invoice_date >= $2::date
+        and not exists (select 1 from tally_sync s where s.tenant_id = i.tenant_id and s.record_id = i.id
+                          and s.kind = case when i.doc_type = 'credit_note' then 'credit_note' else 'sales' end
+                          and s.updated_at >= i.updated_at
+                          and (s.status in ('synced', 'failed', 'needs_attention') or (s.status = 'sent' and s.sent_at > now() - interval '30 minutes')))
+      order by i.invoice_date, i.invoice_number limit 500`,
     [tenantId, cfg.syncFrom],
   );
-  // a voucher Tally already has must not vanish quietly when cancelled here
-  for (const inv of invoices.filter((v) => v.status === 'cancelled')) {
-    const kind = inv.doc_type === 'credit_note' ? 'credit_note' : 'sales';
-    const s = state.get(`${kind}:${inv.id}`);
-    if (s && (s.status === 'synced' || s.status === 'sent')) {
-      await tx.query(`update tally_sync set status = 'needs_attention', error = $4 where tenant_id = $1 and kind = $2 and record_id = $3`, [tenantId, kind, inv.id, `Cancelled in Synapse: cancel voucher ${inv.invoice_number} in Tally`]);
-    }
-  }
   const live = invoices.filter((v) => v.status !== 'cancelled');
   const ledgersSeen = new Set<string>();
   for (const inv of live) {
@@ -135,7 +141,9 @@ export async function pendingForTally(ctx: RecordCtx, i: Integration, limit = 50
     const ls = state.get(`ledger:${ledgerId}`);
     const ledgerReady = ls?.status === 'synced' || items.some((x) => x.kind === 'ledger' && x.id === ledgerId);
     if (!ledgerReady) continue;
-    items.push({ kind, id: inv.id, name: String(inv.invoice_number), xml: tallyEnvelope(company, [salesVoucherXml(L, inv, { remoteId: `synapse-${inv.id}`, billWise: true })]), hash });
+    // already in Tally (an edit): alter the voucher with the same REMOTEID instead of creating a twin
+    const action = state.get(`${kind}:${inv.id}`)?.status === 'synced' ? 'Alter' : 'Create';
+    items.push({ kind, id: inv.id, name: String(inv.invoice_number), xml: tallyEnvelope(company, [salesVoucherXml(L, inv, { remoteId: `synapse-${inv.id}`, billWise: true, action })]), hash });
   }
   if (cfg.pushReceipts) {
     const pays = await tx.query<Record<string, any>>(
@@ -144,7 +152,9 @@ export async function pendingForTally(ctx: RecordCtx, i: Integration, limit = 50
          from payments p left join accounts a on a.tenant_id = p.tenant_id and a.id = p.account_id
         where p.tenant_id = $1 and p.status = 'received' and p.deleted_at is null and p.payment_date >= $2::date
           and not exists (select 1 from external_refs e where e.tenant_id = p.tenant_id and e.provider = 'tally-receipt' and e.object_key = 'payment' and e.record_id = p.id)
-        order by p.payment_date limit 1000`,
+          and not exists (select 1 from tally_sync s where s.tenant_id = p.tenant_id and s.kind = 'receipt' and s.record_id = p.id and s.updated_at >= p.updated_at
+                            and (s.status in ('synced', 'failed', 'needs_attention') or (s.status = 'sent' and s.sent_at > now() - interval '30 minutes')))
+        order by p.payment_date limit 500`,
       [tenantId, cfg.syncFrom],
     );
     for (const p of pays) {
@@ -156,7 +166,8 @@ export async function pendingForTally(ctx: RecordCtx, i: Integration, limit = 50
       if (!party) continue;
       const lid = p.account_id as string | null;
       if (lid && !(state.get(`ledger:${lid}`)?.status === 'synced' || items.some((x) => x.kind === 'ledger' && x.id === lid))) continue;
-      items.push({ kind: 'receipt', id: p.id, name: String(p.payment_number), xml: tallyEnvelope(company, [receiptVoucherXml(L, p, party, bills, `synapse-${p.id}`)]), hash });
+      const action = state.get(`receipt:${p.id}`)?.status === 'synced' ? 'Alter' : 'Create';
+      items.push({ kind: 'receipt', id: p.id, name: String(p.payment_number), xml: tallyEnvelope(company, [receiptVoucherXml(L, p, party, bills, `synapse-${p.id}`, action)]), hash });
     }
   }
   const batch = items.slice(0, limit);
@@ -215,41 +226,56 @@ export async function receiptsFromTally(ctx: RecordCtx, i: Integration, list: Ta
       skipped++;
       continue;
     }
+    if (typeof v.guid !== 'string' || !v.guid || v.guid.length > 200) {
+      skipped++;
+      continue;
+    }
+    // two connector runs posting the same voucher: the second waits here, then sees it applied
+    await tx.query(`select pg_advisory_xact_lock(hashtext('tally-receipt:' || $1 || ':' || $2))`, [tenantId, v.guid]);
     if (await tx.one(`select 1 from external_refs where tenant_id = $1 and provider = 'tally-receipt' and external_id = $2`, [tenantId, v.guid])) {
       skipped++;
       continue;
     }
-    const invs = v.bills?.length
-      ? await tx.query<{ id: string; account_id: string | null; balance_due: string; invoice_number: string }>(
-          `select id, account_id, balance_due, invoice_number from invoices where tenant_id = $1 and doc_type = 'tax_invoice' and status in ('issued','partially_paid','paid') and invoice_number = any($2::text[])`,
-          [tenantId, v.bills.map((b) => b.name)],
-        )
-      : [];
-    let accountId = invs.find((x) => x.account_id)?.account_id ?? null;
-    if (!accountId) {
-      const a = await tx.query<{ id: string }>(`select id from accounts where tenant_id = $1 and lower(name) = lower($2) and deleted_at is null limit 2`, [tenantId, v.party.trim()]);
-      if (a.length === 1) accountId = a[0]!.id;
+    // one bad receipt must not undo the others: each is applied under its own savepoint
+    await tx.query('savepoint tally_receipt');
+    try {
+      const invs = v.bills?.length
+        ? await tx.query<{ id: string; account_id: string | null; balance_due: string; invoice_number: string }>(
+            `select id, account_id, balance_due, invoice_number from invoices where tenant_id = $1 and doc_type = 'tax_invoice' and status in ('issued','partially_paid','paid') and invoice_number = any($2::text[])`,
+            [tenantId, v.bills.map((b) => b.name)],
+          )
+        : [];
+      let accountId = invs.find((x) => x.account_id)?.account_id ?? null;
+      if (!accountId) {
+        const a = await tx.query<{ id: string }>(`select id from accounts where tenant_id = $1 and lower(name) = lower($2) and deleted_at is null limit 2`, [tenantId, String(v.party ?? '').trim()]);
+        if (a.length === 1) accountId = a[0]!.id;
+      }
+      if (!accountId) {
+        await tx.query('release savepoint tally_receipt');
+        unmatched.push(`${v.number ?? v.guid}: ${v.party}`);
+        continue;
+      }
+      const allocations = invs
+        .map((inv) => ({ invoiceId: inv.id, amount: Math.min(Number(inv.balance_due), v.bills!.find((b) => b.name === inv.invoice_number)?.amount ?? 0) }))
+        .filter((a) => a.amount > 0);
+      const r = await recordPayment(ctx, {
+        accountId,
+        amount: Math.round(v.amount * 100) / 100,
+        date: v.date,
+        mode: 'bank_transfer',
+        reference: `Tally ${v.number ?? ''}`.trim().slice(0, 100),
+        notes: v.narration?.slice(0, 500) ?? null,
+        allocations: allocations.length ? allocations : undefined,
+      });
+      await claimRef(tx, tenantId, 'tally-receipt', v.guid, 'payment', r.id);
+      await tx.query(`insert into tally_sync (tenant_id, kind, record_id, name, status, synced_at) values ($1, 'receipt', $2, $3, 'synced', now()) on conflict do nothing`, [tenantId, r.id, r.number]);
+      await tx.query('release savepoint tally_receipt');
+      events.push(...r.events);
+      imported++;
+    } catch (e) {
+      await tx.query('rollback to savepoint tally_receipt');
+      unmatched.push(`${v.number ?? v.guid}: ${v.party} (${(e as Error).message.slice(0, 160)})`);
     }
-    if (!accountId) {
-      unmatched.push(`${v.number ?? v.guid}: ${v.party}`);
-      continue;
-    }
-    const allocations = invs
-      .map((inv) => ({ invoiceId: inv.id, amount: Math.min(Number(inv.balance_due), v.bills!.find((b) => b.name === inv.invoice_number)?.amount ?? 0) }))
-      .filter((a) => a.amount > 0);
-    const r = await recordPayment(ctx, {
-      accountId,
-      amount: Math.round(v.amount * 100) / 100,
-      date: v.date,
-      mode: 'bank_transfer',
-      reference: `Tally ${v.number ?? ''}`.trim().slice(0, 100),
-      notes: v.narration?.slice(0, 500) ?? null,
-      allocations: allocations.length ? allocations : undefined,
-    });
-    await claimRef(tx, tenantId, 'tally-receipt', v.guid, 'payment', r.id);
-    await tx.query(`insert into tally_sync (tenant_id, kind, record_id, name, status, synced_at) values ($1, 'receipt', $2, $3, 'synced', now()) on conflict do nothing`, [tenantId, r.id, r.number]);
-    events.push(...r.events);
-    imported++;
   }
   await tx.query(`update integrations set sync_state = sync_state || $3, last_event_at = now() where tenant_id = $1 and id = $2`, [tenantId, i.id, JSON.stringify({ lastImport: { at: new Date().toISOString(), imported, skipped, unmatched: unmatched.slice(0, 20) } })]);
   return { imported, skipped, unmatched, events };

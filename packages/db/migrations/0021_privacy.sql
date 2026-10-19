@@ -181,7 +181,7 @@ create trigger data_breaches_touch  before update on data_breaches  for each row
 create trigger data_requests_audit  after insert or update or delete on data_requests  for each row execute function app.audit_row_change('data_request');
 create trigger data_breaches_audit  after insert or update or delete on data_breaches  for each row execute function app.audit_row_change('data_breach');
 create trigger privacy_notices_audit after insert or update or delete on privacy_notices for each row execute function app.audit_row_change('privacy_notice');
-create trigger suppressions_audit   after insert or delete on suppressions for each row execute function app.audit_row_change('suppression');
+-- suppressions are not row-audited: their key is the person's address, which erasure must be able to remove
 
 -- the hash-chained audit export reads the trail in a stable order
 create index audit_logs_chain on audit_logs (tenant_id, created_at, id);

@@ -7,8 +7,10 @@ import { KPI_BY_KEY } from '@synapse/shared';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
-import { randomToken } from '../lib/crypto';
-import { badRequest, forbidden, notFound } from '../lib/errors';
+import { randomToken, sha256Hex } from '../lib/crypto';
+import { requestIp } from '../lib/ip';
+import { takeToken } from '../lib/ratelimit';
+import { badRequest, forbidden, notFound, tooMany } from '../lib/errors';
 import { requireAdmin, scope } from '../middleware';
 import { businessHealth, kpiTrend, PERIODS } from '../services/kpis';
 import type { RecordCtx } from '../services/records';
@@ -167,8 +169,38 @@ export const digestRoutes = new Hono<AppEnv>()
   });
 
 /** A shared dashboard, read-only, computed as the person who shared it. */
+/**
+ * A shared dashboard, as its sharer sees it. Only charts and summaries are shown (row-level
+ * tables stay inside the app); answers are cached for five minutes per link and each visitor is
+ * rate-limited, so a public link cannot be used to hammer the database.
+ */
+const shareCache = new Map<string, { at: number; body: unknown }>();
+const SHARE_TTL = 300_000;
+
 export const sharePublicRoutes = new Hono<AppEnv>().get('/dashboards/:token', async (c) => {
-  const route = await resolveRoute(c, 'dashboard', c.req.param('token'));
+  const token = c.req.param('token');
+  const ip = requestIp(c.env, (n) => c.req.header(n)) ?? 'unknown';
+  if (!takeToken(`share:${ip}`, 30).ok || !takeToken(`share-link:${token}`, 120).ok) throw tooMany('Too many requests for this link; try again in a minute');
+  // the route registry is checked every time, so a revoked link stops working at once
+  const route = await resolveRoute(c, 'dashboard', token);
+  c.header('x-robots-tag', 'noindex');
+  c.header('cache-control', 'private, max-age=60');
+  // a cheap check of the link's expiry on every visit: the heavy part (the reports) is cached
+  const live = await c.var.db.tx({ tenantId: route.tenant_id, readOnly: true }, (tx) =>
+    tx.one<{ exp: Date | null }>(`select share_expires_at as exp from dashboards where tenant_id = $1 and id = $2 and shared_by is not null`, [route.tenant_id, route.target_id]),
+  );
+  if (!live?.exp || new Date(live.exp) < new Date()) throw notFound('This link has expired');
+  const cacheKey = `${token}:${new Date(live.exp).getTime()}`;
+  const hit = shareCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < SHARE_TTL) return c.json(hit.body as Record<string, unknown>);
+  const kvKey = `share:dash:${await sha256Hex(cacheKey)}`;
+  if (c.env.CACHE_KV) {
+    const cached = await c.env.CACHE_KV.get(kvKey, 'json').catch(() => null);
+    if (cached) {
+      shareCache.set(cacheKey, { at: Date.now(), body: cached });
+      return c.json(cached as Record<string, unknown>);
+    }
+  }
   const out = await c.var.db.tx({ tenantId: route.tenant_id, readOnly: true }, async (tx) => {
     const d = await tx.one<{ name: string; description: string | null; widgets: { reportId: string; size?: string; title?: string }[]; shared_by: string | null; share_expires_at: Date | null }>(
       `select name, description, widgets, shared_by, share_expires_at from dashboards where tenant_id = $1 and id = $2`,
@@ -180,20 +212,33 @@ export const sharePublicRoutes = new Hono<AppEnv>().get('/dashboards/:token', as
     const company = await tx.one<{ name: string }>(`select name from tenants where id = $1`, [route.tenant_id]);
     const widgets = [];
     const objects = new Map<string, unknown>();
+    let omitted = 0;
     for (const w of d.widgets.slice(0, 20)) {
       const r = await tx.one<{ name: string; object_key: string; definition: unknown }>(`select name, object_key, definition from reports where tenant_id = $1 and id = $2 and (is_shared or owner_id = $3)`, [route.tenant_id, w.reportId, d.shared_by]);
       if (!r) continue;
-      const def = reportDefinitionSchema.parse(r.definition);
+      const parsed = reportDefinitionSchema.safeParse(r.definition);
+      if (!parsed.success) continue;
+      const def = parsed.data;
+      if (def.type === 'table') {
+        omitted++;
+        continue;
+      }
+      await tx.query('savepoint share_widget');
       try {
-        widgets.push({ title: w.title ?? r.name, size: w.size ?? 'm', objectKey: r.object_key, definition: def, result: await runReport(ctx, r.object_key, def) });
+        const result = await runReport(ctx, r.object_key, def);
+        await tx.query('release savepoint share_widget');
+        widgets.push({ title: w.title ?? r.name, size: w.size ?? 'm', objectKey: r.object_key, definition: def, result });
         const obj = ctx.meta.objects.find((o) => o.key === r.object_key);
         if (obj) objects.set(obj.key, { key: obj.key, label: obj.label, plural: obj.plural, fields: obj.fields.map((f) => ({ key: f.key, label: f.label, type: f.type, standard: f.standard, options: f.options?.choices ? { choices: f.options.choices } : undefined })) });
       } catch {
         /* a report the sharer can no longer run is left out */
+        await tx.query('rollback to savepoint share_widget');
       }
     }
-    return { company: company?.name ?? '', name: d.name, description: d.description, expiresAt: d.share_expires_at, widgets, objects: [...objects.values()], pipelines: ctx.meta.pipelines };
+    return { company: company?.name ?? '', name: d.name, description: d.description, expiresAt: d.share_expires_at, widgets, omitted, objects: [...objects.values()], pipelines: ctx.meta.pipelines };
   });
-  c.header('x-robots-tag', 'noindex');
+  shareCache.set(cacheKey, { at: Date.now(), body: out });
+  if (shareCache.size > 500) for (const [k, v] of shareCache) if (Date.now() - v.at > SHARE_TTL) shareCache.delete(k);
+  await c.env.CACHE_KV?.put(kvKey, JSON.stringify(out), { expirationTtl: SHARE_TTL / 1000 }).catch(() => undefined);
   return c.json(out);
 });

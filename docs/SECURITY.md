@@ -125,3 +125,16 @@ Because several workspaces can share one app host, refresh cookies are named per
 - **Webhooks** carry `X-Synapse-Signature-V2: t=…,v1=HMAC(secret, "t.body")` (the v1 header remains). Targets must be public HTTPS hosts; redirects are not followed and deliveries time out after 10 seconds. Every attempt is logged for 30 days.
 - **API keys** have a per-minute limit (default 600) with `X-RateLimit-*` headers and 429 + `Retry-After`. An optional Workers rate-limiting binding (`API_RATE_LIMITER`) adds a ceiling shared across isolates.
 - **Native push** uses a Firebase service account (secret `FCM_SERVICE_ACCOUNT`); tokens of signed-out, disabled or uninstalled devices are dropped.
+
+### Fifth-round review fixes
+
+An independent review of the fifth round found no cross-tenant leaks; these were fixed before release:
+
+- **Privacy requests**: a portal request links only to a record with the verified email; completing an erasure or exporting data needs that match or a staff verification note. Request numbering takes a per-workspace lock.
+- **Campaigns send exactly once**: rows are claimed and committed before sending, each send is recorded in its own short transaction, a row left mid-send by a crash is marked failed (never resent), and a paused or cancelled campaign stops between messages. The creator must still hold the campaigns permission. Campaigns honour a channel opt-out even for utility templates.
+- **Tally**: only new or changed vouchers are offered (no 2,000-row ceiling), edits go out as `Alter`, receipts from Tally take a per-voucher lock and a savepoint each, so one bad receipt is reported instead of undoing the batch.
+- **Webhooks** carry the record as the hook's creator sees it (record visibility and field security); otherwise only the event and id.
+- **Erasure** also removes the person's chat threads and their messages, campaign addresses (hashed), plain-text opt-out rows, notifications and stored webhook copies.
+- **Business health**: money KPIs are blank when the amount field is hidden from the viewer; payment-link totals cover only visible payments.
+- **Shared dashboards**: charts and summaries only (no row tables), cached five minutes per link, rate-limited per visitor and per link; expiry and revocation take effect immediately.
+- Smaller: FCM forgets a device only on `UNREGISTERED`/404; WhatsApp status lookups check record access; re-linking a conversation moves only its unlinked messages; digests are claimed before sending and switch off when no recipient can sign in; public order pages omit internal milestone notes.

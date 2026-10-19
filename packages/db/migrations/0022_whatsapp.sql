@@ -102,7 +102,8 @@ create table campaign_recipients (
   subject_id      uuid not null,
   address         text not null,
   address_key     text not null,
-  status          text not null default 'queued' check (status in ('queued', 'skipped', 'sent', 'delivered', 'read', 'replied', 'failed')),
+  -- 'sending' = claimed by one sender; never picked up again (no duplicate messages)
+  status          text not null default 'queued' check (status in ('queued', 'sending', 'skipped', 'sent', 'delivered', 'read', 'replied', 'failed')),
   skip_reason     text,
   message_id      uuid,
   error           text check (length(error) <= 500),

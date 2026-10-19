@@ -2,7 +2,7 @@
  * Business health: the KPI library (see @synapse/shared KPIS) computed over the records the viewer
  * can see, for a period and the one before it, against the workspace's targets.
  */
-import { hasAdmin, KPI_BY_KEY, KPIS, objectPerm } from '@synapse/shared';
+import { fieldAccess, hasAdmin, KPI_BY_KEY, KPIS, objectPerm } from '@synapse/shared';
 import { enabledApps } from './apps';
 import { Params, type RecordCtx, visibilityWhere } from './records';
 
@@ -292,6 +292,21 @@ const FNS: Record<string, Fn> = {
   },
 };
 
+/** Money KPIs need the amount itself: hidden by field security means no number at all. */
+const MONEY_FIELDS: Record<string, [string, string][]> = {
+  avg_deal_size: [['deal', 'amount']],
+  revenue_won: [['deal', 'amount']],
+  pipeline_coverage: [['deal', 'amount']],
+  sales_velocity: [['deal', 'amount']],
+  orders_booked: [['sales_order', 'grand_total']],
+  collected: [['payment', 'amount']],
+  dso_days: [['invoice', 'balance_due'], ['invoice', 'grand_total']],
+  collection_efficiency: [['invoice', 'balance_due'], ['invoice', 'grand_total']],
+  overdue_share: [['invoice', 'balance_due']],
+};
+const fieldsVisible = (ctx: RecordCtx, key: string) => (MONEY_FIELDS[key] ?? []).every(([o, f]) => fieldAccess(ctx.principal.permissions, o, f) !== 'hidden');
+const compute = (ctx: RecordCtx, key: string, r: Range): Promise<Num> => (fieldsVisible(ctx, key) ? FNS[key]!(ctx, r) : Promise.resolve(null));
+
 /** KPIs measured "as of now" (no meaningful previous period). */
 const POINT_IN_TIME = new Set(['overdue_share', 'pipeline_coverage', 'sales_velocity']);
 
@@ -315,9 +330,9 @@ export async function businessHealth(ctx: RecordCtx, period: Period) {
   for (const k of KPIS) {
     const fn = FNS[k.key];
     if (!fn) continue;
-    const value = await fn(ctx, range);
+    const value = await compute(ctx, k.key, range);
     if (value === null && !targets.has(k.key)) continue;
-    const previous = POINT_IN_TIME.has(k.key) ? null : await fn(ctx, range.prev);
+    const previous = POINT_IN_TIME.has(k.key) ? null : await compute(ctx, k.key, range.prev);
     const target = targets.get(k.key) ?? null;
     items.push({ key: k.key, value, previous, target, status: judge(k.key, value, target) });
   }
@@ -338,7 +353,7 @@ export async function kpiTrend(ctx: RecordCtx, keys: string[]) {
   const series: Record<string, Num[]> = {};
   for (const k of keys.filter((x) => FNS[x] && !POINT_IN_TIME.has(x)).slice(0, 30)) {
     series[k] = [];
-    for (const mo of months) series[k]!.push(await FNS[k]!(ctx, mo));
+    for (const mo of months) series[k]!.push(await compute(ctx, k, mo));
   }
   return { months: months.map((m) => m.label), series };
 }
@@ -356,8 +371,12 @@ async function valueDelivered(ctx: RecordCtx, r: Range) {
     return `select count(*)::int as v from leads r where ${vis} and r.follow_up_reminded_at >= ${a} and r.follow_up_reminded_at < ${b}`;
   });
   if (fu) out.push({ key: 'follow_ups', label: 'Follow-up reminders sent on time', value: Number(fu.v), format: 'number' });
-  if (enabledApps(ctx.meta).has('billing') && can(ctx, 'payment')) {
-    const online = await ctx.tx.one<{ v: number }>(`select coalesce(sum(amount_paid), 0)::float8 as v from payment_links where tenant_id = $1 and paid_at >= $2 and paid_at < $3`, [ctx.tenantId, r.from, r.to]);
+  if (enabledApps(ctx.meta).has('billing') && can(ctx, 'payment') && fieldAccess(ctx.principal.permissions, 'payment', 'amount') !== 'hidden') {
+    // only links whose payment the viewer can see
+    const online = await q1(ctx, 'payment', (vis, p) => {
+      const [a, b] = span(p, r);
+      return `select coalesce(sum(pl.amount_paid), 0)::float8 as v from payment_links pl join payments r on r.tenant_id = pl.tenant_id and r.id = pl.payment_id where ${vis} and pl.paid_at >= ${a} and pl.paid_at < ${b}`;
+    });
     out.push({ key: 'paid_online', label: 'Collected through payment links', value: Number(online?.v ?? 0), format: 'money' });
   }
   if (hasAdmin(ctx.principal.permissions, 'channels')) {

@@ -145,6 +145,13 @@ describe('privacy portal and data-principal requests', () => {
 
   it('erasure anonymises the person, keeps a hashed block and masks their audit history', async () => {
     expect((await api('POST', `/api/admin/privacy/requests/${reqId}/complete`, { outcome: 'completed', resolution: 'Erased your data' })).status).toBe(400);
+    // their WhatsApp thread, a plain-text opt-out and a notification about it
+    const acc = (await sql(`insert into channel_accounts (tenant_id, channel, name, provider) values ($1, 'whatsapp', 'WA', 'meta_cloud') returning id`, [tenantId]))[0]!.id;
+    const conv = (await sql(`insert into conversations (tenant_id, channel_account_id, channel, address) values ($1, $2, 'whatsapp', '919822001100') returning id`, [tenantId, acc]))[0]!.id;
+    await sql(`insert into messages (tenant_id, channel_account_id, channel, direction, from_addr, body, status, conversation_id) values ($1,$2,'whatsapp','in','919822001100','My flat is 4B, Palm Court','received',$3)`, [tenantId, acc, conv]);
+    await sql(`insert into suppressions (tenant_id, channel, address_key, reason) values ($1, 'whatsapp', '9822001100', 'opt_out')`, [tenantId]);
+    const owner = (await api('GET', '/api/auth/me')).json.user.id;
+    await sql(`insert into notifications (tenant_id, user_id, kind, title, link) values ($1, $2, 'message', 'WhatsApp from Vikram', $3)`, [tenantId, owner, `/inbox?c=${conv}`]);
     const done = await api('POST', `/api/admin/privacy/requests/${reqId}/complete`, { outcome: 'completed', resolution: 'We erased your personal data.', erase: true });
     expect(done.status, JSON.stringify(done.json)).toBe(200);
     expect(done.json.erasure).toMatchObject({ records: 1, activities: 1 });
@@ -156,6 +163,10 @@ describe('privacy portal and data-principal requests', () => {
     expect(sup.length).toBe(4);
     expect(sup.every((s) => String(s.address_key).startsWith('h:'))).toBe(true);
     expect(JSON.stringify(sup)).not.toContain('vikram');
+    expect(await sql(`select 1 from conversations where id = $1`, [conv])).toHaveLength(0);
+    expect(await sql(`select 1 from messages where body like '%Palm Court%'`)).toHaveLength(0);
+    expect(await sql(`select 1 from suppressions where address_key = '9822001100'`)).toHaveLength(0);
+    expect(await sql(`select 1 from notifications where title = 'WhatsApp from Vikram'`)).toHaveLength(0);
     const audit = await api('GET', `/api/admin/audit?record=${contactId}`);
     expect(JSON.stringify(audit.json)).not.toContain('vikram@x.test');
     expect(mails.at(-1)!.text).toContain('We erased your personal data.');

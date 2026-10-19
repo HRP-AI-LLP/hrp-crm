@@ -25,6 +25,8 @@ alter table webhook_subscriptions
   add column created_by        uuid default app.current_user_id(),
   add column last_delivery_at  timestamptz,
   add column last_status       integer;
+-- webhook payloads are built as the hook's creator; hooks made before this belong to the owner
+update webhook_subscriptions w set created_by = (select u.id from users u where u.tenant_id = w.tenant_id and u.is_owner order by u.created_at limit 1) where created_by is null;
 alter table webhook_subscriptions add constraint webhook_subscriptions_tenant_id_id_key unique (tenant_id, id);
 alter table webhook_deliveries add foreign key (tenant_id, subscription_id) references webhook_subscriptions (tenant_id, id) on delete cascade;
 

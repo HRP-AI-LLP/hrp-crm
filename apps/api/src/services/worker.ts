@@ -1,7 +1,7 @@
 /**
  * Job processor shared by the Queue consumer and the inline (waitUntil) fallback.
  */
-import { mergePermissions, storageFor, type TenantMeta } from '@synapse/shared';
+import { fieldAccess, mergePermissions, storageFor, type TenantMeta } from '@synapse/shared';
 import type { Env, Principal, TenantInfo } from '../env';
 import { hmacSha256Hex } from '../lib/crypto';
 import { backupStep } from './backup';
@@ -18,13 +18,13 @@ import { afterInbound, applyStatuses } from './whatsapp';
 import { canContact, type ConsentState, isSuppressed } from './privacy';
 import { enqueue, eventJobs, type Job, type Waiter } from './jobs';
 import { recomputeRecord } from './computed';
-import { readRowSystem, toDto } from './records';
+import { getRecord, readRowSystem, toDto } from './records';
 import { routeInserted } from './routing';
 import { loadMeta } from './tenancy';
 import { runWorkflows } from './workflows';
 
 export { systemPrincipal } from './system';
-import { systemPrincipal } from './system';
+import { actAs, systemPrincipal } from './system';
 
 async function tenantFor(db: Db, tenantId: string): Promise<TenantInfo | null> {
   const r = await db.tx({ tenantId, readOnly: true }, (tx) =>
@@ -47,7 +47,7 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
     switch (job.type) {
       case 'record.event': {
         const followUps = await runWorkflows(env, db, base, job.event, null);
-        followUps.push(...(await outboundWebhookJobs(db, sc, job, base)));
+        followUps.push(...(await outboundWebhookJobs(env, db, sc, job, base)));
         // new leads are scored automatically (cheap rule-based score even without AI keys)
         if (job.event.objectKey === 'lead' && job.event.kind === 'created') followUps.push({ type: 'ai.score_lead', tenantId: tenant.id, leadId: job.event.recordId });
         await enqueue(env, waiter, followUps);
@@ -312,20 +312,47 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
   }
 }
 
-async function outboundWebhookJobs(db: Db, sc: { tenantId: string; userId: string | null; requestId: null }, job: Extract<Job, { type: 'record.event' }>, base: { meta: TenantMeta; principal: Principal; tenantId: string }): Promise<Job[]> {
+/**
+ * Webhook copies of a record event. Each subscription sees the record as its creator would in the
+ * app (record visibility and field security): a hook made by a sales rep never carries what the
+ * rep could not open. Hooks without a creator, or for a record their creator cannot see, get the
+ * event and id only.
+ */
+async function outboundWebhookJobs(env: Env, db: Db, sc: { tenantId: string; userId: string | null; requestId: null }, job: Extract<Job, { type: 'record.event' }>, base: { meta: TenantMeta; principal: Principal; tenantId: string }): Promise<Job[]> {
   const name = `${job.event.objectKey}.${job.event.kind}`;
   const subs = await db.tx({ ...sc, readOnly: true }, (tx) =>
-    tx.query<{ id: string }>(`select id from webhook_subscriptions where tenant_id = $1 and is_enabled and ($2 = any(events) or '*' = any(events))`, [sc.tenantId, name]),
+    tx.query<{ id: string; created_by: string | null }>(`select id, created_by from webhook_subscriptions where tenant_id = $1 and is_enabled and ($2 = any(events) or '*' = any(events))`, [sc.tenantId, name]),
   );
   if (!subs.length) return [];
-  // the record itself rides along (as it is now), so integrations need no second call
   const obj = base.meta.objects.find((o) => o.key === job.event.objectKey);
-  const record =
-    job.event.kind === 'deleted' || !obj
-      ? null
-      : await db.tx({ ...sc, readOnly: true }, async (tx) => {
-          const row = await readRowSystem({ ...base, tx }, job.event.objectKey, job.event.recordId);
-          return row ? toDto(obj, row, base.principal.permissions) : null;
-        });
-  return subs.map((s) => ({ type: 'webhook.deliver', tenantId: sc.tenantId, subscriptionId: s.id, event: name, payload: { object: job.event.objectKey, recordId: job.event.recordId, changes: job.event.changes ?? {}, record } }));
+  const views = new Map<string, { record: unknown; changes: Record<string, unknown> }>();
+  const viewFor = async (creator: string | null) => {
+    const k = creator ?? '';
+    if (views.has(k)) return views.get(k)!;
+    let v: { record: unknown; changes: Record<string, unknown> } = { record: null, changes: {} };
+    if (creator && obj) {
+      v = await db.tx({ tenantId: sc.tenantId, userId: creator, readOnly: true }, async (tx) => {
+        const ctx = await actAs(env, tx, sc.tenantId, creator, 'webhook');
+        if (!ctx) return { record: null, changes: {} };
+        let record: unknown = null;
+        if (job.event.kind !== 'deleted') {
+          try {
+            record = await getRecord(ctx, job.event.objectKey, job.event.recordId);
+          } catch {
+            return { record: null, changes: {} };
+          }
+        }
+        const changes = Object.fromEntries(Object.entries(job.event.changes ?? {}).filter(([f]) => fieldAccess(ctx.principal.permissions, obj.key, f) !== 'hidden'));
+        return { record, changes };
+      });
+    }
+    views.set(k, v);
+    return v;
+  };
+  const out: Job[] = [];
+  for (const s of subs) {
+    const v = await viewFor(s.created_by);
+    out.push({ type: 'webhook.deliver', tenantId: sc.tenantId, subscriptionId: s.id, event: name, payload: { object: job.event.objectKey, recordId: job.event.recordId, changes: v.changes, record: v.record } });
+  }
+  return out;
 }

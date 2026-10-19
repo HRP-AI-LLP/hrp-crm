@@ -8,6 +8,8 @@ let api: ReturnType<typeof h.as>;
 let rep: ReturnType<typeof h.as>;
 const hits: { url: string; headers: Headers; body: string }[] = [];
 let failNext = false;
+let hook = '';
+let secret = '';
 const realFetch = globalThis.fetch;
 
 beforeAll(async () => {
@@ -49,8 +51,6 @@ describe('OpenAPI', () => {
 });
 
 describe('webhooks', () => {
-  let hook = '';
-  let secret = '';
   it('subscribes over the API (REST hooks), only for permitted people and public HTTPS hosts', async () => {
     expect((await rep('POST', '/api/v1/hooks', { url: 'https://hooks.example.com/a', events: ['lead.created'] })).status).toBe(403);
     expect((await api('POST', '/api/v1/hooks', { url: 'http://hooks.example.com/a', events: ['lead.created'] })).status).toBe(400);
@@ -88,6 +88,26 @@ describe('webhooks', () => {
     expect((after.json.items as Json[])[0]).toMatchObject({ ok: true, redelivery_of: failed.id });
     expect((await api('POST', `/api/v1/hooks/${hook}/test`)).status).toBe(200);
     expect(JSON.parse(hits.at(-1)!.body).event).toBe('ping');
+  });
+});
+
+describe('webhook payloads follow their creator', () => {
+  it("carry only what the hook's creator could open", async () => {
+    const { Db } = await import('../src/lib/db');
+    const db = Db.fromEnv(h.env);
+    const repId = (await rep('GET', '/api/auth/me')).json.user.id;
+    const tenantId = (await api('GET', '/api/auth/me')).json.tenant.id;
+    try {
+      await db.tx({ tenantId }, (tx) => tx.query(`update webhook_subscriptions set created_by = $2 where tenant_id = $1 and id = $3`, [tenantId, repId, hook]));
+    } finally {
+      await db.close();
+    }
+    await api('POST', '/api/v1/records/lead', { last_name: 'Owner only', email: 'secret@x.test' });
+    const hidden = JSON.parse(hits.at(-1)!.body);
+    expect(hidden.data).toMatchObject({ record: null, changes: {} });
+    expect(hits.at(-1)!.body).not.toContain('secret@x.test');
+    await rep('POST', '/api/v1/records/lead', { last_name: 'Rep lead' });
+    expect(JSON.parse(hits.at(-1)!.body).data.record).toMatchObject({ last_name: 'Rep lead' });
   });
 });
 

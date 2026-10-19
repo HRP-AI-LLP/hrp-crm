@@ -120,6 +120,7 @@ export async function sendSchedule(env: Env, db: Db, tenantId: string, id: strin
   const s = await db.tx({ tenantId }, (tx) => tx.one<Record<string, any>>(`select * from report_schedules where tenant_id = $1 and id = $2`, [tenantId, id]));
   if (!s) return { sent: 0 };
   let sent = 0;
+  let reachable = 0;
   let lastError: string | null = null;
   const company = (await db.tx({ tenantId, readOnly: true }, (tx) => tx.one<{ name: string }>(`select name from tenants where id = $1`, [tenantId])))?.name ?? 'Synapse';
   for (const uid of s.recipients as string[]) {
@@ -127,6 +128,7 @@ export async function sendSchedule(env: Env, db: Db, tenantId: string, id: strin
       const out = await db.tx({ tenantId, userId: uid, readOnly: true }, async (tx) => {
         const ctx = await actAs(env, tx, tenantId, uid, 'digest');
         if (!ctx) return null;
+        reachable++;
         const html = await renderDigest(ctx, s as never, origin);
         return { email: ctx.principal.user.email, html };
       });
@@ -138,8 +140,13 @@ export async function sendSchedule(env: Env, db: Db, tenantId: string, id: strin
       lastError = (e as Error).message.slice(0, 300);
     }
   }
+  // nobody on the list can sign in any more: switch the digest off rather than retrying forever
+  const orphaned = !reachable && !lastError;
   await db.tx({ tenantId }, (tx) =>
-    tx.query(`update report_schedules set last_sent_at = case when $3 > 0 then now() else last_sent_at end, last_error = $4, next_run_at = $5 where tenant_id = $1 and id = $2`, [tenantId, id, sent, lastError, nextRun(s as ScheduleSpec)]),
+    tx.query(
+      `update report_schedules set last_sent_at = case when $3 > 0 then now() else last_sent_at end, last_error = $4, next_run_at = $5, is_enabled = is_enabled and not $6 where tenant_id = $1 and id = $2`,
+      [tenantId, id, sent, orphaned ? 'Turned off: none of the recipients can sign in any more' : lastError, nextRun(s as ScheduleSpec), orphaned],
+    ),
   );
   return { sent, error: lastError };
 }
@@ -155,7 +162,15 @@ export async function digestSweep(env: Env, db: Db) {
   const tenants = await db.platform<{ tenant_id: string }>(`select t as tenant_id from app.list_active_tenant_ids() t`);
   let earliest = now + 6 * 3600_000;
   for (const t of tenants) {
-    const due = await db.tx({ tenantId: t.tenant_id, readOnly: true }, (tx) => tx.query<{ id: string }>(`select id from report_schedules where tenant_id = $1 and is_enabled and next_run_at <= now() order by next_run_at limit 20`, [t.tenant_id]));
+    // claimed first (pushed 30 minutes ahead), so two overlapping runs never send the same digest twice
+    const due = await db.tx({ tenantId: t.tenant_id }, (tx) =>
+      tx.query<{ id: string }>(
+        `update report_schedules set next_run_at = now() + interval '30 minutes' where id in (
+           select id from report_schedules where tenant_id = $1 and is_enabled and next_run_at <= now() order by next_run_at limit 20 for update skip locked)
+         returning id`,
+        [t.tenant_id],
+      ),
+    );
     for (const d of due) await sendSchedule(env, db, t.tenant_id, d.id, origin).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'digest', id: d.id, msg: (e as Error).message })));
     const n = await db.tx({ tenantId: t.tenant_id, readOnly: true }, (tx) => tx.one<{ t: Date | null }>(`select min(next_run_at) as t from report_schedules where tenant_id = $1 and is_enabled`, [t.tenant_id]));
     if (n?.t && new Date(n.t).getTime() < earliest) earliest = new Date(n.t).getTime();

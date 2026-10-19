@@ -13,6 +13,7 @@ import { appOrigin } from '../services/mailer';
 import {
   addressKey,
   applyRetention,
+  assertIdentityMatches,
   assertSubjectEditable,
   auditChain,
   completeRequest,
@@ -214,10 +215,11 @@ export const privacyAdminRoutes = new Hono<AppEnv>()
   .get('/privacy/requests/:id/export', async (c) => {
     const id = uuid.parse(c.req.param('id'));
     const out = await c.var.db.tx(scope(c), async (tx) => {
-      const r = await tx.one<{ subject_object: Subject['object'] | null; subject_id: string | null; number: string; verified_at: Date | null }>(`select subject_object, subject_id, number, verified_at from data_requests where tenant_id = $1 and id = $2`, [c.var.tenant.id, id]);
+      const r = await tx.one<{ id: string; subject_object: Subject['object'] | null; subject_id: string | null; number: string; verified_at: Date | null; requester_email: string | null }>(`select id, subject_object, subject_id, number, verified_at, requester_email from data_requests where tenant_id = $1 and id = $2`, [c.var.tenant.id, id]);
       if (!r) throw notFound();
       if (!r.subject_id || !r.subject_object) throw badRequest('Link the request to the person’s record first');
       if (!r.verified_at) throw badRequest('Verify the requester first');
+      await assertIdentityMatches(tx, c.var.tenant.id, r);
       const data = await personalDataSummary(tx, c.var.meta, c.var.tenant.id, { object: r.subject_object, id: r.subject_id });
       await tx.query(`insert into audit_logs (tenant_id, action, object_key, record_id, changes) values ($1, 'export', 'data_request', $2, $3)`, [c.var.tenant.id, id, JSON.stringify({ subject: r.subject_id })]);
       return { data, number: r.number };

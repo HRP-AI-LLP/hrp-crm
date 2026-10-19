@@ -144,7 +144,12 @@ export const whatsappRoutes = new Hono<AppEnv>()
         const { loadRow } = await import('../services/records');
         await loadRow(ctx, b.related.object, b.related.id, 'read');
         await tx.query(`update conversations set related_object = $3, related_id = $4 where tenant_id = $1 and id = $2`, [c.var.tenant.id, id, b.related.object, b.related.id]);
-        await tx.query(`update messages set related_object = $3, related_id = $4 where tenant_id = $1 and conversation_id = $2`, [c.var.tenant.id, id, b.related.object, b.related.id]);
+        // only this thread's messages that were unlinked or linked to the old record move over
+        await tx.query(
+          `update messages set related_object = $3, related_id = $4 where tenant_id = $1 and conversation_id = $2
+              and (related_id is null or (related_object is not distinct from $5 and related_id is not distinct from $6::uuid))`,
+          [c.var.tenant.id, id, b.related.object, b.related.id, conv.related_object ?? null, conv.related_id ?? null],
+        );
         void t;
       }
     });
@@ -170,6 +175,9 @@ export const whatsappRoutes = new Hono<AppEnv>()
     const q = z.object({ object: z.string().regex(/^[a-z_]{2,40}$/), id: uuid }).parse(c.req.query());
     return c.json(
       await c.var.db.tx(scope(c, true), async (tx) => {
+        // only for a record the caller can open
+        const { loadRow } = await import('../services/records');
+        await loadRow(rctx(c, tx), q.object, q.id, 'read');
         const acc = await tx.one<ChannelAccount>(`select * from channel_accounts where tenant_id = $1 and channel = 'whatsapp' and status = 'active' order by created_at limit 1`, [c.var.tenant.id]);
         if (!acc) return { connected: false };
         const conv = await tx.one<{ id: string; last_inbound_at: string | null }>(
@@ -380,7 +388,9 @@ export const whatsappPublicRoutes = new Hono<AppEnv>().get('/docs/:token', async
     }
     const o = (await getOrder(ctx, t.id)) as Record<string, any>;
     if (['draft', 'cancelled'].includes(o.order.status)) throw notFound();
-    return { kind: t.kind, data: { ...o, order: scrub('sales_order', { ...o.order }) } };
+    // milestones show what is due, not internal notes; the workspace's plan template stays inside
+    const milestones = (o.milestones as Record<string, unknown>[]).map(({ notes: _n, invoice_id: _i, ...m }) => m);
+    return { kind: t.kind, data: { ...o, milestones, milestonePlan: undefined, order: scrub('sales_order', { ...o.order }) } };
   });
   return c.json(out);
 });

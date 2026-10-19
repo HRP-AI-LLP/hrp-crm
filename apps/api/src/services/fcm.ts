@@ -89,7 +89,8 @@ export async function sendNative(env: Env, token: string, msg: NativeMessage): P
   if (res.ok) return 'ok';
   const j = (await res.json().catch(() => ({}))) as { error?: { status?: string; details?: { errorCode?: string }[] } };
   const code = j.error?.details?.find((d) => d.errorCode)?.errorCode ?? j.error?.status;
-  return res.status === 404 || code === 'UNREGISTERED' || code === 'INVALID_ARGUMENT' ? 'gone' : 'error';
+  // INVALID_ARGUMENT usually means our message was malformed, not that the token is dead: keep it
+  return res.status === 404 || code === 'UNREGISTERED' ? 'gone' : 'error';
 }
 
 export function resetFcmCache() {

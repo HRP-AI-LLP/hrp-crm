@@ -227,6 +227,44 @@ describe('campaigns', () => {
     expect(r2.json.skipped.map((x: Json) => x.reason).sort()).toEqual(['no_consent', 'opted_out']);
     expect((await api('POST', `/api/admin/campaigns/${campaignId}/start`, {})).status).toBe(400);
   });
+
+  it('utility campaigns still honour a WhatsApp opt-out; an interrupted send is never repeated', async () => {
+    const tpl = ((await api('GET', '/api/v1/whatsapp/templates')).json.items as Json[]).find((t) => t.name === 'order_update')!;
+    const c = await api('POST', '/api/admin/campaigns', {
+      name: 'Order ready',
+      channel: 'whatsapp',
+      channelAccountId: accId,
+      templateId: tpl.id,
+      variables: [{ source: 'field', field: 'first_name', fallback: 'there' }, { source: 'text', value: 'SO-1' }],
+      audience: { object: 'lead', filters: [{ field: 'company', op: 'eq', value: 'Diwali list' }] },
+    });
+    expect(c.status, JSON.stringify(c.json)).toBe(201);
+    const before = sentTo('919811200004').length;
+    expect((await api('POST', `/api/admin/campaigns/${c.json.id}/start`, {})).status).toBe(200);
+    const r = await api('GET', `/api/admin/campaigns/${c.json.id}`);
+    // no consent is fine for a utility message, an opt-out is not
+    expect(r.json.campaign).toMatchObject({ status: 'sent', sent: 3, skipped: 1 });
+    expect(r.json.skipped).toEqual([{ reason: 'opted_out', n: 1 }]);
+    expect(sentTo('919811200004').length).toBe(before);
+
+    // a row claimed by a sender that died: failed, not resent
+    const lead = (await sql(`select id from leads where phone = '9811200001'`))[0]!.id;
+    await sql(`update campaigns set status = 'sending', finished_at = null where id = $1`, [c.json.id]);
+    await sql(`delete from campaign_recipients where campaign_id = $1 and address = '919811200001'`, [c.json.id]);
+    await sql(`insert into campaign_recipients (tenant_id, campaign_id, subject_object, subject_id, address, address_key, status, updated_at) values ($1,$2,'lead',$3,'919811200001','9811200001','sending', now() - interval '20 minutes')`, [tenantId, c.json.id, lead]);
+    const n = sentTo('919811200001').length;
+    const { campaignStep } = await import('../src/services/campaigns');
+    const db = Db.fromEnv(h.env);
+    try {
+      await campaignStep(h.env as never, db, tenantId, c.json.id, 10, 'https://x.test');
+    } finally {
+      await db.close();
+    }
+    expect(sentTo('919811200001').length).toBe(n);
+    const row = (await sql(`select status, error from campaign_recipients where campaign_id = $1 and address = '919811200001'`, [c.json.id]))[0]!;
+    expect(row).toMatchObject({ status: 'failed', error: 'Interrupted while sending; not resent' });
+    expect((await sql(`select status from campaigns where id = $1`, [c.json.id]))[0]!.status).toBe('sent');
+  });
 });
 
 describe('documents', () => {

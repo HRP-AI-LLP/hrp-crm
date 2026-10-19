@@ -8,6 +8,7 @@
  *  - Sending runs in small batches (the 5-minute cron and the start request), so a campaign
  *    never holds a long transaction and stays within WhatsApp's per-number rate limits.
  */
+import { hasAdmin } from '@synapse/shared';
 import type { Env } from '../env';
 import type { Db, Tx } from '../lib/db';
 import { badRequest, notFound } from '../lib/errors';
@@ -109,7 +110,7 @@ export async function previewAudience(ctx: RecordCtx, channel: 'whatsapp' | 'ema
       if (!addr || !key) reason = channel === 'whatsapp' ? 'no_mobile' : 'no_email';
       else if (seen.has(key)) reason = 'duplicate';
       else {
-        const ok = await canContact(ctx.tx, ctx.tenantId, channel, addr, { marketing: purpose === 'marketing', consent: consent.get(String(r.id)) });
+        const ok = await canContact(ctx.tx, ctx.tenantId, channel, addr, { marketing: purpose === 'marketing', consent: consent.get(String(r.id)), respectOptOut: true });
         if (!ok.ok) reason = ok.reason;
       }
       if (key) seen.add(key);
@@ -147,7 +148,7 @@ export async function startCampaign(env: Env, ctx: RecordCtx, id: string, schedu
       if (!addr || !key) continue;
       if (seen.has(key)) continue;
       seen.add(key);
-      const ok = await canContact(ctx.tx, ctx.tenantId, c.channel, addr, { marketing: purpose === 'marketing', consent: consent.get(String(r.id)) });
+      const ok = await canContact(ctx.tx, ctx.tenantId, c.channel, addr, { marketing: purpose === 'marketing', consent: consent.get(String(r.id)), respectOptOut: true });
       await ctx.tx.query(
         `insert into campaign_recipients (tenant_id, campaign_id, subject_object, subject_id, address, address_key, status, skip_reason) values ($1,$2,$3,$4,$5,$6,$7,$8) on conflict do nothing`,
         [ctx.tenantId, id, a.object, r.id, addr, key, ok.ok ? 'queued' : 'skipped', ok.ok ? null : ok.reason],
@@ -176,92 +177,154 @@ export async function startCampaign(env: Env, ctx: RecordCtx, id: string, schedu
   return { recipients: n, status: when ? 'scheduled' : 'sending' };
 }
 
+interface Planned {
+  rowId: string;
+  subjectId: string;
+  address: string;
+  preview: string;
+  subject: string | null;
+  values: string[];
+  ownerId: string | null;
+}
+
+const FATAL = /access token|\(#?131031\)|#?131042|#?131056|paused|disabled/i;
+
+async function failCampaign(db: Db, tenantId: string, id: string, why: string) {
+  await db.tx({ tenantId }, async (tx) => {
+    await tx.query(`update campaigns set status = 'failed', last_error = $3, finished_at = now() where tenant_id = $1 and id = $2 and status in ('sending', 'scheduled')`, [tenantId, id, why.slice(0, 500)]);
+    await tx.query(`update campaign_recipients set status = 'queued' where tenant_id = $1 and campaign_id = $2 and status = 'sending'`, [tenantId, id]);
+    await recountCampaign(tx, tenantId, id);
+  });
+}
+
 /**
- * Sends the next `budget` queued messages of one campaign. Runs as the campaign's creator, so
- * the merge fields they could not see stay empty and nothing they could not reach is sent.
+ * Sends the next `budget` queued messages of one campaign, as the campaign's creator: merge fields
+ * they cannot see stay empty and nothing they cannot reach is sent.
+ *
+ * Exactly-once: rows are claimed ('sending') and committed before anything goes out; each message
+ * is sent outside any transaction and recorded in its own short one. A row left 'sending' by a
+ * crash is marked failed, never resent.
  */
 export async function campaignStep(env: Env, db: Db, tenantId: string, id: string, budget: number, origin: string) {
-  const work = await db.tx({ tenantId }, async (tx) => {
+  const plan = await db.tx({ tenantId }, async (tx) => {
+    await tx.query(
+      `update campaign_recipients set status = 'failed', error = 'Interrupted while sending; not resent' where tenant_id = $1 and campaign_id = $2 and status = 'sending' and updated_at < now() - interval '15 minutes'`,
+      [tenantId, id],
+    );
     const c = await tx.one<Record<string, any>>(`select * from campaigns where tenant_id = $1 and id = $2 and status = 'sending' for update skip locked`, [tenantId, id]);
     if (!c) return null;
-    const rows = await tx.query<{ id: string; subject_object: 'lead' | 'contact'; subject_id: string; address: string }>(
-      `select id, subject_object, subject_id, address from campaign_recipients where tenant_id = $1 and campaign_id = $2 and status = 'queued' order by id limit $3 for update skip locked`,
+    const fail = async (why: string) => {
+      await tx.query(`update campaigns set status = 'failed', last_error = $3, finished_at = now() where tenant_id = $1 and id = $2`, [tenantId, id, why.slice(0, 500)]);
+      return null;
+    };
+    const ctx = c.created_by ? await actAs(env, tx, tenantId, c.created_by, 'campaign') : null;
+    if (!ctx) return fail('The person who created this campaign can no longer sign in');
+    if (!hasAdmin(ctx.principal.permissions, 'campaigns')) return fail('The person who created this campaign can no longer run campaigns');
+    let content: Awaited<ReturnType<typeof checkContent>>;
+    try {
+      content = await checkContent(tx, tenantId, c as never);
+    } catch (e) {
+      return fail((e as Error).message);
+    }
+    const rows = await tx.query<{ id: string; subject_id: string; address: string }>(
+      `update campaign_recipients set status = 'sending' where id in (
+         select id from campaign_recipients where tenant_id = $1 and campaign_id = $2 and status = 'queued' order by id limit $3 for update skip locked)
+       returning id, subject_id, address`,
       [tenantId, id, budget],
     );
-    return { c, rows };
-  });
-  if (!work) return { sent: 0, done: false };
-  const { c, rows } = work;
-  let sent = 0;
-  await db.tx({ tenantId, userId: c.created_by }, async (tx) => {
-    const ctx = c.created_by ? await actAs(env, tx, tenantId, c.created_by, 'campaign') : null;
-    if (!ctx) {
-      await tx.query(`update campaigns set status = 'failed', last_error = 'The person who created this campaign can no longer sign in', finished_at = now() where tenant_id = $1 and id = $2`, [tenantId, id]);
-      return;
-    }
-    const { acc, tpl, purpose } = await checkContent(tx, tenantId, c as never).catch(async (e) => {
-      await tx.query(`update campaigns set status = 'failed', last_error = $3, finished_at = now() where tenant_id = $1 and id = $2`, [tenantId, id, (e as Error).message.slice(0, 500)]);
-      return { acc: null, tpl: null, purpose: 'marketing' as const };
-    });
-    if (!acc) return;
-    const ids = rows.map((r) => r.subject_id);
     const object = (c.audience as Audience).object;
+    const ids = rows.map((r) => r.subject_id);
     const visible = new Map<string, Record<string, unknown>>();
     if (ids.length) for (const r of (await listRecords(ctx, object, { ids, limit: ids.length })).items) visible.set(String(r.id), r);
     const consent = await consentOf(tx, tenantId, object, ids);
+    const out: Planned[] = [];
     for (const r of rows) {
       const rec = visible.get(r.subject_id);
-      const ok = rec ? await canContact(tx, tenantId, c.channel, r.address, { marketing: purpose === 'marketing', consent: consent.get(r.subject_id) }) : { ok: false, reason: 'not_visible' };
+      const ok = rec
+        ? await canContact(tx, tenantId, c.channel, r.address, { marketing: content.purpose === 'marketing', consent: consent.get(r.subject_id), respectOptOut: true })
+        : { ok: false, reason: 'not_visible' };
       if (!ok.ok) {
         await tx.query(`update campaign_recipients set status = 'skipped', skip_reason = $3 where tenant_id = $1 and id = $2`, [tenantId, r.id, ok.reason]);
         continue;
       }
-      let preview: string;
-      let subject: string | null = null;
-      try {
-        let externalId: string | null;
-        if (c.channel === 'whatsapp') {
-          const values = fillVars(c.variables as VarSpec[], rec!);
-          preview = renderTemplate(tpl!, values);
-          externalId = await sendWa(env, acc, r.address, { type: 'template', template: templatePayload(tpl!, values) });
-        } else {
-          subject = fillMerge(String(c.subject), rec!);
-          const unsub = `${origin}/unsubscribe/${await unsubscribeToken(env, tenantId, 'email', r.address)}`;
-          preview = `${fillMerge(String(c.body), rec!)}\n\n—\nTo stop these emails: ${unsub}`;
-          externalId = (await sendViaChannel(env, acc, { to: r.address, subject, body: preview })).externalId;
-        }
-        const conv = c.channel === 'whatsapp' ? await upsertConversation(tx, tenantId, acc, r.address, { direction: 'out', preview, related: { object, id: r.subject_id }, owner: (rec!.owner_id as string | null) ?? null }) : null;
+      if (c.channel === 'whatsapp') {
+        const values = fillVars(c.variables as VarSpec[], rec!);
+        out.push({ rowId: r.id, subjectId: r.subject_id, address: r.address, values, preview: renderTemplate(content.tpl!, values), subject: null, ownerId: (rec!.owner_id as string | null) ?? null });
+      } else {
+        const unsub = `${origin}/unsubscribe/${await unsubscribeToken(env, tenantId, 'email', r.address)}`;
+        out.push({
+          rowId: r.id,
+          subjectId: r.subject_id,
+          address: r.address,
+          values: [],
+          subject: fillMerge(String(c.subject), rec!),
+          preview: `${fillMerge(String(c.body), rec!)}\n\n—\nTo stop these emails: ${unsub}`,
+          ownerId: (rec!.owner_id as string | null) ?? null,
+        });
+      }
+    }
+    return { c, ...content, object, out, claimed: rows.length };
+  });
+  if (!plan) return { sent: 0, done: false };
+  const { c, acc, tpl, purpose, object, out } = plan;
+  let sent = 0;
+  for (let i = 0; i < out.length; i++) {
+    const p = out[i]!;
+    // paused, cancelled or failed meanwhile: hand the rest back to the queue
+    const still = await db.tx({ tenantId, readOnly: true }, (tx) => tx.one<{ status: string }>(`select status from campaigns where tenant_id = $1 and id = $2`, [tenantId, id]));
+    if (still?.status !== 'sending') {
+      await db.tx({ tenantId }, (tx) => tx.query(`update campaign_recipients set status = 'queued' where tenant_id = $1 and id = any($2::uuid[]) and status = 'sending'`, [tenantId, out.slice(i).map((x) => x.rowId)]));
+      break;
+    }
+    let externalId: string | null;
+    try {
+      externalId =
+        c.channel === 'whatsapp'
+          ? await sendWa(env, acc, p.address, { type: 'template', template: templatePayload(tpl!, p.values) })
+          : (await sendViaChannel(env, acc, { to: p.address, subject: p.subject!, body: p.preview })).externalId;
+    } catch (e) {
+      const msg = (e as Error).message.slice(0, 500);
+      await db.tx({ tenantId }, (tx) => tx.query(`update campaign_recipients set status = 'failed', error = $3 where tenant_id = $1 and id = $2`, [tenantId, p.rowId, msg]));
+      // a broken token or a paused number fails every message: stop instead of burning through the list
+      if (FATAL.test(msg)) {
+        await failCampaign(db, tenantId, id, msg);
+        return { sent, done: true };
+      }
+      continue;
+    }
+    sent++;
+    await db
+      .tx({ tenantId, userId: c.created_by }, async (tx) => {
+        const conv = c.channel === 'whatsapp' ? await upsertConversation(tx, tenantId, acc, p.address, { direction: 'out', preview: p.preview, related: { object, id: p.subjectId }, owner: p.ownerId }) : null;
         const m = await tx.one<{ id: string }>(
           `insert into messages (tenant_id, channel_account_id, channel, direction, to_addr, subject, body, status, external_id, related_object, related_id, conversation_id, template_id, campaign_id, purpose, sent_by)
            values ($1,$2,$3,'out',$4,$5,$6,'sent',$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
-          [tenantId, acc.id, c.channel, r.address, subject, preview, externalId, object, r.subject_id, conv?.id ?? null, tpl?.id ?? null, id, purpose, c.created_by],
+          [tenantId, acc.id, c.channel, p.address, p.subject, p.preview, externalId, object, p.subjectId, conv?.id ?? null, tpl?.id ?? null, id, purpose, c.created_by],
         );
         await tx.query(`insert into activities (tenant_id, kind, subject, body, direction, related_object, related_id, actor_id, metadata) values ($1,$2,$3,$4,'out',$5,$6,$7,$8)`, [
           tenantId,
           c.channel === 'whatsapp' ? 'whatsapp' : 'email',
           `Campaign: ${c.name}`.slice(0, 200),
-          preview.slice(0, 4000),
+          p.preview.slice(0, 4000),
           object,
-          r.subject_id,
+          p.subjectId,
           c.created_by,
           JSON.stringify({ messageId: m!.id, campaignId: id }),
         ]);
-        await tx.query(`update campaign_recipients set status = 'sent', message_id = $3, sent_at = now() where tenant_id = $1 and id = $2`, [tenantId, r.id, m!.id]);
-        sent++;
-      } catch (e) {
-        await tx.query(`update campaign_recipients set status = 'failed', error = $3 where tenant_id = $1 and id = $2`, [tenantId, r.id, (e as Error).message.slice(0, 500)]);
-        // a broken token or a paused number fails every message: stop instead of burning through the list
-        if (/access token|\(#?131031\)|#?131042|#?131056|paused|disabled/i.test((e as Error).message)) {
-          await tx.query(`update campaigns set status = 'failed', last_error = $3, finished_at = now() where tenant_id = $1 and id = $2`, [tenantId, id, (e as Error).message.slice(0, 500)]);
-          break;
-        }
-      }
-    }
-    const left = await tx.one<{ n: number }>(`select count(*)::int as n from campaign_recipients where tenant_id = $1 and campaign_id = $2 and status = 'queued'`, [tenantId, id]);
+        await tx.query(`update campaign_recipients set status = 'sent', message_id = $3, sent_at = now() where tenant_id = $1 and id = $2`, [tenantId, p.rowId, m!.id]);
+      })
+      .catch(async (e) => {
+        // sent but not recorded: never resend; say so on the row
+        console.error(JSON.stringify({ level: 'error', job: 'campaign.record', id, msg: (e as Error).message }));
+        await db.tx({ tenantId }, (tx) => tx.query(`update campaign_recipients set status = 'sent', sent_at = now(), error = 'Sent; the copy in the CRM could not be saved' where tenant_id = $1 and id = $2`, [tenantId, p.rowId])).catch(() => undefined);
+      });
+  }
+  await db.tx({ tenantId }, async (tx) => {
+    const left = await tx.one<{ n: number }>(`select count(*)::int as n from campaign_recipients where tenant_id = $1 and campaign_id = $2 and status in ('queued', 'sending')`, [tenantId, id]);
     if (!left?.n) await tx.query(`update campaigns set status = 'sent', finished_at = now() where tenant_id = $1 and id = $2 and status = 'sending'`, [tenantId, id]);
     await recountCampaign(tx, tenantId, id);
   });
-  return { sent, done: rows.length < budget };
+  return { sent, done: plan.claimed < budget };
 }
 
 /** Every 5 minutes while any campaign is active: start due scheduled ones, send the next batch. */

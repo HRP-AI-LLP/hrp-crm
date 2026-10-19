@@ -372,6 +372,7 @@ export function SharedDashboardPage() {
           );
         })}
       </div>
+      {data.omitted > 0 && <p className="muted small" style={{ marginTop: 12 }}>{data.omitted === 1 ? 'One detailed list is' : `${data.omitted} detailed lists are`} shown only inside the app, not on shared links.</p>}
     </div>
   );
 }

@@ -66,9 +66,9 @@ export async function isSuppressed(tx: Tx, tenantId: string, channel: ContactCha
  * The single check every outbound message goes through.
  *  marketing: needs consent for the channel (or general marketing consent) and no suppression.
  *  transactional (quotes, invoices, replies, service updates): only an erasure or an "all
- *  channels" block stops it.
+ *  channels" block stops it, unless respectOptOut (campaigns) is set.
  */
-export async function canContact(tx: Tx, tenantId: string, channel: ContactChannel, address: string | null | undefined, opts: { marketing: boolean; consent?: ConsentState | null }) {
+export async function canContact(tx: Tx, tenantId: string, channel: ContactChannel, address: string | null | undefined, opts: { marketing: boolean; consent?: ConsentState | null; respectOptOut?: boolean }) {
   const key = addressKey(address);
   if (!key) return { ok: false, reason: 'no_address' as const };
   const rows = await tx.query<{ channel: string; reason: string }>(
@@ -76,8 +76,9 @@ export async function canContact(tx: Tx, tenantId: string, channel: ContactChann
     [tenantId, channel, key, await hashedKey(key)],
   );
   if (rows.some((r) => r.channel === 'all' || r.reason === 'erasure')) return { ok: false, reason: 'blocked' as const };
+  // bulk sends (campaigns) honour a channel opt-out even for utility templates
+  if (rows.length && (opts.marketing || opts.respectOptOut)) return { ok: false, reason: 'opted_out' as const };
   if (!opts.marketing) return { ok: true, reason: null };
-  if (rows.length) return { ok: false, reason: 'opted_out' as const };
   if (!consentAllows(opts.consent, channel)) return { ok: false, reason: 'no_consent' as const };
   return { ok: true, reason: null };
 }
@@ -219,6 +220,8 @@ export async function createRequest(
   input: { kind: RequestKind; source: string; name: string; email?: string | null; phone?: string | null; details?: string | null; subject?: Subject | null; verified?: boolean },
 ) {
   const cfg = await privacyConfig(tx, tenantId);
+  // numbers are handed out one at a time per workspace
+  await tx.query(`select pg_advisory_xact_lock(hashtext('dpr:' || $1::text))`, [tenantId]);
   const n = await tx.one<{ c: number }>(`select count(*)::int + 1 as c from data_requests where tenant_id = $1`, [tenantId]);
   const r = await tx.one<{ id: string; status_token: string; due_at: string }>(
     `insert into data_requests (tenant_id, number, kind, source, requester_name, requester_email, requester_phone, details, subject_object, subject_id, status, verified_at, due_at)
@@ -284,10 +287,27 @@ export async function confirmVerification(tx: Tx, tenantId: string, requestId: s
   return true;
 }
 
+/**
+ * Acting on a record needs proof the requester is that person. A request verified by email may
+ * act only on a record with that email; anything else needs a staff verification (recorded with
+ * a note), where someone checked the person against the record.
+ */
+export async function assertIdentityMatches(tx: Tx, tenantId: string, r: { id: string; subject_object: string | null; subject_id: string | null; requester_email: string | null }) {
+  if (!r.subject_id || !r.subject_object) return;
+  const staff = await tx.one(`select 1 from audit_logs where tenant_id = $1 and action = 'verify' and object_key = 'data_request' and record_id = $2 limit 1`, [tenantId, r.id]);
+  if (staff) return;
+  const rec = await tx.one<{ email: string | null }>(`select email from ${TABLE[r.subject_object as Subject['object']]} where tenant_id = $1 and id = $2`, [tenantId, r.subject_id]);
+  if (!r.requester_email || !rec?.email || rec.email.toLowerCase() !== r.requester_email.toLowerCase()) {
+    throw badRequest('The confirmed email does not belong to the linked record. Verify the person yourself (Mark verified, with how you checked) before acting on it.');
+  }
+}
+
 async function autoLinkSubject(tx: Tx, tenantId: string, requestId: string) {
   const r = await tx.one<{ requester_email: string | null; requester_phone: string | null; subject_id: string | null }>(`select requester_email, requester_phone, subject_id from data_requests where tenant_id = $1 and id = $2`, [tenantId, requestId]);
   if (!r || r.subject_id) return;
-  const found = await findSubjects(tx, tenantId, r.requester_email, r.requester_phone);
+  // only the address the requester proved they own links a record; a phone match is a suggestion for staff
+  if (!r.requester_email) return;
+  const found = await findSubjects(tx, tenantId, r.requester_email, null);
   if (found.length === 1) await tx.query(`update data_requests set subject_object = $3, subject_id = $4 where tenant_id = $1 and id = $2`, [tenantId, requestId, found[0]!.object, found[0]!.id]);
 }
 
@@ -413,6 +433,29 @@ export async function eraseSubject(ctx: RecordCtx, s: Subject, requestId: string
     const m = await tx.query(`update messages set body = null, subject = null, from_addr = null, to_addr = null where tenant_id = $1 and related_object = $2 and related_id = $3 returning id`, [tenantId, sub.object, sub.id]);
     summary.messages = Number(summary.messages) + m.length;
     const a = await tx.query(`update activities set subject = '[erased]', body = null, metadata = '{}'::jsonb where tenant_id = $1 and related_object = $2 and related_id = $3 returning id`, [tenantId, sub.object, sub.id]);
+    // chat threads with the person's number: their messages and the thread itself
+    const phoneKey = addressKey(cur.phone);
+    const emailKey = addressKey(cur.email);
+    const convs = await tx.query<{ id: string }>(
+      `select id from conversations where tenant_id = $1 and ((related_object = $2 and related_id = $3) or ($4::text is not null and app.phone_key(address) = $4))`,
+      [tenantId, sub.object, sub.id, phoneKey],
+    );
+    const convIds = convs.map((x) => x.id);
+    if (convIds.length) {
+      const cm = await tx.query(`update messages set body = null, subject = null, from_addr = null, to_addr = null, media = null where tenant_id = $1 and conversation_id = any($2::uuid[]) returning id`, [tenantId, convIds]);
+      summary.messages = Number(summary.messages) + cm.length;
+      await tx.query(`delete from notifications where tenant_id = $1 and link = any($2::text[])`, [tenantId, convIds.map((c) => `/inbox?c=${c}`)]);
+      await tx.query(`delete from conversations where tenant_id = $1 and id = any($2::uuid[])`, [tenantId, convIds]);
+    }
+    // campaign lists, the plain-text do-not-contact rows (the hashed ones stay), notifications and webhook copies
+    for (const k of [phoneKey, emailKey].filter((x): x is string => !!x)) {
+      const h = await hashedKey(k);
+      await tx.query(`update campaign_recipients set address = $3, address_key = $3 where tenant_id = $1 and address_key = $2`, [tenantId, k, h]);
+      await tx.query(`delete from suppressions where tenant_id = $1 and address_key = $2`, [tenantId, k]);
+    }
+    await tx.query(`update campaign_recipients set address = '[erased]' where tenant_id = $1 and subject_id = $2 and address not like 'h:%'`, [tenantId, sub.id]);
+    await tx.query(`delete from notifications where tenant_id = $1 and link like '%' || $2::text || '%'`, [tenantId, sub.id]);
+    await tx.query(`delete from webhook_deliveries where tenant_id = $1 and payload ->> 'recordId' = $2::text`, [tenantId, sub.id]);
     summary.activities = Number(summary.activities) + a.length;
     const f = await tx.query<{ storage_key: string }>(`update files set deleted_at = now(), name = 'erased' where tenant_id = $1 and object_key = $2 and record_id = $3 and deleted_at is null returning storage_key`, [tenantId, sub.object, sub.id]);
     summary.files = Number(summary.files) + f.length;
@@ -460,6 +503,7 @@ export async function completeRequest(
   if (input.outcome === 'completed' && !r.verified_at) throw badRequest('Verify the requester first (portal requests are verified by email; mark manual ones verified)');
   const s: Subject | null = r.subject_id ? { object: r.subject_object, id: r.subject_id } : null;
   const result: Record<string, unknown> = {};
+  if (input.outcome === 'completed' && s) await assertIdentityMatches(ctx.tx, ctx.tenantId, r as never);
   if (input.outcome === 'completed') {
     if (r.kind === 'erasure') {
       if (!s) throw badRequest('Link the request to the person’s record first');
