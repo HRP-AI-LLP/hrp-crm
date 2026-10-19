@@ -102,6 +102,7 @@ function DashboardView({ dash, canEdit }: { dash: Dashboard; canEdit: boolean })
   const [editing, setEditing] = useState(() => new URLSearchParams(location.search).has('edit'));
   const [widgets, setWidgets] = useState<Widget[]>(dash.widgets);
   const [adding, setAdding] = useState(false);
+  const [linking, setLinking] = useState(false);
   const reports = useQuery({ queryKey: ['reports'], queryFn: () => get<{ items: SavedReport[] }>('/api/v1/reports') });
 
   const save = async (next: Widget[]) => {
@@ -139,11 +140,17 @@ function DashboardView({ dash, canEdit }: { dash: Dashboard; canEdit: boolean })
               </button>
             </>
           )}
+          {!editing && (
+            <button className="btn" onClick={() => setLinking(true)}>
+              Share link
+            </button>
+          )}
           <button className={`btn${editing ? ' primary' : ''}`} onClick={() => setEditing((e) => !e)}>
             {editing ? 'Done' : 'Edit'}
           </button>
         </div>
       )}
+      {linking && <ShareLinkModal dash={dash} onClose={() => setLinking(false)} />}
       {widgets.length ? (
         <div className="dash-grid">
           {widgets.map((w, i) => (
@@ -265,5 +272,106 @@ function NameModal({ title, canShare, onSave, onClose }: { title: string; canSha
         )}
       </div>
     </Modal>
+  );
+}
+
+function ShareLinkModal({ dash, onClose }: { dash: Dashboard; onClose: () => void }) {
+  const toast = useToast();
+  const [days, setDays] = useState(30);
+  const [link, setLink] = useState<{ url: string; expiresAt: string } | null>(null);
+  const create = async () => {
+    try {
+      setLink(await post<{ url: string; expiresAt: string }>(`/api/v1/dashboards/${dash.id}/share-link`, { days }));
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
+  const revoke = async () => {
+    try {
+      await del(`/api/v1/dashboards/${dash.id}/share-link`);
+      setLink(null);
+      toast('Link switched off');
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
+  return (
+    <Modal title={`Share “${dash.name}” by link`} onClose={onClose}>
+      <div className="modal-body stack">
+        <p className="small">Anyone with the link sees this dashboard read-only, with the numbers you can see, until it expires. Use it for a partner, an investor or a TV in the office. Creating a new link switches the old one off.</p>
+        <div className="row">
+          <label className="field" style={{ margin: 0 }}>
+            Expires after
+            <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+              {[1, 7, 30, 90].map((d) => (
+                <option key={d} value={d}>
+                  {d} {d === 1 ? 'day' : 'days'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="btn primary" onClick={create}>
+            {link ? 'New link' : 'Create link'}
+          </button>
+          <button className="btn danger" onClick={revoke}>
+            Switch off
+          </button>
+        </div>
+        {link && (
+          <label className="field">
+            Link (expires {new Date(link.expiresAt).toLocaleDateString('en-IN')})
+            <div className="row">
+              <input readOnly value={link.url} onFocus={(e) => e.target.select()} className="mono small" />
+              <button className="btn sm" onClick={() => navigator.clipboard?.writeText(link.url).then(() => toast('Copied'))}>
+                Copy
+              </button>
+            </div>
+          </label>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/** A dashboard opened from a share link: no sign-in, read-only. */
+export function SharedDashboardPage() {
+  const { token = '' } = useParams();
+  const { data, error } = useQuery({
+    queryKey: ['shared-dash', token],
+    queryFn: async () => {
+      const r = await fetch(`/api/public/dashboards/${encodeURIComponent(token)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error?.message ?? 'This link is not valid');
+      return j as Record<string, any>;
+    },
+    refetchInterval: 300_000,
+    retry: false,
+  });
+  useEffect(() => {
+    if (data) document.title = `${data.name} — ${data.company}`;
+  }, [data]);
+  if (error) return <div className="public-wrap"><p>{(error as Error).message}</p></div>;
+  if (!data) return <div className="public-wrap"><Spinner /></div>;
+  return (
+    <div className="shared-dash">
+      <header className="cp-head">
+        <b>{data.company}</b>
+        <span className="muted small">{data.name} · read-only · updates every 5 minutes</span>
+      </header>
+      <div className="dash-grid" style={{ marginTop: 16 }}>
+        {(data.widgets as Record<string, any>[]).map((w, i) => {
+          const obj = (data.objects as Record<string, any>[]).find((o) => o.key === w.objectKey);
+          const stageOrder = (data.pipelines as Record<string, any>[]).filter((p) => p.objectKey === w.objectKey).flatMap((p) => p.stages.map((s: { id: string }) => s.id));
+          return (
+            <section key={i} className={`panel widget size-${w.size}`}>
+              <div className="panel-head">
+                <h2 style={{ fontSize: 15 }}>{w.title}</h2>
+              </div>
+              <div className="panel-body">{obj ? <ReportView obj={obj as never} def={w.definition} result={w.result} stageOrder={stageOrder} compact /> : null}</div>
+            </section>
+          );
+        })}
+      </div>
+    </div>
   );
 }

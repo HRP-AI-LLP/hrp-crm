@@ -42,6 +42,7 @@ const PublicDocPage = page(() => import('./pages/DocPrint'), 'PublicDocPage');
 const InboxPage = page(() => import('./pages/Inbox'), 'InboxPage');
 const CampaignsPage = page(() => import('./pages/Campaigns'), 'CampaignsPage');
 const HealthPage = page(() => import('./pages/Health'), 'HealthPage');
+const SharedDashboardPage = page(() => import('./pages/Dashboards'), 'SharedDashboardPage');
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useAuth();
@@ -79,6 +80,7 @@ export function App() {
       <Route path="/privacy/:key" element={<PrivacyPortalPage />} />
       <Route path="/unsubscribe/:token" element={<UnsubscribePage />} />
       <Route path="/doc/:token" element={<PublicDocPage />} />
+      <Route path="/share/d/:token" element={<SharedDashboardPage />} />
       <Route
         path="/print/quote/:id"
         element={

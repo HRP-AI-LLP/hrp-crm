@@ -9,7 +9,7 @@ import { z } from 'zod';
 import type { AppEnv } from '../env';
 import { badRequest, forbidden, notFound } from '../lib/errors';
 import { scope } from '../middleware';
-import { forecast, forecastDeals, type Period } from '../services/forecast';
+import { forecast, forecastDeals, projection, type Period } from '../services/forecast';
 import { enqueue, eventJobs } from '../services/jobs';
 import { getQuote, lineSchema, markSent, quoteFromDeal, saveLines, syncDealAmount } from '../services/quotes';
 import { aggregateRecords, getObject, listRecords, loadRow, type RecordCtx } from '../services/records';
@@ -92,9 +92,9 @@ export const reportDefinitionSchema = z.object({
   chart: z.enum(['bar', 'hbar', 'line', 'pie', 'funnel', 'number']).nullish(),
   limit: z.number().int().min(1).max(200).default(50),
 });
-type ReportDefinition = z.infer<typeof reportDefinitionSchema>;
+export type ReportDefinition = z.infer<typeof reportDefinitionSchema>;
 
-async function runReport(ctx: RecordCtx, objectKey: string, d: ReportDefinition) {
+export async function runReport(ctx: RecordCtx, objectKey: string, d: ReportDefinition) {
   getObject(ctx.meta, objectKey);
   if (d.type === 'table') {
     const r = await listRecords(ctx, objectKey, { filters: d.filters, sort: d.sort?.field, dir: d.sort?.dir, limit: d.limit, count: true });
@@ -436,6 +436,7 @@ export const salesRoutes = new Hono<AppEnv>()
     const start = q.start ?? new Date().toISOString().slice(0, 10);
     return c.json(await c.var.db.tx(scope(c, true), (tx) => forecast(rctx(c, tx), q.period as Period, start)));
   })
+  .get('/forecast/projection', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => projection(rctx(c, tx)))))
   .get('/forecast/deals', async (c) => {
     const q = z.object({ period: z.enum(['month', 'quarter']), start: dateStr, category: z.enum(['closed', 'commit', 'best_case', 'pipeline', 'lost', 'omitted']), owner: uuid.optional() }).parse(c.req.query());
     return c.json({ items: await c.var.db.tx(scope(c, true), (tx) => forecastDeals(rctx(c, tx), q.period, q.start, q.category, q.owner ?? null)) });

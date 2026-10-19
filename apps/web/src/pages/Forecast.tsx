@@ -1,3 +1,4 @@
+import { BarChart } from '../components/charts';
 import { objectPerm } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -192,6 +193,7 @@ export function ForecastPage() {
       ) : null}
       {drill && data && <DrillModal period={period} start={data.from} cat={drill.cat} rep={drill.rep} onClose={() => setDrill(null)} />}
       {quotas && data && <QuotaModal months={data.months} onClose={() => setQuotas(false)} />}
+      <ProjectionPanel />
     </>
   );
 }
@@ -293,5 +295,37 @@ function QuotaModal({ months, onClose }: { months: string[]; onClose: () => void
         </table>
       </div>
     </Modal>
+  );
+}
+
+/** Six months of won revenue, the trend line and the weighted pipeline for the next months. */
+function ProjectionPanel() {
+  const { data, error } = useQuery({ queryKey: ['projection'], queryFn: () => get<Record<string, any>>('/api/v1/forecast/projection'), retry: false });
+  if (error || !data) return null;
+  const label = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleString('en-IN', { month: 'short', timeZone: 'UTC' });
+  const cats = [...data.history.map((h: { month: string }) => label(h.month)), `${label(data.current.month)} (now)`, ...data.next.map((n: { month: string }) => label(n.month))];
+  const chart = {
+    categories: cats,
+    series: [
+      { label: 'Won', values: [...data.history.map((h: { won: number }) => h.won), data.current.wonSoFar, 0, 0, 0] },
+      { label: 'Expected from pipeline', values: [0, 0, 0, 0, 0, 0, data.current.weightedOpen, ...data.next.map((n: { weightedOpen: number }) => n.weightedOpen)] },
+      { label: 'Trend', values: [0, 0, 0, 0, 0, 0, data.current.trend, ...data.next.map((n: { trend: number }) => n.trend)] },
+    ],
+  };
+  const fmt = (v: number) => `₹${(v / 100000).toFixed(v >= 1e7 ? 0 : 1)}L`;
+  return (
+    <section className="panel" style={{ marginTop: 16 }}>
+      <div className="panel-head">
+        <div>
+          <h2>Revenue projection</h2>
+          <p className="muted small" style={{ margin: 0 }}>
+            Won so far this month {fmt(data.current.wonSoFar)} · at this pace {fmt(data.current.runRate)} · with weighted pipeline {fmt(data.current.projected)} · trend {data.slopePerMonth >= 0 ? 'up' : 'down'} {fmt(Math.abs(data.slopePerMonth))} a month
+          </p>
+        </div>
+      </div>
+      <div className="panel-body">
+        <BarChart data={chart} fmt={fmt} stacked={false} height={220} />
+      </div>
+    </section>
   );
 }

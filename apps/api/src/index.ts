@@ -11,6 +11,7 @@ import type { Job } from './services/jobs';
 import { dailyBackups } from './services/backup';
 import { mailSweep } from './services/mail';
 import { campaignSweep } from './services/campaigns';
+import { digestSweep } from './services/digests';
 import { reminderSweep } from './services/reminders';
 import { privacyDailySweep } from './services/privacy';
 import { systemCtxFor } from './services/system';
@@ -44,6 +45,7 @@ export default {
         await mailSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'mail-sweep', msg: (e as Error).message })));
         // campaigns send in batches while one is running (a KV flag keeps idle workspaces asleep)
         await campaignSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'campaign-sweep', msg: (e as Error).message })));
+        await digestSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'digest-sweep', msg: (e as Error).message })));
         return;
       }
       await reminderSweep(env, db, true);

@@ -91,3 +91,64 @@ export async function forecastDeals(ctx: RecordCtx, period: Period, start: strin
     p.values,
   );
 }
+
+/**
+ * Revenue projection: six months of won revenue, this month's run rate and weighted pipeline,
+ * and the next three months from the trend line plus the pipeline expected to close in them.
+ * Visibility rules apply, so each person projects their own (or their team's) numbers.
+ */
+export async function projection(ctx: RecordCtx) {
+  if (fieldAccess(ctx.principal.permissions, 'deal', 'amount') === 'hidden') throw forbidden('You cannot see deal amounts');
+  const IST = 330 * 60_000;
+  const now = new Date(Date.now() + IST);
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const month = (i: number) => new Date(Date.UTC(y, m + i, 1)).toISOString().slice(0, 7);
+  const p = new Params();
+  const vis = visibilityWhere(ctx, 'deal', p).join(' and ');
+  const from = p.add(`${month(-6)}-01`);
+  const to = p.add(`${month(4)}-01`);
+  const rows = await ctx.tx.query<{ month: string; won: number; weighted: number; open: number }>(
+    `select to_char(coalesce(case when s.category = 'won' then (r.closed_at at time zone 'Asia/Kolkata')::date end, r.close_date), 'YYYY-MM') as month,
+            coalesce(sum(r.amount) filter (where s.category = 'won'), 0)::float8 as won,
+            coalesce(sum(r.amount * coalesce(r.probability, s.probability) / 100.0) filter (where s.category = 'open'), 0)::float8 as weighted,
+            coalesce(sum(r.amount) filter (where s.category = 'open'), 0)::float8 as open
+       from deals r join pipeline_stages s on s.tenant_id = r.tenant_id and s.id = r.stage_id
+      where ${vis} and ((s.category = 'won' and r.closed_at >= ${from}::date - interval '1 day' and r.closed_at < ${to}::date)
+                     or (s.category = 'open' and r.close_date >= ${from}::date and r.close_date < ${to}::date))
+      group by 1`,
+    p.values,
+  );
+  const by = new Map(rows.map((r) => [r.month, r]));
+  const history = Array.from({ length: 6 }, (_, i) => ({ month: month(i - 6), won: by.get(month(i - 6))?.won ?? 0 }));
+  // least-squares line through the last six months
+  const xs = history.map((_, i) => i);
+  const mean = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length;
+  const mx = mean(xs);
+  const my = mean(history.map((h) => h.won));
+  const slope = xs.reduce((s, x, i) => s + (x - mx) * (history[i]!.won - my), 0) / (xs.reduce((s, x) => s + (x - mx) ** 2, 0) || 1);
+  const trendAt = (i: number) => Math.max(0, Math.round(my + slope * (i - mx)));
+  const daysIn = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  const day = now.getUTCDate();
+  const cur = by.get(month(0));
+  const wonSoFar = cur?.won ?? 0;
+  // open deals whose close date has already passed this month still count as this month's pipeline
+  const p2 = new Params();
+  const vis2 = visibilityWhere(ctx, 'deal', p2).join(' and ');
+  const overdue = await ctx.tx.one<{ w: number }>(
+    `select coalesce(sum(r.amount * coalesce(r.probability, s.probability) / 100.0), 0)::float8 as w from deals r join pipeline_stages s on s.tenant_id = r.tenant_id and s.id = r.stage_id
+      where ${vis2} and s.category = 'open' and r.close_date < ${p2.add(`${month(0)}-01`)}::date`,
+    p2.values,
+  );
+  const weightedOpen = (cur?.weighted ?? 0) + (overdue?.w ?? 0);
+  const current = {
+    month: month(0),
+    wonSoFar,
+    runRate: day > 0 ? Math.round((wonSoFar / day) * daysIn) : 0,
+    weightedOpen: Math.round(weightedOpen),
+    projected: Math.round(wonSoFar + weightedOpen),
+    trend: trendAt(6),
+  };
+  const next = [1, 2, 3].map((i) => ({ month: month(i), weightedOpen: Math.round(by.get(month(i))?.weighted ?? 0), open: Math.round(by.get(month(i))?.open ?? 0), trend: trendAt(6 + i) }));
+  return { history, current, next, slopePerMonth: Math.round(slope) };
+}

@@ -1,3 +1,4 @@
+import { DigestsPanel } from '../components/Digests';
 import { type ObjectMeta, valueType } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
@@ -97,6 +98,7 @@ export function ReportsPage() {
           ))
         )}
       </section>
+      <DigestsPanel />
     </>
   );
 }
