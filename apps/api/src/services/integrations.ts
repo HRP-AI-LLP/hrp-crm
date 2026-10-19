@@ -28,6 +28,7 @@ export interface Integration {
   last_event_at: string | null;
   last_error: string | null;
   error_count: number;
+  created_by: string | null;
   created_at: string;
 }
 

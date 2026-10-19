@@ -7,6 +7,7 @@ import { download, get, post, put } from '../../lib/api';
 import { date, money2 } from '../../lib/format';
 import { Modal, useToast } from '../ui';
 import { type DocLine, LinesEditor, toLineInput } from './LinesEditor';
+import { TallySync } from './TallySync';
 
 type Json = Record<string, any>;
 const STATUS_CLS: Record<string, string> = { draft: '', issued: 'info', partially_paid: 'warn', paid: 'good', cancelled: 'bad' };
@@ -522,7 +523,7 @@ export function OrderBilling({ order, milestones, canEdit }: { order: Json; mile
   );
 }
 
-/** /billing — receivables, GST returns, Tally export and billing settings. */
+/** /billing — receivables, GST returns, Tally sync and export, and billing settings. */
 export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
   const [tab, setTab] = useState<'ar' | 'gst' | 'tally' | 'settings'>('ar');
   return (
@@ -539,7 +540,7 @@ export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
             [
               ['ar', 'Receivables'],
               ['gst', 'GST returns'],
-              ['tally', 'Tally export'],
+              ['tally', 'Tally'],
               ['settings', 'Settings'],
             ] as const
           )
@@ -552,7 +553,13 @@ export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
         </div>
         {tab === 'ar' && <Receivables />}
         {tab === 'gst' && <GstReturns />}
-        {tab === 'tally' && <TallyExport />}
+        {tab === 'tally' && (
+          <>
+            <TallySync />
+            <h3 style={{ margin: '0 16px' }}>Manual export</h3>
+            <TallyExport />
+          </>
+        )}
         {tab === 'settings' && <BillingSettingsForm />}
       </section>
     </>

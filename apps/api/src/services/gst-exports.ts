@@ -163,8 +163,72 @@ export async function gstr1(ctx: RecordCtx, month: string, section: 'b2b' | 'b2c
 }
 
 // ---------------------------------------------------------------------------------- Tally
-const x = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+export const x = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const amt = (n: number) => r2(n).toFixed(2);
+export type TallyLedgers = { sales: string; cgst: string; sgst: string; igst: string; roundOff: string; bank: string };
+
+const entry = (ledger: string, amount: number, debit: boolean, bills?: { name: string; type: 'New Ref' | 'Agst Ref'; amount: number }[]) =>
+  `<ALLLEDGERENTRIES.LIST><LEDGERNAME>${x(ledger)}</LEDGERNAME><ISDEEMEDPOSITIVE>${debit ? 'Yes' : 'No'}</ISDEEMEDPOSITIVE><AMOUNT>${amt(debit ? -amount : amount)}</AMOUNT>` +
+  (bills ?? []).map((b) => `<BILLALLOCATIONS.LIST><NAME>${x(b.name)}</NAME><BILLTYPE>${b.type}</BILLTYPE><AMOUNT>${amt(debit ? -b.amount : b.amount)}</AMOUNT></BILLALLOCATIONS.LIST>`).join('') +
+  `</ALLLEDGERENTRIES.LIST>`;
+
+/** A sales invoice or credit note as an accounting voucher; the party entry carries the bill reference. */
+export function salesVoucherXml(L: TallyLedgers, i: Record<string, any>, opts: { remoteId?: string; billWise?: boolean } = {}) {
+  const credit = i.doc_type === 'credit_note';
+  const total = Number(i.grand_total);
+  // sales: party debit / sales + taxes credit; credit notes are the mirror image
+  const lines = [
+    entry(i.buyer_name, total, !credit, opts.billWise ? [{ name: String(credit ? (i.original_invoice_number ?? i.invoice_number) : i.invoice_number), type: credit ? 'Agst Ref' : 'New Ref', amount: total }] : undefined),
+    entry(L.sales, Number(i.taxable_total), credit),
+    ...(Number(i.cgst_total) ? [entry(L.cgst, Number(i.cgst_total), credit)] : []),
+    ...(Number(i.sgst_total) ? [entry(L.sgst, Number(i.sgst_total), credit)] : []),
+    ...(Number(i.igst_total) ? [entry(L.igst, Number(i.igst_total), credit)] : []),
+    ...(Number(i.round_off) ? [entry(L.roundOff, Math.abs(Number(i.round_off)), credit ? Number(i.round_off) > 0 : Number(i.round_off) < 0)] : []),
+  ];
+  return (
+    `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER${opts.remoteId ? ` REMOTEID="${x(opts.remoteId)}"` : ''} VCHTYPE="${credit ? 'Credit Note' : 'Sales'}" ACTION="Create" OBJVIEW="Accounting Voucher View">` +
+    `<DATE>${ymd(i.invoice_date).replace(/-/g, '')}</DATE><VOUCHERTYPENAME>${credit ? 'Credit Note' : 'Sales'}</VOUCHERTYPENAME><VOUCHERNUMBER>${x(i.invoice_number)}</VOUCHERNUMBER>` +
+    `<PARTYLEDGERNAME>${x(i.buyer_name)}</PARTYLEDGERNAME><PARTYGSTIN>${x(i.buyer_gstin ?? '')}</PARTYGSTIN><PLACEOFSUPPLY>${x(i.place_of_supply ?? '')}</PLACEOFSUPPLY>` +
+    `<NARRATION>${x(i.name)}</NARRATION>${lines.join('')}</VOUCHER></TALLYMESSAGE>`
+  );
+}
+
+/** A receipt; with bill-wise details it settles the invoices it was allocated to. */
+export function receiptVoucherXml(L: TallyLedgers, p: Record<string, any>, party: string, bills: { name: string; amount: number }[] = [], remoteId?: string) {
+  const amount = Number(p.amount);
+  const allocated = bills.reduce((a, b) => a + b.amount, 0);
+  const refs: { name: string; type: 'New Ref' | 'Agst Ref'; amount: number }[] = bills.map((b) => ({ name: b.name, type: 'Agst Ref', amount: b.amount }));
+  // anything not allocated to an invoice stays as an advance (on account) in Tally
+  if (bills.length && amount - allocated > 0.009) refs.push({ name: `${p.payment_number} advance`, type: 'New Ref', amount: r2(amount - allocated) });
+  return (
+    `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER${remoteId ? ` REMOTEID="${x(remoteId)}"` : ''} VCHTYPE="Receipt" ACTION="Create" OBJVIEW="Accounting Voucher View">` +
+    `<DATE>${ymd(p.payment_date).replace(/-/g, '')}</DATE><VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME><VOUCHERNUMBER>${x(p.payment_number)}</VOUCHERNUMBER>` +
+    `<PARTYLEDGERNAME>${x(party)}</PARTYLEDGERNAME><NARRATION>${x([p.mode, p.reference].filter(Boolean).join(' '))}</NARRATION>` +
+    entry(L.bank, amount, true) +
+    entry(party, amount, false, refs.length ? refs : undefined) +
+    `</VOUCHER></TALLYMESSAGE>`
+  );
+}
+
+/** A customer ledger under Sundry Debtors, with GST registration and address. */
+export function ledgerXml(l: { name: string; gstin?: string | null; state?: string | null; address?: string | null; pincode?: string | null; parent?: string }, action: 'Create' | 'Alter' = 'Create') {
+  return (
+    `<TALLYMESSAGE xmlns:UDF="TallyUDF"><LEDGER NAME="${x(l.name)}" ACTION="${action}"><NAME.LIST><NAME>${x(l.name)}</NAME></NAME.LIST><PARENT>${x(l.parent ?? 'Sundry Debtors')}</PARENT>` +
+    `<ISBILLWISEON>Yes</ISBILLWISEON><AFFECTSSTOCK>No</AFFECTSSTOCK>` +
+    `<GSTREGISTRATIONTYPE>${l.gstin ? 'Regular' : 'Unregistered/Consumer'}</GSTREGISTRATIONTYPE>${l.gstin ? `<PARTYGSTIN>${x(l.gstin)}</PARTYGSTIN>` : ''}` +
+    `${l.state ? `<LEDSTATENAME>${x(l.state)}</LEDSTATENAME><STATENAME>${x(l.state)}</STATENAME>` : ''}<COUNTRYNAME>India</COUNTRYNAME>` +
+    `${l.address ? `<ADDRESS.LIST>${String(l.address).split(/\n|, /).slice(0, 4).map((a) => `<ADDRESS>${x(a.trim())}</ADDRESS>`).join('')}</ADDRESS.LIST>` : ''}${l.pincode ? `<PINCODE>${x(l.pincode)}</PINCODE>` : ''}` +
+    `</LEDGER></TALLYMESSAGE>`
+  );
+}
+
+export function tallyEnvelope(company: string, messages: string[]) {
+  return (
+    `<?xml version="1.0" encoding="UTF-8"?>\n<ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA>` +
+    `<REQUESTDESC><REPORTNAME>All Masters</REPORTNAME><STATICVARIABLES><SVCURRENTCOMPANY>${x(company)}</SVCURRENTCOMPANY></STATICVARIABLES></REQUESTDESC>` +
+    `<REQUESTDATA>${messages.join('\n')}</REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>\n`
+  );
+}
 
 export async function tallyXml(ctx: RecordCtx, from: string, to: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw badRequest('Dates must be YYYY-MM-DD');
@@ -179,37 +243,9 @@ export async function tallyXml(ctx: RecordCtx, from: string, to: string) {
       where p.tenant_id = $1 and p.payment_date between $2::date and $3::date and p.status = 'received' and p.deleted_at is null order by p.payment_date, p.payment_number`,
     [ctx.tenantId, from, to],
   );
-  const entry = (ledger: string, amount: number, debit: boolean) =>
-    `<ALLLEDGERENTRIES.LIST><LEDGERNAME>${x(ledger)}</LEDGERNAME><ISDEEMEDPOSITIVE>${debit ? 'Yes' : 'No'}</ISDEEMEDPOSITIVE><AMOUNT>${amt(debit ? -amount : amount)}</AMOUNT></ALLLEDGERENTRIES.LIST>`;
   const vouchers: string[] = [];
-  for (const i of invs) {
-    const credit = i.doc_type === 'credit_note';
-    // sales: party debit / sales + taxes credit; credit notes are the mirror image
-    const lines = [
-      entry(i.buyer_name, Number(i.grand_total), !credit),
-      entry(L.sales, Number(i.taxable_total), credit),
-      ...(Number(i.cgst_total) ? [entry(L.cgst, Number(i.cgst_total), credit)] : []),
-      ...(Number(i.sgst_total) ? [entry(L.sgst, Number(i.sgst_total), credit)] : []),
-      ...(Number(i.igst_total) ? [entry(L.igst, Number(i.igst_total), credit)] : []),
-      ...(Number(i.round_off) ? [entry(L.roundOff, Math.abs(Number(i.round_off)), credit ? Number(i.round_off) > 0 : Number(i.round_off) < 0)] : []),
-    ];
-    vouchers.push(
-      `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER VCHTYPE="${credit ? 'Credit Note' : 'Sales'}" ACTION="Create" OBJVIEW="Accounting Voucher View">` +
-        `<DATE>${ymd(i.invoice_date).replace(/-/g, '')}</DATE><VOUCHERTYPENAME>${credit ? 'Credit Note' : 'Sales'}</VOUCHERTYPENAME><VOUCHERNUMBER>${x(i.invoice_number)}</VOUCHERNUMBER>` +
-        `<PARTYLEDGERNAME>${x(i.buyer_name)}</PARTYLEDGERNAME><PARTYGSTIN>${x(i.buyer_gstin ?? '')}</PARTYGSTIN><PLACEOFSUPPLY>${x(i.place_of_supply ?? '')}</PLACEOFSUPPLY>` +
-        `<NARRATION>${x(i.name)}</NARRATION>${lines.join('')}</VOUCHER></TALLYMESSAGE>`,
-    );
-  }
-  for (const p of pays) {
-    vouchers.push(
-      `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER VCHTYPE="Receipt" ACTION="Create" OBJVIEW="Accounting Voucher View">` +
-        `<DATE>${ymd(p.payment_date).replace(/-/g, '')}</DATE><VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME><VOUCHERNUMBER>${x(p.payment_number)}</VOUCHERNUMBER>` +
-        `<PARTYLEDGERNAME>${x(p.account_name)}</PARTYLEDGERNAME><NARRATION>${x([p.mode, p.reference].filter(Boolean).join(' '))}</NARRATION>` +
-        entry(L.bank, Number(p.amount), true) +
-        entry(p.account_name, Number(p.amount), false) +
-        `</VOUCHER></TALLYMESSAGE>`,
-    );
-  }
+  for (const i of invs) vouchers.push(salesVoucherXml(L, i));
+  for (const p of pays) vouchers.push(receiptVoucherXml(L, p, p.account_name));
   const company = await letterhead(ctx);
   const xml =
     `<?xml version="1.0" encoding="UTF-8"?>\n<ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA>` +
