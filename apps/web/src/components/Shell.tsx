@@ -230,6 +230,7 @@ export function Shell() {
         </div>
         <div className="nav-group">
           <div>Plan</div>
+          <NavLink to="/health">Business health</NavLink>
           <NavLink to="/calendar">Calendar</NavLink>
           <NavLink to="/forecast">Forecast</NavLink>
           <NavLink to="/reports">Reports</NavLink>

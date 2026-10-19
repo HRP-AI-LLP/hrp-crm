@@ -9,6 +9,7 @@ import { moveStock } from './inventory';
 import { LINE_DOCS, readLines, replaceLines } from './lines';
 import { letterhead, type LineInput } from './quotes';
 import { createRecord, loadRow, type RecordCtx, type RecordEvent, readRowSystem, toDto } from './records';
+import { milestonePlan } from './solutions';
 
 const DOC = LINE_DOCS.sales_order!;
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -44,6 +45,7 @@ export async function getOrder(ctx: RecordCtx, id: string) {
     milestones,
     account,
     company: await letterhead(ctx),
+    milestonePlan: await milestonePlan(ctx),
   };
 }
 
@@ -93,6 +95,18 @@ export async function orderFromQuote(ctx: RecordCtx, quoteId: string, opts: { al
   await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'quote',$3), ($1,'system',$4,'sales_order',$5)`, [
     ctx.tenantId, `Converted to order ${r.record.order_number}`, quoteId, `Created from quote ${q.quote_number}`, id,
   ]);
+  // the workspace's usual payment plan (e.g. 50 / 40 / 10) is applied to every new order
+  const plan = await milestonePlan(ctx);
+  if (plan?.length) {
+    // a plan that does not fit (permissions, totals) is skipped: the person sets milestones by hand
+    await ctx.tx.query('savepoint milestone_plan');
+    try {
+      await setMilestones(ctx, id, plan.map((m) => ({ name: m.name, percent: m.percent, trigger: m.trigger as MilestoneInput['trigger'] })));
+      await ctx.tx.query('release savepoint milestone_plan');
+    } catch {
+      await ctx.tx.query('rollback to savepoint milestone_plan');
+    }
+  }
   return { id, events: r.events };
 }
 

@@ -1,6 +1,7 @@
 import type { FieldDef } from '@synapse/shared';
 import { IntegrationsTab } from '../components/admin/IntegrationsAdmin';
 import { PrivacyTab } from '../components/admin/PrivacyAdmin';
+import { SolutionsPanel } from '../components/admin/SolutionsAdmin';
 import { QuickReplies, TemplatesModal } from '../components/admin/WhatsAppAdmin';
 import { useOAuthReturn } from '../lib/oauthReturn';
 import { AutomationsTab } from '../components/builders/AutomationBuilder';
@@ -477,6 +478,9 @@ function ModulesTab() {
   const run = useRun();
   const { data } = useQuery({ queryKey: ['admin-modules'], queryFn: () => get<{ items: Json[] }>('/api/admin/modules') });
   return (
+    <div className="stack">
+    <SolutionsPanel />
+    <h3 style={{ margin: '12px 0 0' }}>Other industry modules</h3>
     <table className="data">
       <tbody>
         {data?.items.map((m) => (
@@ -499,6 +503,7 @@ function ModulesTab() {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 

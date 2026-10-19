@@ -152,7 +152,7 @@ export function OrderPanel({ orderId, canEdit }: { orderId: string; canEdit: boo
         <div className="spread" style={{ marginTop: 6 }}>
           <h3>Payment milestones</h3>
           {canEdit && !['cancelled', 'completed'].includes(status) && (
-            <button className="btn sm" onClick={() => setMs(data.milestones.length ? data.milestones.map((m: Json) => ({ ...m, dueDate: m.due_date ? String(m.due_date).slice(0, 10) : '' })) : [{ name: 'Advance', percent: 50, trigger: 'on_confirmation' }, { name: 'Before dispatch', percent: 40, trigger: 'before_dispatch' }, { name: 'After installation', percent: 10, trigger: 'on_installation' }])}>
+            <button className="btn sm" onClick={() => setMs(data.milestones.length ? data.milestones.map((m: Json) => ({ ...m, dueDate: m.due_date ? String(m.due_date).slice(0, 10) : '' })) : (data.milestonePlan ?? [{ name: 'Advance', percent: 50, trigger: 'on_confirmation' }, { name: 'Before dispatch', percent: 40, trigger: 'before_dispatch' }, { name: 'After installation', percent: 10, trigger: 'on_installation' }]))}>
               {data.milestones.length ? 'Edit milestones' : 'Plan milestones'}
             </button>
           )}

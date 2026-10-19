@@ -5,6 +5,7 @@
  * every created artifact is tagged with module_key so it can be upgraded or removed cleanly.
  */
 import type { FieldSpec } from './fields';
+import { SOLUTIONS } from './industries';
 
 export interface ModuleObject {
   key: string;
@@ -25,7 +26,7 @@ export interface ModuleWorkflow {
   name: string;
   object: string;
   trigger: 'created' | 'updated' | 'stage_changed';
-  conditions: { field: string; op: string; value: unknown }[];
+  conditions: { field: string; op: string; value?: unknown }[];
   actions: Record<string, unknown>[];
 }
 
@@ -292,4 +293,5 @@ export const MODULES: Record<string, ModuleManifest> = {
   [HEALTHCARE.key]: HEALTHCARE,
   [ECOMMERCE.key]: ECOMMERCE,
   [FINANCIAL_SERVICES.key]: FINANCIAL_SERVICES,
+  ...Object.fromEntries(Object.values(SOLUTIONS).map((s) => [s.module.key, s.module])),
 };

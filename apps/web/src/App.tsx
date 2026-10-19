@@ -41,6 +41,7 @@ const UnsubscribePage = page(() => import('./pages/PrivacyPages'), 'UnsubscribeP
 const PublicDocPage = page(() => import('./pages/DocPrint'), 'PublicDocPage');
 const InboxPage = page(() => import('./pages/Inbox'), 'InboxPage');
 const CampaignsPage = page(() => import('./pages/Campaigns'), 'CampaignsPage');
+const HealthPage = page(() => import('./pages/Health'), 'HealthPage');
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { me, ready } = useAuth();
@@ -126,6 +127,7 @@ export function App() {
         <Route path="billing" element={<BillingRoute />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="inbox" element={<InboxPage />} />
+        <Route path="health" element={<HealthPage />} />
         <Route path="campaigns" element={<CampaignsPage />} />
         <Route path="campaigns/:id" element={<CampaignsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

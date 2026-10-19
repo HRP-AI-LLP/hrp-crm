@@ -17,6 +17,7 @@ import { mobileRoutes } from './routes/mobile';
 import { integrationAdminRoutes, integrationPublicRoutes, integrationRoutes } from './routes/integrations';
 import { publicRoutes } from './routes/public';
 import { whatsappAdminRoutes, whatsappPublicRoutes, whatsappRoutes } from './routes/whatsapp';
+import { insightsAdminRoutes, insightsRoutes } from './routes/insights';
 import { auditExportRoutes, privacyAdminRoutes, privacyPublicRoutes, privacyRoutes } from './routes/privacy';
 import { salesRoutes } from './routes/sales';
 import { securityRoutes } from './routes/security';
@@ -68,6 +69,7 @@ export function createApp() {
   app.route('/api/v1', integrationRoutes);
   app.route('/api/v1', privacyRoutes);
   app.route('/api/v1', whatsappRoutes);
+  app.route('/api/v1', insightsRoutes);
   app.route('/api/ai', aiRoutes);
   app.route('/api/admin', adminRoutes);
   app.route('/api/admin', securityRoutes);
@@ -79,6 +81,7 @@ export function createApp() {
   app.route('/api/admin', privacyAdminRoutes);
   app.route('/api/admin', auditExportRoutes);
   app.route('/api/admin', whatsappAdminRoutes);
+  app.route('/api/admin', insightsAdminRoutes);
 
   app.all('/api/*', () => {
     throw notFound('No such API route');

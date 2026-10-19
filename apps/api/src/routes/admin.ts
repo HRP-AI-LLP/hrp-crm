@@ -1,4 +1,4 @@
-import { hashPassword, MODULES, passwordPolicyError, rolePermissionsSchema, fieldSpecSchema, KEY_PATTERN } from '@synapse/shared';
+import { hashPassword, MODULES, SOLUTIONS, passwordPolicyError, rolePermissionsSchema, fieldSpecSchema, KEY_PATTERN } from '@synapse/shared';
 import { type Integration, revokeTokens } from '../services/integrations';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -361,7 +361,8 @@ export const adminRoutes = new Hono<AppEnv>()
   .get('/modules', requireAdmin('modules'), (c) => {
     const installed = new Map(c.var.meta.modules.map((m) => [m.key, m]));
     return c.json({
-      items: Object.values(MODULES).map((m) => ({
+      // industry solutions are installed as a whole (Settings → Industry modules → solutions)
+      items: Object.values(MODULES).filter((m) => !SOLUTIONS[m.key]).map((m) => ({
         key: m.key, name: m.name, version: m.version, description: m.description, industry: m.industry,
         objects: m.objects.map((o) => o.label), installed: installed.has(m.key), installedVersion: installed.get(m.key)?.version ?? null,
       })),
