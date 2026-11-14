@@ -26,6 +26,8 @@ export interface Env {
   AI_PII_PROVIDERS?: string;
   AI_MODEL_WORKERS?: string;
   AI_MODEL_GROQ?: string;
+  /** speech-to-text for meeting and call recordings */
+  AI_MODEL_WHISPER?: string;
   AI_MODEL_GEMINI?: string;
   AI_EMBEDDING_MODEL?: string;
   CF_ZONE_ID?: string;

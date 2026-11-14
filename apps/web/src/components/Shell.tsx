@@ -178,6 +178,7 @@ export function Shell() {
   const opsObjects = opsKeys.map((k) => objects.find((o) => o.key === k)).filter((o): o is NonNullable<typeof o> => !!o);
   const approvals = useApprovalCount(!!me);
   const inbox = useQuery({ queryKey: ['inbox-badge'], queryFn: () => get<{ counts: { unread: number } }>('/api/v1/inbox?view=mine&status=open'), enabled: !!me, refetchInterval: 60_000, staleTime: 30_000 });
+  const copilot = useQuery({ queryKey: ['copilot'], queryFn: () => get<{ insights: unknown[] }>('/api/v1/intel/copilot'), enabled: !!me, refetchInterval: 300_000, staleTime: 120_000 });
   const online = useOnline();
   const admin = me && (can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains') || can('privacy') || can('developers') || can('ai'));
 
@@ -193,6 +194,9 @@ export function Shell() {
         </div>
         <NavLink to="/" end>
           Home
+        </NavLink>
+        <NavLink to="/copilot">
+          Copilot{copilot.data?.insights?.length ? <span className="nav-badge">{copilot.data.insights.length}</span> : null}
         </NavLink>
         <NavLink to="/field">My day</NavLink>
         <NavLink to="/tasks">My tasks</NavLink>

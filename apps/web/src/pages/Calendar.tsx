@@ -284,6 +284,11 @@ export function EventModal({ event, onClose }: { event: Partial<CalEvent>; onClo
               {error}
             </span>
           )}
+          {!isNew && (
+            <Link className="btn ai" to={`/copilot?meeting=${event.id}`} onClick={onClose} style={{ marginRight: 'auto' }}>
+              Brief &amp; debrief
+            </Link>
+          )}
           {!isNew && mine && (
             <button className="btn danger" onClick={() => window.confirm('Delete this event?') && run(() => del(`/api/v1/events/${event.id}`), 'Event deleted')}>
               Delete

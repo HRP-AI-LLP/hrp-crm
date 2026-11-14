@@ -2,6 +2,7 @@ import type { FieldDef } from '@synapse/shared';
 import { IntegrationsTab } from '../components/admin/IntegrationsAdmin';
 import { PrivacyTab } from '../components/admin/PrivacyAdmin';
 import { SolutionsPanel } from '../components/admin/SolutionsAdmin';
+import { AgentsAdmin, CompetitorsAdmin } from '../components/admin/IntelAdmin';
 import { QuickReplies, TemplatesModal } from '../components/admin/WhatsAppAdmin';
 import { useOAuthReturn } from '../lib/oauthReturn';
 import { AutomationsTab } from '../components/builders/AutomationBuilder';
@@ -42,6 +43,10 @@ const GROUPS: [string, [string, string, string][]][] = [
     ['roles', 'Roles & access', 'roles'],
     ['sharing', 'Sharing rules', 'roles'],
     ['security', 'Security', 'users'],
+  ]],
+  ['Intelligence', [
+    ['agents', 'AI agents', 'ai'],
+    ['competitors', 'Competitors', 'ai'],
   ]],
   ['Connect', [
     ['ai', 'AI models', 'ai'],
@@ -122,6 +127,8 @@ export function SettingsPage() {
           {tab === 'modules' && <ModulesTab />}
           {tab === 'apps' && <AppsTab />}
           {tab === 'ai' && <AiModelsTab />}
+          {tab === 'agents' && <AgentsAdmin />}
+          {tab === 'competitors' && <CompetitorsAdmin />}
           {tab === 'workflows' && <AutomationsTab />}
           {tab === 'routing' && <RoutingTab />}
           {tab === 'service' && <ServiceSettingsTab />}

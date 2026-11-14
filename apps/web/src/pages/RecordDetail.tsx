@@ -1,5 +1,8 @@
 import type { FieldDef, RecordDto } from '@synapse/shared';
 import { ConsentPanel } from '../components/admin/PrivacyAdmin';
+import { CopilotPanel } from '../components/intel/CopilotPanel';
+
+const COPILOT_OBJECTS = ['lead', 'contact', 'account', 'deal'];
 import { WhatsAppButton } from './Inbox';
 import { allowedChoices, fieldVisible, objectPerm, resolveLayout } from '@synapse/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -70,7 +73,7 @@ export function RecordDetailPage() {
   const toast = useToast();
   const nav = useNavigate();
   const { me } = useAuth();
-  const [tab, setTab] = useState<'timeline' | 'related' | 'files' | 'tasks' | 'ai'>('timeline');
+  const [tab, setTab] = useState<'timeline' | 'related' | 'files' | 'tasks' | 'ai' | 'copilot'>('timeline');
   const [converting, setConverting] = useState(false);
   const [composing, setComposing] = useState(false);
   const [scheduling, setScheduling] = useState(false);
@@ -275,9 +278,9 @@ export function RecordDetailPage() {
 
         <section className="panel">
           <div className="tabs" role="tablist">
-            {(['timeline', 'related', 'files', 'tasks', 'ai'] as const).map((t) => (
+            {(['timeline', ...(COPILOT_OBJECTS.includes(object) ? (['copilot'] as const) : []), 'related', 'files', 'tasks', 'ai'] as const).map((t) => (
               <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
-                {t === 'timeline' ? 'Timeline' : t === 'related' ? 'Related' : t === 'files' ? 'Files' : t === 'tasks' ? 'Tasks' : 'Synapse AI'}
+                {t === 'timeline' ? 'Timeline' : t === 'copilot' ? 'Copilot' : t === 'related' ? 'Related' : t === 'files' ? 'Files' : t === 'tasks' ? 'Tasks' : 'Synapse AI'}
               </button>
             ))}
           </div>
@@ -290,6 +293,7 @@ export function RecordDetailPage() {
             </div>
           )}
           {tab === 'ai' && <AiPanel object={object} id={id} insights={insights} />}
+          {tab === 'copilot' && <CopilotPanel object={object} id={id} canEdit={canEdit} />}
         </section>
       </div>
 

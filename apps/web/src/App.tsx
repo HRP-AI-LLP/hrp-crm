@@ -42,6 +42,7 @@ const PublicDocPage = page(() => import('./pages/DocPrint'), 'PublicDocPage');
 const InboxPage = page(() => import('./pages/Inbox'), 'InboxPage');
 const CampaignsPage = page(() => import('./pages/Campaigns'), 'CampaignsPage');
 const HealthPage = page(() => import('./pages/Health'), 'HealthPage');
+const CopilotPage = page(() => import('./pages/Copilot'), 'CopilotPage');
 const DevelopersPage = page(() => import('./pages/Developers'), 'DevelopersPage');
 const SharedDashboardPage = page(() => import('./pages/Dashboards'), 'SharedDashboardPage');
 
@@ -131,6 +132,7 @@ export function App() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="health" element={<HealthPage />} />
+        <Route path="copilot" element={<CopilotPage />} />
         <Route path="developers" element={<DevelopersPage />} />
         <Route path="campaigns" element={<CampaignsPage />} />
         <Route path="campaigns/:id" element={<CampaignsPage />} />

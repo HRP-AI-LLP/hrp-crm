@@ -17,6 +17,8 @@ These limits were checked in October 2026. Providers change them, so re-check th
 | WhatsApp campaigns | Workers CPU / Neon compute | Sent in batches of up to 80 per campaign every 5 minutes (first batch at once). A KV flag keeps the cron from waking the database when no campaign is running. WhatsApp's own pricing applies per conversation. |
 | Email digests | Resend free tier (3,000/month, 100/day) | Each recipient is one email. A KV timestamp keeps the database asleep until the next digest is due. |
 | Webhook log | Neon storage | Deliveries are kept 30 days. |
+| Intelligence sweep | Neon compute | Hourly (KV-gated) set-based SQL for scores and insights; no AI calls. Auto meeting prep is off by default and capped by a daily budget per workspace. New conversations are embedded in batches of 100 per hour when Vectorize is bound. |
+| Agents and Ask Synapse | Workers AI / your own keys | Count against the per-tenant daily AI cap like other AI features; every agent has a rule-based result when the cap is reached. Recording transcription uses Workers AI Whisper (`AI_MODEL_WHISPER`). |
 | Cloudflare for SaaS | **100 custom hostnames** included, then $0.10 each | Self-serve custom domains for up to 100 tenants at no cost. |
 
 ## When to start paying

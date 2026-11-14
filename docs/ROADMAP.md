@@ -52,9 +52,17 @@ Built to cover everything in the ELVM Homes proposal on top of the CRM.
 - **Developer platform:** per-workspace OpenAPI 3.1, REST hooks, webhook delivery log and redelivery, timestamped signatures, per-key rate limits.
 - **Android notifications** through Firebase Cloud Messaging.
 
+## Sixth round: revenue intelligence (Nov 2026)
+
+An AI layer of the kind platforms such as Zambyl add on top of a CRM, built into Synapse and fitted to made-to-order businesses (see [INTELLIGENCE.md](INTELLIGENCE.md)):
+
+- **Context layer:** every lead, contact, account and deal is gathered with its customer, deals, quotes, orders, invoices, tickets, competitors, conversations, meetings and scores, as the viewer sees them. Facts are numbered and cited. Stray emails are linked by address or company domain.
+- **Eleven agents** across pipeline creation, deal execution, customer success and growth, and team performance. Each produces a rule-based result first and uses AI on top. Field changes need approval.
+- **Copilot workspace**, a record Copilot tab, meeting brief and debrief (with recording transcription), an hourly insights feed with notifications, deal-risk and account-health scores, competitors with battlecards, and Ask Synapse.
+
 ## Next (suggested order)
 
-1. **Pilots with 2–3 made-to-order businesses** on dev: what they ask for decides the next round.
+1. **Pilots with 2–3 made-to-order businesses** on dev: what they ask for decides the next round. Measure agent usefulness: which briefs and debriefs get used, and how many suggestions are applied versus rejected.
 2. **Platform app reviews:** Google OAuth verification with the CASA assessment for Gmail, Meta App Review with business verification (also needed for WhatsApp templates at scale), and Microsoft publisher verification.
 3. **Test the Tally connector against a live Tally Prime** and adjust tags if a Tally release differs; add stock-item sync for inventory-tracked invoices.
 4. **More telephony and payment providers:** Knowlarity, MyOperator and Ozonetel behind the same interface; Cashfree and PhonePe as alternatives to Razorpay.

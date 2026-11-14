@@ -456,6 +456,22 @@ export async function eraseSubject(ctx: RecordCtx, s: Subject, requestId: string
     await tx.query(`update campaign_recipients set address = '[erased]' where tenant_id = $1 and subject_id = $2 and address not like 'h:%'`, [tenantId, sub.id]);
     await tx.query(`delete from notifications where tenant_id = $1 and link like '%' || $2::text || '%'`, [tenantId, sub.id]);
     await tx.query(`delete from webhook_deliveries where tenant_id = $1 and payload ->> 'recordId' = $2::text`, [tenantId, sub.id]);
+    // intelligence: search index entries, AI outputs and suggestions about the person
+    const ix = await tx.query<{ source_kind: string; source_id: string }>(
+      `delete from interaction_index where tenant_id = $1 and related_object = $2 and related_id = $3 returning source_kind, source_id`,
+      [tenantId, sub.object, sub.id],
+    );
+    r2Keys.push(...ix.map((x) => `vec:${x.source_kind[0]}:${x.source_id}`));
+    await tx.query(`delete from agent_runs where tenant_id = $1 and subject_object = $2 and subject_id = $3`, [tenantId, sub.object, sub.id]);
+    await tx.query(`delete from agent_runs where tenant_id = $1 and citations @> jsonb_build_array(jsonb_build_object('id', $2::text))`, [tenantId, sub.id]);
+    await tx.query(`delete from agent_suggestions where tenant_id = $1 and object_key = $2 and record_id = $3`, [tenantId, sub.object, sub.id]);
+    await tx.query(`delete from action_items where tenant_id = $1 and related_object = $2 and related_id = $3`, [tenantId, sub.object, sub.id]);
+    await tx.query(`delete from insights where tenant_id = $1 and related_object = $2 and related_id = $3`, [tenantId, sub.object, sub.id]);
+    await tx.query(`delete from record_scores where tenant_id = $1 and object_key = $2 and record_id = $3`, [tenantId, sub.object, sub.id]);
+    await tx.query(
+      `update meeting_notes set notes = null, transcript = null where tenant_id = $1 and event_id in (select id from events where tenant_id = $1 and related_object = $2 and related_id = $3)`,
+      [tenantId, sub.object, sub.id],
+    );
     summary.activities = Number(summary.activities) + a.length;
     const f = await tx.query<{ storage_key: string }>(`update files set deleted_at = now(), name = 'erased' where tenant_id = $1 and object_key = $2 and record_id = $3 and deleted_at is null returning storage_key`, [tenantId, sub.object, sub.id]);
     summary.files = Number(summary.files) + f.length;
@@ -475,8 +491,12 @@ export async function eraseSubject(ctx: RecordCtx, s: Subject, requestId: string
 
 /** Removes erased files from storage (after the erasing transaction committed). */
 export async function purgeFiles(env: Env, keys: string[]) {
-  if (!env.FILES || !keys.length) return;
-  await Promise.all(keys.map((k) => env.FILES!.delete(k).catch(() => undefined)));
+  // "vec:" entries are conversation embeddings in the search index (ids only, no text)
+  const vectors = keys.filter((k) => k.startsWith('vec:')).map((k) => k.slice(4));
+  if (env.VECTORIZE && vectors.length) await env.VECTORIZE.deleteByIds(vectors).catch(() => undefined);
+  const files = keys.filter((k) => !k.startsWith('vec:'));
+  if (!env.FILES || !files.length) return;
+  await Promise.all(files.map((k) => env.FILES!.delete(k).catch(() => undefined)));
 }
 
 /** Audit entries of erased records are shown without their old values. */
