@@ -53,6 +53,25 @@ export async function enableApp(ctx: RecordCtx, key: string) {
       [ctx.tenantId],
     );
   }
+  if (key === 'projects') {
+    // people see the projects they run or work on (membership); managers see their team's
+    for (const [role, perm] of [
+      ['sales_rep', { read: 'own', create: true, update: 'own', delete: 'none' }],
+      ['sales_manager', { read: 'team', create: true, update: 'team', delete: 'none' }],
+      ['read_only', { read: 'all', create: false, update: 'none', delete: 'none' }],
+      ['inventory_manager', { read: 'own', create: false, update: 'own', delete: 'none' }],
+      ['operations', { read: 'own', create: true, update: 'own', delete: 'none' }],
+      ['technician', { read: 'own', create: false, update: 'own', delete: 'none' }],
+      ['service_agent', { read: 'own', create: false, update: 'own', delete: 'none' }],
+      ['accounts', { read: 'all', create: false, update: 'none', delete: 'none' }],
+      ['accountant', { read: 'all', create: false, update: 'none', delete: 'none' }],
+    ] as const)
+      await ctx.tx.query(
+        `update roles set permissions = jsonb_set(permissions, '{objects,project}', $3::jsonb, true)
+          where tenant_id = $1 and key = $2 and is_system and permissions ? 'objects' and not (permissions -> 'objects' ? 'project')`,
+        [ctx.tenantId, role, JSON.stringify(perm)],
+      );
+  }
   if (key === 'books') {
     // everyone files their own expenses and claims; sales managers see and approve their team's.
     // Bills and vendor payments stay with accounts (sales roles otherwise inherit "*" create rights).

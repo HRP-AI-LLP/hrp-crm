@@ -30,6 +30,7 @@ import { InstallationPanel, ShipmentPanel } from '../components/ops/FieldPanels'
 import { RaiseTicketButton, TicketBar } from '../components/ops/ServicePanels';
 import { InvoicePanel, PaymentPanel } from '../components/ops/BillingPanels';
 import { BillPanel, ExpensePanel, MakeRecurring, VendorPaymentPanel, WriteOffButton } from '../components/books/BookPanels';
+import { ProjectWorkspace } from '../components/projects/ProjectWorkspace';
 
 /** Mirrors the API: documents that drive stock, tax or customer commitments are deleted only in these states. */
 const DELETABLE_IN: Record<string, string[]> = {
@@ -255,6 +256,7 @@ export function RecordDetailPage() {
       )}
       {object === 'vendor_payment' && <VendorPaymentPanel id={id} canEdit={canEdit} />}
       {object === 'expense' && <ExpensePanel rec={rec} canEdit={canEdit} />}
+      {object === 'project' && apps.has('projects') && <ProjectWorkspace id={id} />}
       {object === 'payment' && <PaymentPanel id={id} canEdit={canEdit} />}
       {object === 'product' && apps.has('inventory') && rec.product_type !== 'service' && (
         <ProductStockPanel productId={id} productName={rec.title} isVariant={!!rec.variant_of} canMove={!!me && (hasAdmin(me.permissions, 'operations') || objectPerm(me.permissions, 'product').update === 'all')} />

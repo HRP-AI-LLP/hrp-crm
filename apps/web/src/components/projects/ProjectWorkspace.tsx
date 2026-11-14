@@ -1,0 +1,1252 @@
+/** The inside of a project: overview, tasks (list / board), Gantt, milestones, issues, time, billing, team. */
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { del, get, patch, post, put } from '../../lib/api';
+import { useAuth } from '../../lib/auth';
+import { date, money2 } from '../../lib/format';
+import { useUsers } from '../../lib/hooks';
+import { BarChart } from '../charts';
+import { Empty, Modal, Spinner, useToast } from '../ui';
+
+type Json = Record<string, any>;
+const today = () => new Date().toISOString().slice(0, 10);
+const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+const d10 = (v: unknown) => (v ? String(v).slice(0, 10) : '');
+const hrs = (m: number) => `${Math.floor(m / 60)}:${String(Math.round(m % 60)).padStart(2, '0')}`;
+export const TASK_STATUSES: [string, string][] = [['open', 'Open'], ['in_progress', 'In progress'], ['review', 'Review'], ['blocked', 'Blocked'], ['done', 'Done'], ['cancelled', 'Cancelled']];
+const PRIORITY: Record<string, string> = { urgent: 'bad', high: 'warn', medium: 'info', low: '', none: '' };
+const STATUS_CLS: Record<string, string> = { open: '', in_progress: 'info', review: 'warn', blocked: 'bad', done: 'good', cancelled: '' };
+
+function useAct(keys: unknown[][]) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  return async <T,>(fn: () => Promise<T>, ok?: string): Promise<T | null> => {
+    try {
+      const r = await fn();
+      if (ok) toast(ok);
+      for (const k of keys) qc.invalidateQueries({ queryKey: k });
+      return r;
+    } catch (e) {
+      toast((e as Error).message, true);
+      return null;
+    }
+  };
+}
+
+type Tab = 'overview' | 'tasks' | 'gantt' | 'milestones' | 'issues' | 'time' | 'billing' | 'team';
+
+export function ProjectWorkspace({ id }: { id: string }) {
+  const { data, isLoading, error } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`) });
+  const [tab, setTab] = useState<Tab>('overview');
+  if (isLoading) return <Spinner />;
+  if (error || !data) return null;
+  const manage = data.level === 'manage';
+  const member = manage || data.level === 'member';
+  const tabs: [Tab, string][] = [
+    ['overview', 'Overview'], ['tasks', 'Tasks'], ['gantt', 'Gantt'], ['milestones', 'Milestones'], ['issues', 'Issues'], ['time', 'Time'],
+    ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'],
+  ];
+  return (
+    <section className="panel" style={{ marginBottom: 20 }}>
+      <div className="tabs" role="tablist" style={{ overflowX: 'auto' }}>
+        {tabs.map(([k, l]) => (
+          <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
+            {l}
+          </button>
+        ))}
+      </div>
+      <div className="panel-body">
+        {tab === 'overview' && <Overview id={id} data={data} />}
+        {tab === 'tasks' && <Tasks id={id} data={data} member={member} manage={manage} />}
+        {tab === 'gantt' && <Gantt id={id} data={data} member={member} />}
+        {tab === 'milestones' && <Milestones id={id} data={data} manage={manage} />}
+        {tab === 'issues' && <Issues id={id} data={data} member={member} />}
+        {tab === 'time' && <ProjectTime id={id} data={data} member={member} />}
+        {tab === 'billing' && manage && <Billing id={id} />}
+        {tab === 'team' && <Team id={id} data={data} manage={manage} />}
+      </div>
+    </section>
+  );
+}
+
+/* ───────────────────────── overview ───────────────────────── */
+
+function Overview({ id, data }: { id: string; data: Json }) {
+  const { data: s } = useQuery({ queryKey: ['project', id, 'summary'], queryFn: () => get<Json>(`/api/v1/projects/${id}/summary`) });
+  const nav = useNavigate();
+  const toast = useToast();
+  if (!s) return <Spinner />;
+  const t = s.tasks as Record<string, number>;
+  const total = Object.values(t).reduce((a, b) => a + b, 0);
+  const chart = { categories: (s.weekly as Json[]).map((w) => w.week.slice(5)), series: [{ label: 'Hours', values: (s.weekly as Json[]).map((w) => Number(w.hours)) }, { label: 'Billable', values: (s.weekly as Json[]).map((w) => Number(w.billable ?? 0)) }] };
+  return (
+    <div className="stack">
+      <div className="kpis" style={{ margin: 0 }}>
+        <Kpi l="Progress" v={`${Math.round(s.progress)}%`} sub={`${t.done ?? 0} of ${total} tasks done`} />
+        <Kpi l="Overdue tasks" v={String(s.overdueTasks)} tone={s.overdueTasks ? 'bad' : undefined} sub={`${s.issues?.open ?? 0} open issues (${s.issues?.critical ?? 0} critical)`} />
+        <Kpi l="Hours logged" v={String(s.hours.logged)} sub={`${s.hours.billable} billable · ${s.hours.estimated} estimated`} />
+        {s.budget && <Kpi l={`Budget (${s.budget.type})`} v={s.budget.pct != null ? `${s.budget.pct}%` : '—'} tone={s.budget.pct > 100 ? 'bad' : undefined} sub={`${s.budget.type === 'hours' ? s.budget.used : money2(s.budget.used)} of ${s.budget.type === 'hours' ? s.budget.planned : money2(s.budget.planned)}`} />}
+        {s.schedule && <Kpi l="Days left" v={String(s.schedule.daysLeft)} tone={s.schedule.daysLeft < 0 ? 'bad' : undefined} sub={`Ends ${date(s.schedule.endDate)}`} />}
+      </div>
+      {s.money && (
+        <div className="kpis" style={{ margin: 0 }}>
+          <Kpi l="Invoiced" v={money2(s.money.revenue)} sub={`${money2(s.money.unbilled)} approved, not billed`} />
+          <Kpi l="Cost" v={money2(s.money.cost)} sub={`Labour ${money2(s.money.labourCost)} · expenses ${money2(s.money.expenses)} · bills ${money2(s.money.bills)}`} />
+          <Kpi l="Profit" v={money2(s.money.profit)} tone={s.money.profit < 0 ? 'bad' : 'good'} sub={s.money.margin != null ? `Margin ${s.money.margin}%` : undefined} />
+        </div>
+      )}
+      {data.project.description && <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{data.project.description}</p>}
+      <div className="panel" style={{ padding: 14 }}>
+        <h3 style={{ marginTop: 0 }}>Hours by week</h3>
+        {chart.categories.length ? <BarChart data={chart} stacked={false} fmt={(n) => `${Math.round(n)}h`} /> : <p className="muted">No time logged yet.</p>}
+      </div>
+      {data.level === 'manage' && (
+        <div>
+          <button
+            className="btn"
+            onClick={async () => {
+              const name = window.prompt('Name of the new project (tasks, lists, milestones and dependencies are copied)', `${data.project.title} (copy)`);
+              if (!name) return;
+              const start = window.prompt('Start date of the new project (YYYY-MM-DD); dates shift to match', today()) || null;
+              try {
+                const r = await post<{ id: string }>(`/api/v1/projects/${id}/duplicate`, { name, startDate: start });
+                nav(`/o/project/${r.id}`);
+              } catch (e) {
+                toast((e as Error).message, true);
+              }
+            }}
+          >
+            Use as template
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Kpi({ l, v, sub, tone }: { l: string; v: string; sub?: string; tone?: 'good' | 'bad' }) {
+  return (
+    <div className="panel kpi">
+      <div className="l">{l}</div>
+      <div className={`v${tone ? ` tone-${tone}` : ''}`}>{v}</div>
+      {sub && <div className="small muted">{sub}</div>}
+    </div>
+  );
+}
+
+/* ───────────────────────── tasks ───────────────────────── */
+
+function useTasks(id: string) {
+  return useQuery({ queryKey: ['project', id, 'tasks'], queryFn: () => get<{ tasks: Json[]; deps: Json[] }>(`/api/v1/projects/${id}/tasks`) });
+}
+
+function people(data: Json) {
+  const m = new Map<string, string>();
+  for (const x of data.members as Json[]) if (x.role !== 'viewer') m.set(x.user_id, x.full_name);
+  if (data.project.owner_id && data.project.manager) m.set(data.project.owner_id, data.project.manager);
+  return m;
+}
+
+function Tasks({ id, data, member, manage }: { id: string; data: Json; member: boolean; manage: boolean }) {
+  const { data: t } = useTasks(id);
+  const { me } = useAuth();
+  const [view, setView] = useState<'list' | 'board'>('list');
+  const [filter, setFilter] = useState({ mine: false, status: 'open_all' });
+  const [edit, setEdit] = useState<Json | null>(null);
+  const act = useAct([['project', id]]);
+  const who = people(data);
+  if (!t) return <Spinner />;
+  const tasks = t.tasks.filter((x) => (!filter.mine || (x.assignees as string[]).includes(me!.user.id)) && (filter.status === 'all' || (filter.status === 'open_all' ? !['done', 'cancelled'].includes(x.status) : x.status === filter.status)));
+  const top = tasks.filter((x) => !x.parent_id);
+  const subs = (pid: string) => tasks.filter((x) => x.parent_id === pid);
+  const lists: Json[] = [...data.lists, { id: null, name: 'No list' }];
+  const row = (x: Json, sub = false) => (
+    <tr key={x.id} id={`task-${x.id}`} className="click" onClick={() => setEdit(x)}>
+      <td style={{ paddingLeft: sub ? 32 : 12 }} onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          disabled={!member}
+          checked={x.status === 'done'}
+          onChange={(e) => act(() => patch(`/api/v1/projects/${id}/tasks/${x.id}`, { status: e.target.checked ? 'done' : 'open' }))}
+          aria-label="Done"
+        />
+      </td>
+      <td style={{ whiteSpace: 'normal' }}>
+        <span className="muted small">#{x.task_number}</span> <span style={x.status === 'done' ? { textDecoration: 'line-through', color: 'var(--ink-3)' } : undefined}>{x.name}</span>
+        {x.comments > 0 && <span className="muted small"> · 💬 {x.comments}</span>}
+      </td>
+      <td>{(x.assignees as string[]).map((a) => who.get(a) ?? '—').join(', ')}</td>
+      <td>
+        <span className={`chip ${STATUS_CLS[x.status]}`}>{x.status.replace('_', ' ')}</span>
+      </td>
+      <td>{x.priority !== 'none' && <span className={`chip ${PRIORITY[x.priority]}`}>{x.priority}</span>}</td>
+      <td style={x.due_date && d10(x.due_date) < today() && !['done', 'cancelled'].includes(x.status) ? { color: 'var(--bad)' } : undefined}>{date(x.due_date)}</td>
+      <td className="num">
+        {x.logged_hours ? `${Math.round(x.logged_hours * 10) / 10}h` : ''}
+        {x.estimate_hours ? ` / ${x.estimate_hours}h` : ''}
+      </td>
+    </tr>
+  );
+  return (
+    <div className="stack">
+      <div className="row" style={{ flexWrap: 'wrap' }}>
+        {member && (
+          <button className="btn primary" onClick={() => setEdit({})}>
+            New task
+          </button>
+        )}
+        {member && (
+          <button
+            className="btn"
+            onClick={async () => {
+              const name = window.prompt('Name of the task list');
+              if (name) await act(() => post(`/api/v1/projects/${id}/lists`, { name }), 'List added');
+            }}
+          >
+            New list
+          </button>
+        )}
+        <div className="row" role="group">
+          <button className={`btn sm${view === 'list' ? ' primary' : ' ghost'}`} onClick={() => setView('list')}>
+            List
+          </button>
+          <button className={`btn sm${view === 'board' ? ' primary' : ' ghost'}`} onClick={() => setView('board')}>
+            Board
+          </button>
+        </div>
+        <select value={filter.status} onChange={(e) => setFilter({ ...filter, status: e.target.value })} style={{ width: 'auto' }}>
+          <option value="open_all">Not done</option>
+          <option value="all">All</option>
+          {TASK_STATUSES.map(([k, l]) => (
+            <option key={k} value={k}>
+              {l}
+            </option>
+          ))}
+        </select>
+        <label className="row small">
+          <input type="checkbox" checked={filter.mine} onChange={(e) => setFilter({ ...filter, mine: e.target.checked })} /> Mine
+        </label>
+      </div>
+      {view === 'list' ? (
+        !t.tasks.length ? (
+          <Empty title="No tasks yet">Break the work into lists and tasks; give them dates to see them on the Gantt chart.</Empty>
+        ) : (
+          lists.map((l) => {
+            const xs = top.filter((x) => (x.list_id ?? null) === l.id);
+            if (!xs.length && l.id === null) return null;
+            return (
+              <div key={l.id ?? 'none'}>
+                <div className="spread">
+                  <h3 style={{ margin: '8px 0' }}>{l.name}</h3>
+                  {l.id && manage && (
+                    <button className="btn sm ghost" onClick={() => window.confirm(`Delete the list "${l.name}"? Its tasks stay, without a list.`) && act(() => del(`/api/v1/projects/${id}/lists/${l.id}`), 'List deleted')}>
+                      Delete list
+                    </button>
+                  )}
+                </div>
+                <table className="data">
+                  <tbody>{xs.flatMap((x) => [row(x), ...subs(x.id).map((s) => row(s, true))])}</tbody>
+                </table>
+              </div>
+            );
+          })
+        )
+      ) : (
+        <Board id={id} tasks={top} who={who} member={member} onOpen={setEdit} />
+      )}
+      {edit && <TaskModal id={id} data={data} task={edit} tasks={t.tasks} deps={t.deps} member={member} manage={manage} onClose={() => setEdit(null)} />}
+    </div>
+  );
+}
+
+function Board({ id, tasks, who, member, onOpen }: { id: string; tasks: Json[]; who: Map<string, string>; member: boolean; onOpen: (t: Json) => void }) {
+  const act = useAct([['project', id]]);
+  const [drag, setDrag] = useState<string | null>(null);
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${TASK_STATUSES.length - 1}, minmax(200px, 1fr))`, gap: 10, overflowX: 'auto' }}>
+      {TASK_STATUSES.filter(([k]) => k !== 'cancelled').map(([k, l]) => (
+        <div
+          key={k}
+          className="panel"
+          style={{ padding: 8, minHeight: 200, background: '#f7fafb' }}
+          onDragOver={(e) => member && e.preventDefault()}
+          onDrop={() => {
+            if (drag && member) act(() => patch(`/api/v1/projects/${id}/tasks/${drag}`, { status: k }));
+            setDrag(null);
+          }}
+        >
+          <div className="spread small" style={{ marginBottom: 6 }}>
+            <b>{l}</b>
+            <span className="muted">{tasks.filter((t) => t.status === k).length}</span>
+          </div>
+          {tasks
+            .filter((t) => t.status === k)
+            .map((t) => (
+              <div key={t.id} className="panel" draggable={member} onDragStart={() => setDrag(t.id)} onClick={() => onOpen(t)} style={{ padding: 8, marginBottom: 6, cursor: 'pointer' }}>
+                <div className="small muted">#{t.task_number}</div>
+                <div>{t.name}</div>
+                <div className="row small" style={{ gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                  {t.priority !== 'none' && <span className={`chip ${PRIORITY[t.priority]}`}>{t.priority}</span>}
+                  {t.due_date && <span className="muted">{date(t.due_date)}</span>}
+                  <span className="muted">{(t.assignees as string[]).map((a) => who.get(a)?.split(' ')[0] ?? '').join(', ')}</span>
+                </div>
+              </div>
+            ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TaskModal({ id, data, task, tasks, deps, member, manage, onClose }: { id: string; data: Json; task: Json; tasks: Json[]; deps: Json[]; member: boolean; manage: boolean; onClose: () => void }) {
+  const act = useAct([['project', id]]);
+  const who = people(data);
+  const isNew = !task.id;
+  const [f, setF] = useState<Json>({
+    name: task.name ?? '',
+    description: task.description ?? '',
+    listId: task.list_id ?? '',
+    milestoneId: task.milestone_id ?? '',
+    parentId: task.parent_id ?? '',
+    status: task.status ?? 'open',
+    priority: task.priority ?? 'medium',
+    assignees: task.assignees ?? [],
+    startDate: d10(task.start_date),
+    dueDate: d10(task.due_date),
+    estimateHours: task.estimate_hours ?? '',
+    billable: task.billable ?? true,
+    rate: task.rate ?? '',
+  });
+  const comments = useQuery({ queryKey: ['project', id, 'comments', task.id], queryFn: () => get<Json[]>(`/api/v1/projects/${id}/tasks/${task.id}/comments`), enabled: !isNew });
+  const [comment, setComment] = useState('');
+  const [dep, setDep] = useState('');
+  const mine = deps.filter((d) => d.task_id === task.id);
+  const save = async () => {
+    const body: Json = {
+      name: f.name,
+      description: f.description || null,
+      listId: f.listId || null,
+      milestoneId: f.milestoneId || null,
+      parentId: f.parentId || null,
+      status: f.status,
+      priority: f.priority,
+      assignees: f.assignees,
+      startDate: f.startDate || null,
+      dueDate: f.dueDate || null,
+      estimateHours: f.estimateHours === '' ? null : Number(f.estimateHours),
+      billable: f.billable,
+      ...(manage ? { rate: f.rate === '' ? null : Number(f.rate) } : {}),
+    };
+    const r = isNew ? await act(() => post(`/api/v1/projects/${id}/tasks`, body), 'Task added') : await act(() => patch(`/api/v1/projects/${id}/tasks/${task.id}`, body), 'Saved');
+    if (r) onClose();
+  };
+  return (
+    <Modal
+      title={isNew ? 'New task' : `#${task.task_number} ${task.name}`}
+      onClose={onClose}
+      wide
+      footer={
+        member ? (
+          <>
+            {!isNew && (
+              <button className="btn danger" onClick={async () => window.confirm('Delete this task and its sub-tasks?') && (await act(() => del(`/api/v1/projects/${id}/tasks/${task.id}`), 'Deleted')) && onClose()}>
+                Delete
+              </button>
+            )}
+            <button className="btn primary" disabled={!f.name.trim()} onClick={save}>
+              Save
+            </button>
+          </>
+        ) : undefined
+      }
+    >
+      <div className="modal-body stack">
+        <div className="grid2">
+          <label className="field wide">
+            Task
+            <input value={f.name} disabled={!member} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus />
+          </label>
+          <label className="field">
+            Status
+            <select value={f.status} disabled={!member} onChange={(e) => setF({ ...f, status: e.target.value })}>
+              {TASK_STATUSES.map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            Priority
+            <select value={f.priority} disabled={!member} onChange={(e) => setF({ ...f, priority: e.target.value })}>
+              {['urgent', 'high', 'medium', 'low', 'none'].map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            Start
+            <input type="date" disabled={!member} value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} />
+          </label>
+          <label className="field">
+            Due
+            <input type="date" disabled={!member} value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} />
+          </label>
+          <label className="field">
+            List
+            <select value={f.listId} disabled={!member} onChange={(e) => setF({ ...f, listId: e.target.value })}>
+              <option value="">No list</option>
+              {(data.lists as Json[]).map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            Milestone
+            <select value={f.milestoneId} disabled={!member} onChange={(e) => setF({ ...f, milestoneId: e.target.value })}>
+              <option value="">None</option>
+              {(data.milestones as Json[]).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            Sub-task of
+            <select value={f.parentId} disabled={!member} onChange={(e) => setF({ ...f, parentId: e.target.value })}>
+              <option value="">—</option>
+              {tasks
+                .filter((x) => !x.parent_id && x.id !== task.id)
+                .map((x) => (
+                  <option key={x.id} value={x.id}>
+                    #{x.task_number} {x.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="field">
+            Estimate (hours)
+            <input inputMode="decimal" disabled={!member} value={f.estimateHours} onChange={(e) => setF({ ...f, estimateHours: e.target.value })} />
+          </label>
+          {manage && (
+            <label className="field">
+              Rate per hour (task-rate billing)
+              <input inputMode="decimal" value={f.rate} onChange={(e) => setF({ ...f, rate: e.target.value })} />
+            </label>
+          )}
+          <label className="row field">
+            <input type="checkbox" disabled={!member} checked={f.billable} onChange={(e) => setF({ ...f, billable: e.target.checked })} /> Billable
+          </label>
+          <div className="field wide">
+            Assigned to
+            <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
+              {[...who].map(([uid, name]) => (
+                <label key={uid} className="row small" style={{ fontWeight: 400 }}>
+                  <input
+                    type="checkbox"
+                    disabled={!member}
+                    checked={(f.assignees as string[]).includes(uid)}
+                    onChange={(e) => setF({ ...f, assignees: e.target.checked ? [...f.assignees, uid] : (f.assignees as string[]).filter((a) => a !== uid) })}
+                  />
+                  {name}
+                </label>
+              ))}
+            </div>
+          </div>
+          <label className="field wide">
+            Description
+            <textarea rows={4} disabled={!member} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+          </label>
+        </div>
+        {!isNew && (
+          <>
+            <div>
+              <b>Waits for</b>
+              {mine.map((d) => {
+                const pre = tasks.find((x) => x.id === d.depends_on_id);
+                return (
+                  <div key={d.depends_on_id} className="row small">
+                    <span>
+                      #{pre?.task_number} {pre?.name} ({d.kind.toUpperCase()}
+                      {d.lag_days ? `, ${d.lag_days > 0 ? '+' : ''}${d.lag_days}d` : ''})
+                    </span>
+                    {member && (
+                      <button className="btn sm ghost" onClick={() => act(() => del(`/api/v1/projects/${id}/tasks/${task.id}/deps/${d.depends_on_id}`))}>
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              {member && (
+                <div className="row" style={{ marginTop: 6 }}>
+                  <select value={dep} onChange={(e) => setDep(e.target.value)} style={{ maxWidth: 320 }}>
+                    <option value="">Add a task this one waits for…</option>
+                    {tasks
+                      .filter((x) => x.id !== task.id && !mine.some((d) => d.depends_on_id === x.id))
+                      .map((x) => (
+                        <option key={x.id} value={x.id}>
+                          #{x.task_number} {x.name}
+                        </option>
+                      ))}
+                  </select>
+                  <button className="btn sm" disabled={!dep} onClick={async () => (await act(() => post(`/api/v1/projects/${id}/tasks/${task.id}/deps`, { dependsOnId: dep }), 'Dependency added')) && setDep('')}>
+                    Add (finish → start)
+                  </button>
+                </div>
+              )}
+            </div>
+            <div>
+              <b>Comments</b>
+              {(comments.data ?? []).map((c) => (
+                <div key={c.id} className="small" style={{ margin: '6px 0' }}>
+                  <b>{c.full_name}</b> <span className="muted">{date(c.created_at)}</span>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{c.body}</div>
+                </div>
+              ))}
+              {member && (
+                <div className="row" style={{ marginTop: 6 }}>
+                  <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Write a comment" />
+                  <button
+                    className="btn sm"
+                    disabled={!comment.trim()}
+                    onClick={async () => {
+                      if (await act(() => post(`/api/v1/projects/${id}/tasks/${task.id}/comments`, { body: comment.trim() }))) {
+                        setComment('');
+                        comments.refetch();
+                      }
+                    }}
+                  >
+                    Post
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/* ───────────────────────── gantt ───────────────────────── */
+
+function Gantt({ id, data, member }: { id: string; data: Json; member: boolean }) {
+  const { data: t } = useTasks(id);
+  const [open, setOpen] = useState<Json | null>(null);
+  const [zoom, setZoom] = useState(18);
+  const rows = useMemo(() => (t?.tasks ?? []).filter((x) => x.start_date || x.due_date).sort((a, b) => (d10(a.start_date || a.due_date) < d10(b.start_date || b.due_date) ? -1 : 1)), [t]);
+  if (!t) return <Spinner />;
+  const ms = (data.milestones as Json[]).filter((m) => m.due_date);
+  const dates = [...rows.flatMap((r) => [d10(r.start_date || r.due_date), d10(r.due_date || r.start_date)]), ...ms.map((m) => d10(m.due_date)), today()];
+  if (!rows.length) return <Empty title="Nothing to chart">Give tasks start and due dates to see them here.</Empty>;
+  const min = addDays(dates.reduce((a, b) => (a < b ? a : b)), -2);
+  const max = addDays(dates.reduce((a, b) => (a > b ? a : b)), 3);
+  const days = Math.round((Date.parse(`${max}T00:00:00Z`) - Date.parse(`${min}T00:00:00Z`)) / 86_400_000) + 1;
+  const x = (d: string) => (Math.round((Date.parse(`${d}T00:00:00Z`) - Date.parse(`${min}T00:00:00Z`)) / 86_400_000)) * zoom;
+  const ROW = 28;
+  const LABEL = 240;
+  const index = new Map(rows.map((r, i) => [r.id, i]));
+  const width = days * zoom;
+  const height = (rows.length + 1) * ROW + 10;
+  return (
+    <div className="stack">
+      <div className="row">
+        <span className="small muted">Zoom</span>
+        {[10, 18, 30].map((z) => (
+          <button key={z} className={`btn sm${zoom === z ? ' primary' : ' ghost'}`} onClick={() => setZoom(z)}>
+            {z === 10 ? 'Months' : z === 18 ? 'Weeks' : 'Days'}
+          </button>
+        ))}
+        <span className="small muted">Moving a task's dates pushes the tasks that wait for it.</span>
+      </div>
+      <div style={{ display: 'flex', overflowX: 'auto', border: '1px solid var(--line)', borderRadius: 8 }}>
+        <div style={{ minWidth: LABEL, borderRight: '1px solid var(--line)' }}>
+          <div style={{ height: ROW, borderBottom: '1px solid var(--line)' }} />
+          {rows.map((r) => (
+            <div key={r.id} className="small" style={{ height: ROW, lineHeight: `${ROW}px`, padding: '0 8px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer' }} onClick={() => setOpen(r)}>
+              <span className="muted">#{r.task_number}</span> {r.parent_id ? '↳ ' : ''}
+              {r.name}
+            </div>
+          ))}
+        </div>
+        <svg width={width} height={height} role="img" aria-label="Gantt chart" style={{ display: 'block', flex: 'none' }}>
+          {Array.from({ length: days }, (_, i) => {
+            const d = addDays(min, i);
+            const dow = new Date(`${d}T00:00:00Z`).getUTCDay();
+            return (
+              <g key={d}>
+                {(dow === 0 || dow === 6) && <rect x={i * zoom} y={ROW} width={zoom} height={height - ROW} fill="#f4f6f8" />}
+                {(dow === 1 || zoom >= 30) && (
+                  <text x={i * zoom + 2} y={18} fontSize="10" fill="#7b8796">
+                    {d.slice(8)}/{d.slice(5, 7)}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+          <line x1={x(today()) + zoom / 2} x2={x(today()) + zoom / 2} y1={ROW} y2={height} stroke="#dc2626" strokeDasharray="3 3" />
+          {t.deps.map((d, i) => {
+            const a = index.get(d.depends_on_id);
+            const b = index.get(d.task_id);
+            if (a === undefined || b === undefined) return null;
+            const pa = rows[a]!;
+            const pb = rows[b]!;
+            const x1 = x(d10(pa.due_date || pa.start_date)) + zoom;
+            const y1 = ROW + a * ROW + ROW / 2;
+            const x2 = x(d10(pb.start_date || pb.due_date));
+            const y2 = ROW + b * ROW + ROW / 2;
+            return <path key={i} d={`M${x1},${y1} h6 V${y2} H${x2}`} fill="none" stroke="#94a3b8" markerEnd="url(#arrow)" />;
+          })}
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
+            </marker>
+          </defs>
+          {rows.map((r, i) => {
+            const s = d10(r.start_date || r.due_date);
+            const e = d10(r.due_date || r.start_date);
+            const w = Math.max(zoom, x(e) - x(s) + zoom);
+            const late = e < today() && !['done', 'cancelled'].includes(r.status);
+            const color = r.status === 'done' ? '#059669' : late ? '#dc2626' : '#0f8dde';
+            return (
+              <g key={r.id} onClick={() => setOpen(r)} style={{ cursor: 'pointer' }}>
+                <rect x={x(s)} y={ROW + i * ROW + 6} width={w} height={ROW - 12} rx={4} fill={color} opacity={0.25} />
+                <rect x={x(s)} y={ROW + i * ROW + 6} width={(w * (r.status === 'done' ? 100 : r.progress)) / 100} height={ROW - 12} rx={4} fill={color} />
+                <title>{`#${r.task_number} ${r.name}: ${s} → ${e}${r.progress ? ` (${r.progress}%)` : ''}`}</title>
+              </g>
+            );
+          })}
+          {ms.map((m) => {
+            const mx = x(d10(m.due_date)) + zoom / 2;
+            return (
+              <g key={m.id}>
+                <line x1={mx} x2={mx} y1={ROW} y2={height} stroke="#075492" strokeOpacity={0.3} />
+                <path d={`M${mx},${ROW - 2} l6,-6 l-6,-6 l-6,6 z`} fill="#075492">
+                  <title>{`Milestone: ${m.name} (${d10(m.due_date)})`}</title>
+                </path>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+      {open && t && <TaskModal id={id} data={data} task={open} tasks={t.tasks} deps={t.deps} member={member} manage={data.level === 'manage'} onClose={() => setOpen(null)} />}
+    </div>
+  );
+}
+
+/* ───────────────────────── milestones ───────────────────────── */
+
+function Milestones({ id, data, manage }: { id: string; data: Json; manage: boolean }) {
+  const act = useAct([['project', id]]);
+  const [edit, setEdit] = useState<Json | null>(null);
+  return (
+    <div className="stack">
+      {manage && (
+        <div>
+          <button className="btn primary" onClick={() => setEdit({})}>
+            New milestone
+          </button>
+        </div>
+      )}
+      {!data.milestones.length ? (
+        <Empty title="No milestones">Phases such as design sign-off, site handover or go-live. Give them an amount to bill fixed-price work by milestone.</Empty>
+      ) : (
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Milestone</th>
+              <th>Start</th>
+              <th>Due</th>
+              <th>Tasks</th>
+              <th className="num">Amount</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(data.milestones as Json[]).map((m) => (
+              <tr key={m.id} className={manage ? 'click' : undefined} onClick={() => manage && setEdit(m)}>
+                <td>{m.name}</td>
+                <td>{date(m.start_date)}</td>
+                <td>{date(m.due_date)}</td>
+                <td>
+                  {m.done}/{m.tasks}
+                </td>
+                <td className="num">{m.amount ? money2(m.amount) : ''}</td>
+                <td>
+                  <span className={`chip ${m.status === 'done' ? 'good' : ''}`}>{m.status}</span> {m.invoice_id && <span className="chip info">invoiced</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {edit && (
+        <MilestoneModal
+          m={edit}
+          who={people(data)}
+          onClose={() => setEdit(null)}
+          onSave={async (body, remove) => {
+            const r = remove
+              ? await act(() => del(`/api/v1/projects/${id}/milestones/${edit.id}`), 'Deleted')
+              : edit.id
+                ? await act(() => put(`/api/v1/projects/${id}/milestones/${edit.id}`, body), 'Saved')
+                : await act(() => post(`/api/v1/projects/${id}/milestones`, body), 'Milestone added');
+            if (r) setEdit(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function MilestoneModal({ m, who, onClose, onSave }: { m: Json; who: Map<string, string>; onClose: () => void; onSave: (b: Json, remove?: boolean) => void }) {
+  const [f, setF] = useState({ name: m.name ?? '', startDate: d10(m.start_date), dueDate: d10(m.due_date), amount: m.amount ?? '', ownerId: m.owner_id ?? '', status: m.status ?? 'open' });
+  return (
+    <Modal
+      title={m.id ? m.name : 'New milestone'}
+      onClose={onClose}
+      footer={
+        <>
+          {m.id && !m.invoice_id && (
+            <button className="btn danger" onClick={() => window.confirm('Delete this milestone?') && onSave({}, true)}>
+              Delete
+            </button>
+          )}
+          <button className="btn primary" disabled={!f.name.trim()} onClick={() => onSave({ name: f.name.trim(), startDate: f.startDate || null, dueDate: f.dueDate || null, amount: f.amount === '' ? null : Number(f.amount), ownerId: f.ownerId || null, status: f.status })}>
+            Save
+          </button>
+        </>
+      }
+    >
+      <div className="modal-body grid2">
+        <label className="field wide">
+          Name
+          <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus />
+        </label>
+        <label className="field">
+          Start
+          <input type="date" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} />
+        </label>
+        <label className="field">
+          Due
+          <input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} />
+        </label>
+        <label className="field">
+          Amount to bill (₹, optional)
+          <input inputMode="decimal" disabled={!!m.invoice_id} value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} />
+        </label>
+        <label className="field">
+          Owner
+          <select value={f.ownerId} onChange={(e) => setF({ ...f, ownerId: e.target.value })}>
+            <option value="">—</option>
+            {[...who].map(([uid, n]) => (
+              <option key={uid} value={uid}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          Status
+          <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
+            <option value="open">Open</option>
+            <option value="done">Done</option>
+          </select>
+        </label>
+      </div>
+    </Modal>
+  );
+}
+
+/* ───────────────────────── issues ───────────────────────── */
+
+const SEV: Record<string, string> = { minor: '', major: 'warn', critical: 'bad', blocker: 'bad' };
+
+function Issues({ id, data, member }: { id: string; data: Json; member: boolean }) {
+  const { data: list } = useQuery({ queryKey: ['project', id, 'issues'], queryFn: () => get<Json[]>(`/api/v1/projects/${id}/issues`) });
+  const [edit, setEdit] = useState<Json | null>(null);
+  const act = useAct([['project', id]]);
+  const who = people(data);
+  if (!list) return <Spinner />;
+  return (
+    <div className="stack">
+      {member && (
+        <div>
+          <button className="btn primary" onClick={() => setEdit({})}>
+            Report an issue
+          </button>
+        </div>
+      )}
+      {!list.length ? (
+        <Empty title="No issues">Snags, defects and bugs found on the job, with severity and an owner.</Empty>
+      ) : (
+        <table className="data">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Issue</th>
+              <th>Severity</th>
+              <th>Status</th>
+              <th>Assigned</th>
+              <th>Reported by</th>
+              <th>Due</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((i) => (
+              <tr key={i.id} className="click" onClick={() => setEdit(i)}>
+                <td>{i.issue_number}</td>
+                <td style={{ whiteSpace: 'normal' }}>{i.title}</td>
+                <td>
+                  <span className={`chip ${SEV[i.severity]}`}>{i.severity}</span>
+                </td>
+                <td>{i.status.replace('_', ' ')}</td>
+                <td>{i.assignee ?? '—'}</td>
+                <td>{i.reporter}</td>
+                <td>{date(i.due_date)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {edit && (
+        <IssueModal
+          issue={edit}
+          who={who}
+          member={member}
+          projectId={id}
+          onClose={() => setEdit(null)}
+          onSave={async (body) => {
+            const r = edit.id ? await act(() => patch(`/api/v1/projects/${id}/issues/${edit.id}`, body), 'Saved') : await act(() => post(`/api/v1/projects/${id}/issues`, body), 'Issue reported');
+            if (r) setEdit(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function IssueModal({ issue, who, member, projectId, onClose, onSave }: { issue: Json; who: Map<string, string>; member: boolean; projectId: string; onClose: () => void; onSave: (b: Json) => void }) {
+  const [f, setF] = useState({ title: issue.title ?? '', description: issue.description ?? '', severity: issue.severity ?? 'major', status: issue.status ?? 'open', assigneeId: issue.assignee_id ?? '', dueDate: d10(issue.due_date) });
+  const comments = useQuery({ queryKey: ['project', projectId, 'issue-comments', issue.id], queryFn: () => get<Json[]>(`/api/v1/projects/${projectId}/issues/${issue.id}/comments`), enabled: !!issue.id });
+  const [c, setC] = useState('');
+  const toast = useToast();
+  return (
+    <Modal
+      title={issue.id ? `Issue #${issue.issue_number}` : 'Report an issue'}
+      onClose={onClose}
+      wide
+      footer={
+        member ? (
+          <button className="btn primary" disabled={!f.title.trim()} onClick={() => onSave({ title: f.title.trim(), description: f.description || null, severity: f.severity, ...(issue.id ? { status: f.status } : {}), assigneeId: f.assigneeId || null, dueDate: f.dueDate || null })}>
+            Save
+          </button>
+        ) : undefined
+      }
+    >
+      <div className="modal-body stack">
+        <div className="grid2">
+          <label className="field wide">
+            Title
+            <input value={f.title} disabled={!member} onChange={(e) => setF({ ...f, title: e.target.value })} autoFocus />
+          </label>
+          <label className="field">
+            Severity
+            <select value={f.severity} disabled={!member} onChange={(e) => setF({ ...f, severity: e.target.value })}>
+              {['minor', 'major', 'critical', 'blocker'].map((s) => (
+                <option key={s}>{s}</option>
+              ))}
+            </select>
+          </label>
+          {issue.id && (
+            <label className="field">
+              Status
+              <select value={f.status} disabled={!member} onChange={(e) => setF({ ...f, status: e.target.value })}>
+                {['open', 'in_progress', 'fixed', 'closed', 'reopened', 'wont_fix'].map((s) => (
+                  <option key={s} value={s}>
+                    {s.replace('_', ' ')}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="field">
+            Assigned to
+            <select value={f.assigneeId} disabled={!member} onChange={(e) => setF({ ...f, assigneeId: e.target.value })}>
+              <option value="">—</option>
+              {[...who].map(([uid, n]) => (
+                <option key={uid} value={uid}>
+                  {n}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            Due
+            <input type="date" disabled={!member} value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} />
+          </label>
+          <label className="field wide">
+            Details
+            <textarea rows={4} disabled={!member} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+          </label>
+        </div>
+        {issue.id && (
+          <div>
+            <b>Comments</b>
+            {(comments.data ?? []).map((x) => (
+              <div key={x.id} className="small" style={{ margin: '6px 0' }}>
+                <b>{x.full_name}</b> <span className="muted">{date(x.created_at)}</span>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{x.body}</div>
+              </div>
+            ))}
+            {member && (
+              <div className="row">
+                <input value={c} onChange={(e) => setC(e.target.value)} placeholder="Write a comment" />
+                <button
+                  className="btn sm"
+                  disabled={!c.trim()}
+                  onClick={async () => {
+                    try {
+                      await post(`/api/v1/projects/${projectId}/issues/${issue.id}/comments`, { body: c.trim() });
+                      setC('');
+                      comments.refetch();
+                    } catch (e) {
+                      toast((e as Error).message, true);
+                    }
+                  }}
+                >
+                  Post
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/* ───────────────────────── time ───────────────────────── */
+
+function ProjectTime({ id, data, member }: { id: string; data: Json; member: boolean }) {
+  const [from, setFrom] = useState(addDays(today(), -30));
+  const { data: rep } = useQuery({ queryKey: ['project', id, 'time', from], queryFn: () => get<Json[]>(`/api/v1/project-reports/time?projectId=${id}&from=${from}&to=${today()}&groupBy=person`) });
+  const { data: t } = useTasks(id);
+  const act = useAct([['project', id], ['timesheet']]);
+  const [f, setF] = useState({ date: today(), hours: '', taskId: '', notes: '', billable: data.project.billing_method !== 'non_billable' && data.project.billing_method !== 'fixed_price' });
+  return (
+    <div className="stack">
+      {member && ['active', 'planning'].includes(data.project.status) && (
+        <div className="panel" style={{ padding: 12 }}>
+          <b>Log time</b>
+          <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 6 }}>
+            <label className="field">
+              Date
+              <input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
+            </label>
+            <label className="field">
+              Hours (e.g. 1.5 or 1:30)
+              <input value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} style={{ width: 120 }} />
+            </label>
+            <label className="field">
+              Task
+              <select value={f.taskId} onChange={(e) => setF({ ...f, taskId: e.target.value })}>
+                <option value="">General</option>
+                {(t?.tasks ?? [])
+                  .filter((x) => !['done', 'cancelled'].includes(x.status))
+                  .map((x) => (
+                    <option key={x.id} value={x.id}>
+                      #{x.task_number} {x.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="field" style={{ minWidth: 220 }}>
+              Notes
+              <input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+            </label>
+            <label className="row small">
+              <input type="checkbox" checked={f.billable} onChange={(e) => setF({ ...f, billable: e.target.checked })} /> Billable
+            </label>
+            <button
+              className="btn primary"
+              disabled={!parseHours(f.hours)}
+              onClick={async () => (await act(() => post('/api/v1/time', { projectId: id, taskId: f.taskId || null, date: f.date, minutes: parseHours(f.hours), notes: f.notes || null, billable: f.billable }), 'Time logged')) && setF({ ...f, hours: '', notes: '' })}
+            >
+              Log
+            </button>
+            <button className="btn" onClick={() => act(() => post('/api/v1/time/timer/start', { projectId: id, taskId: f.taskId || null, notes: f.notes || null }), 'Timer started')}>
+              ▶ Start timer
+            </button>
+          </div>
+          <p className="small muted" style={{ marginBottom: 0 }}>
+            Submit your week for approval on the <a href="/timesheet">Timesheet</a> page.
+          </p>
+        </div>
+      )}
+      <div className="row">
+        <label className="field">
+          Since
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </label>
+      </div>
+      {!rep ? (
+        <Spinner />
+      ) : !rep.length ? (
+        <Empty title="No time in this range" />
+      ) : (
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Person</th>
+              <th className="num">Hours</th>
+              <th className="num">Billable</th>
+              <th className="num">Awaiting approval</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rep.map((r) => (
+              <tr key={r.label}>
+                <td>{r.label}</td>
+                <td className="num">{Math.round(r.hours * 100) / 100}</td>
+                <td className="num">{Math.round(r.billable_hours * 100) / 100}</td>
+                <td className="num">{r.awaiting_approval || ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
+export function parseHours(s: string): number {
+  const t = s.trim();
+  if (!t) return 0;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(t);
+  const minutes = m ? Number(m[1]) * 60 + Number(m[2]) : Math.round(Number(t.replace(',', '.')) * 60);
+  return Number.isFinite(minutes) && minutes > 0 && minutes <= 1440 ? minutes : 0;
+}
+
+/* ───────────────────────── billing ───────────────────────── */
+
+function Billing({ id }: { id: string }) {
+  const { data, refetch } = useQuery({ queryKey: ['project', id, 'unbilled'], queryFn: () => get<Json>(`/api/v1/projects/${id}/unbilled`) });
+  const [sel, setSel] = useState<{ t: Set<string>; e: Set<string>; m: Set<string> } | null>(null);
+  const [groupBy, setGroupBy] = useState('task');
+  const [fixed, setFixed] = useState('');
+  const nav = useNavigate();
+  const toast = useToast();
+  if (!data) return <Spinner />;
+  const s = sel ?? { t: new Set((data.time as Json[]).map((x) => x.id)), e: new Set((data.expenses as Json[]).map((x) => x.id)), m: new Set<string>() };
+  const flip = (k: 't' | 'e' | 'm', v: string) => {
+    const n = { t: new Set(s.t), e: new Set(s.e), m: new Set(s.m) };
+    if (n[k].has(v)) n[k].delete(v);
+    else n[k].add(v);
+    setSel(n);
+  };
+  const total =
+    (data.time as Json[]).filter((x) => s.t.has(x.id)).reduce((a, x) => a + x.amount, 0) +
+    (data.expenses as Json[]).filter((x) => s.e.has(x.id)).reduce((a, x) => a + x.amount, 0) +
+    (data.milestones as Json[]).filter((x) => s.m.has(x.id)).reduce((a, x) => a + x.amount, 0) +
+    (Number(fixed) || 0);
+  return (
+    <div className="stack">
+      <div className="row small" style={{ gap: 16, flexWrap: 'wrap' }}>
+        <span>
+          Billing: <b>{String(data.project.billing_method).replace(/_/g, ' ')}</b>
+        </span>
+        {data.project.fixed_fee > 0 && <span>Fixed fee {money2(data.project.fixed_fee)}</span>}
+        <span>Invoiced so far {money2(data.invoicedToDate)}</span>
+      </div>
+      {!data.project.account_id && <div className="notice">Set the project's customer before invoicing.</div>}
+      <h3 style={{ margin: 0 }}>Approved time not yet billed</h3>
+      {!data.time.length ? (
+        <p className="muted small">None. Time is billable once its timesheet is approved.</p>
+      ) : (
+        <table className="data">
+          <tbody>
+            {(data.time as Json[]).map((x) => (
+              <tr key={x.id}>
+                <td style={{ width: 30 }}>
+                  <input type="checkbox" checked={s.t.has(x.id)} onChange={() => flip('t', x.id)} aria-label="Include" />
+                </td>
+                <td>{date(x.work_date)}</td>
+                <td>{x.full_name}</td>
+                <td>{x.task ? `#${x.task_number} ${x.task}` : 'General'}</td>
+                <td className="small muted">{x.notes}</td>
+                <td className="num">{hrs(x.minutes)}</td>
+                <td className="num">{money2(x.amount)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {data.expenses.length > 0 && (
+        <>
+          <h3 style={{ margin: 0 }}>Billable expenses</h3>
+          <table className="data">
+            <tbody>
+              {(data.expenses as Json[]).map((x) => (
+                <tr key={x.id}>
+                  <td style={{ width: 30 }}>
+                    <input type="checkbox" checked={s.e.has(x.id)} onChange={() => flip('e', x.id)} aria-label="Include" />
+                  </td>
+                  <td>{date(x.expense_date)}</td>
+                  <td>{x.name}</td>
+                  <td className="num">{money2(x.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {data.milestones.length > 0 && (
+        <>
+          <h3 style={{ margin: 0 }}>Milestones</h3>
+          <table className="data">
+            <tbody>
+              {(data.milestones as Json[]).map((x) => (
+                <tr key={x.id}>
+                  <td style={{ width: 30 }}>
+                    <input type="checkbox" checked={s.m.has(x.id)} onChange={() => flip('m', x.id)} aria-label="Include" />
+                  </td>
+                  <td>{x.name}</td>
+                  <td>{x.status === 'done' ? <span className="chip good">done</span> : <span className="chip">open</span>}</td>
+                  <td className="num">{money2(x.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <label className="field">
+          Time lines
+          <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
+            <option value="task">One line per task</option>
+            <option value="person">One line per person</option>
+            <option value="project">One line for all</option>
+            <option value="entry">One line per entry</option>
+          </select>
+        </label>
+        <label className="field">
+          Plus a fixed amount (₹)
+          <input inputMode="decimal" value={fixed} onChange={(e) => setFixed(e.target.value)} placeholder="e.g. 30% advance" />
+        </label>
+        <button
+          className="btn primary"
+          disabled={!total || !data.project.account_id}
+          onClick={async () => {
+            try {
+              const r = await post<{ id: string }>(`/api/v1/projects/${id}/invoice`, { entryIds: [...s.t], expenseIds: [...s.e], milestoneIds: [...s.m], groupBy, fixedAmount: Number(fixed) || null });
+              toast('Draft invoice created');
+              refetch();
+              nav(`/o/invoice/${r.id}`);
+            } catch (e) {
+              toast((e as Error).message, true);
+            }
+          }}
+        >
+          Create draft invoice ({money2(total)} + GST)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ───────────────────────── team ───────────────────────── */
+
+function Team({ id, data, manage }: { id: string; data: Json; manage: boolean }) {
+  const { data: users } = useUsers();
+  const act = useAct([['project', id]]);
+  const [rows, setRows] = useState<Json[] | null>(null);
+  const list = rows ?? (data.members as Json[]).map((m) => ({ userId: m.user_id, role: m.role, billRate: m.bill_rate ?? '', costRate: m.cost_rate ?? '' }));
+  const [add, setAdd] = useState('');
+  const nameOf = (u: string) => users?.items.find((x) => x.id === u)?.full_name ?? (data.members as Json[]).find((m) => m.user_id === u)?.full_name ?? '—';
+  return (
+    <div className="stack">
+      <p className="small muted" style={{ margin: 0 }}>
+        Project manager: <b>{data.project.manager ?? '—'}</b> (the record owner). Managers plan the work and approve time; members work on tasks and log time; viewers only look.
+      </p>
+      <table className="data">
+        <thead>
+          <tr>
+            <th>Person</th>
+            <th>Role</th>
+            {manage && <th className="num">Bill rate / h</th>}
+            {manage && <th className="num">Cost rate / h</th>}
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((m, i) => (
+            <tr key={m.userId}>
+              <td>{nameOf(m.userId)}</td>
+              <td>
+                <select disabled={!manage} value={m.role} onChange={(e) => setRows(list.map((x, j) => (j === i ? { ...x, role: e.target.value } : x)))} style={{ width: 'auto' }}>
+                  <option value="manager">Manager</option>
+                  <option value="member">Member</option>
+                  <option value="viewer">Viewer</option>
+                </select>
+              </td>
+              {manage && (
+                <td style={{ width: 130 }}>
+                  <input inputMode="decimal" value={m.billRate} onChange={(e) => setRows(list.map((x, j) => (j === i ? { ...x, billRate: e.target.value } : x)))} />
+                </td>
+              )}
+              {manage && (
+                <td style={{ width: 130 }}>
+                  <input inputMode="decimal" value={m.costRate} onChange={(e) => setRows(list.map((x, j) => (j === i ? { ...x, costRate: e.target.value } : x)))} />
+                </td>
+              )}
+              <td>
+                {manage && (
+                  <button className="btn sm ghost" onClick={() => setRows(list.filter((_, j) => j !== i))}>
+                    Remove
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {manage && (
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          <select value={add} onChange={(e) => setAdd(e.target.value)} style={{ maxWidth: 280 }}>
+            <option value="">Add a person…</option>
+            {(users?.items ?? [])
+              .filter((u) => !list.some((m) => m.userId === u.id))
+              .map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.full_name}
+                </option>
+              ))}
+          </select>
+          <button className="btn sm" disabled={!add} onClick={() => (setRows([...list, { userId: add, role: 'member', billRate: '', costRate: '' }]), setAdd(''))}>
+            Add
+          </button>
+          <button
+            className="btn primary"
+            disabled={!rows}
+            onClick={async () =>
+              (await act(
+                () => put(`/api/v1/projects/${id}/members`, { members: list.map((m) => ({ userId: m.userId, role: m.role, billRate: m.billRate === '' ? null : Number(m.billRate), costRate: m.costRate === '' ? null : Number(m.costRate) })) }),
+                'Team saved',
+              )) && setRows(null)
+            }
+          >
+            Save team
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

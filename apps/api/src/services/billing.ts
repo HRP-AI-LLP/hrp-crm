@@ -13,6 +13,7 @@ import { repost } from './books/posting';
 import { hasAdmin, objectPerm, splitTax, stateCode, stateName, supplyType, validGstin } from '@synapse/shared';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
 import { assertSameCurrency } from './books/ledger';
+import { releaseInvoice } from './project-links';
 import { assertApproved, reevaluate } from './approvals';
 import { enabledApps } from './apps';
 import { assertProducts } from './lines';
@@ -425,6 +426,7 @@ export async function cancelInvoice(ctx: RecordCtx, id: string, reason: string):
   if (row.sales_order_id) events.push(...(await refreshOrderPaid(ctx, String(row.sales_order_id))));
   await repost(ctx.tx, ctx.tenantId, 'invoice', id);
   await repost(ctx.tx, ctx.tenantId, 'write_off', id);
+  await releaseInvoice(ctx.tx, ctx.tenantId, id);
   return events;
 }
 

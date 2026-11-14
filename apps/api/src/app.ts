@@ -14,6 +14,7 @@ import { appsAdminRoutes, opsRoutes } from './routes/ops';
 import { fieldRoutes, serviceAdminRoutes } from './routes/field';
 import { billingAdminRoutes, billingRoutes } from './routes/billing';
 import { booksRoutes } from './routes/books';
+import { projectRoutes } from './routes/projects';
 import { mobileRoutes } from './routes/mobile';
 import { integrationAdminRoutes, integrationPublicRoutes, integrationRoutes } from './routes/integrations';
 import { publicRoutes } from './routes/public';
@@ -72,6 +73,7 @@ export function createApp() {
   app.route('/api/v1', fieldRoutes);
   app.route('/api/v1', billingRoutes);
   app.route('/api/v1', booksRoutes);
+  app.route('/api/v1', projectRoutes);
   app.route('/api/v1', mobileRoutes);
   app.route('/api/v1', integrationRoutes);
   app.route('/api/v1', privacyRoutes);

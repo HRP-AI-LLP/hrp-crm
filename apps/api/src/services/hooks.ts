@@ -92,6 +92,10 @@ export async function beforeCreate(ctx: HookCtx, objectKey: string, cols: Record
     cols.status = 'draft';
   }
   if (objectKey === 'expense') cols.status = 'draft';
+  if (objectKey === 'project') {
+    cols.status ??= 'active';
+    cols.billing_method ??= 'time_project_rate';
+  }
   if (objectKey === 'invoice' && cols.account_id && cols.place_of_supply === undefined) {
     const a = await ctx.tx.one<{ state: string | null }>(`select state from accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, cols.account_id]);
     if (a?.state) cols.place_of_supply = a.state;

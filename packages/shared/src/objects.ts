@@ -1,6 +1,6 @@
 import type { FieldDef } from './fields';
 
-export const STANDARD_OBJECT_KEYS = ['lead', 'contact', 'account', 'deal', 'product', 'quote', 'sales_order', 'vendor', 'purchase_order', 'shipment', 'installation', 'ticket', 'invoice', 'payment', 'bill', 'vendor_payment', 'expense'] as const;
+export const STANDARD_OBJECT_KEYS = ['lead', 'contact', 'account', 'deal', 'product', 'quote', 'sales_order', 'vendor', 'purchase_order', 'shipment', 'installation', 'ticket', 'invoice', 'payment', 'bill', 'vendor_payment', 'expense', 'project'] as const;
 export type StandardObjectKey = (typeof STANDARD_OBJECT_KEYS)[number];
 
 export interface ObjectStorage {
@@ -32,6 +32,8 @@ export const TICKET_CATEGORIES = ['damage', 'defect', 'installation', 'delivery'
 export const INVOICE_STATUSES = ['draft', 'issued', 'partially_paid', 'paid', 'cancelled'] as const;
 export const PAYMENT_MODES = ['cash', 'upi', 'bank_transfer', 'cheque', 'card', 'other'] as const;
 export const BILL_STATUSES = ['draft', 'open', 'partially_paid', 'paid', 'void'] as const;
+export const PROJECT_STATUSES = ['planning', 'active', 'on_hold', 'completed', 'cancelled'] as const;
+export const PROJECT_BILLING_METHODS = ['fixed_price', 'time_project_rate', 'time_staff_rate', 'time_task_rate', 'non_billable'] as const;
 export const EXPENSE_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'recorded', 'reimbursed', 'void'] as const;
 export const VENDOR_TYPES = ['manufacturer', 'supplier', 'contractor', 'transporter', 'installer', 'service_provider', 'other'] as const;
 const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
@@ -396,12 +398,34 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'mileage_km', label: 'Distance (km)', type: 'number', standard: true },
     { key: 'billable', label: 'Bill to customer', type: 'boolean', standard: true },
     { key: 'customer_id', label: 'Customer', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
+    { key: 'project_id', label: 'Project', type: 'lookup', standard: true, indexed: true, options: { lookupObject: 'project' } },
     { key: 'reference', label: 'Reference / bill no.', type: 'text', standard: true },
     { key: 'taxable_amount', label: 'Before tax', type: 'currency', standard: true, readOnly: true },
     { key: 'tax_amount', label: 'GST', type: 'currency', standard: true, readOnly: true },
     { key: 'total', label: 'Total', type: 'currency', standard: true, readOnly: true },
     { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
     { ...owner, label: 'Spent by' },
+  ],
+  project: [
+    { key: 'name', label: 'Project name', type: 'text', standard: true, required: true },
+    { key: 'project_code', label: 'Project code', type: 'text', standard: true, indexed: true },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, indexed: true, options: { choices: choices(PROJECT_STATUSES) } },
+    { key: 'account_id', label: 'Customer', type: 'lookup', standard: true, indexed: true, options: { lookupObject: 'account' } },
+    { key: 'deal_id', label: 'Deal', type: 'lookup', standard: true, options: { lookupObject: 'deal' } },
+    { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, options: { lookupObject: 'sales_order' } },
+    { key: 'start_date', label: 'Start date', type: 'date', standard: true, indexed: true },
+    { key: 'end_date', label: 'End date', type: 'date', standard: true, indexed: true },
+    { key: 'billing_method', label: 'Billing', type: 'picklist', standard: true, options: { choices: choices(PROJECT_BILLING_METHODS) } },
+    { key: 'project_rate', label: 'Hourly rate (project)', type: 'currency', standard: true, options: { min: 0 } },
+    { key: 'fixed_fee', label: 'Fixed fee', type: 'currency', standard: true, options: { min: 0 } },
+    { key: 'budget_type', label: 'Budget', type: 'picklist', standard: true, options: { choices: choices(['none', 'hours', 'cost', 'revenue']) } },
+    { key: 'budget_hours', label: 'Budget hours', type: 'number', standard: true, options: { min: 0 } },
+    { key: 'budget_amount', label: 'Budget amount', type: 'currency', standard: true, options: { min: 0 } },
+    { key: 'tax_rate', label: 'GST % on invoices', type: 'percent', standard: true },
+    { key: 'hsn_sac', label: 'SAC on invoices', type: 'text', standard: true },
+    { key: 'progress', label: 'Progress %', type: 'percent', standard: true, readOnly: true },
+    { key: 'description', label: 'Description', type: 'textarea', standard: true },
+    { ...owner, label: 'Project manager' },
   ],
 };
 
@@ -443,6 +467,7 @@ export const OBJECT_STORAGE: Record<string, ObjectStorage> = {
   bill: reg('bills', 'name', ['name', 'bill_number', 'vendor_ref']),
   vendor_payment: reg('vendor_payments', 'name', ['name', 'payment_number', 'reference']),
   expense: reg('expenses', 'name', ['name', 'expense_number', 'vendor_name', 'reference']),
+  project: reg('projects', 'name', ['name', 'project_code']),
 };
 
 export function storageFor(objectKey: string): ObjectStorage {

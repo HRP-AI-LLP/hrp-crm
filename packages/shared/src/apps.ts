@@ -138,6 +138,21 @@ export const APPS: Record<string, AppDefinition> = {
       },
     ],
   },
+  projects: {
+    key: 'projects',
+    name: 'Projects and timesheets',
+    description: 'Projects with milestones, task lists, sub-tasks and dependencies; Kanban and Gantt views; issues; time tracking with timers and weekly timesheets approved by the project manager; billing of time, milestones and expenses to GST invoices; budgets, resource utilisation and project profitability.',
+    objects: [{ key: 'project', label: 'Project', plural: 'Projects', icon: 'briefcase' }],
+    requires: [],
+    roles: [
+      {
+        key: 'project_manager',
+        name: 'Project manager',
+        description: 'Runs projects: plans tasks, approves timesheets, bills time and sees project profitability',
+        permissions: { objects: { expense: ownExpense, '*': readOnly, project: { ...all, delete: 'own' }, lead: none }, admin: ['projects'] },
+      },
+    ],
+  },
 };
 
 export const APP_KEYS = Object.keys(APPS);

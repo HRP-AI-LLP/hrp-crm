@@ -20,6 +20,7 @@ These limits were checked in October 2026. Providers change them, so re-check th
 | Intelligence sweep | Neon compute | Hourly (KV-gated) set-based SQL for scores and insights; no AI calls. Auto meeting prep is off by default and capped by a daily budget per workspace. New conversations are embedded in batches of 100 per hour when Vectorize is bound. |
 | Agents and Ask Synapse | Workers AI / your own keys | Count against the per-tenant daily AI cap like other AI features; every agent has a rule-based result when the cap is reached. Recording transcription uses Workers AI Whisper (`AI_MODEL_WHISPER`). |
 | Books | Neon compute and storage | Journals are written in the same transaction as the document; reports are single grouped queries over posted lines (indexed by tenant, account and date). The daily cron runs recurring documents (at most 200 profiles and 12 catch-up runs each per workspace per day). A journal line is roughly 200 bytes, so 1 GB holds millions. |
+| Projects | Neon compute | Lists and reports are single queries with per-project indexes; rescheduling dependants is bounded to 500 moves; no background jobs. |
 | Cloudflare for SaaS | **100 custom hostnames** included, then $0.10 each | Self-serve custom domains for up to 100 tenants at no cost. |
 
 ## When to start paying

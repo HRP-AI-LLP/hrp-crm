@@ -81,14 +81,14 @@ async function buildInvoice(tx: Tx, t: string, id: string, inventoryOn: string) 
   const ar = await sys(tx, t, 'ar');
   const total = r2(Number(r.grand_total) * rate);
   const lines: JLine[] = [credit ? { accountId: ar, credit: total, partyType: 'customer', partyId: r.account_id } : { accountId: ar, debit: total, partyType: 'customer', partyId: r.account_id }];
-  lines.push(...(await salesLines(tx, t, id, rate, sign, r.account_id, null)));
+  lines.push(...(await salesLines(tx, t, id, rate, sign, r.account_id, r.project_id ?? null)));
   lines.push(...(await taxLines(tx, t, { cgst: Number(r.cgst_total) * rate, sgst: Number(r.sgst_total) * rate, igst: Number(r.igst_total) * rate }, credit ? 'debit' : 'credit', 'output')));
   const ro = r2(Number(r.round_off) * rate);
   if (ro) {
     const acc = await sys(tx, t, 'round_off');
     lines.push((ro > 0) !== credit ? { accountId: acc, credit: Math.abs(ro) } : { accountId: acc, debit: Math.abs(ro) });
   }
-  if (!credit) lines.push(...(await cogsLines(tx, t, id, inventoryOn, null)));
+  if (!credit) lines.push(...(await cogsLines(tx, t, id, inventoryOn, r.project_id ?? null)));
   return { date: d10(r.invoice_date), sourceType: credit ? 'credit_note' : 'invoice', sourceId: id, reference: r.invoice_number, narration: `${credit ? 'Credit note' : 'Invoice'} ${r.invoice_number ?? ''} · ${r.buyer_name ?? ''}`.trim(), currency: r.currency, exchangeRate: rate, lines };
 }
 

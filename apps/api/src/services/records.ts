@@ -35,6 +35,7 @@ import { computeFormulas, evaluateRules, hasRollupParents, recomputeRecord, refr
 import { computeScore, notifyOwner, pickAssignee } from './routing';
 import { beforeCreate, beforeUpdate } from './hooks';
 import { NUMBERED, nextDocumentNumber } from './numbering';
+import { releaseInvoice } from './project-links';
 
 export { NUMBERED, nextDocumentNumber };
 
@@ -749,7 +750,16 @@ export async function deleteRecord(ctx: RecordCtx, objectKey: string, id: string
   const s = storageFor(objectKey);
   const deletable = DELETABLE_IN[objectKey];
   if (deletable && !deletable.includes(String(row.status))) throw badRequest(`Cancel it first; only ${deletable.join(' or ')} records can be deleted`);
+  if (objectKey === 'project') {
+    const used = await ctx.tx.one(
+      `select 1 where exists (select 1 from time_entries where tenant_id = $1 and project_id = $2 and status in ('approved','invoiced'))
+                   or exists (select 1 from invoices where tenant_id = $1 and project_id = $2 and status <> 'cancelled' and deleted_at is null)`,
+      [ctx.tenantId, id],
+    );
+    if (used) throw badRequest('This project has approved time or invoices; mark it completed or cancelled instead');
+  }
   await ctx.tx.query(`update ${ident(s.table)} set deleted_at = now() where tenant_id = $1 and id = $2::uuid`, [ctx.tenantId, id]);
+  if (objectKey === 'invoice') await releaseInvoice(ctx.tx, ctx.tenantId, id);
   if (hasRollupParents(ctx.meta, objectKey)) await refreshParents(ctx, objectKey, [row]);
   return [{ objectKey, recordId: id, kind: 'deleted' }];
 }
