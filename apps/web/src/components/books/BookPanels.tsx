@@ -554,17 +554,17 @@ export function ExpensePanel({ rec, canEdit }: { rec: Json; canEdit: boolean }) 
           {rec.is_claim ? 'Claim' : 'Expense'} {rec.expense_number ?? ''} <span className={`chip ${EXP_CLS[status] ?? ''}`}>{status}</span>
         </h2>
         <div className="row" style={{ flexWrap: 'wrap' }}>
-          {editable && rec.is_claim && (
+          {editable && (rec.is_claim || !isBooks) && (
             <button className="btn sm primary" onClick={() => act(() => post(`/api/v1/books/expenses/${id}/submit`), 'Submitted for approval')}>
               Submit for approval
             </button>
           )}
-          {editable && !rec.is_claim && status === 'draft' && (
+          {editable && !rec.is_claim && isBooks && status === 'draft' && (
             <button className="btn sm primary" onClick={() => act(() => post(`/api/v1/books/expenses/${id}/record`), 'Recorded')}>
               Record expense
             </button>
           )}
-          {status === 'submitted' && !mine && (
+          {status === 'submitted' && !mine && rec.created_by !== me?.user.id && (
             <>
               <button className="btn sm primary" onClick={() => act(() => post(`/api/v1/books/expenses/${id}/approve`), 'Approved')}>
                 Approve
@@ -579,7 +579,7 @@ export function ExpensePanel({ rec, canEdit }: { rec: Json; canEdit: boolean }) 
               Reimburse
             </button>
           )}
-          {['approved', 'recorded', 'reimbursed'].includes(status) && (isBooks || (mine && status === 'recorded')) && (
+          {['approved', 'recorded', 'reimbursed'].includes(status) && isBooks && (
             <button className="btn sm danger" onClick={() => setModal('void')}>
               Void
             </button>

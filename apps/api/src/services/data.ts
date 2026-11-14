@@ -6,7 +6,7 @@
 import { type FieldDef, type ObjectMeta, fieldAccess, objectPerm, storageFor } from '@synapse/shared';
 import { badRequest, forbidden } from '../lib/errors';
 import { hasRollupParents, recomputeRecord, refreshParents } from './computed';
-import { createRecord, deleteRecord, getObject, listRecords, loadRow, type RecordCtx, type RecordEvent, updateRecord } from './records';
+import { createRecord, deleteRecord, getObject, listRecords, loadRow, NO_MERGE, type RecordCtx, type RecordEvent, updateRecord } from './records';
 
 const ident = (s: string) => {
   if (!/^[a-z_][a-z0-9_]*$/.test(s)) throw new Error(`unsafe identifier ${s}`);
@@ -147,6 +147,7 @@ export async function mergeRecords(
   const ids = [...new Set(duplicateIds)].filter((d) => d !== masterId);
   if (!ids.length) throw badRequest('Choose at least one duplicate to merge');
   if (ids.length > 10) throw badRequest('Merge at most 10 records at a time');
+  if (NO_MERGE.has(objectKey)) throw badRequest('Financial documents cannot be merged; cancel or void the duplicate instead');
   const obj = getObject(ctx.meta, objectKey);
   const { row: master } = await loadRow(ctx, objectKey, masterId, 'update', true);
   const dups = [];

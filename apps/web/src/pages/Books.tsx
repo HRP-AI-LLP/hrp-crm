@@ -284,13 +284,15 @@ function parseStatement(text: string) {
     rows.push(cells.map((c) => c.trim()));
   }
   const head = (rows.shift() ?? []).map((h) => h.toLowerCase());
-  const col = (...names: string[]) => head.findIndex((h) => names.some((n) => h.includes(n)));
+  // whole-word match, so "cr" does not hit "description" and "dr" does not hit "address"
+  const words = head.map((h) => h.split(/[^a-z0-9]+/).filter(Boolean));
+  const col = (...names: string[]) => words.findIndex((ws) => names.some((n) => ws.includes(n)));
   const cDate = col('date');
-  const cDesc = col('narration', 'description', 'particulars', 'details', 'remarks');
+  const cDesc = col('narration', 'description', 'particulars', 'details', 'remarks', 'transaction');
   const cRef = col('ref', 'cheque', 'utr');
   const cAmt = head.findIndex((h) => h === 'amount');
-  const cDr = col('debit', 'withdrawal', 'dr');
-  const cCr = col('credit', 'deposit', 'cr');
+  const cDr = col('debit', 'withdrawal', 'withdrawals', 'dr');
+  const cCr = col('credit', 'deposit', 'deposits', 'cr');
   const cBal = col('balance');
   const num = (s: string | undefined) => (s ? Number(s.replace(/[₹,\s]/g, '').replace(/^\((.*)\)$/, '-$1')) || 0 : 0);
   const toIso = (s: string) => {
@@ -2485,6 +2487,7 @@ function GstTds() {
             {t3('3.1(d) Inward supplies on reverse charge', d.inwardReverseCharge)}
             {t3('4(A) Input tax credit available', d.itc.total)}
             {t3('Tax liability', d.liability)}
+            {t3('Reverse charge (paid in cash)', d.reverseChargeCash)}
             {t3('Credit carried forward', d.creditCarriedForward)}
             <tr>
               <td>

@@ -36,6 +36,7 @@ function fromPg(err: { code?: string; constraint?: string; detail?: string; mess
     case '22P02':
     case '22007':
     case '22003':
+    case '22008':
       return badRequest('Invalid value', { constraint: err.constraint });
     case '42501':
       return forbidden();

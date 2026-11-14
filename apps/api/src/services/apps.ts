@@ -54,16 +54,26 @@ export async function enableApp(ctx: RecordCtx, key: string) {
     );
   }
   if (key === 'books') {
-    // everyone files their own expenses and claims; sales managers see and approve their team's
-    for (const [role, perm] of [
-      ['sales_rep', { read: 'own', create: true, update: 'own', delete: 'own' }],
-      ['sales_manager', { read: 'team', create: true, update: 'team', delete: 'own' }],
-      ['read_only', { read: 'none', create: false, update: 'none', delete: 'none' }],
-    ] as const)
+    // everyone files their own expenses and claims; sales managers see and approve their team's.
+    // Bills and vendor payments stay with accounts (sales roles otherwise inherit "*" create rights).
+    const none = { read: 'none', create: false, update: 'none', delete: 'none' };
+    const view = { read: 'all', create: false, update: 'none', delete: 'none' };
+    const grants: [string, string, Record<string, unknown>][] = [
+      ['sales_rep', 'expense', { read: 'own', create: true, update: 'own', delete: 'own' }],
+      ['sales_rep', 'bill', none],
+      ['sales_rep', 'vendor_payment', none],
+      ['sales_manager', 'expense', { read: 'team', create: true, update: 'team', delete: 'own' }],
+      ['sales_manager', 'bill', view],
+      ['sales_manager', 'vendor_payment', view],
+      ['read_only', 'expense', none],
+      ...(['inventory_manager', 'operations', 'technician', 'service_agent'] as const).map((r) => [r, 'expense', { read: 'own', create: true, update: 'own', delete: 'own' }] as [string, string, Record<string, unknown>]),
+      ['accounts', 'expense', view],
+    ];
+    for (const [role, object, perm] of grants)
       await ctx.tx.query(
-        `update roles set permissions = jsonb_set(permissions, '{objects,expense}', $3::jsonb, true)
-          where tenant_id = $1 and key = $2 and is_system and permissions ? 'objects' and not (permissions -> 'objects' ? 'expense')`,
-        [ctx.tenantId, role, JSON.stringify(perm)],
+        `update roles set permissions = jsonb_set(permissions, array['objects', $3::text], $4::jsonb, true)
+          where tenant_id = $1 and key = $2 and is_system and permissions ? 'objects' and not (permissions -> 'objects' ? $3::text)`,
+        [ctx.tenantId, role, object, JSON.stringify(perm)],
       );
     await ensureBooks(ctx.tx, ctx.tenantId);
   }

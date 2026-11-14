@@ -310,57 +310,71 @@ export async function expensesByCategory(ctx: RecordCtx, from: string, to: strin
   );
 }
 
-/** GSTR-3B summary for a month (YYYY-MM) from issued invoices, posted bills and expenses. */
-export async function gstr3b(ctx: RecordCtx, month: string) {
-  const from = `${month}-01`;
-  const to = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
-  const out = await ctx.tx.one<{ taxable: number; igst: number; cgst: number; sgst: number; zero_rated: number; zero_rated_igst: number; nil_exempt: number }>(
-    `select coalesce(sum(case when supply_type <> 'export' and tax_total > 0 then s * taxable_total end), 0)::float8 as taxable,
-            coalesce(sum(case when supply_type <> 'export' then s * igst_total end), 0)::float8 as igst,
-            coalesce(sum(case when supply_type <> 'export' then s * cgst_total end), 0)::float8 as cgst,
-            coalesce(sum(case when supply_type <> 'export' then s * sgst_total end), 0)::float8 as sgst,
-            coalesce(sum(case when supply_type = 'export' then s * taxable_total end), 0)::float8 as zero_rated,
-            coalesce(sum(case when supply_type = 'export' then s * igst_total end), 0)::float8 as zero_rated_igst,
-            coalesce(sum(case when supply_type <> 'export' and tax_total = 0 then s * taxable_total end), 0)::float8 as nil_exempt
-       from (select *, case when doc_type = 'credit_note' then -1 else 1 end as s from invoices
-              where tenant_id = $1 and doc_type in ('tax_invoice','credit_note') and status not in ('draft','cancelled') and deleted_at is null and invoice_date between $2::date and $3::date) x`,
-    [ctx.tenantId, from, to],
-  );
-  const rcm = await ctx.tx.one<{ taxable: number; igst: number; cgst: number; sgst: number }>(
-    `select coalesce(sum(s * taxable_total), 0)::float8 as taxable, coalesce(sum(s * igst_total), 0)::float8 as igst, coalesce(sum(s * cgst_total), 0)::float8 as cgst, coalesce(sum(s * sgst_total), 0)::float8 as sgst
-       from (select *, case when doc_type = 'vendor_credit' then -1 else 1 end as s from bills where tenant_id = $1 and reverse_charge and status not in ('draft','void') and deleted_at is null and bill_date between $2::date and $3::date) x`,
-    [ctx.tenantId, from, to],
-  );
-  const itc = await ctx.tx.one<{ igst: number; cgst: number; sgst: number }>(
-    `select coalesce(sum(s * igst_total), 0)::float8 as igst, coalesce(sum(s * cgst_total), 0)::float8 as cgst, coalesce(sum(s * sgst_total), 0)::float8 as sgst
-       from (select *, case when doc_type = 'vendor_credit' then -1 else 1 end as s from bills where tenant_id = $1 and not reverse_charge and itc_eligible and status not in ('draft','void') and deleted_at is null and bill_date between $2::date and $3::date) x`,
-    [ctx.tenantId, from, to],
-  );
-  const exp = await ctx.tx.one<{ igst: number; cgst: number; sgst: number }>(
-    `select coalesce(sum(case when supply_type = 'inter' then tax_amount end), 0)::float8 as igst, coalesce(sum(case when supply_type = 'intra' then round(tax_amount / 2, 2) end), 0)::float8 as cgst,
-            coalesce(sum(case when supply_type = 'intra' then tax_amount - round(tax_amount / 2, 2) end), 0)::float8 as sgst
-       from expenses where tenant_id = $1 and itc_eligible and status in ('approved','recorded','reimbursed') and deleted_at is null and expense_date between $2::date and $3::date`,
-    [ctx.tenantId, from, to],
-  );
-  const itcTotal = { igst: r2(itc!.igst + exp!.igst + rcm!.igst), cgst: r2(itc!.cgst + exp!.cgst + rcm!.cgst), sgst: r2(itc!.sgst + exp!.sgst + rcm!.sgst) };
-  const liability = { igst: r2(out!.igst + out!.zero_rated_igst + rcm!.igst), cgst: r2(out!.cgst + rcm!.cgst), sgst: r2(out!.sgst + rcm!.sgst) };
-  // set-off order (Section 49): IGST credit → IGST, CGST, SGST; CGST credit → CGST, IGST; SGST credit → SGST, IGST
+type Gst = { igst: number; cgst: number; sgst: number };
+/**
+ * Section 49 / Rule 88A set-off: IGST credit first (IGST, then CGST and SGST — aimed where their own
+ * credit falls short), then CGST credit (CGST, then IGST) and SGST credit (SGST, then IGST). CGST and
+ * SGST credit never cross. Returns what is left to pay in cash and the credit carried forward.
+ */
+export function gstSetOff(liability: Gst, itc: Gst) {
   const due = { ...liability };
-  const cr = { ...itcTotal };
-  const use = (from: 'igst' | 'cgst' | 'sgst', to: 'igst' | 'cgst' | 'sgst') => {
-    const x = Math.min(cr[from], due[to]);
+  const cr = { ...itc };
+  const use = (from: keyof Gst, to: keyof Gst, cap = Infinity) => {
+    const x = r2(Math.max(0, Math.min(cr[from], due[to], cap)));
     cr[from] = r2(cr[from] - x);
     due[to] = r2(due[to] - x);
   };
   use('igst', 'igst');
+  use('igst', 'cgst', due.cgst - cr.cgst);
+  use('igst', 'sgst', due.sgst - cr.sgst);
   use('igst', 'cgst');
   use('igst', 'sgst');
   use('cgst', 'cgst');
   use('cgst', 'igst');
   use('sgst', 'sgst');
   use('sgst', 'igst');
-  const pay = due;
-  const carryForward = cr;
+  return { due, credit: cr };
+}
+
+/** GSTR-3B summary for a month (YYYY-MM) from issued invoices, posted bills and expenses. */
+export async function gstr3b(ctx: RecordCtx, month: string) {
+  const from = `${month}-01`;
+  const to = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
+  const out = await ctx.tx.one<{ taxable: number; igst: number; cgst: number; sgst: number; zero_rated: number; zero_rated_igst: number; nil_exempt: number }>(
+    `select coalesce(sum(case when supply_type <> 'export' and tax_total > 0 then s * taxable_total * exchange_rate end), 0)::float8 as taxable,
+            coalesce(sum(case when supply_type <> 'export' then s * igst_total * exchange_rate end), 0)::float8 as igst,
+            coalesce(sum(case when supply_type <> 'export' then s * cgst_total * exchange_rate end), 0)::float8 as cgst,
+            coalesce(sum(case when supply_type <> 'export' then s * sgst_total * exchange_rate end), 0)::float8 as sgst,
+            coalesce(sum(case when supply_type = 'export' then s * taxable_total * exchange_rate end), 0)::float8 as zero_rated,
+            coalesce(sum(case when supply_type = 'export' then s * igst_total * exchange_rate end), 0)::float8 as zero_rated_igst,
+            coalesce(sum(case when supply_type <> 'export' and tax_total = 0 then s * taxable_total * exchange_rate end), 0)::float8 as nil_exempt
+       from (select *, case when doc_type = 'credit_note' then -1 else 1 end as s from invoices
+              where tenant_id = $1 and doc_type in ('tax_invoice','credit_note') and status not in ('draft','cancelled') and deleted_at is null and invoice_date between $2::date and $3::date) x`,
+    [ctx.tenantId, from, to],
+  );
+  const rcm = await ctx.tx.one<{ taxable: number; igst: number; cgst: number; sgst: number }>(
+    `select coalesce(sum(s * taxable_total * exchange_rate), 0)::float8 as taxable, coalesce(sum(s * igst_total * exchange_rate), 0)::float8 as igst, coalesce(sum(s * cgst_total * exchange_rate), 0)::float8 as cgst, coalesce(sum(s * sgst_total * exchange_rate), 0)::float8 as sgst
+       from (select *, case when doc_type = 'vendor_credit' then -1 else 1 end as s from bills where tenant_id = $1 and reverse_charge and status not in ('draft','void') and deleted_at is null and bill_date between $2::date and $3::date) x`,
+    [ctx.tenantId, from, to],
+  );
+  const itc = await ctx.tx.one<{ igst: number; cgst: number; sgst: number }>(
+    `select coalesce(sum(s * igst_total * exchange_rate), 0)::float8 as igst, coalesce(sum(s * cgst_total * exchange_rate), 0)::float8 as cgst, coalesce(sum(s * sgst_total * exchange_rate), 0)::float8 as sgst
+       from (select *, case when doc_type = 'vendor_credit' then -1 else 1 end as s from bills where tenant_id = $1 and not reverse_charge and itc_eligible and status not in ('draft','void') and deleted_at is null and bill_date between $2::date and $3::date) x`,
+    [ctx.tenantId, from, to],
+  );
+  const exp = await ctx.tx.one<{ igst: number; cgst: number; sgst: number }>(
+    `select coalesce(sum(case when supply_type = 'inter' then tax_amount * exchange_rate end), 0)::float8 as igst, coalesce(sum(case when supply_type = 'intra' then round(tax_amount * exchange_rate / 2, 2) end), 0)::float8 as cgst,
+            coalesce(sum(case when supply_type = 'intra' then tax_amount * exchange_rate - round(tax_amount * exchange_rate / 2, 2) end), 0)::float8 as sgst
+       from expenses where tenant_id = $1 and itc_eligible and status in ('approved','recorded','reimbursed') and deleted_at is null and expense_date between $2::date and $3::date`,
+    [ctx.tenantId, from, to],
+  );
+  const itcTotal = { igst: r2(itc!.igst + exp!.igst + rcm!.igst), cgst: r2(itc!.cgst + exp!.cgst + rcm!.cgst), sgst: r2(itc!.sgst + exp!.sgst + rcm!.sgst) };
+  // reverse-charge tax is paid in cash (Section 49(4)); only forward-charge tax is set off against credit
+  const reverseChargeCash = { igst: r2(rcm!.igst), cgst: r2(rcm!.cgst), sgst: r2(rcm!.sgst) };
+  const forward = { igst: r2(out!.igst + out!.zero_rated_igst), cgst: r2(out!.cgst), sgst: r2(out!.sgst) };
+  const liability = { igst: r2(forward.igst + reverseChargeCash.igst), cgst: r2(forward.cgst + reverseChargeCash.cgst), sgst: r2(forward.sgst + reverseChargeCash.sgst) };
+  const { due, credit: cr } = gstSetOff(forward, itcTotal);
+  const pay = { igst: r2(due.igst + reverseChargeCash.igst), cgst: r2(due.cgst + reverseChargeCash.cgst), sgst: r2(due.sgst + reverseChargeCash.sgst) };
   return {
     month,
     outward: { taxable: out!.taxable, igst: out!.igst, cgst: out!.cgst, sgst: out!.sgst },
@@ -369,8 +383,9 @@ export async function gstr3b(ctx: RecordCtx, month: string) {
     inwardReverseCharge: rcm,
     itc: { fromBills: itc, fromExpenses: exp, reverseCharge: { igst: rcm!.igst, cgst: rcm!.cgst, sgst: rcm!.sgst }, total: itcTotal },
     liability,
+    reverseChargeCash,
     payableInCash: pay,
-    creditCarriedForward: carryForward,
+    creditCarriedForward: cr,
   };
 }
 

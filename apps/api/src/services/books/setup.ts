@@ -182,15 +182,21 @@ async function checkParties(ctx: RecordCtx, lines: ManualJournalInput['lines']) 
   }
 }
 
-export async function createManualJournal(ctx: RecordCtx, input: ManualJournalInput, sourceType: 'manual' | 'opening' = 'manual') {
-  await assertBooksAdmin(ctx);
-  await ensureBooks(ctx.tx, ctx.tenantId);
-  if (input.lines.length < 2) throw badRequest('A journal needs at least two lines');
+/** Checks the lines of a hand-made journal: exact balance, one side per line, positive amounts, active accounts, parties on AR/AP. */
+async function validateManualLines(ctx: RecordCtx, lines: ManualJournalInput['lines']) {
+  if (!Array.isArray(lines) || lines.length < 2 || lines.length > 200) throw badRequest('A journal needs between 2 and 200 lines');
+  for (const l of lines) {
+    if (typeof l.accountId !== 'string' || !/^[0-9a-f-]{36}$/i.test(l.accountId)) throw badRequest('Every line needs an account');
+    for (const v of [l.debit, l.credit]) if (v !== undefined && v !== null && (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1e12)) throw badRequest('Amounts must be positive numbers');
+  }
+  const input = { lines };
+
   const d = r2(input.lines.reduce((s, l) => s + (l.debit ?? 0), 0));
   const c = r2(input.lines.reduce((s, l) => s + (l.credit ?? 0), 0));
   if (d !== c) throw badRequest(`Debits (${d.toFixed(2)}) and credits (${c.toFixed(2)}) must be equal`);
   for (const l of input.lines) if ((l.debit ?? 0) && (l.credit ?? 0)) throw badRequest('A line is either a debit or a credit');
   const accts = await ctx.tx.query<{ id: string; is_active: boolean; subtype: string }>(`select id, is_active, subtype from gl_accounts where tenant_id = $1 and id = any($2::uuid[])`, [ctx.tenantId, input.lines.map((l) => l.accountId)]);
+  if (accts.length !== new Set(input.lines.map((l) => l.accountId)).size) throw badRequest('An account on this entry does not exist');
   if (accts.some((a) => !a.is_active)) throw badRequest('An account on this entry is inactive');
   await checkParties(ctx, input.lines);
   // receivable and payable lines carry the party so statements and ageing stay right
@@ -198,6 +204,12 @@ export async function createManualJournal(ctx: RecordCtx, input: ManualJournalIn
     const a = accts.find((x) => x.id === l.accountId);
     if (a && ['accounts_receivable', 'accounts_payable'].includes(a.subtype) && !l.partyId) throw badRequest('Lines on receivable or payable accounts need a customer or vendor');
   }
+}
+
+export async function createManualJournal(ctx: RecordCtx, input: ManualJournalInput, sourceType: 'manual' | 'opening' = 'manual') {
+  await assertBooksAdmin(ctx);
+  await ensureBooks(ctx.tx, ctx.tenantId);
+  await validateManualLines(ctx, input.lines);
   const id = await postJournal(ctx.tx, ctx.tenantId, { date: input.date, sourceType, reference: input.reference, narration: input.narration, lines: input.lines as JLine[] });
   if (!id) throw badRequest('The entry is empty');
   return { id };
@@ -460,12 +472,16 @@ function monthCharge(a: Record<string, any>, from: string, to: string, accumulat
  * Runs depreciation for every active asset up to the end of the given month. Each asset is
  * charged month by month from where it last stopped; one journal per run.
  */
-export async function runDepreciation(ctx: RecordCtx, upTo: string) {
+export async function runDepreciation(ctx: RecordCtx, upTo: string, assetId: string | null = null) {
   await assertBooksAdmin(ctx);
   const y = Number(upTo.slice(0, 4));
   const m = Number(upTo.slice(5, 7)) - 1;
   const end = monthEnd(y, m);
-  const assets = await ctx.tx.query<Record<string, any>>(`select * from fixed_assets where tenant_id = $1 and status = 'active' and in_service_date <= $2::date for update`, [ctx.tenantId, end]);
+  if (end > new Date(Date.now() + 40 * 86_400_000).toISOString().slice(0, 10)) throw badRequest('Depreciation can run at most to the end of next month');
+  const assets = await ctx.tx.query<Record<string, any>>(
+    `select * from fixed_assets where tenant_id = $1 and status = 'active' and in_service_date <= $2::date and ($3::uuid is null or id = $3) for update`,
+    [ctx.tenantId, end, assetId],
+  );
   const byAccount = new Map<string, { dep: string; acc: string; amount: number }>();
   const done: { id: string; amount: number; from: string; to: string }[] = [];
   for (const a of assets) {
@@ -510,7 +526,7 @@ export async function disposeAsset(ctx: RecordCtx, id: string, input: { date: st
   if (a.depreciated_to && d10(a.depreciated_to) > dMonthEnd) throw badRequest(`Depreciation is already charged up to ${d10(a.depreciated_to)}; dispose of the asset on or after that month, or void the later depreciation first`);
   // bring depreciation up to the month before disposal
   const prev = new Date(Date.parse(`${input.date.slice(0, 7)}-01T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
-  if (!a.depreciated_to || d10(a.depreciated_to) < prev) await runDepreciation(ctx, prev);
+  if (!a.depreciated_to || d10(a.depreciated_to) < prev) await runDepreciation(ctx, prev, id);
   const fresh = (await ctx.tx.one<Record<string, any>>(`select * from fixed_assets where tenant_id = $1 and id = $2`, [ctx.tenantId, id]))!;
   const cost = Number(fresh.cost);
   const accd = Number(fresh.accumulated);
@@ -650,13 +666,14 @@ async function checkTemplate(ctx: RecordCtx, kind: RecurringInput['kind'], tpl: 
     if (!objectPerm(ctx.principal.permissions, objectKey).create) throw badRequest(`You cannot create ${objectKey}s`);
   } else {
     await assertBooksAdmin(ctx);
-    if (!Array.isArray(tpl.lines) || tpl.lines.length < 2) throw badRequest('A recurring journal needs at least two lines');
+    await validateManualLines(ctx, tpl.lines);
   }
 }
 
 export async function saveRecurring(ctx: RecordCtx, id: string | null, input: RecurringInput) {
   await checkTemplate(ctx, input.kind, input.template);
   if (input.endDate && input.endDate < input.startDate) throw badRequest('The end date is before the start date');
+  if (input.startDate < new Date(Date.now() - 366 * 86_400_000).toISOString().slice(0, 10)) throw badRequest('A recurring profile can start at most a year back');
   if (id) {
     const ok = await ctx.tx.one(
       `update recurring_profiles set name = $3, kind = $4, template = $5, frequency = $6, every = $7, start_date = $8, end_date = $9, auto_issue = $10,
@@ -685,6 +702,7 @@ export async function deleteRecurring(ctx: RecordCtx, id: string) {
 async function generate(ctx: RecordCtx, p: Record<string, any>, date: string): Promise<{ id: string; events: RecordEvent[] }> {
   const tpl = p.template as Record<string, any>;
   if (p.kind === 'journal') {
+    await validateManualLines(ctx, tpl.lines);
     const r = await postJournal(ctx.tx, ctx.tenantId, { date, sourceType: 'manual', reference: tpl.reference ?? p.name, narration: tpl.narration ?? `Recurring: ${p.name}`, lines: tpl.lines as JLine[] });
     if (!r) throw badRequest('The journal is empty');
     return { id: r, events: [] };

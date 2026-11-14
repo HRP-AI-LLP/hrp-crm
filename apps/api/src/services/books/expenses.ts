@@ -32,8 +32,9 @@ async function number(ctx: RecordCtx, id: string, date: unknown) {
 
 async function assertAccounts(ctx: RecordCtx, row: Record<string, any>) {
   if (row.account_id) {
-    const a = await ctx.tx.one<{ type: string; is_active: boolean }>(`select type, is_active from gl_accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, row.account_id]);
-    if (!a || !a.is_active || !['expense', 'asset'].includes(a.type)) throw badRequest('Choose an expense category (an expense or asset account)');
+    const a = await ctx.tx.one<{ type: string; subtype: string; is_active: boolean; system_key: string | null }>(`select type, subtype, is_active, system_key from gl_accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, row.account_id]);
+    const ok = a && a.is_active && (a.type === 'expense' || (['fixed_asset', 'current_asset'].includes(a.subtype) && !a.system_key));
+    if (!ok) throw badRequest('Choose an expense category (an expense account, or a fixed or other current asset)');
   }
   if (!row.is_claim && row.paid_through_id) {
     const a = await ctx.tx.one<{ subtype: string }>(`select subtype from gl_accounts where tenant_id = $1 and id = $2 and is_active`, [ctx.tenantId, row.paid_through_id]);
@@ -55,20 +56,21 @@ export async function expenseAction(ctx: RecordCtx, id: string, action: 'submit'
   const from = String(row.status);
   let to = from;
   if (action === 'submit') {
-    if (!row.is_claim) throw badRequest('Only claims are submitted for approval; record company-paid expenses directly');
-    if (!['draft', 'rejected'].includes(from)) throw badRequest('Only draft or rejected claims can be submitted');
+    if (!['draft', 'rejected'].includes(from)) throw badRequest('Only draft or rejected expenses can be submitted');
     await assertAccounts(ctx, row);
     to = 'submitted';
     await number(ctx, id, row.expense_date);
   } else if (action === 'approve' || action === 'reject') {
     if (!canApprove(ctx)) throw forbidden('Approving expenses needs the books permission');
-    if (from !== 'submitted') throw badRequest('Only submitted claims can be approved or rejected');
-    if (row.owner_id === me && action === 'approve') throw forbidden('You cannot approve your own claim');
-    if (action === 'reject' && !opts.reason?.trim()) throw badRequest('Say why the claim is rejected');
-    to = action === 'approve' ? 'approved' : 'rejected';
+    if (from !== 'submitted') throw badRequest('Only submitted expenses can be approved or rejected');
+    if ((row.owner_id === me || row.created_by === me) && action === 'approve') throw forbidden('You cannot approve an expense you filed or that is yours');
+    if (action === 'reject' && !opts.reason?.trim()) throw badRequest('Say why the expense is rejected');
+    // a company-paid expense is recorded once approved; a claim waits for reimbursement
+    to = action === 'approve' ? (row.is_claim ? 'approved' : 'recorded') : 'rejected';
   } else if (action === 'record') {
     if (row.is_claim) throw badRequest('Claims are submitted for approval');
     if (!['draft'].includes(from)) throw badRequest('Only draft expenses can be recorded');
+    if (!canApprove(ctx)) throw forbidden('Submit the expense for approval; recording it directly needs the books permission');
     await assertAccounts(ctx, row);
     to = 'recorded';
     await number(ctx, id, row.expense_date);
@@ -81,22 +83,22 @@ export async function expenseAction(ctx: RecordCtx, id: string, action: 'submit'
     }
     to = 'reimbursed';
   } else if (action === 'void') {
-    if (!canApprove(ctx) && !(row.owner_id === me && from === 'recorded')) throw forbidden('Voiding needs the books permission');
+    if (!canApprove(ctx)) throw forbidden('Voiding needs the books permission');
     if (!['approved', 'recorded', 'reimbursed'].includes(from)) throw badRequest('Only posted expenses can be voided');
     to = 'void';
   }
   await ctx.tx.query(
     `update expenses set status = $3,
-            approved_by = case when $3 = 'approved' then $4::uuid else approved_by end, approved_at = case when $3 = 'approved' then now() else approved_at end,
+            approved_by = case when $8 then $4::uuid else approved_by end, approved_at = case when $8 then now() else approved_at end,
             reject_reason = case when $3 = 'rejected' then $5 else reject_reason end,
             reimbursed_at = case when $3 = 'reimbursed' then coalesce($7::date, current_date) else reimbursed_at end,
             reimbursed_through_id = case when $3 = 'reimbursed' then $6::uuid else reimbursed_through_id end
       where tenant_id = $1 and id = $2`,
-    [ctx.tenantId, id, to, me, opts.reason ?? null, opts.throughId ?? null, opts.date ?? null],
+    [ctx.tenantId, id, to, me, opts.reason ?? null, opts.throughId ?? null, opts.date ?? null, action === 'approve'],
   );
-  await repost(ctx.tx, ctx.tenantId, 'expense', id);
-  await repost(ctx.tx, ctx.tenantId, 'reimbursement', id);
-  if (to !== from && row.owner_id && row.owner_id !== me && ['approved', 'rejected', 'reimbursed'].includes(to)) {
+  if (['approve', 'record', 'void'].includes(action)) await repost(ctx.tx, ctx.tenantId, 'expense', id);
+  if (['reimburse', 'void'].includes(action)) await repost(ctx.tx, ctx.tenantId, 'reimbursement', id);
+  if (to !== from && row.owner_id && row.owner_id !== me && ['approved', 'recorded', 'rejected', 'reimbursed'].includes(to) && action !== 'record') {
     await ctx.tx.query(`insert into notifications (tenant_id, user_id, kind, title, body, link) values ($1,$2,'expense',$3,$4,$5)`, [
       ctx.tenantId, row.owner_id, `Your claim "${String(row.name).slice(0, 80)}" was ${to}`, to === 'rejected' ? opts.reason ?? null : null, `/o/expense/${id}`,
     ]);

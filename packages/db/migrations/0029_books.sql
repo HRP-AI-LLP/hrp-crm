@@ -151,17 +151,30 @@ create trigger journals_guard before insert or update or delete on journals for 
 
 create or replace function app.guard_journal_lines() returns trigger
 language plpgsql as $$
+declare j record;
 begin
-  if tg_op = 'UPDATE' and (to_jsonb(new) - array['posted', 'reconciliation_id', 'bank_txn_id']) = (to_jsonb(old) - array['posted', 'reconciliation_id', 'bank_txn_id']) then
+  if tg_op = 'DELETE' then
+    raise exception 'journal lines cannot be deleted' using errcode = 'check_violation';
+  end if;
+  select status, entry_date into j from journals where tenant_id = new.tenant_id and id = new.journal_id;
+  if tg_op = 'INSERT' then
+    -- lines go only into a posted journal and carry its date (the journal's lock-date check covers them)
+    if j.status is distinct from 'posted' or new.entry_date is distinct from j.entry_date or not new.posted then
+      raise exception 'journal lines must belong to a posted journal and carry its date' using errcode = 'check_violation';
+    end if;
     return new;
   end if;
-  if tg_op <> 'INSERT' then
+  if (to_jsonb(new) - array['posted', 'reconciliation_id', 'bank_txn_id']) is distinct from (to_jsonb(old) - array['posted', 'reconciliation_id', 'bank_txn_id']) then
     raise exception 'journal lines cannot be changed' using errcode = 'check_violation';
+  end if;
+  -- lines leave the balances only when their journal is voided, and never come back
+  if new.posted is distinct from old.posted and (new.posted or j.status <> 'void') then
+    raise exception 'journal lines are taken out of balances only by voiding the journal' using errcode = 'check_violation';
   end if;
   return new;
 end
 $$;
-create trigger journal_lines_guard before update or delete on journal_lines for each row execute function app.guard_journal_lines();
+create trigger journal_lines_guard before insert or update or delete on journal_lines for each row execute function app.guard_journal_lines();
 
 -- voiding a journal takes its lines out of balances
 create or replace function app.void_journal_lines() returns trigger
@@ -443,10 +456,14 @@ create or replace function app.expense_totals() returns trigger
 language plpgsql as $$
 declare base numeric; tax numeric;
 begin
-  if tg_op = 'UPDATE' and old.status in ('approved', 'recorded', 'reimbursed', 'void')
-     and (to_jsonb(new) - array['status', 'reimbursed_at', 'reimbursed_through_id', 'invoice_id', 'updated_at', 'updated_by', 'version', 'notes', 'custom', 'deleted_at', 'expense_number'])
-         is distinct from (to_jsonb(old) - array['status', 'reimbursed_at', 'reimbursed_through_id', 'invoice_id', 'updated_at', 'updated_by', 'version', 'notes', 'custom', 'deleted_at', 'expense_number']) then
-    raise exception 'an approved or recorded expense cannot be edited; void it and record a new one' using errcode = 'check_violation';
+  -- once submitted, only the workflow moves it on (approval, rejection, reimbursement, void)
+  if tg_op = 'UPDATE' and old.status in ('submitted', 'approved', 'recorded', 'reimbursed', 'void')
+     and (to_jsonb(new) - array['status', 'approved_by', 'approved_at', 'reject_reason', 'reimbursed_at', 'reimbursed_through_id', 'invoice_id', 'updated_at', 'updated_by', 'version', 'notes', 'custom', 'deleted_at', 'expense_number'])
+         is distinct from (to_jsonb(old) - array['status', 'approved_by', 'approved_at', 'reject_reason', 'reimbursed_at', 'reimbursed_through_id', 'invoice_id', 'updated_at', 'updated_by', 'version', 'notes', 'custom', 'deleted_at', 'expense_number']) then
+    raise exception 'a submitted or posted expense cannot be edited; reject or void it first' using errcode = 'check_violation';
+  end if;
+  if tg_op = 'UPDATE' and new.deleted_at is not null and old.deleted_at is null and old.status not in ('draft', 'rejected', 'void') then
+    raise exception 'only draft, rejected or void expenses can be deleted' using errcode = 'check_violation';
   end if;
   if new.amount_is_inclusive then
     base := round(new.amount * 100 / (100 + new.tax_rate), 2);
@@ -673,6 +690,41 @@ create table gstr2b_lines (
   foreign key (tenant_id, import_id) references gstr2b_imports (tenant_id, id) on delete cascade,
   foreign key (tenant_id, bill_id) references bills (tenant_id, id) on delete set null (bill_id)
 );
+
+-- posted bills and vendor payments change only through their services (the ledger follows them)
+create or replace function app.guard_posted_bill() returns trigger
+language plpgsql as $$
+begin
+  if old.status <> 'draft' and (to_jsonb(new) - array['status', 'amount_paid', 'amount_credited', 'balance_due', 'approval_status', 'void_reason', 'notes', 'custom', 'owner_id',
+                                                     'updated_at', 'updated_by', 'version', 'deleted_at', 'name'])
+       is distinct from (to_jsonb(old) - array['status', 'amount_paid', 'amount_credited', 'balance_due', 'approval_status', 'void_reason', 'notes', 'custom', 'owner_id',
+                                                     'updated_at', 'updated_by', 'version', 'deleted_at', 'name']) then
+    raise exception 'a posted bill cannot be changed; void it or raise a vendor credit' using errcode = 'check_violation';
+  end if;
+  if new.deleted_at is not null and old.deleted_at is null and old.status not in ('draft', 'void') then
+    raise exception 'only draft or void bills can be deleted' using errcode = 'check_violation';
+  end if;
+  return new;
+end
+$$;
+create trigger bills_guard_posted before update on bills for each row execute function app.guard_posted_bill();
+
+create or replace function app.guard_vendor_payment() returns trigger
+language plpgsql as $$
+begin
+  if old.status = 'void' and new.status <> 'void' then
+    raise exception 'a void payment cannot be reinstated' using errcode = 'check_violation';
+  end if;
+  if (new.amount, new.vendor_id, new.payment_date) is distinct from (old.amount, old.vendor_id, old.payment_date) then
+    raise exception 'a vendor payment''s amount, vendor and date cannot change; void it and record a new one' using errcode = 'check_violation';
+  end if;
+  if new.deleted_at is not null and old.deleted_at is null and old.status <> 'void' then
+    raise exception 'only void payments can be deleted' using errcode = 'check_violation';
+  end if;
+  return new;
+end
+$$;
+create trigger vendor_payments_guard before update on vendor_payments for each row execute function app.guard_vendor_payment();
 
 -- ------------------------------------------------------------------------------------- RLS, grants, triggers
 do $$

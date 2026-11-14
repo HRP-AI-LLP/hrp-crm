@@ -284,8 +284,10 @@ export async function repost(tx: Tx, tenantId: string, source: Source, id: strin
 /** The lines postJournal would write (same rounding and zero-line dropping), to compare with a posted entry. */
 async function normalised(tx: Tx, tenantId: string, j: JournalInput) {
   const lines = j.lines
-    .map((l) => ({ a: l.accountId, d: r2(l.debit ?? 0), c: r2(l.credit ?? 0), p: l.partyId ?? '' }))
-    .map((l) => (l.d && l.c ? { ...l, d: r2(Math.max(0, l.d - l.c)), c: r2(Math.max(0, l.c - l.d)) } : l))
+    .map((l) => {
+      const net = r2((l.debit ?? 0) - (l.credit ?? 0));
+      return { a: l.accountId, d: net > 0 ? net : 0, c: net < 0 ? -net : 0, p: l.partyId ?? '' };
+    })
     .filter((l) => l.d > 0 || l.c > 0);
   const diff = r2(lines.reduce((s, l) => s + l.d - l.c, 0));
   if (diff) lines.push({ a: await sys(tx, tenantId, 'round_off'), d: diff < 0 ? -diff : 0, c: diff > 0 ? diff : 0, p: '' });

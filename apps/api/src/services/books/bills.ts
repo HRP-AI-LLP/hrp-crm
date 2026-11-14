@@ -9,7 +9,7 @@
  * bills carry no GST from the supplier; you self-assess it (input credit + RCM liability).
  * TDS is deducted on the taxable value at the section's rate and is not paid to the vendor.
  */
-import { financialYear, splitTax, stateCode, TDS_SECTIONS } from '@synapse/shared';
+import { financialYear, hasAdmin, objectPerm, splitTax, stateCode, TDS_SECTIONS } from '@synapse/shared';
 import { z } from 'zod';
 import { badRequest, notFound } from '../../lib/errors';
 import { assertApproved, reevaluate } from '../approvals';
@@ -18,7 +18,7 @@ import { nextFyNumber } from '../numbering';
 import { computeLines, letterhead, lineSchema } from '../quotes';
 import { createRecord, loadRow, type RecordCtx, type RecordEvent, toDto } from '../records';
 import { lineDto } from '../lines';
-import { r2, d10 } from './ledger';
+import { assertSameCurrency, r2, d10 } from './ledger';
 import { repost } from './posting';
 
 export const billLineSchema = lineSchema.extend({
@@ -57,6 +57,12 @@ export async function saveBillLines(ctx: RecordCtx, id: string, input: BillLineI
   if (pids.length) {
     const found = await ctx.tx.query(`select id from products where tenant_id = $1 and id = any($2::uuid[]) and deleted_at is null`, [ctx.tenantId, pids]);
     if (found.length !== pids.length) throw badRequest('A product on this bill no longer exists');
+  }
+  const poLines = [...new Set(input.map((l) => l.poLineId).filter((x): x is string => !!x))];
+  if (poLines.length) {
+    if (!row.purchase_order_id) throw badRequest('This bill is not linked to a purchase order');
+    const ok = await ctx.tx.query(`select id from purchase_order_lines where tenant_id = $1 and order_id = $2 and id = any($3::uuid[])`, [ctx.tenantId, row.purchase_order_id, poLines]);
+    if (ok.length !== poLines.length) throw badRequest('A line refers to another purchase order');
   }
   const c = computeLines(input);
   await ctx.tx.query(`delete from bill_lines where tenant_id = $1 and order_id = $2`, [ctx.tenantId, id]);
@@ -161,6 +167,14 @@ export async function postBill(ctx: RecordCtx, id: string): Promise<RecordEvent[
   if (row.doc_type === 'vendor_credit') {
     const orig = row.original_bill_id ? await ctx.tx.one<{ grand_total: string; vendor_id: string }>(`select grand_total, vendor_id from bills where tenant_id = $1 and id = $2`, [ctx.tenantId, row.original_bill_id]) : null;
     if (orig && orig.vendor_id !== row.vendor_id) throw badRequest('The vendor credit must be for the same vendor as the bill');
+    if (orig) {
+      const fresh = await ctx.tx.one<{ grand_total: string }>(`select grand_total from bills where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
+      const earlier = await ctx.tx.one<{ v: string }>(
+        `select coalesce(sum(grand_total), 0) as v from bills where tenant_id = $1 and original_bill_id = $2 and id <> $3 and doc_type = 'vendor_credit' and status not in ('draft', 'void') and deleted_at is null`,
+        [ctx.tenantId, row.original_bill_id, id],
+      );
+      if (Number(fresh!.grand_total) + Number(earlier!.v) > Number(orig.grand_total) + 0.009) throw badRequest(`Vendor credits against this bill would exceed its total (${Number(orig.grand_total)})`);
+    }
   }
   const date = d10(row.bill_date);
   const n = await nextFyNumber(ctx, row.doc_type === 'vendor_credit' ? 'vendor_credit' : 'bill', date, row.doc_type === 'vendor_credit' ? 'VC' : 'BILL');
@@ -251,8 +265,10 @@ export async function applyVendorCredit(ctx: RecordCtx, creditId: string, plan: 
   for (const p of plan) {
     if (!(p.amount > 0)) throw badRequest('Amounts must be positive');
     if (p.amount > left + 0.009) throw badRequest(`Only ${left} of this credit is left`);
-    const b = await ctx.tx.one<{ vendor_id: string; doc_type: string; status: string; balance_due: string }>(`select vendor_id, doc_type, status, balance_due from bills where tenant_id = $1 and id = $2 and deleted_at is null for update`, [ctx.tenantId, p.billId]);
+    await loadRow(ctx, 'bill', p.billId, 'update');
+    const b = await ctx.tx.one<{ vendor_id: string; doc_type: string; status: string; balance_due: string; currency: string; exchange_rate: string }>(`select vendor_id, doc_type, status, balance_due, currency, exchange_rate from bills where tenant_id = $1 and id = $2 and deleted_at is null for update`, [ctx.tenantId, p.billId]);
     if (!b || b.doc_type !== 'bill') throw badRequest('Bill not found');
+    assertSameCurrency(c, b, 'bill');
     if (b.vendor_id !== c.vendor_id) throw badRequest('The bill belongs to another vendor');
     if (!['open', 'partially_paid'].includes(b.status)) throw badRequest('Only open bills take credits');
     if (p.amount > Number(b.balance_due) + 0.009) throw badRequest(`That is more than the bill balance (${Number(b.balance_due)})`);
@@ -282,6 +298,8 @@ export interface VendorPaymentInput {
 }
 
 export async function recordVendorPayment(ctx: RecordCtx, input: VendorPaymentInput) {
+  if (input.currency && input.currency !== 'INR' && !input.allocations && !hasAdmin(ctx.principal.permissions, 'books')) throw badRequest('Apply a foreign-currency payment to its bills');
+  if (input.exchangeRate !== undefined && (!(input.exchangeRate > 0) || input.exchangeRate > 100000)) throw badRequest('Invalid exchange rate');
   if (input.paidThroughId) {
     const a = await ctx.tx.one<{ subtype: string }>(`select subtype from gl_accounts where tenant_id = $1 and id = $2 and is_active`, [ctx.tenantId, input.paidThroughId]);
     if (!a || !['bank', 'cash', 'credit_card'].includes(a.subtype)) throw badRequest('Pay from a bank, cash or card account');
@@ -294,7 +312,7 @@ export async function recordVendorPayment(ctx: RecordCtx, input: VendorPaymentIn
     mode: input.mode ?? 'bank_transfer',
     reference: input.reference ?? null,
     notes: input.notes ?? null,
-  });
+  }, { viaService: true });
   const id = r.record.id;
   await ctx.tx.query(`update vendor_payments set name = $3, paid_through_id = $4, currency = $5, exchange_rate = $6 where tenant_id = $1 and id = $2`, [
     ctx.tenantId, id, `${r.record.payment_number}${input.reference ? ` · ${input.reference}` : ''}`, input.paidThroughId ?? null, input.currency ?? 'INR', input.exchangeRate ?? 1,
@@ -312,8 +330,9 @@ export async function allocateVendorPayment(ctx: RecordCtx, paymentId: string, a
   let plan: { billId: string; amount: number }[] = [];
   if (allocations === 'auto') {
     const open = await ctx.tx.query<{ id: string; balance_due: string }>(
-      `select id, balance_due from bills where tenant_id = $1 and vendor_id = $2 and doc_type = 'bill' and status in ('open','partially_paid') and deleted_at is null order by due_date nulls last, bill_date`,
-      [ctx.tenantId, p.vendor_id],
+      `select id, balance_due from bills where tenant_id = $1 and vendor_id = $2 and doc_type = 'bill' and status in ('open','partially_paid') and deleted_at is null and currency = $3
+         and ($4::uuid is null or owner_id = $4) order by due_date nulls last, bill_date`,
+      [ctx.tenantId, p.vendor_id, p.currency ?? 'INR', objectPerm(ctx.principal.permissions, 'bill').read === 'all' ? null : ctx.principal.user.id],
     );
     let room = left;
     for (const b of open) {
@@ -331,8 +350,10 @@ export async function allocateVendorPayment(ctx: RecordCtx, paymentId: string, a
   }
   if (r2(plan.reduce((s, a) => s + a.amount, 0)) > left + 0.009) throw badRequest(`Only ${left} of this payment is left to apply`);
   for (const a of plan) {
-    const b = await ctx.tx.one<{ vendor_id: string; doc_type: string; status: string; balance_due: string }>(`select vendor_id, doc_type, status, balance_due from bills where tenant_id = $1 and id = $2 and deleted_at is null for update`, [ctx.tenantId, a.billId]);
+    await loadRow(ctx, 'bill', a.billId, 'read');
+    const b = await ctx.tx.one<{ vendor_id: string; doc_type: string; status: string; balance_due: string; currency: string; exchange_rate: string }>(`select vendor_id, doc_type, status, balance_due, currency, exchange_rate from bills where tenant_id = $1 and id = $2 and deleted_at is null for update`, [ctx.tenantId, a.billId]);
     if (!b || b.doc_type !== 'bill') throw badRequest('Bill not found');
+    assertSameCurrency(p, b, 'bill');
     if (b.vendor_id !== p.vendor_id) throw badRequest('The bill belongs to another vendor');
     if (!['open', 'partially_paid'].includes(b.status)) throw badRequest('Only open bills take payments');
     if (a.amount > Number(b.balance_due) + 0.009) throw badRequest(`That is more than the bill balance (${Number(b.balance_due)})`);
@@ -369,8 +390,9 @@ export async function getVendorPayment(ctx: RecordCtx, id: string) {
     row.status === 'paid'
       ? await ctx.tx.query(
           `select id, bill_number, vendor_ref, bill_date, due_date, grand_total::float8 as grand_total, balance_due::float8 as balance_due from bills
-            where tenant_id = $1 and vendor_id = $2 and doc_type = 'bill' and status in ('open','partially_paid') and deleted_at is null order by due_date nulls last, bill_date`,
-          [ctx.tenantId, row.vendor_id],
+            where tenant_id = $1 and vendor_id = $2 and doc_type = 'bill' and status in ('open','partially_paid') and deleted_at is null and currency = $3
+              and ($4::uuid is null or owner_id = $4) order by due_date nulls last, bill_date`,
+          [ctx.tenantId, row.vendor_id, row.currency ?? 'INR', objectPerm(ctx.principal.permissions, 'bill').read === 'all' ? null : ctx.principal.user.id],
         )
       : [];
   return { payment: { ...toDto(obj, row, ctx.principal.permissions), paid_through_id: row.paid_through_id ?? null, void_reason: row.void_reason ?? null }, allocations, openBills: open };

@@ -176,7 +176,10 @@ export async function categorize(ctx: RecordCtx, txnId: string, input: { account
 export async function undoTxn(ctx: RecordCtx, txnId: string) {
   const t = await ctx.tx.one<{ status: string; journal_id: string | null }>(`select status, journal_id from bank_transactions where tenant_id = $1 and id = $2 for update`, [ctx.tenantId, txnId]);
   if (!t) throw notFound();
-  const cleared = await ctx.tx.one(`select 1 from journal_lines where tenant_id = $1 and bank_txn_id = $2 and reconciliation_id is not null`, [ctx.tenantId, txnId]);
+  const cleared = await ctx.tx.one(
+    `select 1 from journal_lines where tenant_id = $1 and reconciliation_id is not null and (bank_txn_id = $2 or ($3::text = 'categorized' and journal_id = $4::uuid)) limit 1`,
+    [ctx.tenantId, txnId, t.status, t.journal_id],
+  );
   if (cleared) throw badRequest('This line is reconciled; undo the reconciliation first');
   await ctx.tx.query(`update journal_lines set bank_txn_id = null where tenant_id = $1 and bank_txn_id = $2`, [ctx.tenantId, txnId]);
   if (t.status === 'categorized') await voidSource(ctx.tx, ctx.tenantId, 'bank', txnId, 'Statement line un-categorised');

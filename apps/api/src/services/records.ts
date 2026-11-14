@@ -545,9 +545,11 @@ export async function createRecord(
   ctx: RecordCtx,
   objectKey: string,
   input: Record<string, unknown>,
-  opts: { bypassPermissions?: boolean; fromAutomation?: boolean; autoAssign?: boolean } = {},
+  opts: { bypassPermissions?: boolean; fromAutomation?: boolean; autoAssign?: boolean; viaService?: boolean } = {},
 ): Promise<{ record: RecordDto; events: RecordEvent[] }> {
   const obj = getObject(ctx.meta, objectKey);
+  // money documents that post to the ledger are created only through their own service
+  if (SERVICE_ONLY.has(objectKey) && !opts.viaService) throw badRequest(`${obj.plural} are recorded from their own screen (they post to the books), not as plain records`);
   if (!opts.bypassPermissions && !objectPerm(ctx.principal.permissions, objectKey).create) throw forbidden();
   const s = storageFor(objectKey);
   const prepared = await prepareValues(ctx, obj, input, 'create', !!opts.bypassPermissions);
@@ -621,7 +623,14 @@ export async function createRecord(
 }
 
 /** Header fields frozen once a document leaves draft (stock, tax and the counterparty depend on them). */
+/** Created only by their service (it posts the ledger entry); generic create, import and merge are refused. */
+export const SERVICE_ONLY = new Set(['payment', 'vendor_payment']);
+/** Financial documents that are never merged (merging would soft-delete posted entries). */
+export const NO_MERGE = new Set(['invoice', 'payment', 'bill', 'vendor_payment', 'expense']);
+
 const LOCKED_AFTER_DRAFT: Record<string, string[]> = {
+  payment: ['account_id', 'sales_order_id', 'amount', 'payment_date', 'mode', 'tds_amount', 'bank_charges'],
+  vendor_payment: ['vendor_id', 'amount', 'payment_date', 'mode'],
   sales_order: ['warehouse_id', 'account_id', 'currency'],
   purchase_order: ['vendor_id', 'warehouse_id', 'currency'],
   invoice: ['account_id', 'currency', 'place_of_supply', 'invoice_date', 'reverse_charge', 'contact_id', 'shipping_address'],

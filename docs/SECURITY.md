@@ -150,3 +150,27 @@ An independent review of the fifth round found no cross-tenant leaks; these were
 - **Insights** show only deal-level and conversation factors. Standing risks resurface weekly after a dismissal. Stale insights about closed or deleted records are removed.
 - **The sweep** is queued per workspace and per part (detect, auto-prep, index), with batched writes.
 - **Erasure** also removes search-index entries and their vectors, agent runs about the person, citing them, or built from their meetings and calls, plus suggestions, action items, insights, scores and meeting notes.
+
+### Seventh round (Nov 2026): Books
+
+- **The ledger is enforced by the database.**
+  - Journals must balance (a deferred constraint).
+  - Lines go only into a posted journal, on its date.
+  - Posted lines never change and leave the balances only when their journal is voided.
+  - The application role cannot delete journals.
+  - The lock date applies to posting and voiding.
+  - There is one live journal per document.
+- **Documents and journals stay in step.**
+  - Posted bills, vendor payments and submitted expenses can only be changed through their services (database guards and field locks).
+  - Payments and vendor payments cannot be created, imported or merged as plain records.
+  - Financial documents are never merged.
+  - A change that would alter a bank-reconciled entry is refused.
+- **Who can post.**
+  - Ledger, banking, reports, settings, write-offs and reimbursements need the `books` admin area.
+  - Sales roles cannot raise bills or pay vendors.
+  - Expenses filed by non-accountants go through approval and post only to expense or non-system asset categories.
+  - Nobody approves an expense they own or filed.
+  - TDS, bank charges, deposit accounts and currency on receipts need the billing or books permission. Deposits go only to bank or cash.
+  - A foreign-currency payment settles only documents in that currency, at a rate within 25% of theirs.
+- **GST set-off follows Section 49 and Rule 88A.** Reverse-charge tax is always shown as payable in cash.
+- **Bounds.** Dates are validated. Statement and GSTR-2B imports are size-capped. Depreciation runs at most to next month end. Recurring profiles start at most a year back and catch up at most 12 runs a day. CSV exports are formula-safe.

@@ -190,8 +190,12 @@ export const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
  */
 export async function postJournal(tx: Tx, tenantId: string, j: JournalInput): Promise<string | null> {
   const lines = j.lines
-    .map((l) => ({ ...l, debit: r2(l.debit ?? 0), credit: r2(l.credit ?? 0) }))
-    .map((l) => (l.debit && l.credit ? { ...l, debit: r2(Math.max(0, l.debit - l.credit)), credit: r2(Math.max(0, l.credit - l.debit)) } : l))
+    // a negative debit is a credit (and the other way round); a line with both sides keeps the net
+    .map((l) => {
+      const net = r2((l.debit ?? 0) - (l.credit ?? 0));
+      if (!Number.isFinite(net)) throw badRequest('Invalid amount on the entry');
+      return { ...l, debit: net > 0 ? net : 0, credit: net < 0 ? -net : 0 };
+    })
     .filter((l) => l.debit > 0 || l.credit > 0);
   if (!lines.length) return null;
   const d = r2(lines.reduce((a, l) => a + l.debit, 0));
@@ -263,3 +267,14 @@ export const d10 = (v: unknown): string => {
   if (v instanceof Date) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
   return String(v ?? '').slice(0, 10);
 };
+
+/** A foreign-currency payment must be in the documents' currency, at a rate near theirs. */
+export function assertSameCurrency(payment: { currency?: unknown; exchange_rate?: unknown }, doc: { currency?: unknown; exchange_rate?: unknown }, what: string) {
+  const pc = String(payment.currency ?? 'INR');
+  const dc = String(doc.currency ?? 'INR');
+  if (pc !== dc) throw badRequest(`The payment is in ${pc} but the ${what} is in ${dc}`);
+  if (pc === 'INR') return;
+  const pr = Number(payment.exchange_rate ?? 1);
+  const dr = Number(doc.exchange_rate ?? 1);
+  if (!(pr > 0) || Math.abs(pr - dr) / dr > 0.25) throw badRequest(`The exchange rate ${pr} is more than 25% away from the ${what}'s rate ${dr}`);
+}

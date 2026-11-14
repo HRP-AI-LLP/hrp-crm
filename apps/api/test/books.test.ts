@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Db } from '../src/lib/db';
 import { booksDailySweep } from '../src/services/books/sweep';
 import { nextRun } from '../src/services/books/setup';
+import { gstSetOff } from '../src/services/books/reports';
 import { makeHarness, PW } from './harness';
 
 const CH = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -200,6 +201,60 @@ describe('expenses and claims', () => {
   });
 });
 
+describe('review hardening', () => {
+  it('keeps money postings with the right people and checks their accounts', async () => {
+    // sales reps cannot raise bills or pay vendors
+    expect((await rep('POST', '/api/v1/records/bill', { name: 'x', vendor_id: ids.vendor })).status).toBe(403);
+    expect((await rep('POST', '/api/v1/books/vendor-payments', { vendorId: ids.vendor, amount: 10 })).status).toBe(403);
+    // receipts: deposit account must be bank or cash, and TDS etc. need the billing or books permission
+    const cust = ids.customer;
+    expect((await api('POST', '/api/v1/payments', { accountId: cust, amount: 100, depositAccountId: sysAcc.capital })).status).toBe(400);
+    expect((await api('POST', '/api/v1/payments', { accountId: cust, amount: 100, tdsAmount: 90, bankCharges: 20 })).status).toBe(400);
+    // a foreign-currency payment cannot settle an INR bill
+    const b = await api('POST', '/api/v1/records/bill', { name: 'Hinges', vendor_id: ids.vendor, vendor_ref: 'SP/300', bill_date: today });
+    await api('PUT', `/api/v1/books/bills/${b.json.id}/lines`, { lines: [{ name: 'Hinges', quantity: 1, unitPrice: 100, taxRate: 18 }] });
+    expect((await api('POST', `/api/v1/books/bills/${b.json.id}/post`)).status).toBe(200);
+    const fx = await api('POST', '/api/v1/books/vendor-payments', { vendorId: ids.vendor, amount: 100, currency: 'USD', exchangeRate: 1000000, allocations: [{ billId: b.json.id, amount: 100 }] });
+    expect(fx.status).toBe(400);
+    // payments and vendor payments are not plain records, and posted ones do not change or merge
+    expect((await api('POST', '/api/v1/records/vendor_payment', { name: 'x', vendor_id: ids.vendor, amount: 5 })).status).toBe(400);
+    expect((await api('POST', '/api/v1/records/payment', { name: 'x', account_id: cust, amount: 5 })).status).toBe(400);
+    const vp = await api('POST', '/api/v1/books/vendor-payments', { vendorId: ids.vendor, amount: 50, date: today });
+    expect((await api('PATCH', `/api/v1/records/vendor_payment/${vp.json.id}`, { amount: 5000 })).status).toBe(400);
+    expect((await api('POST', '/api/v1/records/bill/merge', { masterId: b.json.id, duplicateIds: [ids.bill] })).status).toBe(400);
+    expect((await api('DELETE', `/api/v1/records/bill/${b.json.id}`)).status).toBe(400);
+    // a payables summary is for the books team
+    expect((await rep('GET', '/api/v1/books/payables')).status).toBe(403);
+    expect((await rep('GET', '/api/v1/books/recurring')).status).toBe(403);
+    // impossible dates are refused cleanly
+    expect((await api('POST', '/api/v1/books/journals', { date: '2025-13-45', lines: [{ accountId: sysAcc.rent, debit: 1 }, { accountId: sysAcc.cash, credit: 1 }] })).status).toBe(400);
+    await tb();
+  });
+
+  it('company-paid expenses by a rep go through approval and post only to expense categories', async () => {
+    const e = await rep('POST', '/api/v1/records/expense', { name: 'Taxi', amount: 500, is_claim: false, expense_date: today });
+    expect(e.status).toBe(201);
+    expect((await rep('PUT', `/api/v1/books/expenses/${e.json.id}/accounts`, { accountId: sysAcc.inventory, paidThroughId: null })).status).toBe(400);
+    expect((await rep('PUT', `/api/v1/books/expenses/${e.json.id}/accounts`, { accountId: sysAcc.travel, paidThroughId: null })).status).toBe(200);
+    expect((await rep('POST', `/api/v1/books/expenses/${e.json.id}/record`, {})).status).toBe(403);
+    expect((await rep('POST', `/api/v1/books/expenses/${e.json.id}/submit`, {})).status).toBe(200);
+    // once submitted, nothing about it can change
+    expect((await rep('PATCH', `/api/v1/records/expense/${e.json.id}`, { amount: 5 })).status).toBe(400);
+    const ok = await api('POST', `/api/v1/books/expenses/${e.json.id}/approve`, {});
+    expect(ok.status, JSON.stringify(ok.json)).toBe(200);
+    expect((await api('GET', `/api/v1/records/expense/${e.json.id}`)).json.status).toBe('recorded');
+    // nobody approves what they filed, even in someone else's name
+    const c = await api('POST', '/api/v1/records/expense', { name: 'Hotel', amount: 900, is_claim: true, expense_date: today });
+    const me = (await api('GET', '/api/auth/me')).json;
+    const repId = (await rep('GET', '/api/auth/me')).json.user.id;
+    expect(me.user.id).not.toBe(repId);
+    await api('PATCH', `/api/v1/records/expense/${c.json.id}`, { owner_id: repId });
+    expect((await api('POST', `/api/v1/books/expenses/${c.json.id}/submit`, {})).status).toBe(200);
+    expect((await api('POST', `/api/v1/books/expenses/${c.json.id}/approve`, {})).status).toBe(403);
+    await tb();
+  });
+});
+
 describe('manual journals and controls', () => {
   it('refuses unbalanced or receivable lines without a party; posts, reverses and voids', async () => {
     expect((await api('POST', '/api/v1/books/journals', { date: today, lines: [{ accountId: sysAcc.rent, debit: 100 }, { accountId: sysAcc.cash, credit: 90 }] })).status).toBe(400);
@@ -312,10 +367,14 @@ describe('reports', () => {
     const g = await api('GET', `/api/v1/books/reports/gstr-3b?month=${today.slice(0, 7)}`);
     expect(g.status, JSON.stringify(g.json)).toBe(200);
     expect(g.json.outward.igst).toBeCloseTo(1440 + 180, 2);
-    expect(g.json.itc.total.cgst).toBeCloseTo(900 + 90, 2);
-    // IGST liability 1620 is set off by CGST credit (990) and then SGST credit (630); 360 SGST credit is carried forward
+    expect(g.json.itc.total.cgst).toBeCloseTo(900 + 90 + 9, 2); // plywood bill, lunch claim, hinges bill
+    // IGST liability 1620 is set off by CGST credit (999) and then SGST credit (621); 378 SGST credit is carried forward
     expect(g.json.payableInCash).toEqual({ igst: 0, cgst: 0, sgst: 0 });
-    expect(g.json.creditCarriedForward).toEqual({ igst: 0, cgst: 0, sgst: 360 });
+    expect(g.json.creditCarriedForward).toEqual({ igst: 0, cgst: 0, sgst: 378 });
+    // IGST credit goes where CGST/SGST credit falls short
+    expect(gstSetOff({ igst: 0, cgst: 100, sgst: 100 }, { igst: 100, cgst: 100, sgst: 0 }).due).toEqual({ igst: 0, cgst: 0, sgst: 0 });
+    // CGST credit never pays SGST
+    expect(gstSetOff({ igst: 0, cgst: 0, sgst: 100 }, { igst: 0, cgst: 100, sgst: 0 }).due).toEqual({ igst: 0, cgst: 0, sgst: 100 });
   });
 
   it('TDS, statements, day book and CSV export', async () => {
@@ -324,7 +383,7 @@ describe('reports', () => {
     expect(t.json.receivable[0].tds).toBe(160);
     const s = await api('GET', `/api/v1/books/reports/vendor-statement?partyId=${ids.vendor}&from=${fyStart}&to=${today}`);
     expect(s.status).toBe(200);
-    expect(s.json.closing).toBeCloseTo(0, 2);
+    expect(s.json.closing).toBeCloseTo(118 - 50, 2); // the hinges bill less an unapplied advance
     const csv = await api('GET', `/api/v1/books/reports/day-book?from=${fyStart}&to=${today}&format=csv`, undefined, { raw: true });
     expect(csv.status).toBe(200);
     expect(csv.headers.get('content-type')).toContain('text/csv');
@@ -379,7 +438,7 @@ describe('assets, budgets, GSTR-2B, recurring, opening balances', () => {
     expect(g.status, JSON.stringify(g.json)).toBe(200);
     expect(g.json).toMatchObject({ matched: 1, unmatched: 1 });
     const r = await api('GET', `/api/v1/books/reports/gstr-2b?period=${period}`);
-    expect(r.json.missingInGstr2b).toHaveLength(0);
+    expect(r.json.missingInGstr2b.map((b: any) => b.vendor_ref)).toEqual(['SP/300']);
   });
 
   it('recurring journals run on schedule', async () => {

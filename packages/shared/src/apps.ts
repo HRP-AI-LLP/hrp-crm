@@ -24,6 +24,8 @@ export interface AppDefinition {
 const all = { read: 'all', create: true, update: 'all', delete: 'none' } as const;
 const readOnly = { read: 'all', create: false, update: 'none', delete: 'none' } as const;
 const none = { read: 'none', create: false, update: 'none', delete: 'none' } as const;
+/** everyone files their own expenses and claims (the Books app) */
+const ownExpense = { read: 'own', create: true, update: 'own', delete: 'own' } as const;
 
 export const APPS: Record<string, AppDefinition> = {
   orders: {
@@ -44,7 +46,7 @@ export const APPS: Record<string, AppDefinition> = {
         key: 'inventory_manager',
         name: 'Inventory Manager',
         description: 'Products, stock, warehouses and goods receipts',
-        permissions: { objects: { '*': readOnly, product: all, purchase_order: all, vendor: all, sales_order: readOnly }, admin: ['operations'] },
+        permissions: { objects: { expense: ownExpense, '*': readOnly, product: all, purchase_order: all, vendor: all, sales_order: readOnly }, admin: ['operations'] },
       },
     ],
   },
@@ -62,7 +64,7 @@ export const APPS: Record<string, AppDefinition> = {
         key: 'operations',
         name: 'Operations',
         description: 'Orders, purchasing, deliveries and installations',
-        permissions: { objects: { '*': readOnly, sales_order: all, purchase_order: all, vendor: all, product: all, shipment: all, installation: all, lead: none }, admin: ['operations'] },
+        permissions: { objects: { expense: ownExpense, '*': readOnly, sales_order: all, purchase_order: all, vendor: all, product: all, shipment: all, installation: all, lead: none }, admin: ['operations'] },
       },
     ],
   },
@@ -80,7 +82,7 @@ export const APPS: Record<string, AppDefinition> = {
         key: 'technician',
         name: 'Technician',
         description: 'Own installation jobs and deliveries; read customers and orders',
-        permissions: { objects: { '*': none, installation: { read: 'own', create: false, update: 'own', delete: 'none' }, shipment: { read: 'own', create: false, update: 'own', delete: 'none' }, account: readOnly, contact: readOnly, sales_order: readOnly, product: readOnly, ticket: { read: 'own', create: true, update: 'own', delete: 'none' } } },
+        permissions: { objects: { expense: ownExpense, '*': none, installation: { read: 'own', create: false, update: 'own', delete: 'none' }, shipment: { read: 'own', create: false, update: 'own', delete: 'none' }, account: readOnly, contact: readOnly, sales_order: readOnly, product: readOnly, ticket: { read: 'own', create: true, update: 'own', delete: 'none' } } },
       },
     ],
   },
@@ -95,7 +97,7 @@ export const APPS: Record<string, AppDefinition> = {
         key: 'service_agent',
         name: 'Service Agent',
         description: 'Tickets end to end; read customers, orders and products',
-        permissions: { objects: { '*': readOnly, ticket: all, lead: none, deal: none, quote: none } },
+        permissions: { objects: { expense: ownExpense, '*': readOnly, ticket: all, lead: none, deal: none, quote: none } },
       },
     ],
   },
@@ -113,7 +115,7 @@ export const APPS: Record<string, AppDefinition> = {
         key: 'accounts',
         name: 'Accounts',
         description: 'Invoices, credit notes, payments and GST exports',
-        permissions: { objects: { '*': readOnly, invoice: { ...all, delete: 'all' }, payment: all, account: { read: 'all', create: true, update: 'all', delete: 'none' }, lead: none, deal: readOnly }, admin: ['billing'] },
+        permissions: { objects: { '*': readOnly, invoice: { ...all, delete: 'all' }, payment: all, expense: readOnly, account: { read: 'all', create: true, update: 'all', delete: 'none' }, lead: none, deal: readOnly }, admin: ['billing'] },
       },
     ],
   },

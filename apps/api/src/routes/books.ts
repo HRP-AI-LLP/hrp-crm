@@ -36,7 +36,13 @@ import type { RecordCtx, RecordEvent } from '../services/records';
 import { safeCtx } from './public';
 
 const uuid = z.string().uuid();
-const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const dateStr = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((s) => {
+    const d = new Date(`${s}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s && s >= '1990-01-01' && s <= '2100-12-31';
+  }, 'Not a valid date');
 const money = z.number().finite().min(0).max(1e12);
 const signed = z.number().finite().min(-1e12).max(1e12);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -146,7 +152,7 @@ export const booksRoutes = new Hono<AppEnv>()
     return c.json(await c.var.db.tx(scope(c), (tx) => billFromPo(rctx(c, tx), qUuid(c))), 201);
   })
   .get('/books/payables', async (c) => {
-    requireBooks(c);
+    requireAdmin(c);
     return c.json(await c.var.db.tx(scope(c, true), (tx) => payables(rctx(c, tx), qDate(c, 'asOf', today()))));
   })
   .post('/books/vendor-payments', async (c) => {
@@ -266,7 +272,7 @@ export const booksRoutes = new Hono<AppEnv>()
   .get('/books/journals', async (c) => {
     requireAdmin(c);
     const r = await c.var.db.tx(scope(c, true), (tx) =>
-      setup.listJournals(rctx(c, tx), { from: q(c, 'from'), to: q(c, 'to'), sourceType: q(c, 'source'), status: q(c, 'status'), search: q(c, 'q'), limit: Number(c.req.query('limit') ?? 100) || 100, offset: Number(c.req.query('offset') ?? 0) || 0 }),
+      setup.listJournals(rctx(c, tx), { from: q(c, 'from'), to: q(c, 'to'), sourceType: q(c, 'source'), status: q(c, 'status'), search: q(c, 'q'), limit: Math.max(1, Math.min(500, Math.trunc(Number(c.req.query('limit') ?? 100)) || 100)), offset: Math.max(0, Math.min(100_000, Math.trunc(Number(c.req.query('offset') ?? 0)) || 0)) }),
     );
     return c.json(r);
   })
@@ -559,7 +565,7 @@ export const booksRoutes = new Hono<AppEnv>()
     return c.json(await c.var.db.tx(scope(c), (tx) => setup.importGstr2b(rctx(c, tx), b.period, b.rows)));
   })
   .get('/books/recurring', async (c) => {
-    requireBooks(c);
+    requireAdmin(c);
     return c.json(await c.var.db.tx(scope(c, true), (tx) => setup.listRecurring(rctx(c, tx))));
   })
   .post('/books/recurring', async (c) => {

@@ -10,8 +10,9 @@
  * document (only payment state, e-invoice details and cancellation may change).
  */
 import { repost } from './books/posting';
-import { objectPerm, splitTax, stateCode, stateName, supplyType, validGstin } from '@synapse/shared';
-import { badRequest, conflict, notFound } from '../lib/errors';
+import { hasAdmin, objectPerm, splitTax, stateCode, stateName, supplyType, validGstin } from '@synapse/shared';
+import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
+import { assertSameCurrency } from './books/ledger';
 import { assertApproved, reevaluate } from './approvals';
 import { enabledApps } from './apps';
 import { assertProducts } from './lines';
@@ -494,6 +495,16 @@ export async function recordPayment(ctx: RecordCtx, input: PaymentInput) {
     accountId = (o.account_id as string | null) ?? null;
   }
   if (!accountId) throw badRequest('The order has no customer; choose the customer for this payment');
+  const booksFields = !!input.depositAccountId || !!input.tdsAmount || !!input.bankCharges || (!!input.currency && input.currency !== 'INR');
+  if (booksFields) {
+    if (!hasAdmin(ctx.principal.permissions, 'books') && !hasAdmin(ctx.principal.permissions, 'billing')) throw forbidden('TDS, bank charges, deposit account and currency need the billing or books permission');
+    if (r2((input.tdsAmount ?? 0) + (input.bankCharges ?? 0)) > input.amount) throw badRequest('TDS and bank charges cannot exceed the amount');
+    if (input.depositAccountId) {
+      const a = await ctx.tx.one<{ subtype: string }>(`select subtype from gl_accounts where tenant_id = $1 and id = $2 and is_active`, [ctx.tenantId, input.depositAccountId]);
+      if (!a || !['bank', 'cash'].includes(a.subtype)) throw badRequest('Deposit to a bank or cash account');
+    }
+    if (input.currency && input.currency !== 'INR' && !input.allocations && !hasAdmin(ctx.principal.permissions, 'books')) throw badRequest('Apply a foreign-currency receipt to its invoices');
+  }
   const r = await createRecord(ctx, 'payment', {
     name: input.reference ? `Payment ${input.reference}` : 'Payment',
     account_id: accountId,
@@ -503,18 +514,18 @@ export async function recordPayment(ctx: RecordCtx, input: PaymentInput) {
     mode: input.mode ?? 'bank_transfer',
     reference: input.reference ?? null,
     notes: input.notes ?? null,
-  });
+  }, { viaService: true });
   const id = r.record.id;
   const events: RecordEvent[] = [...r.events];
   if (input.milestoneId) await ctx.tx.query(`update payments set milestone_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, input.milestoneId]);
   await ctx.tx.query(`update payments set name = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, `${r.record.payment_number}${input.reference ? ` · ${input.reference}` : ''}`]);
-  if (input.allocations) events.push(...(await allocatePayment(ctx, id, input.allocations)));
-  if (input.salesOrderId) events.push(...(await refreshOrderPaid(ctx, input.salesOrderId)));
-  if (input.depositAccountId || input.tdsAmount || input.bankCharges || (input.currency && input.currency !== 'INR')) {
+  if (booksFields) {
     await ctx.tx.query(`update payments set deposit_account_id = $3, tds_amount = $4, bank_charges = $5, currency = $6, exchange_rate = $7 where tenant_id = $1 and id = $2`, [
       ctx.tenantId, id, input.depositAccountId ?? null, input.tdsAmount ?? 0, input.bankCharges ?? 0, input.currency ?? 'INR', input.exchangeRate ?? 1,
     ]);
   }
+  if (input.allocations) events.push(...(await allocatePayment(ctx, id, input.allocations)));
+  if (input.salesOrderId) events.push(...(await refreshOrderPaid(ctx, input.salesOrderId)));
   await repost(ctx.tx, ctx.tenantId, 'payment', id);
   return { id, number: r.record.payment_number as string, events };
 }
@@ -527,8 +538,8 @@ export async function allocatePayment(ctx: RecordCtx, paymentId: string, allocat
   if (allocations === 'auto') {
     const open = await ctx.tx.query<{ id: string; balance_due: string }>(
       `select id, balance_due from invoices where tenant_id = $1 and account_id = $2 and doc_type = 'tax_invoice' and status in ('issued', 'partially_paid') and deleted_at is null
-         and ($3::uuid is null or sales_order_id = $3::uuid) order by due_date nulls last, invoice_date, invoice_number`,
-      [ctx.tenantId, p.account_id, p.sales_order_id ?? null],
+         and ($3::uuid is null or sales_order_id = $3::uuid) and currency = $4 order by due_date nulls last, invoice_date, invoice_number`,
+      [ctx.tenantId, p.account_id, p.sales_order_id ?? null, p.currency ?? 'INR'],
     );
     plan = [];
     for (const inv of open) {
@@ -554,11 +565,12 @@ export async function allocatePayment(ctx: RecordCtx, paymentId: string, allocat
   const touched = new Set<string>();
   for (const a of plan) {
     if (!(a.amount > 0)) continue;
-    const inv = await ctx.tx.one<{ account_id: string | null; status: string; balance_due: string; doc_type: string }>(
-      `select account_id, status, balance_due, doc_type from invoices where tenant_id = $1 and id = $2 and deleted_at is null for update`,
+    const inv = await ctx.tx.one<{ account_id: string | null; status: string; balance_due: string; doc_type: string; currency: string; exchange_rate: string }>(
+      `select account_id, status, balance_due, doc_type, currency, exchange_rate from invoices where tenant_id = $1 and id = $2 and deleted_at is null for update`,
       [ctx.tenantId, a.invoiceId],
     );
     if (!inv || inv.doc_type !== 'tax_invoice') throw badRequest('Invoice not found');
+    assertSameCurrency(p, inv, 'invoice');
     if (inv.account_id !== p.account_id) throw badRequest('The invoice belongs to another customer');
     if (!['issued', 'partially_paid'].includes(inv.status)) throw badRequest('Only open invoices take payments');
     if (a.amount > Number(inv.balance_due) + 0.009) throw badRequest(`That is more than the invoice balance (${Number(inv.balance_due)})`);
