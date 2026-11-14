@@ -32,23 +32,15 @@ export async function projectAccess(ctx: RecordCtx, projectId: string, need: Lev
     const m = await ctx.tx.one<{ role: string }>(`select role from project_members where tenant_id = $1 and project_id = $2 and user_id = $3`, [ctx.tenantId, projectId, ctx.principal.user.id]);
     if (m) level = m.role === 'manager' ? 'manage' : m.role === 'member' ? 'member' : 'view';
   }
-  if (!level || level !== 'manage') {
-    const perm = objectPerm(ctx.principal.permissions, 'project');
-    if (perm.update !== 'none') {
-      try {
-        await loadRow(ctx, 'project', projectId, 'update');
-        level = 'manage';
-      } catch (e) {
-        if (!(e instanceof ApiError)) throw e;
-      }
-    }
-    if (!level && perm.read !== 'none') {
-      try {
-        await loadRow(ctx, 'project', projectId, 'read');
-        level = 'view';
-      } catch (e) {
-        if (!(e instanceof ApiError)) throw e;
-      }
+  // the owner manages; so do people who may edit every project
+  const perm = objectPerm(ctx.principal.permissions, 'project');
+  if (level !== 'manage' && (p.owner_id === ctx.principal.user.id || perm.update === 'all')) level = 'manage';
+  if (!level && perm.read !== 'none') {
+    try {
+      await loadRow(ctx, 'project', projectId, 'read');
+      level = 'view';
+    } catch (e) {
+      if (!(e instanceof ApiError)) throw e;
     }
   }
   if (!level) throw notFound('Project not found');
@@ -107,7 +99,7 @@ export async function listProjects(ctx: RecordCtx, q: { status?: string | null; 
   }
   return ctx.tx.query(
     `select r.id, r.name, r.project_code, r.status, r.start_date, r.end_date, r.billing_method, r.budget_type,
-            r.budget_hours::float8 as budget_hours, r.budget_amount::float8 as budget_amount, r.progress::float8 as progress, r.owner_id,
+            r.budget_hours::float8 as budget_hours, r.progress::float8 as progress, r.owner_id,
             (select full_name from users u where u.tenant_id = r.tenant_id and u.id = r.owner_id) as manager,
             (select name from accounts a where a.tenant_id = r.tenant_id and a.id = r.account_id) as customer,
             (select count(*)::int from project_tasks t where t.tenant_id = r.tenant_id and t.project_id = r.id and t.status not in ('done','cancelled')) as open_tasks,
@@ -137,8 +129,11 @@ export async function getProject(ctx: RecordCtx, id: string) {
   );
   const lists = await ctx.tx.query(`select id, name, milestone_id, position from project_task_lists where tenant_id = $1 and project_id = $2 order by position, created_at`, [ctx.tenantId, id]);
   const owner = project.owner_id ? await ctx.tx.one<{ full_name: string }>(`select full_name from users where tenant_id = $1 and id = $2`, [ctx.tenantId, project.owner_id]) : null;
+  const dto: Record<string, unknown> = { ...toDto(obj, project, ctx.principal.permissions), manager: owner?.full_name ?? null };
+  // rates, fees and money budgets are for the people who run the project
+  if (level !== 'manage') for (const k of ['project_rate', 'fixed_fee', 'budget_amount']) dto[k] = null;
   return {
-    project: { ...toDto(obj, project, ctx.principal.permissions), manager: owner?.full_name ?? null },
+    project: dto,
     level,
     members: members.map((m: any) => (showRates ? m : { ...m, bill_rate: undefined, cost_rate: undefined })),
     milestones,
@@ -163,7 +158,7 @@ export async function setMembers(ctx: RecordCtx, id: string, members: { userId: 
   for (const m of members)
     await ctx.tx.query(`insert into project_members (tenant_id, project_id, user_id, role, bill_rate, cost_rate) values ($1,$2,$3,$4,$5,$6)`, [ctx.tenantId, id, m.userId, m.role, m.billRate ?? null, m.costRate ?? null]);
   const added = ids.filter((u) => !before.some((b) => b.user_id === u));
-  await notify(ctx, added, `You were added to project ${project.name}`, `/o/project/${id}`);
+  await notify(ctx, added, `You were added to project ${project.name}`, `/projects/${id}`);
 }
 
 export async function refreshProgress(tx: Tx, tenantId: string, projectId: string) {
@@ -179,7 +174,9 @@ export async function refreshProgress(tx: Tx, tenantId: string, projectId: strin
 
 /** Copies a project's milestones, lists, tasks and dependencies (dates shifted to a new start). */
 export async function duplicateProject(ctx: RecordCtx, id: string, input: { name: string; startDate?: string | null; accountId?: string | null }) {
-  const { project } = await projectAccess(ctx, id, 'view');
+  const { project } = await projectAccess(ctx, id, 'manage');
+  const size = await ctx.tx.one<{ n: number }>(`select count(*)::int as n from project_tasks where tenant_id = $1 and project_id = $2`, [ctx.tenantId, id]);
+  if ((size?.n ?? 0) > 2000) throw badRequest('Projects with more than 2,000 tasks cannot be copied');
   const shift = input.startDate && project.start_date ? dayDiff(d10(project.start_date), input.startDate) : 0;
   const mv = (d: unknown) => (d ? addDays(d10(d), shift) : null);
   const r = await createRecord(ctx, 'project', {
@@ -361,7 +358,7 @@ export async function createTask(ctx: RecordCtx, projectId: string, input: TaskI
     ],
   );
   await refreshProgress(ctx.tx, ctx.tenantId, projectId);
-  await notify(ctx, input.assignees ?? [], `New task in ${project.name}: ${input.name}`, `/o/project/${projectId}#task-${t!.id}`);
+  await notify(ctx, input.assignees ?? [], `New task in ${project.name}: ${input.name}`, `/projects/${projectId}#task-${t!.id}`);
   return { id: t!.id, number: n!.n };
 }
 
@@ -370,6 +367,7 @@ export async function updateTask(ctx: RecordCtx, projectId: string, taskId: stri
   const cur = await ctx.tx.one<Record<string, any>>(`select * from project_tasks where tenant_id = $1 and id = $2 and project_id = $3 for update`, [ctx.tenantId, taskId, projectId]);
   if (!cur) throw notFound('Task not found');
   if (input.rate !== undefined && level !== 'manage') throw forbidden('Only the project manager sets task rates');
+  if (input.billable !== undefined && input.billable !== cur.billable && level !== 'manage') throw forbidden('Only the project manager decides what is billable');
   const next = {
     listId: input.listId !== undefined ? input.listId : cur.list_id,
     milestoneId: input.milestoneId !== undefined ? input.milestoneId : cur.milestone_id,
@@ -400,9 +398,9 @@ export async function updateTask(ctx: RecordCtx, projectId: string, taskId: stri
   if (input.dueDate !== undefined || input.startDate !== undefined) await reschedule(ctx.tx, ctx.tenantId, taskId);
   await refreshProgress(ctx.tx, ctx.tenantId, projectId);
   const added = (input.assignees ?? []).filter((a) => !(cur.assignees as string[]).includes(a));
-  await notify(ctx, added, `Task assigned in ${project.name}: ${input.name ?? cur.name}`, `/o/project/${projectId}#task-${taskId}`);
+  await notify(ctx, added, `Task assigned in ${project.name}: ${input.name ?? cur.name}`, `/projects/${projectId}#task-${taskId}`);
   if (status !== cur.status && (status === 'done' || status === 'review'))
-    await notify(ctx, [cur.created_by, project.owner_id], `${input.name ?? cur.name} is ${status === 'done' ? 'done' : 'ready for review'}`, `/o/project/${projectId}#task-${taskId}`);
+    await notify(ctx, [cur.created_by, project.owner_id], `${input.name ?? cur.name} is ${status === 'done' ? 'done' : 'ready for review'}`, `/projects/${projectId}#task-${taskId}`);
 }
 
 export async function deleteTask(ctx: RecordCtx, projectId: string, taskId: string) {
@@ -410,8 +408,8 @@ export async function deleteTask(ctx: RecordCtx, projectId: string, taskId: stri
   const t = await ctx.tx.one<{ created_by: string | null }>(`select created_by from project_tasks where tenant_id = $1 and id = $2 and project_id = $3`, [ctx.tenantId, taskId, projectId]);
   if (!t) throw notFound('Task not found');
   if (level !== 'manage' && t.created_by !== ctx.principal.user.id) throw forbidden('Only the project manager or the task creator can delete it');
-  const time = await ctx.tx.one(`select 1 from time_entries where tenant_id = $1 and (task_id = $2 or task_id in (select id from project_tasks where tenant_id = $1 and parent_id = $2)) and status in ('approved','invoiced') limit 1`, [ctx.tenantId, taskId]);
-  if (time) throw badRequest('Approved time is logged against this task; mark it cancelled instead');
+  const time = await ctx.tx.one(`select 1 from time_entries where tenant_id = $1 and (task_id = $2 or task_id in (select id from project_tasks where tenant_id = $1 and parent_id = $2)) and status in ('submitted','approved','invoiced') limit 1`, [ctx.tenantId, taskId]);
+  if (time) throw badRequest('Submitted or approved time is logged against this task; mark it cancelled instead');
   await ctx.tx.query(`delete from project_tasks where tenant_id = $1 and id = $2`, [ctx.tenantId, taskId]);
   await refreshProgress(ctx.tx, ctx.tenantId, projectId);
 }
@@ -500,7 +498,8 @@ export async function addComment(ctx: RecordCtx, projectId: string, target: { ta
       );
   if (!row) throw notFound();
   const c = await ctx.tx.one<{ id: string }>(`insert into project_comments (tenant_id, project_id, task_id, issue_id, body) values ($1,$2,$3,$4,$5) returning id`, [ctx.tenantId, projectId, target.taskId ?? null, target.issueId ?? null, body]);
-  await notify(ctx, [...row.assignees, row.created_by], `New comment on ${row.name}`, `/o/project/${project.id}`, body.slice(0, 200));
+  const team = await workers(ctx.tx, ctx.tenantId, project);
+  await notify(ctx, [...row.assignees, row.created_by].filter((u) => u && team.has(u)), `New comment on ${row.name}`, `/projects/${project.id}`, body.slice(0, 200));
   return c;
 }
 
@@ -546,8 +545,8 @@ export async function saveIssue(ctx: RecordCtx, projectId: string, id: string | 
         input.assigneeId !== undefined, input.assigneeId ?? null, input.taskId !== undefined, input.taskId ?? null, input.milestoneId !== undefined, input.milestoneId ?? null, input.dueDate !== undefined, input.dueDate ?? null,
       ],
     );
-    if (input.assigneeId && input.assigneeId !== cur.assignee_id) await notify(ctx, [input.assigneeId], `Issue assigned in ${project.name}: ${input.title ?? cur.title}`, `/o/project/${projectId}`);
-    if (input.status && input.status !== cur.status && ['fixed', 'closed'].includes(input.status)) await notify(ctx, [cur.reporter_id], `${input.title ?? cur.title} is ${input.status}`, `/o/project/${projectId}`);
+    if (input.assigneeId && input.assigneeId !== cur.assignee_id) await notify(ctx, [input.assigneeId], `Issue assigned in ${project.name}: ${input.title ?? cur.title}`, `/projects/${projectId}`);
+    if (input.status && input.status !== cur.status && ['fixed', 'closed'].includes(input.status)) await notify(ctx, [cur.reporter_id], `${input.title ?? cur.title} is ${input.status}`, `/projects/${projectId}`);
     return { id };
   }
   if (!input.title) throw badRequest('Give the issue a title');
@@ -557,7 +556,7 @@ export async function saveIssue(ctx: RecordCtx, projectId: string, id: string | 
     `insert into project_issues (tenant_id, project_id, issue_number, title, description, severity, status, assignee_id, task_id, milestone_id, due_date) values ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10) returning id`,
     [ctx.tenantId, projectId, n!.n, input.title, input.description ?? null, input.severity ?? 'major', input.assigneeId ?? null, input.taskId ?? null, input.milestoneId ?? null, input.dueDate ?? null],
   );
-  await notify(ctx, [input.assigneeId, project.owner_id], `New issue in ${project.name}: ${input.title}`, `/o/project/${projectId}`);
+  await notify(ctx, [input.assigneeId, project.owner_id], `New issue in ${project.name}: ${input.title}`, `/projects/${projectId}`);
   return { id: r!.id, number: n!.n };
 }
 
@@ -641,8 +640,8 @@ export async function updateTime(ctx: RecordCtx, id: string, input: Partial<Time
   await weekOpen(ctx.tx, ctx.tenantId, e.user_id, merged.date);
   const r = await rates(ctx.tx, ctx.tenantId, project, e.user_id, merged.taskId ?? null);
   await ctx.tx.query(
-    `update time_entries set task_id = $3, issue_id = $4, work_date = $5, minutes = $6, notes = $7, billable = $8, bill_rate = $9, cost_rate = $10, status = 'draft' where tenant_id = $1 and id = $2`,
-    [ctx.tenantId, id, merged.taskId ?? null, merged.issueId ?? null, merged.date, merged.minutes, merged.notes ?? null, merged.billable, r.bill, r.cost],
+    `update time_entries set task_id = $3, issue_id = $4, work_date = $5, minutes = $6, notes = $7, billable = $8, bill_rate = $9, cost_rate = $10, status = 'draft', entered_by = $11 where tenant_id = $1 and id = $2`,
+    [ctx.tenantId, id, merged.taskId ?? null, merged.issueId ?? null, merged.date, merged.minutes, merged.notes ?? null, merged.billable, r.bill, r.cost, ctx.principal.user.id],
   );
 }
 
@@ -666,8 +665,13 @@ export async function stopTimer(ctx: RecordCtx) {
   );
   if (!e) throw badRequest('No timer is running');
   const day = await ctx.tx.one<{ m: number }>(`select coalesce(sum(minutes), 0)::int as m from time_entries where tenant_id = $1 and user_id = $2 and work_date = $3 and id <> $4`, [ctx.tenantId, ctx.principal.user.id, e.work_date, e.id]);
-  const minutes = Math.max(1, Math.min(1440 - (day?.m ?? 0), e.minutes + Math.ceil(e.secs / 60)));
-  await ctx.tx.query(`update time_entries set minutes = $3, timer_started_at = null where tenant_id = $1 and id = $2`, [ctx.tenantId, e.id, Math.max(0, minutes)]);
+  const room = 1440 - (day?.m ?? 0);
+  const minutes = Math.min(room, Math.max(1, e.minutes + Math.ceil(e.secs / 60)));
+  if (minutes <= 0) {
+    await ctx.tx.query(`delete from time_entries where tenant_id = $1 and id = $2`, [ctx.tenantId, e.id]);
+    throw badRequest('The day already has 24 hours logged; the timer was discarded');
+  }
+  await ctx.tx.query(`update time_entries set minutes = $3, timer_started_at = null where tenant_id = $1 and id = $2`, [ctx.tenantId, e.id, minutes]);
   return { id: e.id, minutes };
 }
 
@@ -686,7 +690,15 @@ export async function getWeek(ctx: RecordCtx, date: string, userId?: string | nu
   let projectFilter: string[] | null = null;
   if (who !== ctx.principal.user.id) {
     const m = await managedProjectIds(ctx);
-    if (m !== 'all') projectFilter = m;
+    if (m !== 'all') {
+      const shared = await ctx.tx.one(
+        `select 1 where exists (select 1 from project_members where tenant_id = $1 and user_id = $2 and project_id = any($3::uuid[]))
+                     or exists (select 1 from time_entries where tenant_id = $1 and user_id = $2 and project_id = any($3::uuid[]))`,
+        [ctx.tenantId, who, m],
+      );
+      if (!shared) throw forbidden('You can see the timesheets of people on projects you manage');
+      projectFilter = m;
+    }
   }
   const entries = await ctx.tx.query(
     `select e.id, e.project_id, p.name as project, p.project_code, e.task_id, t.name as task, t.task_number, e.issue_id, e.work_date, e.minutes, e.notes, e.billable, e.status, e.timer_started_at, e.invoice_id
@@ -699,23 +711,58 @@ export async function getWeek(ctx: RecordCtx, date: string, userId?: string | nu
   return { weekStart: ws, userId: who, entries, timesheet: sheet ?? { status: 'draft' }, capacityHours: cap?.weekly_hours ?? 40 };
 }
 
-/** Replaces the draft (or rejected) time of a week with a grid: one row per project / task, seven days of minutes. */
+/**
+ * Applies a weekly grid (one row per project / task, seven days of minutes) to the person's draft or
+ * rejected time. Existing entries keep their notes, billable flag and issue link: a cell that grew
+ * gets an extra entry for the difference, a cell that shrank takes minutes off its latest entries,
+ * and a project / task no longer in the grid loses its draft time.
+ */
 export async function saveWeek(ctx: RecordCtx, date: string, rows: { projectId: string; taskId?: string | null; billable?: boolean; notes?: string | null; minutes: number[] }[]) {
   const ws = weekStart(date);
   const me = ctx.principal.user.id;
   await weekOpen(ctx.tx, ctx.tenantId, me, ws);
-  await ctx.tx.query(`delete from time_entries where tenant_id = $1 and user_id = $2 and work_date between $3::date and $4::date and status in ('draft','rejected') and timer_started_at is null`, [ctx.tenantId, me, ws, addDays(ws, 6)]);
-  let n = 0;
+  const existing = await ctx.tx.query<{ id: string; project_id: string; task_id: string | null; work_date: string; minutes: number }>(
+    `select id, project_id, task_id, work_date::text as work_date, minutes from time_entries
+      where tenant_id = $1 and user_id = $2 and work_date between $3::date and $4::date and status in ('draft','rejected') and timer_started_at is null
+      order by created_at for update`,
+    [ctx.tenantId, me, ws, addDays(ws, 6)],
+  );
+  const want = new Map<string, number>();
+  const meta = new Map<string, { projectId: string; taskId: string | null; billable?: boolean; notes?: string | null; date: string }>();
   for (const r of rows) {
     if (r.minutes.length !== 7) throw badRequest('Each row has seven days');
     for (let i = 0; i < 7; i++) {
-      const m = Math.round(r.minutes[i] ?? 0);
-      if (!m) continue;
-      await logTime(ctx, { projectId: r.projectId, taskId: r.taskId ?? null, date: addDays(ws, i), minutes: m, notes: r.notes ?? null, billable: r.billable });
-      n++;
+      const k = `${r.projectId}|${r.taskId ?? ''}|${addDays(ws, i)}`;
+      want.set(k, (want.get(k) ?? 0) + Math.max(0, Math.round(r.minutes[i] ?? 0)));
+      meta.set(k, { projectId: r.projectId, taskId: r.taskId ?? null, billable: r.billable, notes: r.notes, date: addDays(ws, i) });
     }
   }
-  return { entries: n };
+  const have = new Map<string, typeof existing>();
+  for (const e of existing) {
+    const k = `${e.project_id}|${e.task_id ?? ''}|${e.work_date}`;
+    have.set(k, [...(have.get(k) ?? []), e]);
+  }
+  let changed = 0;
+  // shrink or remove first (frees room under the 24-hour cap), then grow
+  for (const [k, es] of have) {
+    let excess = es.reduce((s2, e) => s2 + e.minutes, 0) - (want.get(k) ?? 0);
+    for (const e of [...es].reverse()) {
+      if (excess <= 0) break;
+      const take = Math.min(e.minutes, excess);
+      excess -= take;
+      changed++;
+      if (take === e.minutes) await ctx.tx.query(`delete from time_entries where tenant_id = $1 and id = $2`, [ctx.tenantId, e.id]);
+      else await ctx.tx.query(`update time_entries set minutes = minutes - $3, status = 'draft', entered_by = $4 where tenant_id = $1 and id = $2`, [ctx.tenantId, e.id, take, me]);
+    }
+  }
+  for (const [k, minutes] of want) {
+    const extra = minutes - (have.get(k) ?? []).reduce((s2, e) => s2 + e.minutes, 0);
+    if (extra <= 0) continue;
+    const m = meta.get(k)!;
+    await logTime(ctx, { projectId: m.projectId, taskId: m.taskId, date: m.date, minutes: extra, notes: m.notes ?? null, billable: m.billable });
+    changed++;
+  }
+  return { changed };
 }
 
 export async function submitWeek(ctx: RecordCtx, date: string) {
@@ -760,13 +807,13 @@ export async function pendingApprovals(ctx: RecordCtx) {
 export async function decideTime(ctx: RecordCtx, entryIds: string[], decision: 'approve' | 'reject', reason?: string | null) {
   if (decision === 'reject' && !reason?.trim()) throw badRequest('Say why the time is rejected');
   const managed = await managedProjectIds(ctx);
-  const rows = await ctx.tx.query<{ id: string; user_id: string; project_id: string; status: string; timesheet_id: string | null }>(
-    `select id, user_id, project_id, status, timesheet_id from time_entries where tenant_id = $1 and id = any($2::uuid[]) for update`,
+  const rows = await ctx.tx.query<{ id: string; user_id: string; project_id: string; status: string; timesheet_id: string | null; entered_by: string | null }>(
+    `select id, user_id, project_id, status, timesheet_id, entered_by from time_entries where tenant_id = $1 and id = any($2::uuid[]) for update`,
     [ctx.tenantId, entryIds],
   );
   if (rows.length !== new Set(entryIds).size) throw notFound('Time entry not found');
   for (const r of rows) {
-    if (r.user_id === ctx.principal.user.id) throw forbidden('You cannot approve your own time');
+    if (r.user_id === ctx.principal.user.id || (decision === 'approve' && r.entered_by === ctx.principal.user.id)) throw forbidden('You cannot approve time you logged or changed');
     if (managed !== 'all' && !managed.includes(r.project_id)) throw forbidden('Only the project manager approves this time');
     if (r.status !== 'submitted') throw badRequest('Only submitted time can be approved or rejected');
   }
@@ -777,12 +824,13 @@ export async function decideTime(ctx: RecordCtx, entryIds: string[], decision: '
   // a timesheet is approved when all its time is; rejected (back to the person) when any is
   for (const sid of new Set(rows.map((r) => r.timesheet_id).filter((x): x is string => !!x))) {
     await ctx.tx.query(
-      `update timesheets s set status = case when exists (select 1 from time_entries e where e.tenant_id = s.tenant_id and e.timesheet_id = s.id and e.status = 'rejected') then 'rejected'
-                                            when not exists (select 1 from time_entries e where e.tenant_id = s.tenant_id and e.timesheet_id = s.id and e.status = 'submitted') then 'approved' else s.status end,
+      `update timesheets s set status = case when exists (select 1 from time_entries e where e.tenant_id = s.tenant_id and e.user_id = s.user_id and e.work_date between s.week_start and s.week_start + 6 and e.status in ('rejected','draft')) then 'rejected'
+                                            when not exists (select 1 from time_entries e where e.tenant_id = s.tenant_id and e.user_id = s.user_id and e.work_date between s.week_start and s.week_start + 6 and e.status = 'submitted') then 'approved' else s.status end,
               decided_by = $3, decided_at = now(), reject_reason = case when $4::text is not null then $4 else reject_reason end
         where s.tenant_id = $1 and s.id = $2`,
       [ctx.tenantId, sid, ctx.principal.user.id, decision === 'reject' ? reason!.slice(0, 1000) : null],
     );
+    await ctx.tx.query(`update timesheets set reject_reason = null where tenant_id = $1 and id = $2 and status = 'approved'`, [ctx.tenantId, sid]);
   }
   for (const u of new Set(rows.map((r) => r.user_id)))
     await notify(ctx, [u], decision === 'approve' ? 'Your time was approved' : 'Some of your time was rejected', '/timesheet', decision === 'reject' ? reason ?? null : null);
@@ -928,13 +976,15 @@ export async function projectSummary(ctx: RecordCtx, projectId: string) {
     : project.budget_type === 'revenue' ? { type: 'revenue', planned: Number(project.budget_amount ?? 0), used: r2(revenue!.v + time!.unbilled_amount) }
     : null;
   const money = level === 'manage' ? { revenue: r2(revenue!.v), unbilled: r2(time!.unbilled_amount), labourCost: r2(time!.labour_cost), expenses: r2(otherCosts!.expenses), bills: r2(otherCosts!.bills), cost, profit: r2(revenue!.v - cost), margin: revenue!.v ? r2(((revenue!.v - cost) / revenue!.v) * 100) : null } : null;
+  // cost and revenue budgets reveal money: only managers see them
+  const showBudget = budget && (level === 'manage' || budget.type === 'hours');
   return {
     progress: Number(project.progress),
     tasks: Object.fromEntries(tasks.map((t) => [t.status, t.n])),
     overdueTasks: overdue?.n ?? 0,
     issues,
     hours: { logged: r2(time!.hours), billable: r2(time!.billable_hours), approved: r2(time!.approved_hours), estimated: r2(est?.v ?? 0) },
-    budget: budget ? { ...budget, pct: budget.planned ? r2((budget.used / budget.planned) * 100) : null } : null,
+    budget: showBudget && budget ? { ...budget, pct: budget.planned ? r2((budget.used / budget.planned) * 100) : null } : null,
     money,
     weekly,
     schedule: project.end_date ? { endDate: d10(project.end_date), daysLeft: dayDiff(today(), d10(project.end_date)) } : null,
@@ -948,8 +998,8 @@ export async function timeReport(ctx: RecordCtx, q: { from: string; to: string; 
   const key = { person: `u.full_name`, project: `p.name`, task: `coalesce('#' || t.task_number || ' ' || t.name, '(no task)')`, day: `to_char(e.work_date, 'YYYY-MM-DD')` }[q.groupBy];
   return ctx.tx.query(
     `select ${key} as label, (sum(e.minutes)::float8 / 60) as hours, (coalesce(sum(e.minutes) filter (where e.billable), 0)::float8 / 60) as billable_hours,
-            coalesce(sum(round(e.minutes * e.bill_rate / 60.0, 2)) filter (where e.billable), 0)::float8 as billable_value,
-            coalesce(sum(round(e.minutes * e.cost_rate / 60.0, 2)), 0)::float8 as cost,
+            case when bool_and($6::boolean or e.project_id = any($8::uuid[])) then coalesce(sum(round(e.minutes * e.bill_rate / 60.0, 2)) filter (where e.billable), 0)::float8 end as billable_value,
+            case when bool_and($6::boolean or e.project_id = any($8::uuid[])) then coalesce(sum(round(e.minutes * e.cost_rate / 60.0, 2)), 0)::float8 end as cost,
             count(*) filter (where e.status = 'submitted')::int as awaiting_approval
        from time_entries e join users u on u.tenant_id = e.tenant_id and u.id = e.user_id join projects p on p.tenant_id = e.tenant_id and p.id = e.project_id
        left join project_tasks t on t.tenant_id = e.tenant_id and t.id = e.task_id
@@ -972,9 +1022,9 @@ export async function utilisation(ctx: RecordCtx, from: string, to: string) {
       )
      select p.id as user_id, p.full_name, coalesce(c.weekly_hours, 40)::float8 * $6 as capacity,
             coalesce(sum(e.minutes), 0)::float8 / 60 as logged, coalesce(sum(e.minutes) filter (where e.billable), 0)::float8 / 60 as billable,
-            (select coalesce(sum(t.estimate_hours), 0)::float8 from project_tasks t where t.tenant_id = $1 and p.id = any(t.assignees) and t.status not in ('done','cancelled')) as open_estimate
+            (select coalesce(sum(t.estimate_hours), 0)::float8 from project_tasks t where t.tenant_id = $1 and p.id = any(t.assignees) and t.status not in ('done','cancelled') and ($4::boolean or t.project_id = any($5::uuid[]))) as open_estimate
        from people p left join resource_capacity c on c.tenant_id = $1 and c.user_id = p.id
-       left join time_entries e on e.tenant_id = $1 and e.user_id = p.id and e.work_date between $2::date and $3::date
+       left join time_entries e on e.tenant_id = $1 and e.user_id = p.id and e.work_date between $2::date and $3::date and ($4::boolean or e.project_id = any($5::uuid[]))
       group by p.id, p.full_name, c.weekly_hours order by p.full_name`,
     [ctx.tenantId, from, to, managed === 'all', managed === 'all' ? [] : managed, r2(weeks)],
   );
@@ -990,8 +1040,10 @@ export async function setCapacity(ctx: RecordCtx, userId: string, weeklyHours: n
 /** Open tasks assigned to me across projects (my work). */
 export async function myTasks(ctx: RecordCtx) {
   return ctx.tx.query(
-    `select ${TASK_COLS}, p.name as project from project_tasks t join projects p on p.tenant_id = t.tenant_id and p.id = t.project_id
+    `select t.id, t.project_id, t.task_number, t.name, t.status, t.priority, t.start_date, t.due_date, t.estimate_hours::float8 as estimate_hours, t.progress, p.name as project
+       from project_tasks t join projects p on p.tenant_id = t.tenant_id and p.id = t.project_id
       where t.tenant_id = $1 and $2 = any(t.assignees) and t.status not in ('done','cancelled') and p.deleted_at is null and p.status in ('active','planning','on_hold')
+        and (p.owner_id = $2 or exists (select 1 from project_members m where m.tenant_id = t.tenant_id and m.project_id = t.project_id and m.user_id = $2 and m.role <> 'viewer'))
       order by t.due_date nulls last, array_position(array['urgent','high','medium','low','none'], t.priority) limit 500`,
     [ctx.tenantId, ctx.principal.user.id],
   );

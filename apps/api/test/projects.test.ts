@@ -195,7 +195,8 @@ describe('billing and reports', () => {
     expect(ut.status).toBe(200);
     expect(ut.json.find((x: any) => x.full_name === 'DEV')).toMatchObject({ capacity: 40, logged: 5.5 });
     expect((await outsider('GET', '/api/v1/project-reports/utilisation')).status).toBe(403);
-    expect((await pm('PUT', `/api/v1/project-reports/capacity/${ids.dev}`, { weeklyHours: 30 })).status).toBe(200);
+    expect((await pm('PUT', `/api/v1/project-reports/capacity/${ids.dev}`, { weeklyHours: 30 })).status).toBe(403);
+    expect((await api('PUT', `/api/v1/project-reports/capacity/${ids.dev}`, { weeklyHours: 30 })).status).toBe(200);
   });
 
   it('duplicates a project as a template; a project with approved time cannot be deleted', async () => {
@@ -207,5 +208,63 @@ describe('billing and reports', () => {
     expect(String(t.tasks.find((x: any) => x.name === 'Site survey').start_date).slice(0, 10)).toBe(addDays(monday, 7));
     expect((await api('DELETE', `/api/v1/records/project/${ids.project}`)).status).toBe(400);
     expect((await api('DELETE', `/api/v1/records/project/${d.json.id}`)).status).toBe(200);
+  });
+});
+
+describe('review hardening', () => {
+  it('keeps rates and money with managers', async () => {
+    await pm('PATCH', `/api/v1/projects/${ids.project}/tasks/${ids.taskB}`, { rate: 5000 });
+    const g = await dev('GET', `/api/v1/projects/${ids.project}`);
+    expect(g.json.project.project_rate).toBeNull();
+    const mt = await dev('GET', '/api/v1/my-tasks');
+    expect(mt.json[0].rate).toBeUndefined();
+    expect((await dev('POST', `/api/v1/projects/${ids.project}/duplicate`, { name: 'Copy' })).status).toBe(403);
+    const r = await dev('GET', `/api/v1/project-reports/time?from=${monday}&to=${addDays(monday, 6)}&groupBy=person`);
+    expect(r.json[0].billable_value).toBeNull();
+    expect((await dev('PATCH', `/api/v1/projects/${ids.project}/tasks/${ids.taskB}`, { billable: false })).status).toBe(403);
+  });
+
+  it('a manager cannot approve hours they entered for someone else', async () => {
+    const wk = addDays(monday, -14);
+    const e = await pm('POST', '/api/v1/time', { projectId: ids.project, userId: ids.dev, date: wk, minutes: 600 });
+    expect(e.status, JSON.stringify(e.json)).toBe(201);
+    expect((await dev('POST', '/api/v1/timesheet/submit', { date: wk })).status).toBe(200);
+    expect((await pm('POST', '/api/v1/timesheet/decide', { entryIds: [e.json.id], decision: 'approve' })).status).toBe(403);
+    expect((await api('POST', '/api/v1/timesheet/decide', { entryIds: [e.json.id], decision: 'approve' })).status).toBe(200);
+  });
+
+  it('saving the grid keeps notes, billable and issue links', async () => {
+    const wk = addDays(monday, -21);
+    const iss = (await dev('POST', `/api/v1/projects/${ids.project}/issues`, { title: 'Rework' })).json.id;
+    const e = await dev('POST', '/api/v1/time', { projectId: ids.project, taskId: ids.taskB, issueId: iss, date: wk, minutes: 60, notes: 'internal rework - do not bill', billable: false });
+    expect(e.status).toBe(201);
+    // the grid shows 1:00 on that day and adds 30 minutes on the next
+    const w = await dev('PUT', '/api/v1/timesheet', { date: wk, rows: [{ projectId: ids.project, taskId: ids.taskB, minutes: [60, 30, 0, 0, 0, 0, 0] }] });
+    expect(w.status, JSON.stringify(w.json)).toBe(200);
+    const week = (await dev('GET', `/api/v1/timesheet?date=${wk}`)).json.entries as any[];
+    const kept = week.find((x) => x.id === e.json.id);
+    expect(kept).toMatchObject({ minutes: 60, notes: 'internal rework - do not bill', billable: false, issue_id: iss });
+    expect(week).toHaveLength(2);
+  });
+
+  it('a week with corrected-but-unsubmitted time is not approved', async () => {
+    const wk = addDays(monday, -28);
+    const p2 = (await pm('POST', '/api/v1/records/project', { name: 'Second', account_id: ids.customer })).json.id;
+    await pm('PUT', `/api/v1/projects/${p2}/members`, { members: [{ userId: ids.dev, role: 'member' }] });
+    const a = (await dev('POST', '/api/v1/time', { projectId: ids.project, date: wk, minutes: 60 })).json.id;
+    const b = (await dev('POST', '/api/v1/time', { projectId: p2, date: wk, minutes: 60 })).json.id;
+    await dev('POST', '/api/v1/timesheet/submit', { date: wk });
+    expect((await pm('POST', '/api/v1/timesheet/decide', { entryIds: [a], decision: 'reject', reason: 'fix' })).status).toBe(200);
+    expect((await dev('PATCH', `/api/v1/time/${a}`, { minutes: 90 })).status).toBe(200);
+    expect((await pm('POST', '/api/v1/timesheet/decide', { entryIds: [b], decision: 'approve' })).status).toBe(200);
+    expect((await dev('GET', `/api/v1/timesheet?date=${wk}`)).json.timesheet.status).toBe('rejected');
+    expect((await dev('POST', '/api/v1/timesheet/submit', { date: wk })).status).toBe(200);
+  });
+
+  it('other people\'s weeks, outsiders linking expenses, and credit notes', async () => {
+    expect((await outsider('GET', `/api/v1/timesheet?date=${monday}&userId=${ids.dev}`)).status).toBe(403);
+    expect((await pm('GET', `/api/v1/timesheet?date=${monday}&userId=${ids.dev}`)).status).toBe(200);
+    const x = await outsider('POST', '/api/v1/records/expense', { name: 'x', amount: 10, project_id: ids.project });
+    expect([403, 404]).toContain(x.status);
   });
 });

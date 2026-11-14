@@ -232,6 +232,8 @@ create table time_entries (
   timer_started_at timestamptz,
   approved_by   uuid,
   approved_at   timestamptz,
+  -- who last entered or changed the hours (they may not approve them)
+  entered_by    uuid default app.current_user_id(),
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now(),
   unique (tenant_id, id),
@@ -263,6 +265,10 @@ begin
      and (to_jsonb(new) - array['status', 'timesheet_id', 'invoice_id', 'approved_by', 'approved_at', 'updated_at'])
          is distinct from (to_jsonb(old) - array['status', 'timesheet_id', 'invoice_id', 'approved_by', 'approved_at', 'updated_at']) then
     raise exception 'submitted, approved or invoiced time cannot be edited' using errcode = 'check_violation';
+  end if;
+  -- the workflow only moves forward: invoiced time goes back to approved only when its invoice is cancelled
+  if old.status = 'invoiced' and new.status not in ('invoiced', 'approved') or old.status = 'approved' and new.status not in ('approved', 'invoiced') then
+    raise exception 'approved or invoiced time cannot go back to draft' using errcode = 'check_violation';
   end if;
   return new;
 end

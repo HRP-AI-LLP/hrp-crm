@@ -111,7 +111,7 @@ function Overview({ id, data }: { id: string; data: Json }) {
               const start = window.prompt('Start date of the new project (YYYY-MM-DD); dates shift to match', today()) || null;
               try {
                 const r = await post<{ id: string }>(`/api/v1/projects/${id}/duplicate`, { name, startDate: start });
-                nav(`/o/project/${r.id}`);
+                nav(`/projects/${r.id}`);
               } catch (e) {
                 toast((e as Error).message, true);
               }

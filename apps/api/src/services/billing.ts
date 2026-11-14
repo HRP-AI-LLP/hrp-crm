@@ -464,8 +464,9 @@ export async function creditNoteFrom(ctx: RecordCtx, invoiceId: string, opts: { 
     place_of_supply: row.place_of_supply ?? null,
     notes: opts.reason,
   });
-  await ctx.tx.query(`update invoices set doc_type = 'credit_note', original_invoice_id = $3, sales_order_id = $4, due_date = null where tenant_id = $1 and id = $2`, [ctx.tenantId, r.record.id, invoiceId, row.sales_order_id ?? null]);
+  await ctx.tx.query(`update invoices set doc_type = 'credit_note', original_invoice_id = $3, sales_order_id = $4, due_date = null, project_id = $5 where tenant_id = $1 and id = $2`, [ctx.tenantId, r.record.id, invoiceId, row.sales_order_id ?? null, row.project_id ?? null]);
   const events = [...r.events, ...(await saveInvoiceLines(ctx, r.record.id, input))];
+  if (row.project_id) await ctx.tx.query(`update invoice_lines set project_id = $3 where tenant_id = $1 and order_id = $2`, [ctx.tenantId, r.record.id, row.project_id]);
   return { id: r.record.id, events };
 }
 

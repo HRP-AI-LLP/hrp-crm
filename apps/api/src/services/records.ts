@@ -588,6 +588,7 @@ export async function createRecord(
     if (['quote', 'shipment', 'installation', 'ticket'].includes(objectKey)) cols.share_token = randomToken(24);
   }
   await beforeCreate(ctx, objectKey, cols);
+  if (objectKey === 'expense' && cols.project_id) await (await import('./projects')).projectAccess(ctx, String(cols.project_id), 'member');
   if ((objectKey === 'sales_order' || objectKey === 'purchase_order') && cols.warehouse_id === undefined) {
     const wh = await ctx.tx.one<{ id: string }>(`select id from warehouses where tenant_id = $1 and is_default and is_active`, [ctx.tenantId]);
     if (wh) cols.warehouse_id = wh.id;
@@ -702,6 +703,7 @@ export async function updateRecord(
     }
   }
   await beforeUpdate(ctx, objectKey, row, cols);
+  if (objectKey === 'expense' && cols.project_id && cols.project_id !== row.project_id) await (await import('./projects')).projectAccess(ctx, String(cols.project_id), 'member');
   const ownerChanged = cols.owner_id !== undefined && cols.owner_id !== row.owner_id;
   if (ownerChanged && objectKey === 'lead') cols.assigned_at = new Date().toISOString();
   if (objectKey === 'lead' && cols.next_follow_up_at !== undefined && String(cols.next_follow_up_at) !== String(row.next_follow_up_at ?? '')) cols.follow_up_reminded_at = null;

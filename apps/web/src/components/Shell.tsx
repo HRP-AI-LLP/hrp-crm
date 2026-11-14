@@ -230,7 +230,7 @@ export function Shell() {
         {apps.has('projects') && (
           <div className="nav-group">
             <div>Projects</div>
-            <NavLink to="/o/project">Projects</NavLink>
+            <NavLink to="/projects">Projects</NavLink>
             <NavLink to="/timesheet">Timesheet</NavLink>
           </div>
         )}

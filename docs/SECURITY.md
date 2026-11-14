@@ -174,3 +174,23 @@ An independent review of the fifth round found no cross-tenant leaks; these were
   - A foreign-currency payment settles only documents in that currency, at a rate within 25% of theirs.
 - **GST set-off follows Section 49 and Rule 88A.** Reverse-charge tax is always shown as payable in cash.
 - **Bounds.** Dates are validated. Statement and GSTR-2B imports are size-capped. Depreciation runs at most to next month end. Recurring profiles start at most a year back and catch up at most 12 runs a day. CSV exports are formula-safe.
+
+### Seventh round: Projects and timesheets
+
+- **Access follows the project.**
+  - Who can do what:
+    - Managers (the owner, members with the manager role, people who may edit every project, and `projects` admins) can plan, approve and bill.
+    - Members work on tasks.
+    - Viewers look.
+  - Ids from another project are refused everywhere.
+  - Members reach the project from its own page even without the record permission.
+- **Money stays with managers.** Bill and cost rates, fixed fees, money budgets, cost and value columns in reports, and copying a project as a template are for managers only.
+- **Time approval:**
+  - Nobody approves time they logged, or time they entered or last changed for someone else.
+  - A week is approved only when none of its time is still awaiting a decision, rejected or being corrected.
+- **The database guards time.** Submitted, approved and invoiced time cannot be edited or deleted, and approved or invoiced time never goes back to draft. One timer per person, and a day cannot exceed 24 hours.
+- **The weekly grid edits time in place.** Notes, billable flags and issue links are kept.
+- **Billing:**
+  - Time, expenses and milestones are locked while they are invoiced, and released when the invoice is cancelled or deleted.
+  - Credit notes carry the project, so project revenue stays right.
+  - An expense can be tagged only to a project the filer works on.

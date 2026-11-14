@@ -31,7 +31,7 @@ export function TimesheetPage() {
           <h1>Timesheet</h1>
           <p>Log your hours, submit your week, approve your team's time.</p>
         </div>
-        <Link className="btn" to="/o/project">
+        <Link className="btn" to="/projects">
           Projects
         </Link>
       </div>
@@ -319,7 +319,7 @@ function MyTasks() {
         {data.map((t) => (
           <tr key={t.id}>
             <td>
-              <Link to={`/o/project/${t.project_id}`}>
+              <Link to={`/projects/${t.project_id}`}>
                 #{t.task_number} {t.name}
               </Link>
             </td>

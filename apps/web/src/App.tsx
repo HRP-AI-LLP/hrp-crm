@@ -31,6 +31,8 @@ const InventoryRoute = page(() => import('./pages/Operations'), 'InventoryRoute'
 const BillingRoute = page(() => import('./pages/Operations'), 'BillingRoute');
 const BooksPage = page(() => import('./pages/Books'), 'BooksPage');
 const TimesheetPage = page(() => import('./pages/Timesheet'), 'TimesheetPage');
+const ProjectsPage = page(() => import('./pages/Projects'), 'ProjectsPage');
+const ProjectPage = page(() => import('./pages/Projects'), 'ProjectPage');
 const JobConfirmPage = page(() => import('./pages/CustomerPages'), 'JobConfirmPage');
 const TicketStatusPage = page(() => import('./pages/CustomerPages'), 'TicketStatusPage');
 const PaidPage = page(() => import('./pages/CustomerPages'), 'PaidPage');
@@ -133,6 +135,8 @@ export function App() {
         <Route path="billing" element={<BillingRoute />} />
         <Route path="books" element={<BooksPage />} />
         <Route path="timesheet" element={<TimesheetPage />} />
+        <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects/:id" element={<ProjectPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="health" element={<HealthPage />} />

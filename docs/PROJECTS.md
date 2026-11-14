@@ -11,7 +11,7 @@ Projects is a built-in app (Settings → Apps) in the class of Zoho Projects. It
   - a budget in hours, cost or revenue;
   - the GST rate and SAC used on its invoices.
 - **Team:** people are added as managers, members or viewers, each with a bill rate and a cost rate. Only managers see rates and money.
-- **Use as template:** copies milestones, task lists, tasks, sub-tasks and dependencies into a new project. Dates shift to the new start date.
+- **Use as template** (managers only): copies milestones, task lists, tasks, sub-tasks and dependencies into a new project. Dates shift to the new start date.
 
 ## Planning
 
@@ -47,7 +47,7 @@ Projects is a built-in app (Settings → Apps) in the class of Zoho Projects. It
 - **Rates:** each entry takes its bill rate from the billing method (project, staff or task rate) and its cost rate from the person's cost rate on the project.
 - **Approval:**
   - Submit the week. Managers of the projects concerned are notified and approve or return entries (with a reason) under Timesheet → Approvals.
-  - Nobody approves their own time.
+  - Nobody approves their own time, or time they entered or changed for someone else.
   - A week is approved when all its time is, and goes back to the person if any of it is returned.
 - **Locks:**
   - Submitted, approved and invoiced time cannot be edited or deleted. This is enforced in the database.
@@ -78,7 +78,7 @@ The project's **Billing** tab (managers) lists approved, billable, uninvoiced ti
 | Who | Can |
 |---|---|
 | `projects` admin area | Everything, including capacity settings |
-| Project manager role (added when Projects is switched on) | Creates projects and runs the ones they own or manage |
+| Project manager role (added when Projects is switched on) | Creates projects and runs the ones they own or are a manager of (not a workspace-wide admin) |
 | Project managers (owner, or member with the manager role) | Plan, manage the team, approve time, bill, see money |
 | Members | Work on tasks and issues, log their own time |
 | Viewers, and people who can read the project record | Look only |

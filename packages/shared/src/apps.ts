@@ -149,7 +149,7 @@ export const APPS: Record<string, AppDefinition> = {
         key: 'project_manager',
         name: 'Project manager',
         description: 'Runs projects: plans tasks, approves timesheets, bills time and sees project profitability',
-        permissions: { objects: { expense: ownExpense, '*': readOnly, project: { ...all, delete: 'own' }, lead: none }, admin: ['projects'] },
+        permissions: { objects: { expense: ownExpense, '*': readOnly, project: { read: 'own', create: true, update: 'own', delete: 'own' }, lead: none } },
       },
     ],
   },
