@@ -60,6 +60,20 @@ An AI layer of the kind platforms such as Zambyl add on top of a CRM, built into
 - **Eleven agents** across pipeline creation, deal execution, customer success and growth, and team performance. Each produces a rule-based result first and uses AI on top. Field changes need approval.
 - **Copilot workspace**, a record Copilot tab, meeting brief and debrief (with recording transcription), an hourly insights feed with notifications, deal-risk and account-health scores, competitors with battlecards, and Ask Synapse.
 
+## Seventh round: books, projects and manufacturing (Nov 2026)
+
+Three phases, each tested, reviewed and committed before the next:
+
+- **Books (done):** full double-entry accounting in the class of Zoho Books, with Synapse or Tally as the books of record per workspace. It covers the ledger, payables with TDS, expenses and claims, banking and reconciliation, financial and GST/TDS reports, budgets, fixed assets, recurring transactions and multi-currency (see [BOOKS.md](BOOKS.md)).
+- **Projects and timesheets (next):** projects, milestones, task lists and dependent tasks, Gantt and Kanban, issues, time logs with approval, billing of time and expenses, project budgets, resource utilisation and project P&L from the ledger (journal lines already carry a project).
+- **Manufacturing (after):**
+  - Multi-level BOMs, routings and work centres.
+  - Work orders: issue, produce, WIP, scrap and by-products.
+  - Job work and subcontracting with GST challans.
+  - Process and batch production: recipes, lots, expiry and yield.
+  - MRP: suggestions from demand and stock.
+  - Quality checks and costing posted to the ledger.
+
 ## Next (suggested order)
 
 1. **Pilots with 2–3 made-to-order businesses** on dev: what they ask for decides the next round. Measure agent usefulness: which briefs and debriefs get used, and how many suggestions are applied versus rejected.

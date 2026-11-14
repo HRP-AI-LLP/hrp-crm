@@ -14,6 +14,10 @@
 import pg from 'pg';
 import type { Env } from '../env';
 
+// DATE columns come back as 'YYYY-MM-DD' strings. The default turns them into a Date at local
+// midnight, which shifts the day by one when serialised from a process east of UTC (e.g. IST).
+pg.types.setTypeParser(1082, (v: string) => v);
+
 export interface TxScope {
   tenantId: string;
   userId?: string | null;

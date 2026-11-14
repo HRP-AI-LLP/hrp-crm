@@ -75,6 +75,23 @@ export async function beforeCreate(ctx: HookCtx, objectKey: string, cols: Record
     cols.financial_year = n.fy;
     cols.mode ??= 'bank_transfer';
   }
+  if (objectKey === 'vendor_payment') {
+    if (!cols.vendor_id) throw badRequest('Validation failed', [{ field: 'vendor_id', message: 'is required' }]);
+    const n = await nextFyNumber(ctx, 'vendor_payment', String(cols.payment_date ?? new Date().toISOString().slice(0, 10)), 'PAY');
+    cols.payment_number = n.number;
+    cols.financial_year = n.fy;
+    cols.mode ??= 'bank_transfer';
+  }
+  if (objectKey === 'bill') {
+    if (!cols.vendor_id) throw badRequest('Validation failed', [{ field: 'vendor_id', message: 'is required' }]);
+    const v = await ctx.tx.one<{ gstin: string | null; state: string | null; payment_terms_days: number | null }>(`select gstin, state, payment_terms_days from vendors where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, cols.vendor_id]);
+    if (!v) throw badRequest('Vendor not found');
+    cols.vendor_gstin ??= v.gstin && /^[0-9]{2}[A-Z0-9]{13}$/.test(v.gstin) ? v.gstin : null;
+    const date = String(cols.bill_date ?? new Date().toISOString().slice(0, 10));
+    if (!cols.due_date && v.payment_terms_days) cols.due_date = new Date(new Date(`${date}T00:00:00Z`).getTime() + v.payment_terms_days * 86_400_000).toISOString().slice(0, 10);
+    cols.status = 'draft';
+  }
+  if (objectKey === 'expense') cols.status = 'draft';
   if (objectKey === 'invoice' && cols.account_id && cols.place_of_supply === undefined) {
     const a = await ctx.tx.one<{ state: string | null }>(`select state from accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, cols.account_id]);
     if (a?.state) cols.place_of_supply = a.state;

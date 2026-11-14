@@ -9,6 +9,7 @@
  * and seller details are snapshotted at issue; the database refuses later edits of an issued
  * document (only payment state, e-invoice details and cancellation may change).
  */
+import { repost } from './books/posting';
 import { objectPerm, splitTax, stateCode, stateName, supplyType, validGstin } from '@synapse/shared';
 import { badRequest, conflict, notFound } from '../lib/errors';
 import { assertApproved, reevaluate } from './approvals';
@@ -299,6 +300,7 @@ export async function issueInvoice(ctx: RecordCtx, id: string): Promise<RecordEv
   const events: RecordEvent[] = [{ objectKey: 'invoice', recordId: id, kind: 'updated', changes: { status: ['draft', 'issued'] } }];
   if (row.doc_type === 'credit_note' && row.original_invoice_id) events.push(...(await applyCredit(ctx, String(row.original_invoice_id))));
   await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'invoice',$3)`, [ctx.tenantId, `Issued as ${n.number}`, id]);
+  await repost(ctx.tx, ctx.tenantId, 'invoice', id);
   if (row.sales_order_id) await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'sales_order',$3)`, [ctx.tenantId, `${series === 'credit_note' ? 'Credit note' : 'Invoice'} ${n.number} issued`, row.sales_order_id]);
   return events;
 }
@@ -364,7 +366,7 @@ export async function refreshInvoicePaid(ctx: RecordCtx, invoiceId: string): Pro
   if (!before || before.status === 'draft' || before.status === 'cancelled') return [];
   const r = await ctx.tx.one<{ status: string; amount_paid: string }>(
     `update invoices i set amount_paid = x.paid,
-            status = case when x.paid + i.amount_credited >= i.grand_total - 0.009 then 'paid' when x.paid > 0 or i.amount_credited > 0 then 'partially_paid' else 'issued' end
+            status = case when x.paid + i.amount_credited + i.amount_written_off >= i.grand_total - 0.009 then 'paid' when x.paid > 0 or i.amount_credited > 0 or i.amount_written_off > 0 then 'partially_paid' else 'issued' end
        from (select coalesce(sum(a.amount), 0) as paid from payment_allocations a join payments p on p.tenant_id = a.tenant_id and p.id = a.payment_id
               where a.tenant_id = $1 and a.invoice_id = $2 and p.status = 'received') x
       where i.tenant_id = $1 and i.id = $2 and i.doc_type <> 'credit_note' returning i.status, i.amount_paid`,
@@ -420,6 +422,8 @@ export async function cancelInvoice(ctx: RecordCtx, id: string, reason: string):
   const events: RecordEvent[] = [{ objectKey: 'invoice', recordId: id, kind: 'updated', changes: { status: [row.status, 'cancelled'] } }];
   if (row.doc_type === 'credit_note' && row.original_invoice_id) events.push(...(await applyCredit(ctx, String(row.original_invoice_id))));
   if (row.sales_order_id) events.push(...(await refreshOrderPaid(ctx, String(row.sales_order_id))));
+  await repost(ctx.tx, ctx.tenantId, 'invoice', id);
+  await repost(ctx.tx, ctx.tenantId, 'write_off', id);
   return events;
 }
 
@@ -474,6 +478,12 @@ export interface PaymentInput {
   notes?: string | null;
   /** explicit allocations, or 'auto' (oldest due first) */
   allocations?: { invoiceId: string; amount: number }[] | 'auto' | null;
+  /** books: bank / cash account the money landed in, TDS the customer deducted, bank charges */
+  depositAccountId?: string | null;
+  tdsAmount?: number;
+  bankCharges?: number;
+  currency?: string;
+  exchangeRate?: number;
 }
 
 export async function recordPayment(ctx: RecordCtx, input: PaymentInput) {
@@ -500,6 +510,12 @@ export async function recordPayment(ctx: RecordCtx, input: PaymentInput) {
   await ctx.tx.query(`update payments set name = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, `${r.record.payment_number}${input.reference ? ` · ${input.reference}` : ''}`]);
   if (input.allocations) events.push(...(await allocatePayment(ctx, id, input.allocations)));
   if (input.salesOrderId) events.push(...(await refreshOrderPaid(ctx, input.salesOrderId)));
+  if (input.depositAccountId || input.tdsAmount || input.bankCharges || (input.currency && input.currency !== 'INR')) {
+    await ctx.tx.query(`update payments set deposit_account_id = $3, tds_amount = $4, bank_charges = $5, currency = $6, exchange_rate = $7 where tenant_id = $1 and id = $2`, [
+      ctx.tenantId, id, input.depositAccountId ?? null, input.tdsAmount ?? 0, input.bankCharges ?? 0, input.currency ?? 'INR', input.exchangeRate ?? 1,
+    ]);
+  }
+  await repost(ctx.tx, ctx.tenantId, 'payment', id);
   return { id, number: r.record.payment_number as string, events };
 }
 
@@ -561,6 +577,8 @@ export async function allocatePayment(ctx: RecordCtx, paymentId: string, allocat
     touched.add(a.invoiceId);
   }
   await ctx.tx.query(`update payments set amount_allocated = (select coalesce(sum(amount), 0) from payment_allocations where tenant_id = $1 and payment_id = $2) where tenant_id = $1 and id = $2`, [ctx.tenantId, paymentId]);
+  // the exchange difference depends on which invoices the payment settles
+  if (p.currency && p.currency !== 'INR') await repost(ctx.tx, ctx.tenantId, 'payment', paymentId);
   const events: RecordEvent[] = [];
   for (const i of touched) events.push(...(await refreshInvoicePaid(ctx, i)));
   if (p.sales_order_id) events.push(...(await refreshOrderPaid(ctx, String(p.sales_order_id))));
@@ -575,6 +593,7 @@ export async function voidPayment(ctx: RecordCtx, id: string, reason: string): P
   if (row.milestone_id) {
     await ctx.tx.query(`update order_milestones set amount_paid = greatest(amount_paid - $3, 0), status = case when status = 'paid' then 'due' else status end, paid_at = null where tenant_id = $1 and id = $2`, [ctx.tenantId, row.milestone_id, row.amount]);
   }
+  await repost(ctx.tx, ctx.tenantId, 'payment', id);
   const events: RecordEvent[] = [{ objectKey: 'payment', recordId: id, kind: 'updated', changes: { status: ['received', 'void'] } }];
   for (const i of invs) events.push(...(await refreshInvoicePaid(ctx, i.invoice_id)));
   if (row.sales_order_id) events.push(...(await refreshOrderPaid(ctx, String(row.sales_order_id))));

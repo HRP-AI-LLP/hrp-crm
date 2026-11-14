@@ -117,6 +117,25 @@ export const APPS: Record<string, AppDefinition> = {
       },
     ],
   },
+  books: {
+    key: 'books',
+    name: 'Books (accounting)',
+    description: 'Full double-entry accounting: chart of accounts and journals posted automatically from invoices, payments, bills and expenses; vendor bills, credits and payments with TDS; expenses and employee claims; banking with statement import, rules and reconciliation; recurring transactions, budgets, fixed assets and depreciation; trial balance, P&L, balance sheet, cash flow, GSTR-3B, GSTR-2B matching and TDS reports. Choose Synapse or Tally as the books of record.',
+    objects: [
+      { key: 'bill', label: 'Bill', plural: 'Bills', icon: 'file-text' },
+      { key: 'vendor_payment', label: 'Vendor Payment', plural: 'Vendor Payments', icon: 'send' },
+      { key: 'expense', label: 'Expense', plural: 'Expenses', icon: 'credit-card' },
+    ],
+    requires: ['billing', 'purchasing'],
+    roles: [
+      {
+        key: 'accountant',
+        name: 'Accountant',
+        description: 'Books, bills, expenses, banking, journals and financial reports',
+        permissions: { objects: { '*': readOnly, invoice: { ...all, delete: 'all' }, payment: all, bill: { ...all, delete: 'all' }, vendor_payment: all, expense: all, vendor: all, account: all, lead: none, deal: readOnly }, admin: ['billing', 'books'] },
+      },
+    ],
+  },
 };
 
 export const APP_KEYS = Object.keys(APPS);

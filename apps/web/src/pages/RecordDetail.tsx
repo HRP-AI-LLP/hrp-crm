@@ -29,6 +29,7 @@ import { ProductStockPanel } from '../components/ops/Inventory';
 import { InstallationPanel, ShipmentPanel } from '../components/ops/FieldPanels';
 import { RaiseTicketButton, TicketBar } from '../components/ops/ServicePanels';
 import { InvoicePanel, PaymentPanel } from '../components/ops/BillingPanels';
+import { BillPanel, ExpensePanel, MakeRecurring, VendorPaymentPanel, WriteOffButton } from '../components/books/BookPanels';
 
 /** Mirrors the API: documents that drive stock, tax or customer commitments are deleted only in these states. */
 const DELETABLE_IN: Record<string, string[]> = {
@@ -237,9 +238,23 @@ export function RecordDetailPage() {
       {object === 'invoice' && (
         <>
           <ApprovalBar object={object} record={rec} canEdit={canEdit} />
+          {apps.has('books') && rec.doc_type === 'tax_invoice' && (
+            <div className="row" style={{ justifyContent: 'flex-end', marginBottom: 8 }}>
+              <MakeRecurring kind="invoice" rec={rec} />
+              {['issued', 'partially_paid'].includes(String(rec.status)) && <WriteOffButton invoice={rec} />}
+            </div>
+          )}
           <InvoicePanel id={id} canEdit={canEdit} />
         </>
       )}
+      {object === 'bill' && (
+        <>
+          <ApprovalBar object={object} record={rec} canEdit={canEdit} />
+          <BillPanel id={id} canEdit={canEdit} />
+        </>
+      )}
+      {object === 'vendor_payment' && <VendorPaymentPanel id={id} canEdit={canEdit} />}
+      {object === 'expense' && <ExpensePanel rec={rec} canEdit={canEdit} />}
       {object === 'payment' && <PaymentPanel id={id} canEdit={canEdit} />}
       {object === 'product' && apps.has('inventory') && rec.product_type !== 'service' && (
         <ProductStockPanel productId={id} productName={rec.title} isVariant={!!rec.variant_of} canMove={!!me && (hasAdmin(me.permissions, 'operations') || objectPerm(me.permissions, 'product').update === 'all')} />

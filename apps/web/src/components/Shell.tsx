@@ -1,3 +1,4 @@
+import { hasAdmin } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Suspense, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -171,7 +172,7 @@ export function Shell() {
   const loc = useLocation();
   useEffect(() => setNavOpen(false), [loc.pathname]);
   const std = ['lead', 'contact', 'account', 'deal', 'quote', 'product'];
-  const opsKeys = ['sales_order', 'purchase_order', 'vendor', 'shipment', 'installation', 'ticket', 'invoice', 'payment'];
+  const opsKeys = ['sales_order', 'purchase_order', 'vendor', 'shipment', 'installation', 'ticket', 'invoice', 'payment', 'bill', 'vendor_payment', 'expense'];
   const objects = meta?.objects ?? [];
   const custom = objects.filter((o) => !std.includes(o.key) && !opsKeys.includes(o.key) && !o.moduleKey?.startsWith('app.'));
   const apps = new Set((meta?.modules ?? []).filter((m) => m.enabled && m.key.startsWith('app.')).map((m) => m.key.slice(4)));
@@ -223,6 +224,7 @@ export function Shell() {
             {apps.has('inventory') && <NavLink to="/inventory">Inventory</NavLink>}
             {apps.has('delivery') && <NavLink to="/schedule">Field schedule</NavLink>}
             {apps.has('billing') && <NavLink to="/billing">Billing &amp; GST</NavLink>}
+            {apps.has('books') && me && hasAdmin(me.permissions, 'books') && <NavLink to="/books">Books</NavLink>}
           </div>
         )}
         <div className="nav-group">

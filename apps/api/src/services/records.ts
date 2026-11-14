@@ -625,6 +625,7 @@ const LOCKED_AFTER_DRAFT: Record<string, string[]> = {
   sales_order: ['warehouse_id', 'account_id', 'currency'],
   purchase_order: ['vendor_id', 'warehouse_id', 'currency'],
   invoice: ['account_id', 'currency', 'place_of_supply', 'invoice_date', 'reverse_charge', 'contact_id', 'shipping_address'],
+  bill: ['vendor_id', 'vendor_ref', 'bill_date', 'currency', 'exchange_rate', 'place_of_supply', 'reverse_charge', 'itc_eligible', 'tds_section', 'tds_rate', 'purchase_order_id'],
 };
 /** Documents that drive stock or customer commitments can only be deleted in these states. */
 const DELETABLE_IN: Record<string, string[]> = {
@@ -634,6 +635,9 @@ const DELETABLE_IN: Record<string, string[]> = {
   installation: ['scheduled', 'cancelled'],
   invoice: ['draft'],
   payment: ['void'],
+  bill: ['draft', 'void'],
+  vendor_payment: ['void'],
+  expense: ['draft', 'rejected', 'void'],
 };
 
 function stripNulls(o: Record<string, unknown>) {

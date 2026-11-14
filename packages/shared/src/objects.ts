@@ -1,6 +1,6 @@
 import type { FieldDef } from './fields';
 
-export const STANDARD_OBJECT_KEYS = ['lead', 'contact', 'account', 'deal', 'product', 'quote', 'sales_order', 'vendor', 'purchase_order', 'shipment', 'installation', 'ticket', 'invoice', 'payment'] as const;
+export const STANDARD_OBJECT_KEYS = ['lead', 'contact', 'account', 'deal', 'product', 'quote', 'sales_order', 'vendor', 'purchase_order', 'shipment', 'installation', 'ticket', 'invoice', 'payment', 'bill', 'vendor_payment', 'expense'] as const;
 export type StandardObjectKey = (typeof STANDARD_OBJECT_KEYS)[number];
 
 export interface ObjectStorage {
@@ -31,6 +31,8 @@ export const TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 export const TICKET_CATEGORIES = ['damage', 'defect', 'installation', 'delivery', 'warranty', 'billing', 'feedback', 'other'] as const;
 export const INVOICE_STATUSES = ['draft', 'issued', 'partially_paid', 'paid', 'cancelled'] as const;
 export const PAYMENT_MODES = ['cash', 'upi', 'bank_transfer', 'cheque', 'card', 'other'] as const;
+export const BILL_STATUSES = ['draft', 'open', 'partially_paid', 'paid', 'void'] as const;
+export const EXPENSE_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'recorded', 'reimbursed', 'void'] as const;
 export const VENDOR_TYPES = ['manufacturer', 'supplier', 'contractor', 'transporter', 'installer', 'service_provider', 'other'] as const;
 const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
 
@@ -327,8 +329,79 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'reference', label: 'Reference (UTR / cheque no.)', type: 'text', standard: true },
     { key: 'amount_allocated', label: 'Applied to invoices', type: 'currency', standard: true, readOnly: true },
     { key: 'unallocated', label: 'Unapplied', type: 'currency', standard: true, readOnly: true },
+    { key: 'tds_amount', label: 'TDS deducted by customer', type: 'currency', standard: true, options: { min: 0 } },
+    { key: 'bank_charges', label: 'Bank charges', type: 'currency', standard: true, options: { min: 0 } },
     { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
     owner,
+  ],
+  bill: [
+    { key: 'name', label: 'Title', type: 'text', standard: true, required: true },
+    { key: 'bill_number', label: 'Bill #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'doc_type', label: 'Type', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['bill', 'vendor_credit']) } },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, readOnly: true, indexed: true, options: { choices: choices(BILL_STATUSES) } },
+    { key: 'vendor_id', label: 'Vendor', type: 'lookup', standard: true, required: true, options: { lookupObject: 'vendor' } },
+    { key: 'vendor_ref', label: "Vendor's bill no.", type: 'text', standard: true, indexed: true, helpText: 'The number printed on the supplier invoice (used for GSTR-2B matching)' },
+    { key: 'purchase_order_id', label: 'Purchase order', type: 'lookup', standard: true, options: { lookupObject: 'purchase_order' } },
+    { key: 'original_bill_id', label: 'Against bill', type: 'lookup', standard: true, readOnly: true, options: { lookupObject: 'bill' } },
+    { key: 'bill_date', label: 'Bill date', type: 'date', standard: true, indexed: true },
+    { key: 'due_date', label: 'Due date', type: 'date', standard: true, indexed: true },
+    { key: 'place_of_supply', label: 'Place of supply', type: 'text', standard: true },
+    { key: 'reverse_charge', label: 'Reverse charge', type: 'boolean', standard: true },
+    { key: 'itc_eligible', label: 'Input tax credit eligible', type: 'boolean', standard: true },
+    { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
+    { key: 'exchange_rate', label: 'Exchange rate', type: 'number', standard: true, options: { min: 0 } },
+    { key: 'tds_section', label: 'TDS section', type: 'text', standard: true, helpText: 'e.g. 194C, 194J — the rate comes from the section unless you set one' },
+    { key: 'tds_rate', label: 'TDS %', type: 'percent', standard: true },
+    { key: 'taxable_total', label: 'Taxable value', type: 'currency', standard: true, readOnly: true },
+    { key: 'cgst_total', label: 'CGST', type: 'currency', standard: true, readOnly: true },
+    { key: 'sgst_total', label: 'SGST', type: 'currency', standard: true, readOnly: true },
+    { key: 'igst_total', label: 'IGST', type: 'currency', standard: true, readOnly: true },
+    { key: 'tds_amount', label: 'TDS', type: 'currency', standard: true, readOnly: true },
+    { key: 'grand_total', label: 'Bill total', type: 'currency', standard: true, readOnly: true },
+    { key: 'amount_paid', label: 'Paid', type: 'currency', standard: true, readOnly: true },
+    { key: 'amount_credited', label: 'Credited', type: 'currency', standard: true, readOnly: true },
+    { key: 'balance_due', label: 'Balance due', type: 'currency', standard: true, readOnly: true, indexed: true },
+    { key: 'approval_status', label: 'Approval', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(APPROVAL_STATUSES) } },
+    { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
+    owner,
+  ],
+  vendor_payment: [
+    { key: 'name', label: 'Payment', type: 'text', standard: true, required: true },
+    { key: 'payment_number', label: 'Payment #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['paid', 'void']) } },
+    { key: 'vendor_id', label: 'Vendor', type: 'lookup', standard: true, required: true, options: { lookupObject: 'vendor' } },
+    { key: 'payment_date', label: 'Paid on', type: 'date', standard: true, indexed: true },
+    { key: 'amount', label: 'Amount', type: 'currency', standard: true, required: true, options: { min: 0.01 } },
+    { key: 'mode', label: 'Mode', type: 'picklist', standard: true, options: { choices: choices(PAYMENT_MODES) } },
+    { key: 'reference', label: 'Reference (UTR / cheque no.)', type: 'text', standard: true },
+    { key: 'amount_allocated', label: 'Applied to bills', type: 'currency', standard: true, readOnly: true },
+    { key: 'unallocated', label: 'Unapplied (advance)', type: 'currency', standard: true, readOnly: true },
+    { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
+    owner,
+  ],
+  expense: [
+    { key: 'name', label: 'What for', type: 'text', standard: true, required: true },
+    { key: 'expense_number', label: 'Expense #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, readOnly: true, indexed: true, options: { choices: choices(EXPENSE_STATUSES) } },
+    { key: 'is_claim', label: 'Claim (I paid, reimburse me)', type: 'boolean', standard: true },
+    { key: 'expense_date', label: 'Date', type: 'date', standard: true, indexed: true },
+    { key: 'amount', label: 'Amount', type: 'currency', standard: true, required: true, options: { min: 0.01 } },
+    { key: 'amount_is_inclusive', label: 'Amount includes GST', type: 'boolean', standard: true },
+    { key: 'tax_rate', label: 'GST %', type: 'percent', standard: true },
+    { key: 'supply_type', label: 'Supply', type: 'picklist', standard: true, options: { choices: choices(['intra', 'inter']) } },
+    { key: 'itc_eligible', label: 'Input tax credit eligible', type: 'boolean', standard: true },
+    { key: 'vendor_id', label: 'Vendor', type: 'lookup', standard: true, options: { lookupObject: 'vendor' } },
+    { key: 'vendor_name', label: 'Paid to', type: 'text', standard: true },
+    { key: 'vendor_gstin', label: "Vendor's GSTIN", type: 'text', standard: true },
+    { key: 'mileage_km', label: 'Distance (km)', type: 'number', standard: true },
+    { key: 'billable', label: 'Bill to customer', type: 'boolean', standard: true },
+    { key: 'customer_id', label: 'Customer', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
+    { key: 'reference', label: 'Reference / bill no.', type: 'text', standard: true },
+    { key: 'taxable_amount', label: 'Before tax', type: 'currency', standard: true, readOnly: true },
+    { key: 'tax_amount', label: 'GST', type: 'currency', standard: true, readOnly: true },
+    { key: 'total', label: 'Total', type: 'currency', standard: true, readOnly: true },
+    { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
+    { ...owner, label: 'Spent by' },
   ],
 };
 
@@ -367,6 +440,9 @@ export const OBJECT_STORAGE: Record<string, ObjectStorage> = {
   ticket: reg('tickets', 'name', ['name', 'ticket_number', 'customer_phone']),
   invoice: reg('invoices', 'name', ['name', 'invoice_number', 'buyer_name']),
   payment: reg('payments', 'name', ['name', 'payment_number', 'reference']),
+  bill: reg('bills', 'name', ['name', 'bill_number', 'vendor_ref']),
+  vendor_payment: reg('vendor_payments', 'name', ['name', 'payment_number', 'reference']),
+  expense: reg('expenses', 'name', ['name', 'expense_number', 'vendor_name', 'reference']),
 };
 
 export function storageFor(objectKey: string): ObjectStorage {

@@ -12,6 +12,7 @@ export function listApps(meta: TenantMeta) {
   const on = enabledApps(meta);
   return Object.values(APPS).map((a) => ({ key: a.key, name: a.name, description: a.description, requires: a.requires, enabled: on.has(a.key), objects: a.objects.map((o) => o.plural) }));
 }
+import { ensureBooks } from './books/ledger';
 
 export async function enableApp(ctx: RecordCtx, key: string) {
   const app = APPS[key];
@@ -51,6 +52,20 @@ export async function enableApp(ctx: RecordCtx, key: string) {
         where tenant_id = $1 and key = 'sales_rep' and is_system and permissions ? 'objects' and not (permissions -> 'objects' ? 'purchase_order')`,
       [ctx.tenantId],
     );
+  }
+  if (key === 'books') {
+    // everyone files their own expenses and claims; sales managers see and approve their team's
+    for (const [role, perm] of [
+      ['sales_rep', { read: 'own', create: true, update: 'own', delete: 'own' }],
+      ['sales_manager', { read: 'team', create: true, update: 'team', delete: 'own' }],
+      ['read_only', { read: 'none', create: false, update: 'none', delete: 'none' }],
+    ] as const)
+      await ctx.tx.query(
+        `update roles set permissions = jsonb_set(permissions, '{objects,expense}', $3::jsonb, true)
+          where tenant_id = $1 and key = $2 and is_system and permissions ? 'objects' and not (permissions -> 'objects' ? 'expense')`,
+        [ctx.tenantId, role, JSON.stringify(perm)],
+      );
+    await ensureBooks(ctx.tx, ctx.tenantId);
   }
   if (key === 'inventory' || key === 'orders' || key === 'purchasing') await defaultWarehouse(ctx);
   return { ok: true };

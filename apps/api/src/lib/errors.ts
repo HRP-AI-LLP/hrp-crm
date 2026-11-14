@@ -23,7 +23,9 @@ export const conflict = (msg: string, details?: unknown) => new ApiError(409, 'c
 export const tooMany = (msg = 'Too many requests') => new ApiError(429, 'rate_limited', msg);
 
 /** Maps Postgres errors to safe API errors without leaking internals. */
-function fromPg(err: { code?: string; constraint?: string; detail?: string }): ApiError | null {
+function fromPg(err: { code?: string; constraint?: string; detail?: string; message?: string }): ApiError | null {
+  // our own trigger checks (raise … using errcode = 'check_violation') carry a message written for people
+  if (err.code === '23514' && !err.constraint && err.message && err.message.length < 300) return badRequest(err.message.charAt(0).toUpperCase() + err.message.slice(1));
   switch (err.code) {
     case '23505':
       return conflict('A record with the same unique value already exists', { constraint: err.constraint });

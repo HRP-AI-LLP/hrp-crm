@@ -108,6 +108,11 @@ export const billingRoutes = new Hono<AppEnv>()
         reference: z.string().max(120).nullish(),
         notes: z.string().max(2000).nullish(),
         allocations: z.union([z.literal('auto'), z.array(z.object({ invoiceId: uuid, amount: z.number().positive() })).max(100)]).nullish(),
+        depositAccountId: uuid.nullish(),
+        tdsAmount: z.number().min(0).max(1e12).optional(),
+        bankCharges: z.number().min(0).max(1e12).optional(),
+        currency: z.string().regex(/^[A-Z]{3}$/).optional(),
+        exchangeRate: z.number().positive().max(1e6).optional(),
       })
       .parse(await c.req.json());
     if (!b.accountId && !b.salesOrderId) throw badRequest('Choose the customer or the order');

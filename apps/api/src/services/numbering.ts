@@ -31,10 +31,10 @@ export async function nextDocumentNumber(ctx: Ctx, key: string, fallbackPrefix?:
  * GST series per financial year, e.g. INV/26-27/0001 (at most 16 characters, unique per FY).
  * The counter is keyed by series and FY, so numbering restarts every April.
  */
-export async function nextFyNumber(ctx: Ctx, series: 'invoice' | 'credit_note' | 'proforma' | 'payment', date: string | Date, prefix: string) {
+export async function nextFyNumber(ctx: Ctx, series: 'invoice' | 'credit_note' | 'proforma' | 'payment' | 'bill' | 'vendor_credit' | 'vendor_payment' | 'expense' | 'asset', date: string | Date, prefix: string) {
   const fy = financialYear(date);
   const short = `${fy.slice(2, 4)}-${fy.slice(5)}`;
   const n = await ctx.tx.one<{ n: string }>(`select app.next_counter($1) as n`, [`${series}:${fy}`]);
-  const p = prefix.replace(/[^A-Za-z0-9-]/g, '').slice(0, 5) || 'INV';
+  const p = prefix.replace(/[^A-Za-z0-9-]/g, '').slice(0, 5) || 'DOC';
   return { number: `${p}/${short}/${String(n!.n).padStart(4, '0')}`, fy };
 }
