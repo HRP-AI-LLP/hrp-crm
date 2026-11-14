@@ -26,6 +26,11 @@ const NEXT: Record<string, string[]> = {
 };
 const TRIGGER: Record<string, string> = { on_confirmation: 'On confirmation', before_dispatch: 'Before dispatch', on_delivery: 'On delivery', on_installation: 'After installation', on_date: 'On a date' };
 
+/** True once workspace metadata has loaded (until then useApps() is empty: don't redirect on it). */
+export function useMetaReady() {
+  return !!useMeta().data;
+}
+
 export function useApps() {
   const { data: meta } = useMeta();
   return new Set((meta?.modules ?? []).filter((m) => m.enabled && m.key.startsWith('app.')).map((m) => m.key.slice(4)));

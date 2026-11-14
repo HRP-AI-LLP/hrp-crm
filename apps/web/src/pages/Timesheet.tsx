@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { parseHours } from '../components/projects/ProjectWorkspace';
-import { useApps } from '../components/ops/OrderPanel';
+import { useApps, useMetaReady } from '../components/ops/OrderPanel';
 import { Empty, Spinner, useToast } from '../components/ui';
 import { get, post, put } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -21,9 +21,10 @@ type Tab = 'week' | 'tasks' | 'approvals' | 'reports';
 export function TimesheetPage() {
   const { me } = useAuth();
   const apps = useApps();
+  const metaReady = useMetaReady();
   const [tab, setTab] = useState<Tab>(() => (['week', 'tasks', 'approvals', 'reports'].find((k) => `#${k}` === window.location.hash) as Tab) ?? 'week');
   if (!me) return null;
-  if (!apps.has('projects')) return <Navigate to="/" replace />;
+  if (!apps.has('projects')) return metaReady ? <Navigate to="/" replace /> : <Spinner />;
   return (
     <>
       <div className="page-head">

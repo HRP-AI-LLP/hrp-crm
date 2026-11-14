@@ -10,6 +10,7 @@
  */
 import { fieldAccess, hasAdmin, objectPerm } from '@synapse/shared';
 import { badRequest, forbidden, notFound } from '../lib/errors';
+import type { Tx } from '../lib/db';
 import { Params, type RecordCtx, visibilityWhere } from './records';
 
 export type MovementType = 'in' | 'out' | 'adjust' | 'transfer_in' | 'transfer_out' | 'reserve' | 'release';
@@ -93,6 +94,7 @@ export async function moveStock(ctx: RecordCtx, m: Movement) {
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
     [ctx.tenantId, m.productId, m.warehouseId, m.type, qty, res, onHand, m.unitCost ?? null, m.reason ?? null, m.ref?.object ?? null, m.ref?.id ?? null, m.ref?.label ?? null, ctx.principal.sessionId === 'system' ? null : ctx.principal.user.id],
   );
+  if (qty < 0) await trimLots(ctx.tx, ctx.tenantId, m.productId, m.warehouseId);
   if (!product.track_inventory) await ctx.tx.query(`update products set track_inventory = true where tenant_id = $1 and id = $2`, [ctx.tenantId, m.productId]);
   // a transfer is checked once both legs are booked
   if (m.type !== 'transfer_out') await checkReorder(ctx, m.productId);
@@ -279,4 +281,25 @@ export async function openingStock(ctx: RecordCtx, rows: OpeningRow[]) {
     else out.unchanged++;
   }
   return out;
+}
+
+/** Keeps a product's lots within its stock: stock that left another way (shipments, adjustments) comes off the lots first-expiry-first-out. */
+export async function trimLots(tx: Tx, tenantId: string, productId: string, warehouseId: string) {
+  const r = await tx.one<{ over: string }>(
+    `select coalesce((select sum(on_hand) from stock_lots where tenant_id = $1 and product_id = $2 and warehouse_id = $3), 0)
+            - coalesce((select greatest(on_hand, 0) from stock_levels where tenant_id = $1 and product_id = $2 and warehouse_id = $3), 0) as over`,
+    [tenantId, productId, warehouseId],
+  );
+  let over = n3(r?.over);
+  if (over <= 0) return;
+  const lots = await tx.query<{ id: string; on_hand: string }>(
+    `select id, on_hand from stock_lots where tenant_id = $1 and product_id = $2 and warehouse_id = $3 and on_hand > 0 order by (status = 'available') desc, expiry_date nulls last, created_at for update`,
+    [tenantId, productId, warehouseId],
+  );
+  for (const l of lots) {
+    if (over <= 0) break;
+    const take = Math.min(over, Number(l.on_hand));
+    await tx.query(`update stock_lots set on_hand = on_hand - $3 where tenant_id = $1 and id = $2`, [tenantId, l.id, take]);
+    over = n3(over - take);
+  }
 }

@@ -227,6 +227,14 @@ export function Shell() {
             {apps.has('books') && me && hasAdmin(me.permissions, 'books') && <NavLink to="/books">Books</NavLink>}
           </div>
         )}
+        {apps.has('manufacturing') && (
+          <div className="nav-group">
+            <div>Manufacturing</div>
+            <NavLink to="/manufacturing">Production</NavLink>
+            <NavLink to="/o/work_order">Work orders</NavLink>
+            <NavLink to="/o/job_work">Job work</NavLink>
+          </div>
+        )}
         {apps.has('projects') && (
           <div className="nav-group">
             <div>Projects</div>

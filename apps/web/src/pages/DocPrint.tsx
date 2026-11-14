@@ -60,6 +60,32 @@ function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back:
       back: `/o/invoice/${i.id}`,
     };
   }
+  if (kind === 'job_work') {
+    // delivery challan for goods sent for job work (CGST rule 55; ITC-04 reports it)
+    const j = d.jobWork;
+    const v = d.vendor ?? {};
+    const lines = (d.lines as Json[]).map((l) => {
+      const taxable = Math.round(Number(l.sent_qty || l.quantity) * Number(l.unit_cost) * 100) / 100;
+      // no tax is charged on goods sent for job work: the rate is shown, the value is the taxable value only
+      return { name: l.product, hsnSac: l.hsn_sac, unit: l.unit, quantity: Number(l.sent_qty || l.quantity), unitPrice: Number(l.unit_cost), discountPct: 0, taxRate: Number(l.tax_rate ?? 0), lineSubtotal: taxable, lineTax: 0, lineTotal: taxable };
+    });
+    const subtotal = lines.reduce((s, l) => s + l.lineSubtotal, 0);
+    const rows: [string, string][] = [['Purpose', 'Sent for job work (not a supply)']];
+    if (j.process) rows.push(['Process', j.process]);
+    if (j.expected_date) rows.push(['Expected back', date(j.expected_date)]);
+    if (j.vehicle_number) rows.push(['Vehicle no.', j.vehicle_number]);
+    return {
+      doc: {
+        quote: { ...j, bill_to: { name: v.name, address: [v.address, v.city].filter(Boolean).join(', '), state: v.state ?? '', gstin: v.gstin ?? '' }, doc_date: j.sent_date, subtotal, tax_total: 0, grand_total: subtotal, discount_total: 0, round_off: 0, status: 'issued', valid_until: null },
+        lines,
+        account: null,
+        contact: null,
+        company: d.company,
+      },
+      labels: { title: 'Delivery challan', numberLabel: 'Challan #', number: j.challan_number ?? 'Not sent yet', party: 'Job worker', rows, footerNote: `Goods sent under section 143 of the CGST Act for processing and return. No tax is charged; values are the taxable value of the goods.${j.challan_number ? '' : '\nDRAFT: not sent yet.'}` },
+      back: `/o/job_work/${j.id}`,
+    };
+  }
   return null;
 }
 
@@ -67,6 +93,7 @@ const SOURCES: Record<string, (id: string) => string> = {
   sales_order: (id) => `/api/v1/orders/${id}`,
   purchase_order: (id) => `/api/v1/purchase-orders/${id}`,
   invoice: (id) => `/api/v1/invoices/${id}`,
+  job_work: (id) => `/api/v1/mfg/job-works/${id}`,
 };
 
 export function DocPrintPage() {

@@ -72,6 +72,44 @@ export async function enableApp(ctx: RecordCtx, key: string) {
         [ctx.tenantId, role, JSON.stringify(perm)],
       );
   }
+  if (key === 'manufacturing') {
+    // planners and the store run production; sales can see where an order is; accounts can audit it
+    const view = { read: 'all', create: false, update: 'none', delete: 'none' };
+    const none = { read: 'none', create: false, update: 'none', delete: 'none' };
+    const grants: [string, string, Record<string, unknown>][] = [
+      ['sales_rep', 'work_order', view],
+      ['sales_rep', 'job_work', none],
+      ['sales_manager', 'work_order', view],
+      ['sales_manager', 'job_work', view],
+      ['read_only', 'work_order', view],
+      ['read_only', 'job_work', view],
+      ['inventory_manager', 'work_order', { read: 'all', create: true, update: 'all', delete: 'own' }],
+      ['inventory_manager', 'job_work', { read: 'all', create: true, update: 'all', delete: 'own' }],
+      ['operations', 'work_order', { read: 'all', create: true, update: 'all', delete: 'own' }],
+      ['operations', 'job_work', { read: 'all', create: true, update: 'all', delete: 'own' }],
+      ['technician', 'work_order', none],
+      ['technician', 'job_work', none],
+      ['service_agent', 'work_order', none],
+      ['service_agent', 'job_work', none],
+      ['accounts', 'work_order', view],
+      ['accounts', 'job_work', view],
+      ['accountant', 'work_order', view],
+      ['accountant', 'job_work', view],
+    ];
+    for (const [role, obj, perm] of grants)
+      await ctx.tx.query(
+        `update roles set permissions = jsonb_set(permissions, array['objects', $3::text], $4::jsonb, true)
+          where tenant_id = $1 and key = $2 and is_system and permissions ? 'objects' and not (permissions -> 'objects' ? $3::text)`,
+        [ctx.tenantId, role, obj, JSON.stringify(perm)],
+      );
+    // people who only look at orders do not see what they cost
+    for (const role of ['sales_rep', 'sales_manager', 'read_only'])
+      await ctx.tx.query(
+        `update roles set permissions = jsonb_set(case when permissions ? 'fields' then permissions else permissions || '{"fields":{}}'::jsonb end, '{fields,work_order}', $3::jsonb, true)
+          where tenant_id = $1 and key = $2 and is_system and not coalesce(permissions -> 'fields' ? 'work_order', false)`,
+        [ctx.tenantId, role, JSON.stringify({ material_cost: 'hidden', operation_cost: 'hidden' })],
+      );
+  }
   if (key === 'books') {
     // everyone files their own expenses and claims; sales managers see and approve their team's.
     // Bills and vendor payments stay with accounts (sales roles otherwise inherit "*" create rights).

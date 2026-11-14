@@ -132,10 +132,17 @@ export async function confirmOrder(ctx: RecordCtx, id: string): Promise<RecordEv
   if (row.warehouse_id) {
     for (const l of lines) {
       if (!l.productId) continue;
-      const p = await ctx.tx.one<{ track_inventory: boolean; product_type: string }>(`select track_inventory, product_type from products where tenant_id = $1 and id = $2`, [ctx.tenantId, l.productId]);
+      const p = await ctx.tx.one<{ track_inventory: boolean; product_type: string; make_or_buy: string | null }>(`select track_inventory, product_type, make_or_buy from products where tenant_id = $1 and id = $2`, [ctx.tenantId, l.productId]);
       if (!p?.track_inventory || p.product_type !== 'goods') continue;
-      await moveStock(ctx, { productId: l.productId, warehouseId: String(row.warehouse_id), type: 'reserve', reserved: l.quantity, ref: { object: 'sales_order', id, label } });
-      await ctx.tx.query(`update sales_order_lines set reserved_qty = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, l.id, l.quantity]);
+      let qty = Number(l.quantity);
+      // made-to-order items reserve what is on the shelf; production reserves the rest as it is made
+      if (p.make_or_buy && p.make_or_buy !== 'buy') {
+        const lvl = await ctx.tx.one<{ free: string }>(`select greatest(on_hand - reserved, 0) as free from stock_levels where tenant_id = $1 and product_id = $2 and warehouse_id = $3`, [ctx.tenantId, l.productId, row.warehouse_id]);
+        qty = Math.min(qty, Number(lvl?.free ?? 0));
+        if (qty <= 0) continue;
+      }
+      await moveStock(ctx, { productId: l.productId, warehouseId: String(row.warehouse_id), type: 'reserve', reserved: qty, ref: { object: 'sales_order', id, label } });
+      await ctx.tx.query(`update sales_order_lines set reserved_qty = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, l.id, qty]);
     }
   }
   const events = await setStatus(ctx, id, 'draft', 'confirmed', ['confirmed_at = now()']);

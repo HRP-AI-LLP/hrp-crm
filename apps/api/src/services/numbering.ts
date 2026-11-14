@@ -15,6 +15,8 @@ export const NUMBERED: Record<string, { column: string; prefix: string }> = {
   shipment: { column: 'shipment_number', prefix: 'DL' },
   installation: { column: 'job_number', prefix: 'INS' },
   ticket: { column: 'ticket_number', prefix: 'TK' },
+  work_order: { column: 'wo_number', prefix: 'WO' },
+  job_work: { column: 'jw_number', prefix: 'JW' },
 };
 
 /** Next number like Q-2026-0007; prefixes can be changed in Settings (settings.numbering). */
@@ -31,7 +33,7 @@ export async function nextDocumentNumber(ctx: Ctx, key: string, fallbackPrefix?:
  * GST series per financial year, e.g. INV/26-27/0001 (at most 16 characters, unique per FY).
  * The counter is keyed by series and FY, so numbering restarts every April.
  */
-export async function nextFyNumber(ctx: Ctx, series: 'invoice' | 'credit_note' | 'proforma' | 'payment' | 'bill' | 'vendor_credit' | 'vendor_payment' | 'expense' | 'asset', date: string | Date, prefix: string) {
+export async function nextFyNumber(ctx: Ctx, series: 'invoice' | 'credit_note' | 'proforma' | 'payment' | 'bill' | 'vendor_credit' | 'vendor_payment' | 'expense' | 'asset' | 'challan', date: string | Date, prefix: string) {
   const fy = financialYear(date);
   const short = `${fy.slice(2, 4)}-${fy.slice(5)}`;
   const n = await ctx.tx.one<{ n: string }>(`select app.next_counter($1) as n`, [`${series}:${fy}`]);

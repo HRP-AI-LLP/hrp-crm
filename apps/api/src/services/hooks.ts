@@ -96,6 +96,27 @@ export async function beforeCreate(ctx: HookCtx, objectKey: string, cols: Record
     cols.status ??= 'active';
     cols.billing_method ??= 'time_project_rate';
   }
+  if (objectKey === 'work_order') {
+    cols.status = 'draft';
+    if (!cols.product_id) throw badRequest('Validation failed', [{ field: 'product_id', message: 'is required' }]);
+    const p = await ctx.tx.one<{ product_type: string }>(`select product_type from products where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, cols.product_id]);
+    if (!p || p.product_type !== 'goods') throw badRequest('A work order makes a goods product');
+    if (!(Number(cols.quantity) > 0) || Number(cols.quantity) > 10_000_000) throw badRequest('Validation failed', [{ field: 'quantity', message: 'must be between 0 and 10,000,000' }]);
+    cols.bom_id ??= (await ctx.tx.one<{ id: string }>(`select id from boms where tenant_id = $1 and product_id = $2 and status = 'active' order by is_default desc, revision desc limit 1`, [ctx.tenantId, cols.product_id]))?.id ?? null;
+    cols.warehouse_id ??= (await ctx.tx.one<{ id: string }>(`select id from warehouses where tenant_id = $1 and is_active order by is_default desc, created_at limit 1`, [ctx.tenantId]))?.id ?? null;
+    cols.priority ??= 'normal';
+  }
+  if (objectKey === 'job_work') {
+    cols.status = 'draft';
+    if (!cols.vendor_id) throw badRequest('Validation failed', [{ field: 'vendor_id', message: 'is required' }]);
+    const v = await ctx.tx.one(`select 1 from vendors where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, cols.vendor_id]);
+    if (!v) throw badRequest('Vendor not found');
+    if (cols.output_product_id) {
+      const p = await ctx.tx.one<{ product_type: string }>(`select product_type from products where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, cols.output_product_id]);
+      if (!p || p.product_type !== 'goods') throw badRequest('What comes back must be a goods product');
+    }
+    cols.warehouse_id ??= (await ctx.tx.one<{ id: string }>(`select id from warehouses where tenant_id = $1 and is_active order by is_default desc, created_at limit 1`, [ctx.tenantId]))?.id ?? null;
+  }
   if (objectKey === 'invoice' && cols.account_id && cols.place_of_supply === undefined) {
     const a = await ctx.tx.one<{ state: string | null }>(`select state from accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, cols.account_id]);
     if (a?.state) cols.place_of_supply = a.state;
@@ -134,4 +155,7 @@ export async function beforeUpdate(ctx: HookCtx, objectKey: string, row: Record<
     }
   }
   if (objectKey === 'installation' && cols.owner_id !== undefined) cols.technician_id = cols.owner_id;
+  if (objectKey === 'work_order' && cols.quantity !== undefined && (!(Number(cols.quantity) > 0) || Number(cols.quantity) > 10_000_000))
+    throw badRequest('Validation failed', [{ field: 'quantity', message: 'must be between 0 and 10,000,000' }]);
+  if (objectKey === 'work_order' && cols.product_id !== undefined && cols.product_id !== row.product_id) cols.bom_id = null;
 }

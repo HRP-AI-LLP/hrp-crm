@@ -2,7 +2,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { useApps } from '../components/ops/OrderPanel';
+import { useApps, useMetaReady } from '../components/ops/OrderPanel';
 import { ProjectWorkspace } from '../components/projects/ProjectWorkspace';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
 import { get, post } from '../lib/api';
@@ -21,11 +21,12 @@ const BILLING: [string, string][] = [
 
 export function ProjectsPage() {
   const apps = useApps();
+  const metaReady = useMetaReady();
   const [q, setQ] = useState({ status: 'open', search: '', mine: false });
   const [create, setCreate] = useState(false);
   const params = new URLSearchParams({ ...(q.status !== 'open' && q.status !== 'all' ? { status: q.status } : {}), ...(q.search ? { q: q.search } : {}), ...(q.mine ? { mine: '1' } : {}) });
   const { data } = useQuery({ queryKey: ['projects', params.toString()], queryFn: () => get<Json[]>(`/api/v1/projects?${params}`), enabled: apps.has('projects') });
-  if (!apps.has('projects')) return <Navigate to="/" replace />;
+  if (!apps.has('projects')) return metaReady ? <Navigate to="/" replace /> : <Spinner />;
   const rows = (data ?? []).filter((p) => q.status !== 'open' || ['planning', 'active', 'on_hold'].includes(p.status));
   return (
     <>
@@ -216,8 +217,9 @@ export function ProjectPage() {
   const { id } = useParams();
   const { me } = useAuth();
   const apps = useApps();
+  const metaReady = useMetaReady();
   const { data, error } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`), enabled: !!id && apps.has('projects') });
-  if (!apps.has('projects')) return <Navigate to="/" replace />;
+  if (!apps.has('projects')) return metaReady ? <Navigate to="/" replace /> : <Spinner />;
   if (error) return <Empty title="Project not found">It may have been deleted, or you are not on its team.</Empty>;
   if (!data || !me) return <Spinner />;
   const p = data.project;

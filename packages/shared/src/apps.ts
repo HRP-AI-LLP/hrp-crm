@@ -138,6 +138,30 @@ export const APPS: Record<string, AppDefinition> = {
       },
     ],
   },
+  manufacturing: {
+    key: 'manufacturing',
+    name: 'Manufacturing',
+    description: 'Multi-level bills of materials with routings, work centres and by-products; work orders with material issue, operations, output, scrap and batch / lot numbers with expiry; job work under GST challans with ITC-04; quality checks; MRP that turns sales orders and stock levels into purchase and production suggestions; production costing posted to the books.',
+    objects: [
+      { key: 'work_order', label: 'Work Order', plural: 'Work Orders', icon: 'tool' },
+      { key: 'job_work', label: 'Job Work', plural: 'Job Work', icon: 'repeat' },
+    ],
+    requires: ['inventory', 'purchasing'],
+    roles: [
+      {
+        key: 'production_manager',
+        name: 'Production manager',
+        description: 'Bills of materials, work orders, job work, quality, MRP and stock',
+        permissions: { objects: { expense: ownExpense, '*': readOnly, work_order: { ...all, delete: 'all' }, job_work: { ...all, delete: 'all' }, product: all, purchase_order: all, vendor: readOnly, lead: none }, admin: ['manufacturing', 'operations'] },
+      },
+      {
+        key: 'shop_floor',
+        name: 'Shop floor',
+        description: 'Works on released work orders: issues material, records operations and output',
+        permissions: { objects: { expense: ownExpense, '*': none, work_order: { read: 'all', create: false, update: 'all', delete: 'none' }, product: readOnly } },
+      },
+    ],
+  },
   projects: {
     key: 'projects',
     name: 'Projects and timesheets',

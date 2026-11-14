@@ -628,7 +628,7 @@ export async function createRecord(
 /** Created only by their service (it posts the ledger entry); generic create, import and merge are refused. */
 export const SERVICE_ONLY = new Set(['payment', 'vendor_payment']);
 /** Financial documents that are never merged (merging would soft-delete posted entries). */
-export const NO_MERGE = new Set(['invoice', 'payment', 'bill', 'vendor_payment', 'expense']);
+export const NO_MERGE = new Set(['invoice', 'payment', 'bill', 'vendor_payment', 'expense', 'work_order', 'job_work']);
 
 const LOCKED_AFTER_DRAFT: Record<string, string[]> = {
   payment: ['account_id', 'sales_order_id', 'amount', 'payment_date', 'mode', 'tds_amount', 'bank_charges'],
@@ -636,6 +636,8 @@ const LOCKED_AFTER_DRAFT: Record<string, string[]> = {
   sales_order: ['warehouse_id', 'account_id', 'currency'],
   purchase_order: ['vendor_id', 'warehouse_id', 'currency'],
   invoice: ['account_id', 'currency', 'place_of_supply', 'invoice_date', 'reverse_charge', 'contact_id', 'shipping_address'],
+  work_order: ['product_id', 'bom_id', 'quantity', 'warehouse_id', 'sales_order_id'],
+  job_work: ['vendor_id', 'output_product_id', 'output_qty', 'warehouse_id', 'rate'],
   bill: ['vendor_id', 'vendor_ref', 'bill_date', 'currency', 'exchange_rate', 'place_of_supply', 'reverse_charge', 'itc_eligible', 'tds_section', 'tds_rate', 'purchase_order_id'],
 };
 /** Documents that drive stock or customer commitments can only be deleted in these states. */
@@ -649,6 +651,8 @@ const DELETABLE_IN: Record<string, string[]> = {
   bill: ['draft', 'void'],
   vendor_payment: ['void'],
   expense: ['draft', 'rejected', 'void'],
+  work_order: ['draft', 'cancelled'],
+  job_work: ['draft', 'cancelled'],
 };
 
 function stripNulls(o: Record<string, unknown>) {

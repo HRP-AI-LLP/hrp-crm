@@ -66,13 +66,7 @@ Three phases, each tested, reviewed and committed before the next:
 
 - **Books (done):** full double-entry accounting in the class of Zoho Books, with Synapse or Tally as the books of record per workspace. It covers the ledger, payables with TDS, expenses and claims, banking and reconciliation, financial and GST/TDS reports, budgets, fixed assets, recurring transactions and multi-currency (see [BOOKS.md](BOOKS.md)).
 - **Projects and timesheets (done):** projects with team rates, milestones, task lists, sub-tasks and dependencies (auto-rescheduling), list/board/Gantt, issues, comments, timers, weekly timesheets with approval, billing of time, milestones and expenses, budgets, profitability, utilisation and templates (see [PROJECTS.md](PROJECTS.md)).
-- **Manufacturing (after):**
-  - Multi-level BOMs, routings and work centres.
-  - Work orders: issue, produce, WIP, scrap and by-products.
-  - Job work and subcontracting with GST challans.
-  - Process and batch production: recipes, lots, expiry and yield.
-  - MRP: suggestions from demand and stock.
-  - Quality checks and costing posted to the ledger.
+- **Manufacturing (done):** multi-level BOMs with routings, scrap, yield, by-products and versions; work centres and load; work orders costed through WIP with variances; make-to-order reservations; batches, expiry, FEFO and traceability; quality checks; job work with GST challans and ITC-04; MRP that raises purchase and work orders (see [MANUFACTURING.md](MANUFACTURING.md)).
 
 ## Next (suggested order)
 

@@ -194,3 +194,28 @@ An independent review of the fifth round found no cross-tenant leaks; these were
   - Time, expenses and milestones are locked while they are invoiced, and released when the invoice is cancelled or deleted.
   - Credit notes carry the project, so project revenue stays right.
   - An expense can be tagged only to a project the filer works on.
+
+### Seventh round: Manufacturing
+
+- **Who does what:**
+  - Bills of materials, work centres and MRP need the `manufacturing` admin area.
+  - Releasing, closing and cancelling a work order is for planners: the `manufacturing` admin area, or the right to create work orders. The shop floor issues and returns material, logs time and records output.
+  - Production screens (overview, batches, quality, BOMs, reports) need read access to work orders, or the manufacturing or operations admin area.
+- **Costs stay with people who may see costs.** Material, labour, WIP, standard and actual cost, variance and work centre rates are returned only to manufacturing, operations and books admins, or to people who can see and edit product cost prices. Work order cost fields are hidden from sales and read-only roles.
+- **Quality:**
+  - Final inspections, which release QC-gated output, need the manufacturing or operations admin area. Nobody certifies their own output.
+  - On the floor, an inspection must be of the order's own product or materials, and of a batch that went into or came out of that order.
+  - Only manufacturing or operations admins change a batch's status by hand.
+- **Batches:**
+  - Quarantined and rejected batches are never used. If usable batches and unbatched stock can't cover a quantity, the request is refused rather than quietly taking held stock.
+  - Batches never add up to more than stock on hand. Stock that leaves another way (shipments, adjustments) comes off the batches first-expiry-first-out.
+  - Output cannot be added to a batch that is on hold or rejected.
+- **Stock and ledger integrity:**
+  - Production does not take stock reserved for sales orders.
+  - Output needs issued material, so nothing comes into stock at no cost.
+  - Job work receipts are capped at the expected quantity plus 10%, and the expected quantity is frozen once goods are sent.
+  - Every journal's source is the log row written in the same request.
+- **Frozen after draft:** a work order's product, quantity, BOM, warehouse and sales order, and a job work's job worker, output, expected quantity, warehouse and rate. Only drafts and cancelled documents can be deleted, and neither can be merged.
+- **Bounds:** costing is computed once per BOM per request and capped at 12 levels and 2,000 BOMs. Explosion is capped at 1,000 nodes and tracing at 20 levels and 500 rows. Work order quantity is at most 10,000,000.
+- **The ITC-04 CSV is formula-safe.**
+

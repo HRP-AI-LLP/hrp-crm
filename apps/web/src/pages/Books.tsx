@@ -8,7 +8,7 @@ import { useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { BarChart } from '../components/charts';
 import { useAct, VendorPaymentModal } from '../components/books/BookPanels';
-import { useApps } from '../components/ops/OrderPanel';
+import { useApps, useMetaReady } from '../components/ops/OrderPanel';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
 import { del, download, get, patch, post, put } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -45,9 +45,10 @@ const TABS: [Tab, string][] = [
 export function BooksPage() {
   const { me } = useAuth();
   const apps = useApps();
+  const metaReady = useMetaReady();
   const [tab, setTab] = useState<Tab>(() => (TABS.find(([k]) => `#${k}` === window.location.hash)?.[0] ?? 'overview'));
   if (!me) return null;
-  if (!apps.has('books')) return <Navigate to="/" replace />;
+  if (!apps.has('books')) return metaReady ? <Navigate to="/" replace /> : <Spinner />;
   if (!hasAdmin(me.permissions, 'books')) {
     return (
       <Empty title="Books needs the books permission">

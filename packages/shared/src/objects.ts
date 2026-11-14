@@ -1,6 +1,6 @@
 import type { FieldDef } from './fields';
 
-export const STANDARD_OBJECT_KEYS = ['lead', 'contact', 'account', 'deal', 'product', 'quote', 'sales_order', 'vendor', 'purchase_order', 'shipment', 'installation', 'ticket', 'invoice', 'payment', 'bill', 'vendor_payment', 'expense', 'project'] as const;
+export const STANDARD_OBJECT_KEYS = ['lead', 'contact', 'account', 'deal', 'product', 'quote', 'sales_order', 'vendor', 'purchase_order', 'shipment', 'installation', 'ticket', 'invoice', 'payment', 'bill', 'vendor_payment', 'expense', 'project', 'work_order', 'job_work'] as const;
 export type StandardObjectKey = (typeof STANDARD_OBJECT_KEYS)[number];
 
 export interface ObjectStorage {
@@ -32,6 +32,8 @@ export const TICKET_CATEGORIES = ['damage', 'defect', 'installation', 'delivery'
 export const INVOICE_STATUSES = ['draft', 'issued', 'partially_paid', 'paid', 'cancelled'] as const;
 export const PAYMENT_MODES = ['cash', 'upi', 'bank_transfer', 'cheque', 'card', 'other'] as const;
 export const BILL_STATUSES = ['draft', 'open', 'partially_paid', 'paid', 'void'] as const;
+export const WORK_ORDER_STATUSES = ['draft', 'released', 'in_progress', 'completed', 'closed', 'cancelled'] as const;
+export const JOB_WORK_STATUSES = ['draft', 'sent', 'partially_received', 'received', 'closed', 'cancelled'] as const;
 export const PROJECT_STATUSES = ['planning', 'active', 'on_hold', 'completed', 'cancelled'] as const;
 export const PROJECT_BILLING_METHODS = ['fixed_price', 'time_project_rate', 'time_staff_rate', 'time_task_rate', 'non_billable'] as const;
 export const EXPENSE_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'recorded', 'reimbursed', 'void'] as const;
@@ -121,6 +123,13 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'track_inventory', label: 'Track stock', type: 'boolean', standard: true },
     { key: 'reorder_level', label: 'Reorder level', type: 'number', standard: true, options: { min: 0 }, helpText: 'Alert when available stock falls to this' },
     { key: 'reorder_qty', label: 'Reorder quantity', type: 'number', standard: true, options: { min: 0 } },
+    { key: 'make_or_buy', label: 'Make or buy', type: 'picklist', standard: true, options: { choices: choices(['buy', 'make', 'both']) }, helpText: 'Planning (MRP) suggests purchases for bought items and work orders for made ones' },
+    { key: 'preferred_vendor_id', label: 'Preferred vendor', type: 'lookup', standard: true, options: { lookupObject: 'vendor' } },
+    { key: 'lead_time_days', label: 'Lead time (days)', type: 'number', standard: true, options: { min: 0, max: 365 } },
+    { key: 'safety_stock', label: 'Safety stock', type: 'number', standard: true, options: { min: 0 } },
+    { key: 'min_order_qty', label: 'Minimum order quantity', type: 'number', standard: true, options: { min: 0 } },
+    { key: 'batch_tracked', label: 'Batch / lot tracked', type: 'boolean', standard: true },
+    { key: 'shelf_life_days', label: 'Shelf life (days)', type: 'number', standard: true, options: { min: 1, max: 36500 } },
     { key: 'cost_price', label: 'Cost price', type: 'currency', standard: true, options: { min: 0 } },
     { key: 'mrp', label: 'MRP', type: 'currency', standard: true, options: { min: 0 } },
     { key: 'barcode', label: 'Barcode', type: 'text', standard: true },
@@ -406,6 +415,42 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
     { ...owner, label: 'Spent by' },
   ],
+  work_order: [
+    { key: 'name', label: 'Work order', type: 'text', standard: true, required: true },
+    { key: 'wo_number', label: 'WO #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, readOnly: true, indexed: true, options: { choices: choices(WORK_ORDER_STATUSES) } },
+    { key: 'product_id', label: 'Product', type: 'lookup', standard: true, required: true, indexed: true, options: { lookupObject: 'product' } },
+    { key: 'quantity', label: 'Quantity', type: 'number', standard: true, required: true, options: { min: 0.001 } },
+    { key: 'produced_qty', label: 'Produced', type: 'number', standard: true, readOnly: true },
+    { key: 'scrapped_qty', label: 'Scrapped', type: 'number', standard: true, readOnly: true },
+    { key: 'planned_start', label: 'Planned start', type: 'date', standard: true, indexed: true },
+    { key: 'planned_end', label: 'Planned finish', type: 'date', standard: true, indexed: true },
+    { key: 'priority', label: 'Priority', type: 'picklist', standard: true, options: { choices: choices(['low', 'normal', 'high', 'urgent']) } },
+    { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, options: { lookupObject: 'sales_order' } },
+    { key: 'project_id', label: 'Project', type: 'lookup', standard: true, options: { lookupObject: 'project' } },
+    { key: 'lot_number', label: 'Batch / lot', type: 'text', standard: true },
+    { key: 'material_cost', label: 'Material cost', type: 'currency', standard: true, readOnly: true },
+    { key: 'operation_cost', label: 'Labour & overhead', type: 'currency', standard: true, readOnly: true },
+    { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
+    { ...owner, label: 'Planner' },
+  ],
+  job_work: [
+    { key: 'name', label: 'Job work', type: 'text', standard: true, required: true },
+    { key: 'jw_number', label: 'JW #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'challan_number', label: 'Challan #', type: 'text', standard: true, readOnly: true, indexed: true },
+    { key: 'status', label: 'Status', type: 'picklist', standard: true, readOnly: true, indexed: true, options: { choices: choices(JOB_WORK_STATUSES) } },
+    { key: 'vendor_id', label: 'Job worker', type: 'lookup', standard: true, required: true, indexed: true, options: { lookupObject: 'vendor' } },
+    { key: 'process', label: 'Process', type: 'text', standard: true, helpText: 'e.g. powder coating, CNC cutting, stitching' },
+    { key: 'output_product_id', label: 'Comes back as', type: 'lookup', standard: true, options: { lookupObject: 'product' }, helpText: 'Leave empty if the same goods come back processed' },
+    { key: 'output_qty', label: 'Expected quantity back', type: 'number', standard: true, options: { min: 0 } },
+    { key: 'received_qty', label: 'Received back', type: 'number', standard: true, readOnly: true },
+    { key: 'rate', label: 'Job work rate (per unit)', type: 'currency', standard: true, options: { min: 0 } },
+    { key: 'expected_date', label: 'Expected back', type: 'date', standard: true, indexed: true },
+    { key: 'sent_date', label: 'Sent on', type: 'date', standard: true, readOnly: true },
+    { key: 'vehicle_number', label: 'Vehicle no.', type: 'text', standard: true },
+    { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
+    owner,
+  ],
   project: [
     { key: 'name', label: 'Project name', type: 'text', standard: true, required: true },
     { key: 'project_code', label: 'Project code', type: 'text', standard: true, indexed: true },
@@ -468,6 +513,8 @@ export const OBJECT_STORAGE: Record<string, ObjectStorage> = {
   vendor_payment: reg('vendor_payments', 'name', ['name', 'payment_number', 'reference']),
   expense: reg('expenses', 'name', ['name', 'expense_number', 'vendor_name', 'reference']),
   project: reg('projects', 'name', ['name', 'project_code']),
+  work_order: reg('work_orders', 'name', ['name', 'wo_number', 'lot_number']),
+  job_work: reg('job_works', 'name', ['name', 'jw_number', 'challan_number']),
 };
 
 export function storageFor(objectKey: string): ObjectStorage {
