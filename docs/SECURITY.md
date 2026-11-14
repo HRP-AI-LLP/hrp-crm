@@ -138,3 +138,15 @@ An independent review of the fifth round found no cross-tenant leaks; these were
 - **Business health**: money KPIs are blank when the amount field is hidden from the viewer; payment-link totals cover only visible payments.
 - **Shared dashboards**: charts and summaries only (no row tables), cached five minutes per link, rate-limited per visitor and per link; expiry and revocation take effect immediately.
 - Smaller: FCM forgets a device only on `UNREGISTERED`/404; WhatsApp status lookups check record access; re-linking a conversation moves only its unlinked messages; digests are claimed before sending and switch off when no recipient can sign in; public order pages omit internal milestone notes.
+
+### Sixth round (Nov 2026): revenue intelligence
+
+- **Context and agents run as the person asking.** Records, fields, tasks (task permission), calendar events (owner, attendee or deal read "all") and score factors (object and field security) are filtered before anything reaches a model or a screen.
+- **Agent results are personal.** A brief, debrief or analysis is shown only to the person who ran it, since it reflects what they can see. Each attendee prepares their own brief; the organiser's is the one recorded on the meeting.
+- **Writes need the right access.** Meeting notes, recordings and debriefs need write access to the meeting. Timeline entries and competitor tags on a record need edit access to it. Field changes are only suggestions until someone with edit access applies them, and the timeline records which field changed, not its values. AI-extracted action items go to the person who ran the debrief. Competitor tags need an exact name or alias match.
+- **Prompt injection:** CRM text, transcripts and website text are wrapped as data. The worst a malicious text can do is shape the output and the requester's own action items.
+- **Website research** reads public https sites only, rejecting IP literals, local names and credentials. It re-checks every redirect, caps size and time, and runs outside any database transaction.
+- **Recording transcription** is capped at 20 MB while streaming, counts against the workspace's daily AI allowance, and keeps no audio.
+- **Insights** show only deal-level and conversation factors. Standing risks resurface weekly after a dismissal. Stale insights about closed or deleted records are removed.
+- **The sweep** is queued per workspace and per part (detect, auto-prep, index), with batched writes.
+- **Erasure** also removes search-index entries and their vectors, agent runs about the person, citing them, or built from their meetings and calls, plus suggestions, action items, insights, scores and meeting notes.

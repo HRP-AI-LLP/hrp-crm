@@ -254,6 +254,11 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
       case 'backup.step':
         await backupStep(env, db, waiter, job);
         return;
+      case 'intel.sweep': {
+        const { intelSweepPart } = await import('./intel/sweep');
+        await intelSweepPart(env, db, job.tenantId, job.part);
+        return;
+      }
       case 'webhook.deliver': {
         const sub = await db.tx({ ...sc, readOnly: true }, (tx) => tx.one<{ url: string; secret: string; is_enabled: boolean }>(`select url, secret, is_enabled from webhook_subscriptions where tenant_id = $1 and id = $2`, [tenant.id, job.subscriptionId]));
         if (!sub?.is_enabled && !job.redeliveryOf) return;

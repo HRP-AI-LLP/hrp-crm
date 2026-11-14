@@ -18,7 +18,7 @@ import { guardedChat } from '../ai/features';
 import { AiUnavailableError, extractJson } from '../ai/router';
 import { canContact, type ConsentState } from '../privacy';
 import { listRecords, loadRow, type RecordCtx, toDto } from '../records';
-import { buildContext, type Citation, canRead, type Fact, factLines, resolveRefs, stageCategory, stageLabel, visibleIds } from './context';
+import { buildContext, type Citation, canRead, type Fact, factLines, resolveRefs, stageCategory, stageLabel, visibleFactors, visibleIds } from './context';
 import { accountHealth, accountSignals, dealRisk, dealSignals, type Factor, type Score, saveScores } from './scores';
 
 export interface AgentEnv {
@@ -95,6 +95,8 @@ interface Plan {
   insights: NewInsight[];
   scores: Score[];
   eventId?: string;
+  /** a public website to read before the model call (fetched outside any transaction) */
+  site?: string | null;
   afterSave?: (tx: Tx, runId: string, plan: Plan) => Promise<void>;
 }
 
@@ -121,7 +123,7 @@ function setSection(out: Output, s: Section) {
   if (i >= 0) out.sections[i] = s;
   else out.sections.push(s);
 }
-const factorItems = (factors: Factor[], ctx: RecordCtx) => factors.filter((f) => f.object === 'activity' || canRead(ctx, f.object)).map((f) => ({ text: f.label, meta: { impact: f.impact } }));
+const factorItems = (factors: Factor[], ctx: RecordCtx) => visibleFactors(ctx, factors).map((f) => ({ text: f.label, meta: { impact: f.impact } }));
 
 // ------------------------------------------------------------------------------- website research
 const PUBLIC_MAIL = new Set(['gmail.com', 'yahoo.com', 'yahoo.co.in', 'hotmail.com', 'outlook.com', 'live.com', 'icloud.com', 'rediffmail.com', 'protonmail.com', 'zoho.com', 'ymail.com']);
@@ -271,6 +273,7 @@ async function applyDebrief(ctx: RecordCtx, plan: Plan, out: Output, raw: unknow
   const d = debriefSchema.parse(raw);
   out.headline = clip(d.summary, 300) || out.headline;
   setSection(out, { key: 'summary', title: 'Summary', text: d.summary });
+  out.aiSummary = true;
   if (d.decisions.length) setSection(out, { key: 'decisions', title: 'Decisions', items: d.decisions.map((t) => ({ text: t })) });
   const q = d.qualification;
   const qual = (['need', 'budget', 'authority', 'timeline'] as const).filter((k) => q[k]).map((k) => ({ text: `${k[0]!.toUpperCase()}${k.slice(1)}: ${q[k]}` }));
@@ -295,12 +298,23 @@ async function applyDebrief(ctx: RecordCtx, plan: Plan, out: Output, raw: unknow
 }
 
 async function tagCompetitors(tx: Tx, ctx: RecordCtx, dealId: string, names: string[]) {
-  if (!names.length || objectPerm(ctx.principal.permissions, 'deal').update === 'none') return;
+  if (!names.length) return;
   const comps = await tx.query<{ id: string; name: string; aliases: string[] }>(`select id, name, aliases from competitors where tenant_id = $1 and is_active`, [ctx.tenantId]);
   for (const n of names) {
-    const l = n.toLowerCase();
-    const c = comps.find((x) => x.name.toLowerCase() === l || x.aliases.some((a) => a.toLowerCase() === l) || l.includes(x.name.toLowerCase()));
+    const l = n.toLowerCase().trim();
+    const c = comps.find((x) => x.name.toLowerCase() === l || x.aliases.some((a) => a.toLowerCase() === l));
     if (c) await tx.query(`insert into deal_competitors (tenant_id, deal_id, competitor_id, source, note) values ($1,$2,$3,'ai','Mentioned in a conversation') on conflict do nothing`, [ctx.tenantId, dealId, c.id]);
+  }
+}
+
+/** Whether the caller may change this record (permission refusals only; SQL errors surface). */
+async function canUpdate(ctx: RecordCtx, object: string, id: string) {
+  try {
+    await loadRow(ctx, object, id, 'update');
+    return true;
+  } catch (e) {
+    if (e instanceof ApiError) return false;
+    throw e;
   }
 }
 
@@ -335,10 +349,6 @@ const AGENTS: Record<string, Gather> = {
     const row = (await loadRow(ctx, s.object, s.id, 'read')).row as Record<string, unknown>;
     const site = siteUrl((row.website as string) ?? (row.domain as string) ?? ((row.custom as Record<string, unknown>)?.website as string) ?? (row.email as string));
     const facts = [...c.facts];
-    if (site) {
-      const text = await fetchSiteText(site);
-      if (text) facts.push({ ref: `F${facts.length + 1}`, object: s.object, id: s.id, kind: 'website', label: `Website ${new URL(site).hostname}`, at: null, text: `Their website (${site}) says: ${text}` });
-    }
     const pb = playbookFor(ctx.meta.modules.filter((m) => m.enabled).map((m) => m.key));
     const fit = s.object === 'lead' && typeof row.ai_score === 'number' ? row.ai_score : null;
     const plan = newPlan({
@@ -346,6 +356,7 @@ const AGENTS: Record<string, Gather> = {
       facts,
       attach: s,
       ownerId: (row.owner_id as string) ?? null,
+      site,
       output: {
         headline: `${c.subject.label}: what we know`,
         sections: [
@@ -358,7 +369,7 @@ const AGENTS: Record<string, Gather> = {
     });
     plan.ai = {
       system: `${SYSTEM}\nResearch this prospect for a salesperson before first contact. JSON: {"overview":"3-4 sentences about who they are","needs":[{"text":string,"refs":[string]}],"talking_points":[{"text":string,"refs":[string]}],"questions":[string],"fit":{"score":0-100,"reasons":[string]},"risks":[{"text":string,"refs":[string]}]}. Questions should build on this playbook: ${pb.discovery.join(' | ')}`,
-      user: factsBlock(facts),
+      user: '',
       maxTokens: 1100,
       merge(out, raw, f) {
         const r = z.object({ overview: z.string().catch(''), needs: citedList, talking_points: citedList, questions: strList, fit: z.object({ score: z.coerce.number().min(0).max(100), reasons: strList }).nullish().catch(null), risks: citedList }).parse(raw);
@@ -470,26 +481,29 @@ const AGENTS: Record<string, Gather> = {
       },
     };
     plan.afterSave = async (tx, runId) => {
-      await tx.query(`insert into meeting_notes (tenant_id, event_id, prep_run_id) values ($1,$2,$3) on conflict (tenant_id, event_id) do update set prep_run_id = excluded.prep_run_id`, [ctx.tenantId, s.id, runId]);
+      // briefs are personal (built from what the requester can see); the organiser's is recorded on the meeting
+      if (e.owner_id === ctx.principal.user.id)
+        await tx.query(`insert into meeting_notes (tenant_id, event_id, prep_run_id) values ($1,$2,$3) on conflict (tenant_id, event_id) do update set prep_run_id = excluded.prep_run_id`, [ctx.tenantId, s.id, runId]);
     };
     return plan;
   },
 
   async meeting_debrief(ctx, a, s, input) {
     if (!s || s.object !== 'event') throw badRequest('The debrief runs on a calendar meeting');
-    const e = await loadEvent(ctx, s.id);
+    const e = await loadEvent(ctx, s.id, true);
     const saved = await ctx.tx.one<{ notes: string | null; transcript: string | null }>(`select notes, transcript from meeting_notes where tenant_id = $1 and event_id = $2`, [ctx.tenantId, s.id]);
     const text = [input.notes ?? saved?.notes, input.transcript ?? saved?.transcript].filter((x) => x && x.trim()).join('\n\n');
     if (text.trim().length < 20) throw badRequest('Add your meeting notes or a transcript first');
     const c = await relatedContext(ctx, e.related_object, e.related_id);
     const attach = c ? { object: c.subject.object, id: c.subject.id } : null;
+    const writable = attach ? await canUpdate(ctx, attach.object, attach.id) : false;
     const comps = (await ctx.tx.query<{ name: string }>(`select name from competitors where tenant_id = $1 and is_active order by name limit 50`, [ctx.tenantId])).map((x) => x.name);
     const lines = extractActionLines(text);
     const plan = newPlan({
       subject: { object: 'event', id: s.id, label: e.title },
       facts: c?.facts.slice(0, 12) ?? [],
       attach,
-      ownerId: e.owner_id,
+      ownerId: ctx.principal.user.id,
       eventId: s.id,
       items: lines.map((t) => ({ title: t, dueInDays: 2, source: 'meeting' as const })),
       output: {
@@ -506,11 +520,11 @@ const AGENTS: Record<string, Gather> = {
            transcript_source = coalesce(excluded.transcript_source, meeting_notes.transcript_source), debrief_run_id = excluded.debrief_run_id, updated_at = now()`,
         [ctx.tenantId, s.id, input.notes ?? null, input.transcript ?? null, input.transcript ? 'pasted' : null, runId],
       );
-      if (p.attach) {
+      if (p.attach && writable) {
         const summary = (p.output.sections.find((x) => x.key === 'summary')?.text ?? '').slice(0, 3800);
         await tx.query(`insert into activities (tenant_id, kind, subject, body, related_object, related_id, sentiment, metadata) values ($1,'meeting',$2,$3,$4,$5,$6,$7)`, [
           ctx.tenantId,
-          clip(`Meeting debrief: ${e.title}`, 200),
+          clip(`Meeting debrief${p.output.aiSummary ? ' (AI summary)' : ''}: ${e.title}`, 200),
           summary,
           p.attach.object,
           p.attach.id,
@@ -543,7 +557,7 @@ const AGENTS: Record<string, Gather> = {
       subject: { object: 'call', id: s.id, label: act.subject ?? 'Call' },
       facts: c?.facts.slice(0, 10) ?? [],
       attach,
-      ownerId: act.actor_id ?? (row.owner_id as string | null) ?? null,
+      ownerId: ctx.principal.user.id,
       items: lines.map((t) => ({ title: t, dueInDays: 2, source: 'call' as const })),
       output: { headline: clip(text, 280), sections: [{ key: 'summary', title: 'Transcript', text: clip(text, 1500) }] },
     });
@@ -583,7 +597,7 @@ const AGENTS: Record<string, Gather> = {
     if (!closed)
       plan.ai = {
         system: `${SYSTEM}\nAssess why this deal could slip and give a concrete plan to save it (3-5 steps, most important first). JSON: {"explanation":"2-3 sentences","save_plan":[{"text":string,"refs":[string]}]}`,
-        user: `Rule-based risk score ${score.score}/100 because: ${score.factors.map((f) => f.label).join('; ')}\n${factsBlock(c.facts)}`,
+        user: `Rule-based risk score ${score.score}/100 because: ${visibleFactors(ctx, score.factors).map((f) => f.label).join('; ')}\n${factsBlock(c.facts)}`,
         maxTokens: 800,
         merge(out, raw, f) {
           const r = z.object({ explanation: z.string().catch(''), save_plan: citedList }).parse(raw);
@@ -646,7 +660,7 @@ const AGENTS: Record<string, Gather> = {
     });
     plan.ai = {
       system: `${SYSTEM}\nAssess this customer relationship and suggest how to keep and grow it (3-5 steps). JSON: {"explanation":"2-3 sentences","plan":[{"text":string,"refs":[string]}]}`,
-      user: `Rule-based health ${score.score}/100 because: ${score.factors.map((f) => f.label).join('; ') || 'no notable signals'}\n${factsBlock(c.facts)}`,
+      user: `Rule-based health ${score.score}/100 because: ${visibleFactors(ctx, score.factors).map((f) => f.label).join('; ') || 'no notable signals'}\n${factsBlock(c.facts)}`,
       maxTokens: 800,
       merge(out, raw, f) {
         const r = z.object({ explanation: z.string().catch(''), plan: citedList }).parse(raw);
@@ -849,7 +863,7 @@ export async function focusList(ctx: RecordCtx): Promise<FocusItem[]> {
   const t = ctx.tenantId;
   const out: FocusItem[] = [];
   const evs = await ctx.tx.query<{ id: string; title: string; starts_at: Date; prepped: boolean }>(
-    `select e.id, e.title, e.starts_at, exists (select 1 from meeting_notes n where n.tenant_id = e.tenant_id and n.event_id = e.id and n.prep_run_id is not null) as prepped
+    `select e.id, e.title, e.starts_at, exists (select 1 from agent_runs r where r.tenant_id = e.tenant_id and r.subject_object = 'event' and r.subject_id = e.id and r.agent_key = 'meeting_prep' and r.requested_by = $2) as prepped
        from events e where e.tenant_id = $1 and e.status = 'scheduled' and e.starts_at between now() and now() + interval '24 hours'
         and (e.owner_id = $2 or e.attendees @> jsonb_build_array(jsonb_build_object('userId', $2::text))) order by e.starts_at limit 10`,
     [t, me],
@@ -948,6 +962,14 @@ export async function runAgent(a: AgentEnv, key: string, subject: { object: stri
     return gather(ctx, a, subject, input);
   });
 
+  if (plan.site) {
+    const text = await fetchSiteText(plan.site);
+    if (text) {
+      plan.facts.push({ ref: `F${plan.facts.length + 1}`, object: plan.subject!.object, id: plan.subject!.id, kind: 'website', label: `Website ${new URL(plan.site).hostname}`, at: null, text: `Their website (${plan.site}) says: ${text}` });
+      plan.output.website = plan.site;
+    }
+  }
+  if (plan.ai && !plan.ai.user) plan.ai.user = factsBlock(plan.facts);
   let aiUsed = false;
   let model: string | null = null;
   if (plan.ai && opts.useAi !== false) {

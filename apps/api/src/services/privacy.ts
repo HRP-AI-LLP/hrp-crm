@@ -468,10 +468,21 @@ export async function eraseSubject(ctx: RecordCtx, s: Subject, requestId: string
     await tx.query(`delete from action_items where tenant_id = $1 and related_object = $2 and related_id = $3`, [tenantId, sub.object, sub.id]);
     await tx.query(`delete from insights where tenant_id = $1 and related_object = $2 and related_id = $3`, [tenantId, sub.object, sub.id]);
     await tx.query(`delete from record_scores where tenant_id = $1 and object_key = $2 and record_id = $3`, [tenantId, sub.object, sub.id]);
-    await tx.query(
-      `update meeting_notes set notes = null, transcript = null where tenant_id = $1 and event_id in (select id from events where tenant_id = $1 and related_object = $2 and related_id = $3)`,
-      [tenantId, sub.object, sub.id],
-    );
+    // meetings and calls with the person: their notes, transcripts and the debriefs built from them
+    const evs = (await tx.query<{ id: string }>(`select id from events where tenant_id = $1 and related_object = $2 and related_id = $3`, [tenantId, sub.object, sub.id])).map((x) => x.id);
+    if (evs.length) {
+      await tx.query(`update meeting_notes set notes = null, transcript = null where tenant_id = $1 and event_id = any($2::uuid[])`, [tenantId, evs]);
+      await tx.query(`delete from agent_runs where tenant_id = $1 and subject_object = 'event' and subject_id = any($2::uuid[])`, [tenantId, evs]);
+    }
+    await tx.query(`delete from agent_runs where tenant_id = $1 and subject_object = 'call' and subject_id = any($2::uuid[])`, [tenantId, a.map((x) => String(x.id))]);
+    // conversation messages wiped above leave their search vectors behind otherwise
+    if (convIds.length) {
+      const mx = await tx.query<{ source_id: string }>(
+        `delete from interaction_index where tenant_id = $1 and source_kind = 'message' and source_id in (select id from messages where tenant_id = $1 and conversation_id = any($2::uuid[])) returning source_id`,
+        [tenantId, convIds],
+      );
+      r2Keys.push(...mx.map((x) => `vec:m:${x.source_id}`));
+    }
     summary.activities = Number(summary.activities) + a.length;
     const f = await tx.query<{ storage_key: string }>(`update files set deleted_at = now(), name = 'erased' where tenant_id = $1 and object_key = $2 and record_id = $3 and deleted_at is null returning storage_key`, [tenantId, sub.object, sub.id]);
     summary.files = Number(summary.files) + f.length;

@@ -9,7 +9,8 @@ import type { Env } from '../../env';
 import type { Db, Tx } from '../../lib/db';
 import type { RecordCtx } from '../records';
 import { actAs, systemCtxFor } from '../system';
-import { growthOpportunities, runAgent, settingsOf, stalledDays, upsertInsight } from './agents';
+import { enqueue } from '../jobs';
+import { growthOpportunities, runAgent, settingsOf, stalledDays } from './agents';
 import { resolveUnlinked } from './context';
 import { indexInteractions } from './ask';
 import { accountHealth, accountSignals, dealRisk, dealSignals, saveScores } from './scores';
@@ -34,6 +35,10 @@ export async function detectInsights(ctx: RecordCtx) {
   const tx = ctx.tx;
   const t = ctx.tenantId;
   const found: Found[] = [];
+  // a standing risk comes back once a week after a dismissal (the key changes weekly)
+  const week = `${new Date().getUTCFullYear()}w${Math.floor((Date.now() / 86_400_000 + 4) / 7)}`;
+  // insight text is shown to anyone who can open the record: only deal-level and conversation factors
+  const safe = (fs: { label: string; object: string; field?: string; impact: number }[], sign: 1 | -1) => fs.filter((f) => (f.object === 'activity' || f.object === 'deal') && !f.field && f.impact * sign > 0).slice(0, 3).map((f) => f.label).join(' · ');
   const evaluated = new Map<string, Set<string>>();
   const mark = (kind: string, id: string | null) => {
     if (!id) return;
@@ -49,11 +54,11 @@ export async function detectInsights(ctx: RecordCtx) {
   await saveScores(tx, t, [...deals, ...accounts]);
   for (const d of deals) {
     mark('deal_risk', d.recordId);
-    if (d.band === 'bad') found.push({ kind: 'deal_risk', severity: 'risk', title: `${d.title} is at risk (${d.score}/100)`, body: d.factors.filter((f) => f.impact > 0).slice(0, 3).map((f) => f.label).join(' · '), object: 'deal', id: d.recordId, ownerId: d.ownerId, dedupe: `deal_risk:${d.recordId}`, score: d.score });
+    if (d.band === 'bad') found.push({ kind: 'deal_risk', severity: 'risk', title: `${d.title} is at risk (${d.score}/100)`, body: safe(d.factors, 1) || 'Open the deal to see what drives the score.', object: 'deal', id: d.recordId, ownerId: d.ownerId, dedupe: `deal_risk:${d.recordId}:${week}`, score: d.score });
   }
   for (const a of accounts) {
     mark('account_health', a.recordId);
-    if (a.band === 'bad') found.push({ kind: 'account_health', severity: 'risk', title: `${a.title} needs attention (health ${a.score}/100)`, body: a.factors.filter((f) => f.impact < 0).slice(0, 3).map((f) => f.label).join(' · '), object: 'account', id: a.recordId, ownerId: a.ownerId, dedupe: `account_health:${a.recordId}`, score: a.score });
+    if (a.band === 'bad') found.push({ kind: 'account_health', severity: 'risk', title: `${a.title} needs attention (health ${a.score}/100)`, body: safe(a.factors, -1) || 'Open the account to see what drives the score.', object: 'account', id: a.recordId, ownerId: a.ownerId, dedupe: `account_health:${a.recordId}:${week}`, score: a.score });
   }
 
   // slipped close dates
@@ -63,7 +68,7 @@ export async function detectInsights(ctx: RecordCtx) {
     [t],
   );
   for (const d of deals) mark('deal_slipped', d.recordId);
-  for (const d of slipped) found.push({ kind: 'deal_slipped', severity: 'warn', title: `${d.name}: expected close date ${d.close_date} has passed`, body: 'Update the close date or the stage so the forecast stays honest.', object: 'deal', id: d.id, ownerId: d.owner_id, dedupe: `deal_slipped:${d.id}:${d.close_date}` });
+  for (const d of slipped) found.push({ kind: 'deal_slipped', severity: 'warn', title: `${d.name}: the expected close date has passed`, body: 'Update the close date or the stage so the forecast stays honest.', object: 'deal', id: d.id, ownerId: d.owner_id, dedupe: `deal_slipped:${d.id}:${d.close_date}` });
 
   // new leads nobody has answered
   const waitHours = Math.min(72, Math.max(1, Number((await settingsOf(tx, t, 'rep_focus')).settings?.leadWaitHours ?? 4) || 4));
@@ -113,7 +118,7 @@ export async function detectInsights(ctx: RecordCtx) {
     [t],
   );
   for (const d of deals) mark('competitor', d.recordId);
-  for (const d of comp) found.push({ kind: 'competitor', severity: 'warn', title: `${d.name}: up against ${d.competitors} at a late stage`, body: 'Run the competitive coach for positioning and answers to likely objections.', object: 'deal', id: d.id, ownerId: d.owner_id, dedupe: `competitor:${d.id}` });
+  for (const d of comp) found.push({ kind: 'competitor', severity: 'warn', title: `${d.name}: up against ${d.competitors} at a late stage`, body: 'Run the competitive coach for positioning and answers to likely objections.', object: 'deal', id: d.id, ownerId: d.owner_id, dedupe: `competitor:${d.id}:${week}` });
 
   // repeat business
   const growthAccounts = accounts.filter((a) => a.band !== 'bad').slice(0, 120);
@@ -131,10 +136,29 @@ export async function detectInsights(ctx: RecordCtx) {
   for (const u of people) mark('actions_overdue', u.id);
   for (const o of overdue) found.push({ kind: 'actions_overdue', severity: 'warn', title: `${o.n} overdue action item${o.n > 1 ? 's' : ''}`, body: 'Close them, move the due date, or hand them over.', object: null, id: null, ownerId: o.owner_id, dedupe: `actions_overdue:${o.owner_id}` });
 
-  for (const f of found) await upsertInsight(tx, t, { ...f, object: f.object as string, id: f.id as string });
+  for (let i = 0; i < found.length; i += 500) {
+    const b = found.slice(i, i + 500);
+    await tx.query(
+      `insert into insights (tenant_id, kind, severity, title, body, related_object, related_id, owner_id, score, dedupe_key)
+       select $1, k, sv, ti, bo, ro, ri, ow, sc, dk from unnest($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::uuid[], $8::uuid[], $9::numeric[], $10::text[]) as x(k, sv, ti, bo, ro, ri, ow, sc, dk)
+       on conflict (tenant_id, dedupe_key) do update set title = excluded.title, body = excluded.body, severity = excluded.severity, score = excluded.score, owner_id = excluded.owner_id`,
+      [t, b.map((f) => f.kind), b.map((f) => f.severity), b.map((f) => f.title.slice(0, 300)), b.map((f) => f.body?.slice(0, 2000) ?? null), b.map((f) => f.object), b.map((f) => f.id), b.map((f) => f.ownerId), b.map((f) => f.score ?? null), b.map((f) => f.dedupe)],
+    );
+  }
 
-  // anything no longer true disappears (unless someone already acted on it or dismissed it)
+  // anything no longer true disappears (unless someone already acted on it or dismissed it).
+  // Detectors that look at the whole workspace (not a capped sample) clear every stale insight of
+  // their kind, including ones about deals that have since closed or been deleted.
   const keys = found.map((f) => f.dedupe);
+  const WHOLE = ['deal_slipped', 'lead_waiting', 'meeting_prep', 'quote_expiring', 'competitor', 'actions_overdue'];
+  await tx.query(`delete from insights where tenant_id = $1 and kind = any($2::text[]) and status in ('new','seen') and not (dedupe_key = any($3::text[]))`, [t, WHOLE, keys]);
+  // risk insights: the sweep scores up to 400 open deals / accounts; closed or deleted ones lose theirs
+  await tx.query(
+    `delete from insights i where i.tenant_id = $1 and i.kind = 'deal_risk' and i.status in ('new','seen') and not exists (
+       select 1 from deals d join pipeline_stages st on st.tenant_id = d.tenant_id and st.id = d.stage_id where d.tenant_id = i.tenant_id and d.id = i.related_id and d.deleted_at is null and st.category = 'open')`,
+    [t],
+  );
+  await tx.query(`delete from insights i where i.tenant_id = $1 and i.kind in ('account_health','growth') and i.status in ('new','seen') and not exists (select 1 from accounts a where a.tenant_id = i.tenant_id and a.id = i.related_id and a.deleted_at is null)`, [t]);
   for (const [kind, ids] of evaluated) {
     const col = kind === 'actions_overdue' ? 'owner_id' : 'related_id';
     await tx.query(`delete from insights where tenant_id = $1 and kind = $2 and status in ('new','seen') and ${col} = any($3::uuid[]) and not (dedupe_key = any($4::text[]))`, [t, kind, [...ids], keys]);
@@ -183,29 +207,39 @@ async function autoPrep(env: Env, db: Db, tenantId: string) {
   return done;
 }
 
+/** One part of a workspace's sweep (each part is its own job, so none can starve the others). */
+export async function intelSweepPart(env: Env, db: Db, tenantId: string, part: 'detect' | 'prep' | 'index') {
+  if (part === 'detect')
+    return db.tx({ tenantId }, async (tx) => {
+      const ctx = await systemCtxFor(env, tx, tenantId);
+      if (!ctx) return null;
+      await resolveUnlinked(tx, tenantId, 100);
+      return detectInsights(ctx);
+    });
+  if (part === 'prep') return autoPrep(env, db, tenantId);
+  return indexInteractions(env, db, tenantId);
+}
+
+/** All parts in order (tests and manual runs). */
 export async function intelSweepTenant(env: Env, db: Db, tenantId: string) {
-  const res = await db.tx({ tenantId }, async (tx) => {
-    const ctx = await systemCtxFor(env, tx, tenantId);
-    if (!ctx) return null;
-    await resolveUnlinked(tx, tenantId);
-    return detectInsights(ctx);
-  });
-  const prepped = await autoPrep(env, db, tenantId);
-  const indexed = await indexInteractions(env, db, tenantId).catch((e) => {
+  const res = await intelSweepPart(env, db, tenantId, 'detect');
+  const prepped = await intelSweepPart(env, db, tenantId, 'prep');
+  const indexed = await intelSweepPart(env, db, tenantId, 'index').catch((e) => {
     console.error(JSON.stringify({ level: 'error', job: 'intel.index', tenantId, msg: (e as Error).message }));
     return 0;
   });
-  return { ...(res ?? {}), prepped, indexed };
+  return { ...((res as object) ?? {}), prepped, indexed } as { insights?: number; scores?: number; notified?: number; prepped: unknown; indexed: unknown };
 }
 
-/** 5-minute cron entry: runs at most hourly, per workspace. */
+/** 5-minute cron entry: at most hourly; queues one job per workspace and part. */
 export async function intelSweep(env: Env, db: Db) {
   const now = Date.now();
   if (env.CACHE_KV) {
     const next = await env.CACHE_KV.get(KV_KEY).catch(() => null);
     if (next && Date.parse(next) > now) return;
-    await env.CACHE_KV.put(KV_KEY, new Date(now + EVERY).toISOString()).catch(() => undefined);
   }
   const tenants = await db.platform<{ tenant_id: string }>(`select t as tenant_id from app.list_active_tenant_ids() t`);
-  for (const t of tenants) await intelSweepTenant(env, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'intel.sweep', tenantId: t.tenant_id, msg: (e as Error).message })));
+  // the gate moves only once the work is queued, so a failed run is retried by the next cron tick
+  await enqueue(env, null, tenants.flatMap((t) => (['detect', 'prep', 'index'] as const).map((part) => ({ type: 'intel.sweep' as const, tenantId: t.tenant_id, part }))));
+  await env.CACHE_KV?.put(KV_KEY, new Date(now + EVERY).toISOString()).catch(() => undefined);
 }

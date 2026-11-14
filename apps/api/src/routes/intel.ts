@@ -7,7 +7,8 @@ import { AGENTS, fieldAccess, objectPerm } from '@synapse/shared';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
-import { badRequest, forbidden, notFound } from '../lib/errors';
+import { ApiError, badRequest, forbidden, notFound, tooMany } from '../lib/errors';
+import { actAs } from '../services/system';
 import { requireAdmin, scope } from '../middleware';
 import { AiUnavailableError } from '../services/ai/router';
 import { enqueue, eventJobs } from '../services/jobs';
@@ -46,14 +47,41 @@ async function transcribe(env: AppEnv['Bindings'], bytes: Uint8Array): Promise<s
   if (!text) throw badRequest('No speech was recognised in this recording');
   return text;
 }
-const MAX_AUDIO = 25 * 1024 * 1024;
-async function readAudio(c: { req: { header: (n: string) => string | undefined; arrayBuffer: () => Promise<ArrayBuffer> } }) {
-  if (Number(c.req.header('content-length') ?? 0) > MAX_AUDIO) throw badRequest('Recordings can be at most 25 MB (about 25 minutes)');
+const MAX_AUDIO = 20 * 1024 * 1024;
+/** Reads the upload with a hard cap (a chunked body has no Content-Length to check up front). */
+async function readAudio(c: { req: { header: (n: string) => string | undefined; raw: Request } }) {
+  if (Number(c.req.header('content-length') ?? 0) > MAX_AUDIO) throw badRequest('Recordings can be at most 20 MB (about 20 minutes)');
   const type = c.req.header('content-type') ?? '';
   if (!/^(audio|video)\//.test(type) && type !== 'application/octet-stream') throw badRequest('Upload an audio file (mp3, m4a, wav, ogg or webm)');
-  const bytes = new Uint8Array(await c.req.arrayBuffer());
-  if (!bytes.length || bytes.length > MAX_AUDIO) throw badRequest('The recording is empty or larger than 25 MB');
+  const reader = c.req.raw.body?.getReader();
+  if (!reader) throw badRequest('The recording is empty');
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_AUDIO) {
+      await reader.cancel().catch(() => undefined);
+      throw badRequest('Recordings can be at most 20 MB (about 20 minutes)');
+    }
+    parts.push(value);
+  }
+  if (!size) throw badRequest('The recording is empty');
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const p of parts) (bytes.set(p, at), (at += p.byteLength));
   return bytes;
+}
+
+/** Transcriptions count against the workspace's daily platform AI allowance. */
+async function chargeTranscription(c: { env: AppEnv['Bindings']; var: AppEnv['Variables'] }) {
+  const limit = Number(c.env.AI_DAILY_LIMIT_PER_TENANT ?? 300);
+  await c.var.db.tx(scope(c), async (tx) => {
+    const used = await tx.one<{ n: number }>(`select count(*)::int as n from ai_usage where tenant_id = $1 and created_at > now() - interval '1 day' and ok and provider not like 'tenant:%'`, [c.var.tenant.id]);
+    if ((used?.n ?? 0) >= limit) throw tooMany('Daily AI limit reached for this workspace');
+    await tx.query(`insert into ai_usage (tenant_id, task, provider, model, ok) values ($1, 'transcribe', 'workers-ai', $2, true)`, [c.var.tenant.id, c.env.AI_MODEL_WHISPER ?? '@cf/openai/whisper-large-v3-turbo']);
+  });
 }
 
 const itemSchema = z.object({
@@ -109,7 +137,8 @@ export const intelRoutes = new Hono<AppEnv>()
       }
       if (!q.id) throw badRequest('id is required');
       await assertSubject(ctx, q.object, q.id);
-      return tx.query(`select id, agent_key, trigger, subject_object, subject_id, status, output, citations, ai_used, model, started_at from agent_runs where tenant_id = $1 and subject_object = $2 and subject_id = $3 and ($4::text is null or agent_key = $4) order by started_at desc limit $5`, [c.var.tenant.id, q.object, q.id, q.agent ?? null, q.limit]);
+      // runs are built from what their requester can see, so each person sees their own
+      return tx.query(`select id, agent_key, trigger, subject_object, subject_id, status, output, citations, ai_used, model, started_at from agent_runs where tenant_id = $1 and subject_object = $2 and subject_id = $3 and requested_by = $6 and ($4::text is null or agent_key = $4) order by started_at desc limit $5`, [c.var.tenant.id, q.object, q.id, q.agent ?? null, q.limit, c.var.principal.user.id]);
     });
     return c.json({ items: rows });
   })
@@ -121,9 +150,10 @@ export const intelRoutes = new Hono<AppEnv>()
       const ctx = rctx(c, tx);
       const meetings = await tx.query(
         `select e.id, e.title, e.kind, e.starts_at, e.ends_at, e.status, e.location, e.related_object, e.related_id,
-                n.prep_run_id is not null as prepped, n.debrief_run_id is not null as debriefed,
+                exists (select 1 from agent_runs r where r.tenant_id = e.tenant_id and r.subject_object = 'event' and r.subject_id = e.id and r.agent_key = 'meeting_prep' and r.requested_by = $2) as prepped,
+                exists (select 1 from agent_runs r where r.tenant_id = e.tenant_id and r.subject_object = 'event' and r.subject_id = e.id and r.agent_key = 'meeting_debrief' and r.requested_by = $2) as debriefed,
                 (select count(*)::int from action_items i where i.tenant_id = e.tenant_id and i.event_id = e.id) as action_items
-           from events e left join meeting_notes n on n.tenant_id = e.tenant_id and n.event_id = e.id
+           from events e
           where e.tenant_id = $1 and e.status <> 'cancelled' and (e.owner_id = $2 or e.attendees @> jsonb_build_array(jsonb_build_object('userId', $2::text)))
             and e.starts_at >= date_trunc('day', now() at time zone 'Asia/Kolkata') at time zone 'Asia/Kolkata'
             and e.starts_at < (date_trunc('day', now() at time zone 'Asia/Kolkata') + interval '1 day') at time zone 'Asia/Kolkata'
@@ -182,6 +212,18 @@ export const intelRoutes = new Hono<AppEnv>()
     const b = itemSchema.parse(await c.req.json());
     const row = await c.var.db.tx(scope(c), async (tx) => {
       if (b.relatedObject && b.relatedId) await loadRow(rctx(c, tx), b.relatedObject, b.relatedId, 'read');
+      if (b.ownerId && b.ownerId !== c.var.principal.user.id) {
+        const other = await actAs(c.env, tx, c.var.tenant.id, b.ownerId, 'assign');
+        if (!other) throw badRequest('That person cannot be assigned work');
+        if (b.relatedObject && b.relatedId) {
+          try {
+            await loadRow(other, b.relatedObject, b.relatedId, 'read');
+          } catch (e) {
+            if (e instanceof ApiError) throw badRequest('That person cannot see this record');
+            throw e;
+          }
+        }
+      }
       return tx.one(
         `insert into action_items (tenant_id, title, detail, priority, due_at, owner_id, related_object, related_id, source) values ($1,$2,$3,$4,$5,$6,$7,$8,'manual') returning *`,
         [c.var.tenant.id, b.title, b.detail ?? null, b.priority, b.dueAt ?? null, b.ownerId ?? c.var.principal.user.id, b.relatedObject ?? null, b.relatedId ?? null],
@@ -240,7 +282,7 @@ export const intelRoutes = new Hono<AppEnv>()
       await tx.query(`insert into activities (tenant_id, kind, subject, body, related_object, related_id, metadata) values ($1,'ai',$2,$3,$4,$5,$6)`, [
         c.var.tenant.id,
         'Applied an AI suggestion',
-        `${s.field_key}: ${JSON.stringify(s.current_value)} → ${JSON.stringify(s.proposed_value)}. ${s.reason ?? ''}`.slice(0, 3000),
+        `Updated ${(c.var.meta.objects.find((o) => o.key === s.object_key)?.fields.find((f) => f.key === s.field_key)?.label ?? s.field_key).slice(0, 80)} from a meeting or call debrief.`,
         s.object_key,
         s.record_id,
         JSON.stringify({ suggestionId: id, runId: s.run_id }),
@@ -312,8 +354,13 @@ export const intelRoutes = new Hono<AppEnv>()
     const out = await c.var.db.tx(scope(c, true), async (tx) => {
       const ctx = rctx(c, tx);
       const e = await loadEvent(ctx, id);
-      const n = await tx.one<Record<string, any>>(`select notes, transcript, transcript_source, prep_run_id, debrief_run_id, updated_at from meeting_notes where tenant_id = $1 and event_id = $2`, [c.var.tenant.id, id]);
-      const runs = await tx.query<Record<string, any>>(`select id, agent_key, output, citations, ai_used, model, started_at from agent_runs where tenant_id = $1 and id = any($2::uuid[])`, [c.var.tenant.id, [n?.prep_run_id, n?.debrief_run_id].filter(Boolean)]);
+      const n = await tx.one<Record<string, any>>(`select notes, transcript, transcript_source, updated_at from meeting_notes where tenant_id = $1 and event_id = $2`, [c.var.tenant.id, id]);
+      // the caller's own brief and debrief (each is built from what its requester can see)
+      const runs = await tx.query<Record<string, any>>(
+        `select distinct on (agent_key) id, agent_key, output, citations, ai_used, model, started_at from agent_runs
+          where tenant_id = $1 and subject_object = 'event' and subject_id = $2 and requested_by = $3 and agent_key in ('meeting_prep','meeting_debrief') order by agent_key, started_at desc`,
+        [c.var.tenant.id, id, c.var.principal.user.id],
+      );
       let related: { object: string; id: string; title: string } | null = null;
       if (e.related_object && e.related_id && canRead(ctx, e.related_object) && (await visibleIds(ctx, e.related_object, [e.related_id])).size) {
         const s = await tx.one<{ t: string }>(`select coalesce((select name from deals where tenant_id = $1 and id = $2), (select name from accounts where tenant_id = $1 and id = $2), (select full_name from contacts where tenant_id = $1 and id = $2), (select full_name from leads where tenant_id = $1 and id = $2)) as t`, [c.var.tenant.id, e.related_id]);
@@ -325,8 +372,8 @@ export const intelRoutes = new Hono<AppEnv>()
         notes: n?.notes ?? '',
         transcript: n?.transcript ?? '',
         transcriptSource: n?.transcript_source ?? null,
-        prep: runs.find((r) => r.id === n?.prep_run_id) ?? null,
-        debrief: runs.find((r) => r.id === n?.debrief_run_id) ?? null,
+        prep: runs.find((r) => r.agent_key === 'meeting_prep') ?? null,
+        debrief: runs.find((r) => r.agent_key === 'meeting_debrief') ?? null,
         actionItems: items,
         canWrite: e.owner_id === c.var.principal.user.id || objectPerm(c.var.principal.permissions, 'deal').update === 'all' || (Array.isArray(e.attendees) && e.attendees.some((x: { userId?: string }) => x.userId === c.var.principal.user.id)),
       };
@@ -337,7 +384,7 @@ export const intelRoutes = new Hono<AppEnv>()
     const id = uuid.parse(c.req.param('id'));
     const b = z.object({ notes: z.string().max(20_000).optional(), transcript: z.string().max(200_000).optional() }).parse(await c.req.json());
     await c.var.db.tx(scope(c), async (tx) => {
-      await loadEvent(rctx(c, tx), id);
+      await loadEvent(rctx(c, tx), id, true);
       await tx.query(
         `insert into meeting_notes (tenant_id, event_id, notes, transcript, transcript_source) values ($1,$2,$3,$4,$5)
          on conflict (tenant_id, event_id) do update set notes = case when $6::boolean then excluded.notes else meeting_notes.notes end,
@@ -350,12 +397,13 @@ export const intelRoutes = new Hono<AppEnv>()
   })
   .post('/meetings/:id/transcribe', async (c) => {
     const id = uuid.parse(c.req.param('id'));
-    await c.var.db.tx(scope(c, true), (tx) => loadEvent(rctx(c, tx), id));
+    await c.var.db.tx(scope(c, true), (tx) => loadEvent(rctx(c, tx), id, true));
+    await chargeTranscription(c);
     const text = await transcribe(c.env, await readAudio(c));
     await c.var.db.tx(scope(c), (tx) =>
       tx.query(
         `insert into meeting_notes (tenant_id, event_id, transcript, transcript_source) values ($1,$2,$3,'audio')
-         on conflict (tenant_id, event_id) do update set transcript = coalesce(meeting_notes.transcript || E'\\n\\n', '') || excluded.transcript, transcript_source = 'audio', updated_at = now()`,
+         on conflict (tenant_id, event_id) do update set transcript = left(coalesce(meeting_notes.transcript || E'\\n\\n', '') || excluded.transcript, 200000), transcript_source = 'audio', updated_at = now()`,
         [c.var.tenant.id, id, text.slice(0, 190_000)],
       ),
     );
@@ -364,6 +412,7 @@ export const intelRoutes = new Hono<AppEnv>()
   .post('/calls/:id/transcribe', async (c) => {
     const id = uuid.parse(c.req.param('id'));
     await c.var.db.tx(scope(c, true), (tx) => assertSubject(rctx(c, tx), 'call', id, true));
+    await chargeTranscription(c);
     const text = await transcribe(c.env, await readAudio(c));
     const r = await runAgent(agentEnv(c), 'call_debrief', { object: 'call', id }, { transcript: text });
     return c.json({ transcript: text, run: r }, 201);
@@ -371,6 +420,7 @@ export const intelRoutes = new Hono<AppEnv>()
 
   // ============================================================================ competitors
   .get('/competitors', async (c) => {
+    if (objectPerm(c.var.principal.permissions, 'deal').read === 'none') throw forbidden();
     const rows = await c.var.db.tx(scope(c, true), (tx) =>
       tx.query(
         `select c.*, (select count(*)::int from deal_competitors d where d.tenant_id = c.tenant_id and d.competitor_id = c.id and d.status = 'active') as active_deals,

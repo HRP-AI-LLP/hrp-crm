@@ -17,6 +17,7 @@ export type Job =
   | { type: 'meta.recompute'; tenantId: string; objectKey: string; after?: string }
   /** one page of one table of a workspace backup (see services/backup.ts) */
   | { type: 'backup.step'; tenantId: string; stamp: string; table: number; after?: string | null }
+  | { type: 'intel.sweep'; tenantId: string; part: 'detect' | 'prep' | 'index' }
   /** integrations (services/integrations.ts and friends) */
   | { type: 'mail.sync'; tenantId: string; integrationId: string }
   | { type: 'calendar.push'; tenantId: string; eventId: string; ownerId: string | null; removeRef?: { integrationId: string; id: string } | null }
@@ -35,15 +36,32 @@ export async function enqueue(env: Env, waiter: Waiter | null, jobs: Job[]): Pro
     await env.JOBS.sendBatch(jobs.map((body) => ({ body })));
     return;
   }
+  // No queue bound (local dev, tests): run inline. Jobs queued from inside a running job are
+  // appended to the current drain instead of nesting, so a long chain (a backup is one job per
+  // table page) never holds one database connection per step.
+  if (draining) {
+    pending.push(...jobs.map((j) => ({ env, job: j, waiter })));
+    return;
+  }
   const { processJob } = await import('./worker');
+  pending.push(...jobs.map((j) => ({ env, job: j, waiter })));
   const run = (async () => {
-    for (const j of jobs) {
-      await processJob(env, j, waiter).catch((e) => console.error(JSON.stringify({ level: 'error', job: j.type, msg: (e as Error).message })));
+    draining = true;
+    try {
+      while (pending.length) {
+        const p = pending.shift()!;
+        await processJob(p.env, p.job, p.waiter).catch((e) => console.error(JSON.stringify({ level: 'error', job: p.job.type, msg: (e as Error).message })));
+      }
+    } finally {
+      draining = false;
     }
   })();
   if (waiter) waiter.waitUntil(run);
   else await run;
 }
+
+let draining = false;
+const pending: { env: Env; job: Job; waiter: Waiter | null }[] = [];
 
 export function eventJobs(tenantId: string, userId: string | null, events: RecordEvent[]): Job[] {
   return events.map((event) => ({ type: 'record.event', tenantId, userId, event }));

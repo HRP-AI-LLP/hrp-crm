@@ -9,6 +9,8 @@ export interface Factor {
   label: string;
   impact: number;
   object: string;
+  /** a field the factor reveals (hidden from viewers without access to it) */
+  field?: string;
 }
 
 export interface Score {
@@ -79,15 +81,15 @@ const days = (d: Date | null, now: number) => (d ? Math.floor((now - new Date(d)
 
 export function dealRisk(s: DealSignals, now = Date.now(), stalledDays = 14): Score {
   const f: Factor[] = [];
-  const add = (label: string, impact: number, object = 'deal') => f.push({ label, impact, object });
+  const add = (label: string, impact: number, object = 'deal', field?: string) => f.push({ label, impact, object, ...(field ? { field } : {}) });
   const touch = days(s.last_touch, now) ?? days(s.created_at, now) ?? 0;
   if (touch > stalledDays * 2) add(`No contact with the customer for ${touch} days`, 30, 'activity');
   else if (touch > stalledDays) add(`No contact with the customer for ${touch} days`, 18, 'activity');
   if (s.close_date) {
     const late = days(s.close_date, now)!;
-    if (late > 0) add(`Expected close date passed ${late} day${late === 1 ? '' : 's'} ago`, 22);
-    else if (late > -7 && (s.probability ?? 0) < 50) add('Closing this week but still early in the pipeline', 10);
-  } else add('No expected close date', 6);
+    if (late > 0) add(`Expected close date passed ${late} day${late === 1 ? '' : 's'} ago`, 22, 'deal', 'close_date');
+    else if (late > -7 && (s.probability ?? 0) < 50) add('Closing this week but still early in the pipeline', 10, 'deal', 'close_date');
+  } else add('No expected close date', 6, 'deal', 'close_date');
   const inStage = days(s.stage_since ?? s.created_at, now) ?? 0;
   if (inStage > 45) add(`In the same stage for ${inStage} days`, 14);
   else if (inStage > 25) add(`In the same stage for ${inStage} days`, 7);
@@ -163,11 +165,13 @@ export function accountHealth(s: AccountSignals, now = Date.now()): Score {
 }
 
 export async function saveScores(tx: Tx, tenantId: string, scores: Score[]) {
-  for (const s of scores) {
+  for (let i = 0; i < scores.length; i += 500) {
+    const b = scores.slice(i, i + 500);
     await tx.query(
-      `insert into record_scores (tenant_id, object_key, record_id, kind, score, band, factors, computed_at) values ($1,$2,$3,$4,$5,$6,$7, now())
+      `insert into record_scores (tenant_id, object_key, record_id, kind, score, band, factors, computed_at)
+       select $1, o, r, k, sc, bd, f::jsonb, now() from unnest($2::text[], $3::uuid[], $4::text[], $5::int[], $6::text[], $7::text[]) as t(o, r, k, sc, bd, f)
        on conflict (tenant_id, object_key, record_id, kind) do update set score = excluded.score, band = excluded.band, factors = excluded.factors, computed_at = now()`,
-      [tenantId, s.objectKey, s.recordId, s.kind, s.score, s.band, JSON.stringify(s.factors)],
+      [tenantId, b.map((x) => x.objectKey), b.map((x) => x.recordId), b.map((x) => x.kind), b.map((x) => x.score), b.map((x) => x.band), b.map((x) => JSON.stringify(x.factors))],
     );
   }
 }

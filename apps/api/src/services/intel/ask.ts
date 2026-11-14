@@ -52,12 +52,6 @@ export async function indexInteractions(env: Env, db: Db, tenantId: string, limi
   return rows.length;
 }
 
-/** Removes erased people's conversations from the vector index (ids only; best effort). */
-export async function unindex(env: Env, ids: { kind: 'activity' | 'message'; id: string }[]) {
-  if (!env.VECTORIZE || !ids.length) return;
-  for (let i = 0; i < ids.length; i += 500) await env.VECTORIZE.deleteByIds(ids.slice(i, i + 500).map((x) => `${x.kind[0]}:${x.id}`)).catch(() => undefined);
-}
-
 const STOP = new Set(['what', 'which', 'when', 'where', 'who', 'whom', 'whose', 'why', 'how', 'the', 'and', 'for', 'with', 'from', 'that', 'this', 'there', 'their', 'about', 'have', 'has', 'had', 'did', 'does', 'any', 'all', 'our', 'they', 'them', 'were', 'was', 'are', 'is', 'last', 'tell', 'show', 'give', 'list', 'customer', 'customers', 'deal', 'deals', 'lead', 'leads', 'said', 'say', 'mention', 'mentioned']);
 export const keywords = (q: string) => [...new Set(q.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length > 2 && !STOP.has(w)))].slice(0, 8);
 

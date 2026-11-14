@@ -213,7 +213,7 @@ describe('meetings', () => {
     expect((await api('POST', `/api/v1/intel/suggestions/${close.id}/reject`)).status).toBe(200);
 
     const tl = await sql(`select subject from activities where related_object = 'deal' and related_id = $1 and kind = 'meeting'`, [dealId]);
-    expect(tl[0]!.subject).toBe('Meeting debrief: Design presentation');
+    expect(tl[0]!.subject).toBe('Meeting debrief (AI summary): Design presentation');
   });
 
   it('action items belong to their owner', async () => {
@@ -226,6 +226,40 @@ describe('meetings', () => {
     expect(done.json.completed_at).toBeTruthy();
     const made = await rep('POST', '/api/v1/intel/action-items', { title: 'Call back', relatedObject: 'deal', relatedId: dealId });
     expect(made.status).toBe(404);
+  });
+});
+
+describe('review fixes', () => {
+  it("briefs are personal, meeting writes need write access, and private meetings stay out of others' context", async () => {
+    const repId = (await rep('GET', '/api/auth/me')).json.user.id;
+    // a meeting the rep attends, on an account the rep can read
+    const start = new Date(Date.now() + 5 * 3600_000).toISOString();
+    const shared = await api('POST', '/api/v1/events', { title: 'Joint visit', startsAt: start, endsAt: new Date(Date.parse(start) + 3600_000).toISOString(), relatedObject: 'account', relatedId: accountId, attendees: [{ userId: repId }] });
+    expect(shared.status).toBe(201);
+    const brief = await api('POST', '/api/v1/intel/agents/meeting_prep/run', { object: 'event', id: shared.json.id });
+    expect(brief.status).toBe(201);
+    const seen = await rep('GET', `/api/v1/intel/meetings/${shared.json.id}`);
+    expect(seen.status).toBe(200);
+    expect(seen.json.prep).toBeNull();
+    expect((await rep('GET', `/api/v1/intel/runs?object=event&id=${shared.json.id}`)).json.items).toEqual([]);
+    expect((await api('GET', `/api/v1/intel/runs?object=event&id=${shared.json.id}`)).json.items).toHaveLength(1);
+    // the owner's private meeting on the same account never appears in the rep's view of the account
+    const priv = await api('POST', '/api/v1/events', { title: 'Pricing strategy with Priya', startsAt: start, endsAt: new Date(Date.parse(start) + 3600_000).toISOString(), relatedObject: 'account', relatedId: accountId });
+    const ctxRep = await rep('GET', `/api/v1/intel/context/account/${accountId}`);
+    expect(ctxRep.status).toBe(200);
+    expect(JSON.stringify(ctxRep.json.facts)).not.toContain('Pricing strategy');
+    expect(JSON.stringify((await api('GET', `/api/v1/intel/context/account/${accountId}`)).json.facts)).toContain('Pricing strategy');
+    // not invited: no notes, no debrief
+    expect((await rep('PUT', `/api/v1/intel/meetings/${priv.json.id}/notes`, { notes: 'x' })).status).toBe(404);
+    expect((await rep('POST', '/api/v1/intel/agents/meeting_debrief/run', { object: 'event', id: priv.json.id, notes: 'Action: do something risky please' })).status).toBe(404);
+  });
+
+  it('assigns action items only to people who can see the record; battlecards need deal access', async () => {
+    const repId = (await rep('GET', '/api/auth/me')).json.user.id;
+    const r = await api('POST', '/api/v1/intel/action-items', { title: 'Check pricing', relatedObject: 'deal', relatedId: dealId, ownerId: repId });
+    expect(r.status).toBe(400);
+    const ok = await api('POST', '/api/v1/intel/action-items', { title: 'Call Priya', relatedObject: 'contact', relatedId: contactId, ownerId: repId });
+    expect(ok.status).toBe(201);
   });
 });
 
@@ -272,7 +306,7 @@ describe('insights sweep and Copilot', () => {
   it('focus and pipeline review run for the person asking', async () => {
     const f = await rep('POST', '/api/v1/intel/agents/rep_focus/run', {});
     expect(f.status).toBe(201);
-    expect(f.json.output.focus).toEqual([]);
+    expect(f.json.output.focus.map((x: Json) => x.title)).toEqual(['Prepare for Joint visit']);
     const p = await api('POST', '/api/v1/intel/agents/pipeline_review/run', {});
     expect(p.status).toBe(201);
     expect(p.json.output.owners[0].deals).toBe(1);

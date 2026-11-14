@@ -5,8 +5,9 @@
  * Agents receive facts as "[F3] …" lines and must cite the refs they rely on; citations that do
  * not match a fact are dropped, so every claim in an agent's output can be traced to a record.
  */
-import { type FieldDef, objectPerm, storageFor } from '@synapse/shared';
+import { type FieldDef, fieldAccess, objectPerm, storageFor } from '@synapse/shared';
 import type { Tx } from '../../lib/db';
+import { ApiError } from '../../lib/errors';
 import { listRecords, loadRow, type RecordCtx, toDto } from '../records';
 
 export interface Fact {
@@ -57,8 +58,10 @@ export async function visibleWhere(ctx: RecordCtx, object: string, filters: { fi
   try {
     const r = await listRecords(ctx, object, { filters: filters.map((f) => ({ field: f.field, op: 'eq', value: f.value })), limit, sort, dir: 'desc' });
     return r.items as Record<string, unknown>[];
-  } catch {
-    return [];
+  } catch (e) {
+    // permission / validation refusals only: a SQL error must surface (the transaction is aborted)
+    if (e instanceof ApiError) return [];
+    throw e;
   }
 }
 
@@ -75,6 +78,11 @@ export async function visibleIds(ctx: RecordCtx, object: string, ids: string[]):
 }
 
 const SKIP_TYPES = new Set(['email', 'phone', 'url', 'file', 'user', 'lookup', 'json', 'formula_hidden']);
+
+/** Score factors the viewer may see: the object behind each one, and the field when it names one. */
+export function visibleFactors<T extends { object: string; field?: string }>(ctx: RecordCtx, factors: T[]): T[] {
+  return factors.filter((f) => (f.object === 'activity' || canRead(ctx, f.object)) && (!f.field || fieldAccess(ctx.principal.permissions, f.object, f.field) !== 'hidden'));
+}
 
 /** A record as one readable line: "Label: value; …" (no ids, contact details or PII-flagged fields). */
 export function describe(ctx: RecordCtx, object: string, dto: Record<string, unknown>): string {
@@ -138,7 +146,7 @@ export async function buildContext(ctx: RecordCtx, object: string, id: string, o
   // ------------------------------------------------------------------ the customer around the subject
   const accountId = (object === 'account' ? id : (record.account_id as string | null)) ?? null;
   if (accountId && object !== 'account') {
-    const acc = canRead(ctx, 'account') ? ((await listRecords(ctx, 'account', { ids: [accountId], limit: 1 }).catch(() => ({ items: [] }))).items as Record<string, unknown>[]) : [];
+    const acc = canRead(ctx, 'account') ? ((await listRecords(ctx, 'account', { ids: [accountId], limit: 1 })).items as Record<string, unknown>[]) : [];
     addRecords('account', acc, 'Customer');
   }
   if (object === 'deal' && record.contact_id) {
@@ -222,10 +230,12 @@ export async function buildContext(ctx: RecordCtx, object: string, id: string, o
   }
   const evs = await ctx.tx.query<{ id: string; title: string; kind: string; starts_at: Date; status: string; outcome: string | null; related_object: string; related_id: string; summary: string | null }>(
     `select e.id, e.title, e.kind, e.starts_at, e.status, e.outcome, e.related_object, e.related_id,
-            (select r.output ->> 'summary' from meeting_notes n join agent_runs r on r.tenant_id = n.tenant_id and r.id = n.debrief_run_id where n.tenant_id = e.tenant_id and n.event_id = e.id) as summary
+            (select r.output -> 'sections' -> 0 ->> 'text' from agent_runs r where r.tenant_id = e.tenant_id and r.agent_key = 'meeting_debrief' and r.subject_object = 'event' and r.subject_id = e.id and r.requested_by = $5 order by r.started_at desc limit 1) as summary
        from events e join unnest($2::text[], $3::uuid[]) as t(o, i) on e.related_object = t.o and e.related_id = t.i
-      where e.tenant_id = $1 and e.status <> 'cancelled' order by e.starts_at desc limit 8`,
-    [ctx.tenantId, objs, ids],
+      where e.tenant_id = $1 and e.status <> 'cancelled'
+        and ($4::boolean or e.owner_id = $5 or e.attendees @> jsonb_build_array(jsonb_build_object('userId', $5::text)))
+      order by e.starts_at desc limit 8`,
+    [ctx.tenantId, objs, ids, objectPerm(ctx.principal.permissions, 'deal').read === 'all', ctx.principal.user.id],
   );
   for (const e of evs) {
     const future = e.starts_at.getTime() > Date.now();
@@ -244,17 +254,25 @@ export async function buildContext(ctx: RecordCtx, object: string, id: string, o
     [ctx.tenantId, objs, ids],
   );
   for (const it of items) facts.add({ object: it.related_object, id: it.related_id, kind: 'action_item', label: `Open action: ${clip(it.title, 60)}`, at: iso(it.due_at), text: `Open action item${it.due_at ? ` due ${it.due_at.toISOString().slice(0, 10)}` : ''}: ${clip(it.title, 200)} (${it.status.replace('_', ' ')})` });
-  const tasks = await ctx.tx.query<{ title: string; status: string; due_at: Date | null; related_object: string; related_id: string }>(
-    `select k.title, k.status, k.due_at, k.related_object, k.related_id from tasks k join unnest($2::text[], $3::uuid[]) as t(o, i) on k.related_object = t.o and k.related_id = t.i
-      where k.tenant_id = $1 and k.status not in ('done', 'cancelled') order by k.due_at nulls last limit 8`,
-    [ctx.tenantId, objs, ids],
-  );
+  const taskRead = objectPerm(ctx.principal.permissions, 'task').read;
+  const tasks =
+    taskRead === 'none'
+      ? []
+      : await ctx.tx.query<{ title: string; status: string; due_at: Date | null; related_object: string; related_id: string }>(
+          `select k.title, k.status, k.due_at, k.related_object, k.related_id from tasks k join unnest($2::text[], $3::uuid[]) as t(o, i) on k.related_object = t.o and k.related_id = t.i
+            where k.tenant_id = $1 and k.status not in ('done', 'cancelled') and ($4::boolean is false or k.assignee_id = $5 or k.created_by = $5)
+            order by k.due_at nulls last limit 8`,
+          [ctx.tenantId, objs, ids, taskRead === 'own', ctx.principal.user.id],
+        );
   for (const t of tasks) facts.add({ object: t.related_object, id: t.related_id, kind: 'task', label: `Task: ${clip(t.title, 60)}`, at: iso(t.due_at), text: `Open task${t.due_at ? ` due ${t.due_at.toISOString().slice(0, 10)}` : ''}: ${clip(t.title, 200)}` });
-  const scores = await ctx.tx.query<{ object_key: string; record_id: string; kind: string; score: number; band: string; factors: { label: string }[] }>(
+  const scores = await ctx.tx.query<{ object_key: string; record_id: string; kind: string; score: number; band: string; factors: { label: string; object: string; field?: string }[] }>(
     `select object_key, record_id, kind, score, band, factors from record_scores where tenant_id = $1 and (object_key, record_id) in (select * from unnest($2::text[], $3::uuid[]))`,
     [ctx.tenantId, objs, ids],
   );
-  for (const s of scores) facts.add({ object: s.object_key, id: s.record_id, kind: 'score', label: `${s.kind.replace('_', ' ')} ${s.score}`, at: null, text: `${s.kind.replace('_', ' ')} score ${s.score}/100 (${s.band}): ${(s.factors ?? []).slice(0, 4).map((f) => f.label).join('; ')}` });
+  for (const s of scores) {
+    const shown = visibleFactors(ctx, (s.factors ?? []) as { label: string; object: string; field?: string }[]);
+    facts.add({ object: s.object_key, id: s.record_id, kind: 'score', label: `${s.kind.replace('_', ' ')} ${s.score}`, at: null, text: `${s.kind.replace('_', ' ')} score ${s.score}/100 (${s.band}): ${shown.slice(0, 4).map((f) => f.label).join('; ')}` });
+  }
 
   return { subject: { object, id, label }, record, facts: facts.items, related };
 }
