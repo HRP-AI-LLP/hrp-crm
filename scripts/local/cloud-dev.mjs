@@ -1,10 +1,11 @@
 // @ts-check
 /**
  * Run HRP Synapse on this computer against the cloud DEV environment — no GitHub Actions needed.
+ * (For a fully local setup with Postgres in Podman/Docker, use `pnpm local`.)
  *
- *   pnpm local            migrate the Neon "dev" branch, build the app, start API + UI
- *   pnpm local --no-migrate   skip the migration step
- *   pnpm local --no-build     skip the production build of the web app (faster restarts)
+ *   pnpm local:cloud               migrate the Neon "dev" branch, build the app, start API + UI
+ *   pnpm local:cloud --no-migrate  skip the migration step
+ *   pnpm local:cloud --no-build    skip the production build of the web app (faster restarts)
  *
  * What runs where:
  *   - Database: the Neon `dev` branch in the cloud (the same data as hrpsynapse-dev.hrpai.in)
@@ -26,6 +27,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApiClient } from '@neondatabase/api-client';
+import { freePorts } from './ports.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = new Set(process.argv.slice(2));
@@ -40,32 +42,6 @@ const fail = (m) => {
 function run(cmd, opts = {}) {
   const r = spawnSync(cmd, { cwd: opts.cwd ?? ROOT, stdio: 'inherit', shell: true, env: { ...process.env, ...(opts.env ?? {}) } });
   if (r.status !== 0) fail(`${opts.display ?? cmd} failed`);
-}
-
-/** Ends whatever still listens on these local ports (wrangler's workerd, Vite) from an earlier run. */
-export function freePorts(ports) {
-  for (const port of ports) {
-    if (win) {
-      const out = spawnSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8' }).stdout ?? '';
-      const pids = new Set(
-        out
-          .split(/\r?\n/)
-          .filter((l) => /LISTENING/i.test(l) && new RegExp(`:${port}\\s`).test(l))
-          .map((l) => l.trim().split(/\s+/).pop())
-          .filter((p) => p && p !== '0'),
-      );
-      for (const pid of pids) spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-    } else {
-      const out = spawnSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).stdout ?? '';
-      for (const pid of out.split(/\s+/).filter(Boolean)) {
-        try {
-          process.kill(Number(pid), 'SIGTERM');
-        } catch {
-          /* already gone */
-        }
-      }
-    }
-  }
 }
 
 const SECRETS = join(ROOT, 'infra', '.local', 'secrets.json');

@@ -62,9 +62,12 @@ Generated passwords and keys are written to `infra/.local/secrets.json`, which i
 
 | Command | What it does |
 |---|---|
-| `pnpm local` | **Test on this computer against the cloud dev environment, no GitHub Actions needed.** Migrates only the Neon `dev` branch, writes `.dev.vars` with the dev keys, builds the app and starts the API on http://localhost:8787 (built app with offline mode and push) and Vite on http://localhost:5173. AI and knowledge-base search use the real dev resources; KV, queue and files are simulated locally. Flags: `--no-migrate`, `--no-build` |
-| `pnpm dev` | Vite on http://localhost:5173 plus the Worker on :8787 (uses `apps/api/.dev.vars`, which points at the Neon dev branch) |
-| `pnpm test` | RLS isolation tests and API end-to-end tests. They need a local Postgres; set `TEST_ADMIN_DATABASE_URL` |
+| `pnpm local` | **Run everything on this computer, no cloud.** Starts Postgres 17 in Podman (or Docker) — container `synapse-pg`, volume `synapse-pgdata`, 127.0.0.1:54329 — applies migrations, creates a `demo` workspace once (admin@demo.local; password in `infra/.local/local.json`), writes `.dev.vars`, builds the app and starts the API on http://localhost:8787 and Vite on http://localhost:5173 with `apps/api/wrangler.local.jsonc` (no remote bindings). Files, cache and queue are simulated by wrangler; AI uses `GROQ_API_KEY` / `GEMINI_API_KEY` if set, otherwise rule-based fallbacks. On Windows it starts the Podman machine if needed. Flags: `--no-migrate`, `--no-build`, `--reset-db`; `CONTAINER_ENGINE=docker` to prefer Docker |
+| `pnpm local:cloud` | The same app against the cloud **dev** environment: migrates only the Neon `dev` branch and uses the real dev AI and knowledge-base resources. Flags: `--no-migrate`, `--no-build` |
+| `pnpm local:stop` | Stops a running `pnpm local` / `pnpm local:cloud`; `--db` also stops the local database container (data is kept) |
+| `pnpm local:test` | Runs the test suites against a throwaway Postgres container (`synapse-pg-test`, 127.0.0.1:54330, in memory), separate from your local database |
+| `pnpm dev` | Vite on http://localhost:5173 plus the Worker on :8787 (uses whatever `apps/api/.dev.vars` the last `pnpm local` or `pnpm local:cloud` wrote) |
+| `pnpm test` | RLS isolation tests and API end-to-end tests against the Postgres in `TEST_ADMIN_DATABASE_URL` (or use `pnpm local:test`) |
 | `pnpm db:migrate` | Apply migrations (`DATABASE_URL_OWNER` required) |
 | `pnpm typecheck` | Type-check every package |
 | `pnpm deploy:dev` | Manual deploy of the dev Worker |

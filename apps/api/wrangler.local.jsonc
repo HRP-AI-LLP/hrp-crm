@@ -1,0 +1,27 @@
+// HRP Synapse — fully local development (`pnpm local`): no cloud resources at all.
+// DATABASE_URL and the keys come from apps/api/.dev.vars, written by scripts/local/local-dev.mjs and
+// pointing at the local Postgres container. R2 files are simulated by wrangler on this computer.
+// Workers AI and Vectorize are not bound: AI features use GROQ_API_KEY / GEMINI_API_KEY when set,
+// or their rule-based fallbacks; knowledge-base vector search is off.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "synapse-local",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/.well-known/assetlinks.json"]
+  },
+  "vars": {
+    "APP_ENV": "local",
+    "BASE_DOMAIN": "localhost",
+    "ALLOW_TENANT_HEADER": "true",
+    "SIGNUP_ENABLED": "true",
+    "CORS_ORIGINS": "http://localhost:5173",
+    "AI_DAILY_LIMIT_PER_TENANT": "300"
+  },
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "synapse-files-local" }]
+}
