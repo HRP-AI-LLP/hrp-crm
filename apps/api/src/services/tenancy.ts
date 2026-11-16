@@ -64,11 +64,20 @@ export async function invalidateTenantCache(env: Env, tenant: TenantInfo, host?:
 }
 
 // ------------------------------------------------------------------------------------------------
-// Metadata (objects + fields + pipelines), cached by (tenant, meta_version) → safe to cache in KV.
+// Metadata (objects + fields + pipelines), cached by (tenant, meta_version, code revision) → safe to
+// cache in KV. The code revision changes whenever a release changes the standard fields or their
+// choices, so a deploy never serves metadata cached by the previous version.
 // ------------------------------------------------------------------------------------------------
+const CODE_REV = (() => {
+  const text = JSON.stringify([STANDARD_FIELDS, CUSTOM_OBJECT_BASE_FIELDS]);
+  let h = 0x811c9dc5; // FNV-1a
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193) >>> 0;
+  return h.toString(36);
+})();
+
 export async function loadMeta(env: Env, tx: Tx, tenant: TenantInfo): Promise<TenantMeta> {
   const cache = new EdgeCache(env);
-  return cache.getOrLoad(`t:${tenant.id}:meta:v${tenant.metaVersion}`, { ttlSeconds: 86_400, kv: true }, () => readMeta(tx, tenant));
+  return cache.getOrLoad(`t:${tenant.id}:meta:v${tenant.metaVersion}:${CODE_REV}`, { ttlSeconds: 86_400, kv: true }, () => readMeta(tx, tenant));
 }
 
 export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> {
