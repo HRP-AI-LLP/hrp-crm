@@ -1,4 +1,5 @@
-// pnpm gst:check — checks the WhiteBooks GSP keys in the repo-root .env without printing them.
+// pnpm gst:check — checks the GSP keys in the repo-root .env without printing them
+// (India Compliance: shows the account and credits; WhiteBooks: a public taxpayer search).
 // It calls the public taxpayer search (no OTP needed) and, if you pass a GSTIN and the GST portal
 // username, asks the portal for an OTP:  pnpm gst:check 09AAAAA0000A1Z5 my_gst_username
 import { dirname, join } from 'node:path';
@@ -8,6 +9,17 @@ import { loadDotEnv } from './dotenv.mjs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 loadDotEnv(ROOT);
 const e = /** @type {Record<string, string>} */ (process.env);
+if (e.INDIA_COMPLIANCE_API_SECRET && (e.GST_PROVIDER ?? '').toLowerCase() !== 'whitebooks') {
+  // India Compliance: show the account (credits) without spending a credit
+  const { execFileSync } = await import('node:child_process');
+  console.log('GST Suvidha Provider: India Compliance');
+  try {
+    execFileSync(process.execPath, [join(ROOT, 'scripts/local/ic-account.mjs'), 'status'], { stdio: 'inherit' });
+  } catch {
+    process.exit(1);
+  }
+  process.exit(0);
+}
 const missing = ['WHITEBOOKS_CLIENT_ID', 'WHITEBOOKS_CLIENT_SECRET', 'WHITEBOOKS_EMAIL'].filter((k) => !e[k]);
 if (missing.length) {
   console.error(`Missing in .env: ${missing.join(', ')}`);

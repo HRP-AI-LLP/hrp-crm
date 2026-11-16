@@ -1,9 +1,9 @@
 /**
- * The GST portal through the WhiteBooks GSP: connecting a GSTIN (OTP), the session, what the
+ * The GST portal through a GST Suvidha Provider (see provider.ts): connecting a GSTIN (OTP), the session, what the
  * portal holds (ledgers, liabilities, filed returns, notices, challans, GSTR-2B, GSTR-2X) and
  * filing returns (save → status → proceed/submit → summary → offset → file with EVC or DSC).
  *
- * Calls to WhiteBooks never run inside a database transaction: each step reads what it needs in
+ * Calls to the GSP never run inside a database transaction: each step reads what it needs in
  * one short transaction, calls the GSP, and records the outcome in another.
  *
  * Access: books or billing admins. Credentials (e-invoice / e-way bill passwords) and the session
@@ -16,7 +16,10 @@ import { ApiError, badRequest, conflict, forbidden, notFound } from '../../lib/e
 import { importGstr2b, type Gstr2bRow } from '../books/setup';
 import type { RecordCtx } from '../records';
 import { BUILDABLE, buildGstr1, buildGstr3b, buildItc04, filingCalendar, fromRetPeriod } from './returns';
-import { GspError, pick, requireConfig, wbCall, wbConfig, type WbCall, type WbResult } from './whitebooks';
+import { getProvider, requireProvider, type Form as FormCode, type GspConn, type GspProvider, type GstOp, type Secrets, type Session } from './provider';
+import { GspError, pick, type WbResult } from './whitebooks';
+
+export type { Secrets, Session } from './provider';
 
 export interface GstDeps {
   env: Env;
@@ -32,28 +35,23 @@ export function assertGstAdmin(ctx: RecordCtx) {
 
 /* ───────────────────────── forms ───────────────────────── */
 
-interface Form {
+interface FormInfo {
   label: string;
-  path: string;
-  /** EVC OTP form type */
-  evc: string;
-  /** how saved data becomes a summary: GSTR-1 "proceed to file", GSTR-6 "submit" */
-  proceed?: 'r1' | 'r1a' | 'submit';
+  /** GSTR-3B: the liability is paid from the ledgers before filing */
   offset?: boolean;
-  save?: { method: 'PUT' | 'POST'; path: string };
 }
-export const FORMS: Record<string, Form> = {
-  GSTR1: { label: 'GSTR-1', path: '/gstr1', evc: 'R1', proceed: 'r1' },
-  GSTR1A: { label: 'GSTR-1A', path: '/gstr1a', evc: 'R1A', proceed: 'r1a' },
-  GSTR3B: { label: 'GSTR-3B', path: '/gstr3b', evc: 'R3B', offset: true },
-  GSTR7: { label: 'GSTR-7 (TDS deducted)', path: '/gstr7', evc: 'R7' },
-  GSTR2X: { label: 'GSTR-2X (TDS/TCS credit received)', path: '/gstr2x', evc: 'R2X' },
-  ITC04: { label: 'ITC-04 (job work)', path: '/itc04', evc: 'ITC04' },
-  GSTR9: { label: 'GSTR-9 (annual)', path: '/gstr9', evc: 'R9' },
-  GSTR9C: { label: 'GSTR-9C (reconciliation)', path: '/gstr9c', evc: 'R9C' },
-  GSTR6: { label: 'GSTR-6 (ISD)', path: '/gstr6', evc: 'R6', proceed: 'submit' },
-  GSTR8: { label: 'GSTR-8 (e-commerce TCS)', path: '/gstr8', evc: 'R8' },
-  CMP08: { label: 'CMP-08 (composition)', path: '/cmp', evc: 'CMP08', save: { method: 'POST', path: '/cmp/savecmp' } },
+export const FORMS: Record<FormCode, FormInfo> = {
+  GSTR1: { label: 'GSTR-1' },
+  GSTR1A: { label: 'GSTR-1A' },
+  GSTR3B: { label: 'GSTR-3B', offset: true },
+  GSTR7: { label: 'GSTR-7 (TDS deducted)' },
+  GSTR2X: { label: 'GSTR-2X (TDS/TCS credit received)' },
+  ITC04: { label: 'ITC-04 (job work)' },
+  GSTR9: { label: 'GSTR-9 (annual)' },
+  GSTR9C: { label: 'GSTR-9C (reconciliation)' },
+  GSTR6: { label: 'GSTR-6 (ISD)' },
+  GSTR8: { label: 'GSTR-8 (e-commerce TCS)' },
+  CMP08: { label: 'CMP-08 (composition)' },
 };
 export type ReturnType = keyof typeof FORMS;
 
@@ -80,15 +78,13 @@ interface ConnRow {
   last_error: string | null;
   updated_at: string;
 }
-export interface Secrets {
-  einvPassword?: string;
-  ewbPassword?: string;
-}
-export interface Session {
-  txn?: string;
-  einvToken?: string;
-  ewbAt?: string;
-}
+export const gspConn = (c: Pick<ConnRow, 'id' | 'gstin' | 'gst_username' | 'einv_username' | 'ewb_username'>): GspConn => ({
+  id: c.id,
+  gstin: c.gstin,
+  gstUsername: c.gst_username,
+  einvUsername: c.einv_username,
+  ewbUsername: c.ewb_username,
+});
 
 const key = (env: Env) => {
   if (!env.DATA_ENCRYPTION_KEY) throw badRequest('This server has no DATA_ENCRYPTION_KEY, so GST portal credentials cannot be stored');
@@ -148,7 +144,7 @@ export async function logEvent(ctx: RecordCtx, e: { connectionId?: string | null
 }
 
 export async function listConnections(deps: GstDeps) {
-  const cfg = wbConfig(deps.env);
+  const gp = getProvider(deps.env);
   return deps.run(async (ctx) => {
     assertGstAdmin(ctx);
     const rows = await ctx.tx.query<ConnRow>(`select * from gst_connections where tenant_id = $1 order by created_at`, [ctx.tenantId]);
@@ -157,7 +153,12 @@ export async function listConnections(deps: GstDeps) {
       const s = await unseal<Secrets>(deps.env, ctx.tenantId, r.secret_ciphertext);
       out.push({ ...connDto(r), hasEinvPassword: !!s.einvPassword, hasEwbPassword: !!s.ewbPassword });
     }
-    return { gsp: { provider: 'WhiteBooks', configured: !!cfg, sandbox: cfg?.sandbox ?? true }, connections: out };
+    return {
+      gsp: gp
+        ? { provider: gp.label, id: gp.id, configured: true, sandbox: gp.sandbox, nicSandbox: gp.nicSandbox, forms: gp.forms, challan: gp.challan, dsc: gp.dsc, views: gp.views }
+        : { provider: null, id: null, configured: false, sandbox: false, nicSandbox: false, forms: [], challan: false, dsc: false, views: [] },
+      connections: out,
+    };
   });
 }
 
@@ -249,187 +250,161 @@ export async function deleteConnection(deps: GstDeps, id: string) {
 /* ───────────────────────── portal session ───────────────────────── */
 
 const SESSION_MINUTES = 360;
-
-/** The sandbox only knows GSTN's test taxpayers; a real GSTIN or username fails there. */
-export function sandboxHint(sandbox: boolean, message: string) {
-  if (!sandbox) return message;
-  return `${message}. This server uses WhiteBooks' SANDBOX, which only knows the test taxpayers WhiteBooks gives you (test GSTIN and username), not real ones. For your real GSTIN use production keys with WHITEBOOKS_ENV=production.`;
-}
 const REFRESH_WITHIN_MS = 45 * 60_000;
 
-function baseHeaders(c: ConnRow, ip: string, txn?: string): Record<string, string | undefined> {
-  return { gst_username: c.gst_username ?? undefined, state_cd: c.gstin.slice(0, 2), ip_address: ip, txn };
+async function saveSession(ctx: RecordCtx, env: Env, id: string, session: Session, set = '') {
+  await ctx.tx.query(`update gst_connections set session_ciphertext = $3${set} where tenant_id = $1 and id = $2`, [
+    ctx.tenantId,
+    id,
+    Object.keys(session).length ? await seal(env, ctx.tenantId, session) : null,
+  ]);
 }
-
-const sessionGone = (r: WbResult) => /^AUTH4/i.test(r.code ?? '') || /invalid session|session (has )?expired|auth(entication)? token (has )?expired|invalid (auth )?token/i.test(r.message);
 
 /** Asks the GST portal to send an OTP to the taxpayer's registered mobile and email. */
 export async function requestOtp(deps: GstDeps, id: string) {
-  const cfg = requireConfig(deps.env);
-  const c = await deps.run(async (ctx) => {
+  const gp = requireProvider(deps.env);
+  const { c, session } = await deps.run(async (ctx) => {
     assertGstAdmin(ctx);
-    return loadConn(ctx, id);
+    const c = await loadConn(ctx, id);
+    return { c, session: await unseal<Session>(deps.env, ctx.tenantId, c.session_ciphertext) };
   });
   if (!c.gst_username) throw badRequest('Enter the GST portal username for this GSTIN first');
-  const r = await wbCall(cfg, 'gst', 'GET', '/authentication/otprequest', { headers: baseHeaders(c, deps.ip) });
-  const txn = r.ok ? pick(r, 'txn') : undefined;
+  const step = await gp.requestOtp(gspConn(c), session, deps.ip);
   return deps.run(async (ctx) => {
-    if (!r.ok || !txn) {
-      const msg = r.ok ? 'The GST system did not return a transaction id' : sandboxHint(cfg.sandbox, r.message);
+    if (!step.result.ok) {
+      const msg = gp.hint(step.result.message);
       await ctx.tx.query(`update gst_connections set last_error = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, msg.slice(0, 1000)]);
       await logEvent(ctx, { connectionId: id, action: 'otp.request', ok: false, message: msg });
-      throw new GspError(msg, r.code, r);
+      throw new GspError(msg, step.result.code, step.result);
     }
-    const cur = await loadConn(ctx, id, true);
-    const session = await unseal<Session>(deps.env, ctx.tenantId, cur.session_ciphertext);
-    session.txn = String(txn);
-    await ctx.tx.query(
-      `update gst_connections set status = 'otp_sent', otp_sent_at = now(), session_ciphertext = $3, session_expires_at = null, last_error = null where tenant_id = $1 and id = $2`,
-      [ctx.tenantId, id, await seal(deps.env, ctx.tenantId, session)],
-    );
-    await logEvent(ctx, { connectionId: id, action: 'otp.request', ok: true, message: cfg.sandbox ? 'Sandbox: the OTP is 575757' : null });
-    return { ok: true, sandbox: cfg.sandbox };
+    await loadConn(ctx, id, true);
+    await saveSession(ctx, deps.env, id, step.session, `, status = 'otp_sent', otp_sent_at = now(), session_expires_at = null, last_error = null`);
+    await logEvent(ctx, { connectionId: id, action: 'otp.request', ok: true, message: gp.sandbox ? 'Sandbox: the OTP is 575757' : null });
+    return { ok: true, sandbox: gp.sandbox };
   });
 }
 
 /** Verifies the OTP and starts a 6-hour portal session. */
 export async function verifyOtp(deps: GstDeps, id: string, otp: string) {
   if (!/^\d{4,8}$/.test(otp)) throw badRequest('Enter the OTP from the GST portal');
-  const cfg = requireConfig(deps.env);
-  const { c, txn } = await deps.run(async (ctx) => {
+  const gp = requireProvider(deps.env);
+  const { c, session } = await deps.run(async (ctx) => {
     assertGstAdmin(ctx);
     const c = await loadConn(ctx, id);
-    const s = await unseal<Session>(deps.env, ctx.tenantId, c.session_ciphertext);
-    if (c.status !== 'otp_sent' || !s.txn) throw badRequest('Request an OTP first');
+    if (c.status !== 'otp_sent') throw badRequest('Request an OTP first');
     if (c.otp_sent_at && Date.now() - Date.parse(c.otp_sent_at) > 15 * 60_000) throw badRequest('The OTP has expired; request a new one');
-    return { c, txn: s.txn };
+    return { c, session: await unseal<Session>(deps.env, ctx.tenantId, c.session_ciphertext) };
   });
-  const r = await wbCall(cfg, 'gst', 'GET', '/authentication/authtoken', { query: { otp }, headers: baseHeaders(c, deps.ip, txn) });
+  const step = await gp.verifyOtp(gspConn(c), session, otp, deps.ip);
   return deps.run(async (ctx) => {
-    if (!r.ok) {
-      await ctx.tx.query(`update gst_connections set last_error = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, r.message.slice(0, 1000)]);
-      await logEvent(ctx, { connectionId: id, action: 'otp.verify', ok: false, message: r.message });
-      throw new GspError(r.message, r.code, r);
+    if (!step.result.ok) {
+      await ctx.tx.query(`update gst_connections set last_error = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, step.result.message.slice(0, 1000)]);
+      await logEvent(ctx, { connectionId: id, action: 'otp.verify', ok: false, message: step.result.message });
+      throw new GspError(step.result.message, step.result.code, step.result);
     }
-    const cur = await loadConn(ctx, id, true);
-    const session = await unseal<Session>(deps.env, ctx.tenantId, cur.session_ciphertext);
-    session.txn = String(pick(r, 'txn') ?? txn);
-    const minutes = Number(pick(r, 'expiry')) > 0 ? Math.min(Number(pick(r, 'expiry')), SESSION_MINUTES) : SESSION_MINUTES;
-    const row = (await ctx.tx.one<ConnRow>(
-      `update gst_connections set status = 'active', session_started_at = now(), session_expires_at = now() + make_interval(mins => $4), session_ciphertext = $3, last_error = null
-        where tenant_id = $1 and id = $2 returning *`,
-      [ctx.tenantId, id, await seal(deps.env, ctx.tenantId, session), minutes],
-    ))!;
+    await loadConn(ctx, id, true);
+    const minutes = step.minutes ?? SESSION_MINUTES;
+    await saveSession(ctx, deps.env, id, step.session, `, status = 'active', session_started_at = now(), session_expires_at = now() + make_interval(mins => ${Math.round(minutes)}), last_error = null`);
     await logEvent(ctx, { connectionId: id, action: 'otp.verify', ok: true });
-    return connDto(row);
+    return connDto((await loadConn(ctx, id))!);
   });
 }
 
 export async function disconnect(deps: GstDeps, id: string) {
-  const cfg = wbConfig(deps.env);
-  const { c, txn } = await deps.run(async (ctx) => {
+  const gp = getProvider(deps.env);
+  const { c, session } = await deps.run(async (ctx) => {
     assertGstAdmin(ctx);
     const c = await loadConn(ctx, id);
-    return { c, txn: (await unseal<Session>(deps.env, ctx.tenantId, c.session_ciphertext)).txn };
+    return { c, session: await unseal<Session>(deps.env, ctx.tenantId, c.session_ciphertext) };
   });
-  if (cfg && txn && c.status === 'active') await wbCall(cfg, 'gst', 'GET', '/authentication/logout', { headers: baseHeaders(c, deps.ip, txn) }).catch(() => null);
+  if (gp && c.status === 'active') await gp.logout(gspConn(c), session, deps.ip).catch(() => null);
   return deps.run(async (ctx) => {
-    const cur = await loadConn(ctx, id, true);
-    const session = await unseal<Session>(deps.env, ctx.tenantId, cur.session_ciphertext);
-    delete session.txn;
-    await ctx.tx.query(`update gst_connections set status = 'disconnected', session_expires_at = null, session_ciphertext = $3 where tenant_id = $1 and id = $2`, [
-      ctx.tenantId,
-      id,
-      Object.keys(session).length ? await seal(deps.env, ctx.tenantId, session) : null,
-    ]);
+    await loadConn(ctx, id, true);
+    const { txn: _t, ic: _i, ...rest } = session;
+    await saveSession(ctx, deps.env, id, rest, `, status = 'disconnected', session_expires_at = null`);
     await logEvent(ctx, { connectionId: id, action: 'disconnect', ok: true });
     return { ok: true };
   });
 }
 
 /** The live session: refreshed when it has under 45 minutes left; an error when there is none. */
-async function liveSession(deps: GstDeps, id: string): Promise<{ c: ConnRow; txn: string }> {
-  const cfg = requireConfig(deps.env);
-  const { c, txn } = await deps.run(async (ctx) => {
+async function liveSession(deps: GstDeps, gp: GspProvider, id: string): Promise<{ c: ConnRow; session: Session }> {
+  const { c, session } = await deps.run(async (ctx) => {
     assertGstAdmin(ctx);
     const c = await loadConn(ctx, id);
-    return { c, txn: (await unseal<Session>(deps.env, ctx.tenantId, c.session_ciphertext)).txn };
+    return { c, session: await unseal<Session>(deps.env, ctx.tenantId, c.session_ciphertext) };
   });
   const exp = c.session_expires_at ? Date.parse(c.session_expires_at) : 0;
-  if (c.status !== 'active' || !txn || exp <= Date.now()) throw new ApiError(409, 'gst_session_required', 'Connect to the GST portal first: request an OTP and enter it (the session lasts 6 hours)');
-  if (exp - Date.now() > REFRESH_WITHIN_MS) return { c, txn };
-  const r = await wbCall(cfg, 'gst', 'GET', '/authentication/refreshtoken', { headers: baseHeaders(c, deps.ip, txn) });
+  if (c.status !== 'active' || exp <= Date.now()) throw new ApiError(409, 'gst_session_required', 'Connect to the GST portal first: request an OTP and enter it (the session lasts 6 hours)');
+  if (exp - Date.now() > REFRESH_WITHIN_MS) return { c, session };
+  const step = await gp.refresh(gspConn(c), session, deps.ip);
   return deps.run(async (ctx) => {
-    if (!r.ok) {
-      await logEvent(ctx, { connectionId: id, action: 'session.refresh', ok: false, message: r.message });
-      return { c, txn }; // the old session still has some time; the next call may refresh again
+    if (!step.result.ok) {
+      await logEvent(ctx, { connectionId: id, action: 'session.refresh', ok: false, message: step.result.message });
+      return { c, session }; // the old session still has some time; the next call may refresh again
     }
-    const cur = await loadConn(ctx, id, true);
-    const session = await unseal<Session>(deps.env, ctx.tenantId, cur.session_ciphertext);
-    session.txn = String(pick(r, 'txn') ?? txn);
-    const row = (await ctx.tx.one<ConnRow>(
-      `update gst_connections set session_expires_at = now() + make_interval(mins => $4), session_ciphertext = $3 where tenant_id = $1 and id = $2 returning *`,
-      [ctx.tenantId, id, await seal(deps.env, ctx.tenantId, session), SESSION_MINUTES],
-    ))!;
+    await loadConn(ctx, id, true);
+    await saveSession(ctx, deps.env, id, step.session, `, session_expires_at = now() + make_interval(mins => ${Math.round(step.minutes ?? SESSION_MINUTES)})`);
     await logEvent(ctx, { connectionId: id, action: 'session.refresh', ok: true });
-    return { c: row, txn: session.txn };
+    return { c: (await loadConn(ctx, id))!, session: step.session };
   });
 }
 
 /** One GST API call in the connection's session; an expired session marks the connection expired. */
-async function portalCall(
-  deps: GstDeps,
-  id: string,
-  method: 'GET' | 'POST' | 'PUT',
-  path: string,
-  call: WbCall,
-  log: { action: string; filingId?: string | null; quiet?: boolean },
-): Promise<WbResult> {
-  const cfg = requireConfig(deps.env);
-  const { c, txn } = await liveSession(deps, id);
-  const r = await wbCall(cfg, 'gst', method, path, { ...call, headers: { ...baseHeaders(c, deps.ip, txn), ...(call.headers ?? {}) } });
+async function portalOp(deps: GstDeps, id: string, op: GstOp, log: { action: string; filingId?: string | null; quiet?: boolean }): Promise<WbResult> {
+  const gp = requireProvider(deps.env);
+  const { c, session } = await liveSession(deps, gp, id);
+  const r = await gp.call(gspConn(c), session, deps.ip, op);
+  const gone = !r.ok && gp.sessionGone(r);
   if (!r.ok || !log.quiet)
     await deps.run(async (ctx) => {
-      if (!r.ok && sessionGone(r)) await ctx.tx.query(`update gst_connections set status = 'expired', session_expires_at = null where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
+      if (gone) await ctx.tx.query(`update gst_connections set status = 'expired', session_expires_at = null where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
       await logEvent(ctx, { connectionId: id, filingId: log.filingId, action: log.action, ok: r.ok, message: r.ok ? null : r.message });
     });
   if (!r.ok) {
-    if (sessionGone(r)) throw new ApiError(409, 'gst_session_required', `The GST portal session has ended (${r.message}). Request a new OTP.`);
-    throw new GspError(r.message, r.code, r);
+    if (gone) throw new ApiError(409, 'gst_session_required', `The GST portal session has ended (${r.message}). Request a new OTP.`);
+    throw new GspError(gp.hint(r.message), r.code, r);
   }
   return r;
 }
 
 /* ───────────────────────── what the portal holds ───────────────────────── */
 
-type View = { path: string; params: string[]; optional?: string[]; dates?: string[]; label: string };
-/** Read-only portal views the dashboard can fetch. Dates are given as YYYY-MM-DD and sent dd-mm-yyyy. */
+type View = { params: string[]; optional?: string[]; dates?: string[]; label: string };
+/** Read-only portal views the dashboard can fetch (the provider says which it has). Dates are given as YYYY-MM-DD and sent dd-mm-yyyy; periods are MMYYYY. */
 export const VIEWS: Record<string, View> = {
-  ledger_balance: { label: 'Cash and ITC balance', path: '/ledgers/bal', params: ['retperiod'] },
-  cash_ledger: { label: 'Electronic cash ledger', path: '/ledgers/cashdtl', params: ['frdt', 'todt'], dates: ['frdt', 'todt'] },
-  itc_ledger: { label: 'Electronic credit ledger', path: '/ledgers/itc', params: ['frdt', 'todt'], dates: ['frdt', 'todt'] },
-  liability_ledger: { label: 'Electronic liability ledger', path: '/ledgers/tax', params: ['frdt', 'todt'], dates: ['frdt', 'todt'] },
-  rcm_ledger: { label: 'RCM ledger', path: '/ledgers/rcmldg', params: ['frdt', 'todt'], dates: ['frdt', 'todt'] },
-  tax_payable: { label: 'Tax payable', path: '/ledgers/taxpayable', params: ['retperiod', 'rettype'] },
-  return_track: { label: 'Returns filed', path: '/gstr/rettrack', params: ['returnperiod'], optional: ['type'] },
-  return_status: { label: 'Return status', path: '/gstr/retstatus', params: ['returnperiod', 'refid'] },
-  notices: { label: 'Notices and orders', path: '/notices/noticelist', params: ['date'], dates: ['date'] },
-  notice: { label: 'Notice', path: '/notices/noticedetails', params: ['refId'] },
-  challans: { label: 'Challans', path: '/payment/chllnlst', params: ['fromdate', 'todate'], dates: ['fromdate', 'todate'] },
-  challan: { label: 'Challan', path: '/payment/chllnsum', params: ['cpin'] },
-  gstr1_summary: { label: 'GSTR-1 summary', path: '/gstr1/retsum', params: ['retperiod'] },
-  gstr3b_summary: { label: 'GSTR-3B summary', path: '/gstr3b/retsum', params: ['retperiod'] },
-  gstr3b_autoliab: { label: 'GSTR-3B auto-calculated liability', path: '/gstr3b/autoliab', params: ['retperiod'] },
-  gstr3b_interest: { label: 'GSTR-3B interest', path: '/gstr3b/syscalcintrst', params: ['retperiod'] },
-  late_fee: { label: 'Late fee', path: '/all/latefee', params: ['retperiod', 'rettype'] },
-  gstr2b: { label: 'GSTR-2B', path: '/gstr2b/all', params: ['rtnprd'], optional: ['filenum'] },
-  gstr2x: { label: 'TDS/TCS credits (GSTR-2X)', path: '/gstr2x/tdstcs', params: ['retperiod', 'rectype'], optional: ['fromtime'] },
-  gstr7_summary: { label: 'GSTR-7 summary', path: '/gstr7/retsum', params: ['retperiod'] },
-  itc04_summary: { label: 'ITC-04 summary', path: '/itc04/retsum', params: ['retperiod'] },
-  gstr9_autocalc: { label: 'GSTR-9 auto-calculated', path: '/gstr9/getautocal', params: ['retperiod'] },
-  gstr9_details: { label: 'GSTR-9 details', path: '/gstr9/getdet', params: ['retperiod'] },
-  einvoices: { label: 'E-invoices reported (IRNs)', path: '/gst/einvoice/irnlist', params: ['suptyp', 'rtnprd'] },
+  ledger_balance: { label: 'Cash and ITC balance', params: ['period'] },
+  cash_ledger: { label: 'Electronic cash ledger', params: ['from', 'to'], dates: ['from', 'to'] },
+  itc_ledger: { label: 'Electronic credit ledger', params: ['from', 'to'], dates: ['from', 'to'] },
+  liability_ledger: { label: 'Electronic liability ledger', params: ['from', 'to'], dates: ['from', 'to'] },
+  rcm_ledger: { label: 'RCM ledger', params: ['from', 'to'], dates: ['from', 'to'] },
+  tax_payable: { label: 'Tax payable', params: ['period', 'returnType'] },
+  return_track: { label: 'Returns filed', params: ['period'], optional: ['type'] },
+  return_status: { label: 'Return status', params: ['period', 'refId'] },
+  notices: { label: 'Notices and orders', params: ['from'], dates: ['from'] },
+  notice: { label: 'Notice', params: ['refId'] },
+  challans: { label: 'Challans', params: ['from', 'to'], dates: ['from', 'to'] },
+  challan: { label: 'Challan', params: ['cpin'] },
+  gstr1_summary: { label: 'GSTR-1 summary', params: ['period'] },
+  gstr3b_summary: { label: 'GSTR-3B summary', params: ['period'] },
+  gstr3b_autoliab: { label: 'GSTR-3B auto-calculated liability', params: ['period'] },
+  gstr3b_interest: { label: 'GSTR-3B interest', params: ['period'] },
+  late_fee: { label: 'Late fee', params: ['period', 'returnType'] },
+  gstr2b: { label: 'GSTR-2B', params: ['period'], optional: ['fileNo'] },
+  gstr2x: { label: 'TDS/TCS credits (GSTR-2X)', params: ['period', 'recType'], optional: ['fromTime'] },
+  gstr7_summary: { label: 'GSTR-7 summary', params: ['period'] },
+  itc04_summary: { label: 'ITC-04 summary', params: ['period'] },
+  gstr9_autocalc: { label: 'GSTR-9 auto-calculated', params: ['period'] },
+  gstr9_details: { label: 'GSTR-9 details', params: ['period'] },
+  einvoices: { label: 'E-invoices reported (IRNs)', params: ['supplyType', 'period'] },
 };
+export function viewsFor(env: Env) {
+  const gp = getProvider(env);
+  const have = new Set(gp?.views ?? Object.keys(VIEWS));
+  return Object.entries(VIEWS)
+    .filter(([k]) => have.has(k))
+    .map(([k, v]) => ({ kind: k, label: v.label, params: v.params, optional: v.optional ?? [], dates: v.dates ?? [] }));
+}
 const PARAM_RE = /^[A-Za-z0-9_.\-/ ]{1,64}$/;
 const toDmy = (s: string) => (/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s.slice(8, 10)}-${s.slice(5, 7)}-${s.slice(0, 4)}` : s);
 
@@ -437,6 +412,7 @@ const toDmy = (s: string) => (/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s.slice(8, 10)}
 export async function fetchView(deps: GstDeps, id: string, kind: string, params: Record<string, string>) {
   const v = VIEWS[kind];
   if (!v) throw badRequest('Unknown GST portal view');
+  if (!requireProvider(deps.env).views.includes(kind)) throw badRequest(`${v.label} is not available with this GST Suvidha Provider`);
   const query: Record<string, string> = {};
   for (const p of [...v.params, ...(v.optional ?? [])]) {
     const val = params[p];
@@ -447,11 +423,11 @@ export async function fetchView(deps: GstDeps, id: string, kind: string, params:
     if (!PARAM_RE.test(val)) throw badRequest(`${p} is not valid`);
     query[p] = v.dates?.includes(p) ? toDmy(val) : val;
   }
-  const gstin = await deps.run(async (ctx) => {
+  await deps.run(async (ctx) => {
     assertGstAdmin(ctx);
-    return (await loadConn(ctx, id)).gstin;
+    await loadConn(ctx, id);
   });
-  const r = await portalCall(deps, id, 'GET', v.path, { query: { gstin, ...query } }, { action: `view.${kind}`, quiet: true });
+  const r = await portalOp(deps, id, { op: 'view', kind, q: query }, { action: `view.${kind}`, quiet: true });
   const cacheKey = Object.values(query).join('|').slice(0, 60);
   await deps.run(async (ctx) => {
     await ctx.tx.query(
@@ -467,14 +443,14 @@ export async function fetchView(deps: GstDeps, id: string, kind: string, params:
 export async function searchTaxpayer(deps: GstDeps, gstin: string) {
   const g = gstin.trim().toUpperCase();
   if (!validGstin(g)) throw badRequest('That GSTIN is not valid');
-  const cfg = requireConfig(deps.env);
+  const gp = requireProvider(deps.env);
   await deps.run(async (ctx) => {
     if (!hasAdmin(ctx.principal.permissions, 'books') && !hasAdmin(ctx.principal.permissions, 'billing') && !hasAdmin(ctx.principal.permissions, 'accounts')) {
       throw forbidden();
     }
   });
-  const r = await wbCall(cfg, 'gst', 'GET', '/public/search', { query: { gstin: g } });
-  if (!r.ok) throw new GspError(sandboxHint(cfg.sandbox, r.message), r.code, r);
+  const r = await gp.search(g);
+  if (!r.ok) throw new GspError(gp.hint(r.message), r.code, r);
   const d = r.data ?? {};
   const addr = d.pradr?.addr ?? {};
   return {
@@ -562,6 +538,27 @@ export async function overview(deps: GstDeps, id: string, today = new Date()) {
 
 /** Fetches the portal's record of returns filed for each month of a financial year (for the calendar). */
 export async function syncReturnTrack(deps: GstDeps, id: string, fyStart: number) {
+  const gp = requireProvider(deps.env);
+  if (gp.returnTrack) {
+    // one public call for the whole year, no OTP needed
+    const fy = `${fyStart}-${String(fyStart + 1).slice(2)}`;
+    const gstin = await deps.run(async (ctx) => {
+      assertGstAdmin(ctx);
+      return (await loadConn(ctx, id)).gstin;
+    });
+    const r = await gp.returnTrack(gstin, fy);
+    await deps.run(async (ctx) => {
+      await logEvent(ctx, { connectionId: id, action: 'view.return_track', ok: r.ok, message: r.ok ? `FY ${fy}` : r.message });
+      if (r.ok)
+        await ctx.tx.query(
+          `insert into gst_portal_cache (tenant_id, connection_id, kind, key, data) values ($1,$2,'return_track',$3,$4)
+           on conflict (tenant_id, connection_id, kind, key) do update set data = excluded.data, fetched_at = now()`,
+          [ctx.tenantId, id, `fy ${fy}`, JSON.stringify(r.data ?? null)],
+        );
+    });
+    if (!r.ok) throw new GspError(r.message, r.code, r);
+    return [{ period: fy, ok: true }];
+  }
   const out: { period: string; ok: boolean; message?: string }[] = [];
   for (let k = 0; k < 12; k++) {
     const m = ((3 + k) % 12) + 1;
@@ -570,7 +567,7 @@ export async function syncReturnTrack(deps: GstDeps, id: string, fyStart: number
     if (d > new Date()) break;
     const period = `${String(m).padStart(2, '0')}${y}`;
     try {
-      await fetchView(deps, id, 'return_track', { returnperiod: period });
+      await fetchView(deps, id, 'return_track', { period });
       out.push({ period, ok: true });
     } catch (e) {
       if (e instanceof ApiError && e.code === 'gst_session_required') throw e;
@@ -600,7 +597,7 @@ interface FilingRow {
   updated_at: string;
 }
 
-function filingDto(f: FilingRow, withPayload = false) {
+function filingDto(f: FilingRow, gp: GspProvider | null, withPayload = false) {
   const form = FORMS[f.return_type];
   return {
     id: f.id,
@@ -619,7 +616,8 @@ function filingDto(f: FilingRow, withPayload = false) {
     filingMode: f.filing_mode,
     updatedAt: f.updated_at,
     canOffset: !!form?.offset,
-    needsProceed: !!form?.proceed,
+    needsProceed: !!gp?.proceed(f.return_type),
+    canSend: !!gp?.forms.includes(f.return_type),
     ...(withPayload ? { payload: f.payload } : {}),
   };
 }
@@ -634,7 +632,7 @@ export async function listFilings(deps: GstDeps, connectionId: string) {
   return deps.run(async (ctx) => {
     assertGstAdmin(ctx);
     const rows = await ctx.tx.query<FilingRow>(`select * from gst_filings where tenant_id = $1 and connection_id = $2 order by right(period, 4) desc, left(period, 2) desc, return_type`, [ctx.tenantId, connectionId]);
-    return rows.map((r) => filingDto(r));
+    return rows.map((r) => filingDto(r, getProvider(deps.env)));
   });
 }
 
@@ -646,7 +644,7 @@ export async function getFiling(deps: GstDeps, id: string) {
       `select e.action, e.ok, e.message, e.created_at, u.full_name as by from gst_events e left join users u on u.id = e.created_by where e.tenant_id = $1 and e.filing_id = $2 order by e.created_at`,
       [ctx.tenantId, id],
     );
-    return { ...filingDto(f, true), events };
+    return { ...filingDto(f, getProvider(deps.env), true), events };
   });
 }
 
@@ -720,26 +718,28 @@ export async function prepareFiling(deps: GstDeps, connectionId: string, input: 
           [ctx.tenantId, connectionId, input.returnType, input.period, JSON.stringify(payload), source],
         ))!;
     await logEvent(ctx, { connectionId, filingId: row.id, action: 'prepare', ok: true, message: source === 'upload' ? 'From uploaded JSON' : 'From Synapse records' });
-    return { ...filingDto(row, true), ...extra };
+    return { ...filingDto(row, getProvider(deps.env), true), ...extra };
   });
 }
 
 /** Starts a return from the portal's own figures (GSTR-9 auto-calculation, GSTR-2X credits to accept). */
 export async function prepareFromPortal(deps: GstDeps, connectionId: string, returnType: 'GSTR9' | 'GSTR2X', period: string) {
   fromRetPeriod(period);
+  const kind = returnType === 'GSTR9' ? 'gstr9_autocalc' : 'gstr2x';
+  if (!requireProvider(deps.env).views.includes(kind)) throw badRequest(`${FORMS[returnType].label} can't be started from the portal with this GST Suvidha Provider; upload its JSON instead`);
   const gstin = await deps.run(async (ctx) => {
     assertGstAdmin(ctx);
     return (await loadConn(ctx, connectionId)).gstin;
   });
   let payload: Record<string, unknown>;
   if (returnType === 'GSTR9') {
-    const r = await portalCall(deps, connectionId, 'GET', '/gstr9/getautocal', { query: { gstin, retperiod: period } }, { action: 'view.gstr9_autocalc' });
+    const r = await portalOp(deps, connectionId, { op: 'view', kind: 'gstr9_autocalc', q: { period } }, { action: 'view.gstr9_autocalc' });
     const d = r.data ?? {};
     payload = { ...d, gstin, fp: period };
   } else {
     const rows: any[] = [];
     for (const rectype of ['TDS', 'TCS'] as const) {
-      const r = await portalCall(deps, connectionId, 'GET', '/gstr2x/tdstcs', { query: { gstin, retperiod: period, rectype } }, { action: 'view.gstr2x' }).catch((e) => {
+      const r = await portalOp(deps, connectionId, { op: 'view', kind: 'gstr2x', q: { period, recType: rectype } }, { action: 'view.gstr2x' }).catch((e: unknown) => {
         if (e instanceof ApiError && e.code === 'gst_session_required') throw e;
         return null;
       });
@@ -770,7 +770,7 @@ export async function prepareFromPortal(deps: GstDeps, connectionId: string, ret
           JSON.stringify(payload),
         ]))!;
     await logEvent(ctx, { connectionId, filingId: row.id, action: 'prepare', ok: true, message: 'From the portal' });
-    return filingDto(row, true);
+    return filingDto(row, getProvider(deps.env), true);
   });
 }
 
@@ -780,7 +780,7 @@ async function filingContext(deps: GstDeps, id: string, allowed: FilingRow['stat
     const f = await loadFiling(ctx, id);
     if (!allowed.includes(f.status)) throw conflict(`Not possible while the return is ${f.status}`);
     const c = await loadConn(ctx, f.connection_id);
-    return { f, c, form: FORMS[f.return_type]! };
+    return { f, c, form: FORMS[f.return_type]!, gp: requireProvider(deps.env) };
   });
 }
 
@@ -791,16 +791,16 @@ async function updateFiling(deps: GstDeps, id: string, set: Record<string, unkno
       `update gst_filings set ${cols.map((k, i) => `${k} = $${i + 3}`).join(', ')} where tenant_id = $1 and id = $2 returning *`,
       [ctx.tenantId, id, ...cols.map((k) => (set[k] !== null && typeof set[k] === 'object' ? JSON.stringify(set[k]) : set[k]))],
     );
-    return filingDto(row!, false);
+    return filingDto(row!, getProvider(deps.env), false);
   });
 }
 
 /** Saves the prepared data to the portal. GSTN processes it in the background: check its status next. */
 export async function saveFiling(deps: GstDeps, id: string) {
-  const { f, c, form } = await filingContext(deps, id, ['prepared', 'error', 'saved']);
+  const { f, c, form, gp } = await filingContext(deps, id, ['prepared', 'error', 'saved']);
   if (!f.payload) throw badRequest('Prepare the return first');
-  const save = form.save ?? { method: 'PUT' as const, path: `${form.path}/retsave` };
-  const r = await portalCall(deps, c.id, save.method, save.path, { headers: { gstin: c.gstin, ret_period: f.period }, body: f.payload }, { action: 'save', filingId: id });
+  if (!gp.forms.includes(f.return_type)) throw badRequest(`${form.label} can't be sent through ${gp.label}. Download the JSON and upload it on the GST portal.`);
+  const r = await portalOp(deps, c.id, { op: 'save', form: f.return_type, period: f.period, body: f.payload }, { action: 'save', filingId: id });
   const ref = pick(r, 'reference_id', 'ref_id', 'refid', 'referenceId', 'reference_no');
   return updateFiling(deps, id, ref ? { status: 'saving', ref_id: String(ref), portal_status: 'REC', error_report: null } : { status: 'saved', portal_status: 'P', error_report: null });
 }
@@ -811,7 +811,7 @@ const STATUS_TEXT: Record<string, string> = { P: 'Processed', PE: 'Processed wit
 export async function checkFiling(deps: GstDeps, id: string) {
   const { f, c } = await filingContext(deps, id, ['saving', 'saved', 'error', 'submitted', 'offset']);
   if (!f.ref_id) throw badRequest('Nothing is being processed on the portal for this return');
-  const r = await portalCall(deps, c.id, 'GET', '/gstr/retstatus', { query: { gstin: c.gstin, returnperiod: f.period, refid: f.ref_id } }, { action: 'status', filingId: id });
+  const r = await portalOp(deps, c.id, { op: 'status', form: f.return_type, period: f.period, refId: f.ref_id }, { action: 'status', filingId: id });
   const st = String(pick(r, 'status_cd') ?? '').toUpperCase();
   const code = STATUS_TEXT[st] ? st : 'IP';
   const report = r.data?.error_report ?? r.data?.errorReport ?? null;
@@ -824,21 +824,19 @@ export async function checkFiling(deps: GstDeps, id: string) {
 
 /** GSTR-1 / 1A "proceed to file" (and GSTR-6 submit): the portal freezes the data and builds the summary. */
 export async function proceedFiling(deps: GstDeps, id: string, opts: { nil?: boolean } = {}) {
-  const { f, c, form } = await filingContext(deps, id, ['saved', 'prepared']);
-  if (!form.proceed) throw badRequest(`${form.label} does not need this step`);
+  const { f, c, form, gp } = await filingContext(deps, id, ['saved', 'prepared']);
+  const how = gp.proceed(f.return_type);
+  if (!how) throw badRequest(`${form.label} does not need this step`);
   if (f.status === 'prepared' && !opts.nil) throw badRequest('Save the return to the portal first');
-  let r: WbResult;
-  if (form.proceed === 'r1') r = await portalCall(deps, c.id, 'GET', '/all/newproceedfile', { query: { gstin: c.gstin, retperiod: f.period, type: 'R1', isNil: opts.nil ? 'Y' : 'N' } }, { action: 'proceed', filingId: id });
-  else if (form.proceed === 'r1a') r = await portalCall(deps, c.id, 'GET', '/gstr1a/proceedfile', { query: { gstin: c.gstin, retperiod: f.period, isNil: opts.nil ? 'Y' : 'N' } }, { action: 'proceed', filingId: id });
-  else r = await portalCall(deps, c.id, 'POST', `${form.path}/retsubmit`, { headers: { gstin: c.gstin, ret_period: f.period }, body: { gstin: c.gstin, ret_period: f.period } }, { action: 'submit', filingId: id });
+  const r = await portalOp(deps, c.id, { op: 'proceed', form: f.return_type, period: f.period, nil: !!opts.nil }, { action: how === 'submit' ? 'submit' : 'proceed', filingId: id });
   const ref = pick(r, 'reference_id', 'ref_id', 'refid', 'referenceId');
   return updateFiling(deps, id, ref ? { status: 'submitted', ref_id: String(ref), portal_status: 'PROCEED' } : { status: 'submitted', portal_status: 'P' });
 }
 
 /** Fetches the return summary from the portal; it is what gets filed. */
 export async function summaryFiling(deps: GstDeps, id: string) {
-  const { f, c, form } = await filingContext(deps, id, ['saved', 'submitted', 'offset', 'error', 'filed']);
-  const r = await portalCall(deps, c.id, 'GET', `${form.path}/retsum`, { query: { gstin: c.gstin, retperiod: f.period } }, { action: 'summary', filingId: id });
+  const { f, c } = await filingContext(deps, id, ['saved', 'submitted', 'offset', 'error', 'filed']);
+  const r = await portalOp(deps, c.id, { op: 'summary', form: f.return_type, period: f.period }, { action: 'summary', filingId: id });
   if (r.data == null) throw new GspError('The portal returned no summary yet; try again in a minute', null, r);
   return updateFiling(deps, id, { summary: r.data });
 }
@@ -858,7 +856,7 @@ export async function proposeOffset(deps: GstDeps, id: string) {
   const { f, c } = await filingContext(deps, id, ['saved', 'submitted', 'error']);
   if (f.return_type !== 'GSTR3B') throw badRequest('Only GSTR-3B is offset');
   if (!f.summary) throw badRequest('Fetch the return summary first');
-  const bal = await portalCall(deps, c.id, 'GET', '/ledgers/bal', { query: { gstin: c.gstin, retperiod: f.period } }, { action: 'view.ledger_balance', quiet: true });
+  const bal = await portalOp(deps, c.id, { op: 'view', kind: 'ledger_balance', q: { period: f.period } }, { action: 'view.ledger_balance', quiet: true });
   const itcBal = bal.data?.itc_bal ?? {};
   const credit = { i: n(itcBal.igst_bal), c: n(itcBal.cgst_bal), s: n(itcBal.sgst_bal), cs: n(itcBal.cess_bal) };
   const cashBal = bal.data?.cash_bal ?? {};
@@ -920,36 +918,34 @@ export async function offsetFiling(deps: GstDeps, id: string, body: { pdcash: un
   const { f, c } = await filingContext(deps, id, ['saved', 'submitted', 'error']);
   if (f.return_type !== 'GSTR3B') throw badRequest('Only GSTR-3B is offset');
   if (!Array.isArray(body.pdcash)) throw badRequest('pdcash is required');
-  await portalCall(deps, c.id, 'PUT', '/gstr3b/retoffset', { headers: { gstin: c.gstin, ret_period: f.period }, body }, { action: 'offset', filingId: id });
+  await portalOp(deps, c.id, { op: 'offset', period: f.period, body }, { action: 'offset', filingId: id });
   return updateFiling(deps, id, { status: 'offset' });
 }
 
 /* filing */
 
 export async function requestEvcOtp(deps: GstDeps, id: string, pan?: string | null) {
-  const { f, c, form } = await filingContext(deps, id, ['saved', 'submitted', 'offset']);
+  const { f, c } = await filingContext(deps, id, ['saved', 'submitted', 'offset']);
   const p = (pan ?? c.signatory_pan ?? '').trim().toUpperCase();
   if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(p)) throw badRequest("Enter the authorised signatory's PAN");
-  await portalCall(deps, c.id, 'GET', '/authentication/otpforevc', { query: { gstin: c.gstin, pan: p, form_type: form.evc } }, { action: 'evc.otp', filingId: f.id });
+  await portalOp(deps, c.id, { op: 'evcOtp', form: f.return_type, pan: p }, { action: 'evc.otp', filingId: f.id });
   return { ok: true };
 }
 
 /**
  * Files the return with the summary as fetched. EVC needs the OTP sent to the signatory; DSC needs
- * the signatory's DSC registered on the GST portal (and WhiteBooks' signer).
+ * the signatory's DSC registered on the GST portal (and the provider's signer; not every provider has DSC).
  */
 export async function fileFiling(deps: GstDeps, id: string, input: { mode: 'evc' | 'dsc'; pan?: string | null; otp?: string | null }) {
-  const { f, c, form } = await filingContext(deps, id, ['saved', 'submitted', 'offset']);
+  const { f, c, form, gp } = await filingContext(deps, id, ['saved', 'submitted', 'offset']);
   if (!f.summary) throw badRequest('Fetch and check the return summary first');
-  if (form.proceed && f.status === 'saved') throw badRequest('Proceed to file first, then fetch the summary again');
+  if (input.mode === 'dsc' && !gp.dsc) throw badRequest(`${gp.label} files with EVC only`);
+  if (gp.proceed(f.return_type) && f.status === 'saved') throw badRequest('Proceed to file first, then fetch the summary again');
   if (form.offset && f.status !== 'offset') throw badRequest('Offset the liability first');
   const pan = (input.pan ?? c.signatory_pan ?? '').trim().toUpperCase();
   if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) throw badRequest("Enter the authorised signatory's PAN");
   if (input.mode === 'evc' && !/^\d{6}$/.test(input.otp ?? '')) throw badRequest('Enter the 6-digit EVC OTP');
-  const r =
-    input.mode === 'evc'
-      ? await portalCall(deps, c.id, 'POST', `${form.path}/retevcfile`, { query: { pan, evcotp: input.otp! }, headers: { gstin: c.gstin, ret_period: f.period }, body: f.summary }, { action: 'file.evc', filingId: id })
-      : await portalCall(deps, c.id, 'POST', `${form.path}/retfile`, { query: { pan }, headers: { gstin: c.gstin, ret_period: f.period }, body: f.summary }, { action: 'file.dsc', filingId: id });
+  const r = await portalOp(deps, c.id, { op: 'file', form: f.return_type, period: f.period, mode: input.mode, pan, otp: input.otp ?? null, summary: f.summary }, { action: `file.${input.mode}`, filingId: id });
   const arn = pick(r, 'ack_num', 'arn', 'ackNum', 'ack_no', 'ARN');
   return deps.run(async (ctx) => {
     const row = (await ctx.tx.one<FilingRow>(
@@ -958,7 +954,7 @@ export async function fileFiling(deps: GstDeps, id: string, input: { mode: 'evc'
     ))!;
     await ctx.tx.query(`insert into audit_logs (tenant_id, action, object_key, changes) values ($1, 'gst_file', $2, $3)`, [ctx.tenantId, 'gst_filing', JSON.stringify({ gstin: c.gstin, form: f.return_type, period: f.period, arn, mode: input.mode })]);
     if (pan !== c.signatory_pan) await ctx.tx.query(`update gst_connections set signatory_pan = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, c.id, pan]);
-    return filingDto(row);
+    return filingDto(row, getProvider(deps.env));
   });
 }
 
@@ -966,7 +962,7 @@ export async function fileFiling(deps: GstDeps, id: string, input: { mode: 'evc'
 export async function resetFiling(deps: GstDeps, id: string) {
   const { f, c, form } = await filingContext(deps, id, ['saved', 'error', 'saving']);
   if (!['GSTR1', 'GSTR1A'].includes(f.return_type)) throw badRequest(`${form.label} cannot be reset this way`);
-  await portalCall(deps, c.id, 'POST', `${form.path}/reset`, { headers: { gstin: c.gstin, ret_period: f.period }, body: { gstin: c.gstin, ret_period: f.period } }, { action: 'reset', filingId: id });
+  await portalOp(deps, c.id, { op: 'reset', form: f.return_type, period: f.period }, { action: 'reset', filingId: id });
   return updateFiling(deps, id, { status: 'prepared', ref_id: null, portal_status: null, error_report: null, summary: null });
 }
 
@@ -996,15 +992,15 @@ export function gstr2bRows(data: any): Gstr2bRow[] {
 /** Fetches GSTR-2B for a period and matches it against bills (the reconciliation in Books). */
 export async function importGstr2bFromPortal(deps: GstDeps, connectionId: string, period: string) {
   fromRetPeriod(period);
-  const gstin = await deps.run(async (ctx) => {
+  await deps.run(async (ctx) => {
     assertGstAdmin(ctx);
-    return (await loadConn(ctx, connectionId)).gstin;
+    await loadConn(ctx, connectionId);
   });
-  const first = await portalCall(deps, connectionId, 'GET', '/gstr2b/all', { query: { gstin, rtnprd: period } }, { action: 'view.gstr2b' });
+  const first = await portalOp(deps, connectionId, { op: 'view', kind: 'gstr2b', q: { period } }, { action: 'view.gstr2b' });
   const rows = gstr2bRows(first.data);
   const fc = n(first.data?.data?.fc ?? first.data?.fc);
   for (let k = 2; k <= Math.min(fc, 50); k++) {
-    const r = await portalCall(deps, connectionId, 'GET', '/gstr2b/all', { query: { gstin, rtnprd: period, filenum: k } }, { action: 'view.gstr2b', quiet: true });
+    const r = await portalOp(deps, connectionId, { op: 'view', kind: 'gstr2b', q: { period, fileNo: String(k) } }, { action: 'view.gstr2b', quiet: true });
     rows.push(...gstr2bRows(r.data));
   }
   return deps.run(async (ctx) => ({ ...(await importGstr2b(ctx, period, rows)), fetched: rows.length }));
@@ -1025,6 +1021,8 @@ export interface ChallanInput {
 /** Creates a GST payment challan (PMT-06) on the portal; pay it with the CPIN at the bank. */
 export async function createChallan(deps: GstDeps, connectionId: string, input: ChallanInput) {
   fromRetPeriod(input.period);
+  const gp = requireProvider(deps.env);
+  if (!gp.challan) throw badRequest(`Create the challan on the GST portal (Services → Payments → Create Challan); ${gp.label} doesn't offer it`);
   const { c, company } = await deps.run(async (ctx) => {
     assertGstAdmin(ctx);
     const c = await loadConn(ctx, connectionId);
@@ -1053,7 +1051,7 @@ export async function createChallan(deps: GstDeps, connectionId: string, input: 
   }
   if (!(total > 0)) throw badRequest('Enter the amounts to pay');
   body.total_amt = total;
-  const r = await portalCall(deps, connectionId, 'POST', '/payment/generateChallan', { headers: { gstin: c.gstin, ret_period: input.period }, body }, { action: 'challan.create' });
+  const r = await portalOp(deps, connectionId, { op: 'challan', period: input.period, body }, { action: 'challan.create' });
   return { cpin: pick(r, 'cpin', 'CPIN') ?? null, total, expiresOn: pick(r, 'chln_exp_dt', 'expiry') ?? null, data: r.data };
 }
 

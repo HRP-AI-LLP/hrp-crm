@@ -247,3 +247,9 @@ An independent review of the fifth round found no cross-tenant leaks; these were
   - Every call is logged in `gst_events` (append-only for the app role), and filing also writes an audit log entry.
 - **Sessions:** a session-expired answer from the portal marks the connection expired. The OTP must be verified within 15 minutes of the request.
 - **Issued invoices:** the issued-invoice guard was widened only for the IRN's QR code, the IRN cancellation time and the e-way bill fields. Tax content stays frozen.
+
+#### GST provider choice: India Compliance
+
+- **Two providers, one interface:** `services/gst/provider.ts`. India Compliance's key (`INDIA_COMPLIANCE_API_SECRET`) is a Worker secret; `pnpm gst:ic-account` writes it to the git-ignored `.env` and never prints it.
+- **GSTN encryption in the app** (`gstn-crypto.ts`): AES-256-ECB, HMAC-SHA256 and RSA PKCS#1 v1.5 with GSTN's public certificate. Tests check them against OpenSSL. Every encrypted response's HMAC is verified before it is used. The session key (sek), auth token and app key live only in the sealed session. A fresh app key is made for every OTP.
+- **No returns sandbox** with India Compliance: filing still needs the fetched summary, the proceed/submit step, the GSTR-3B offset, the signatory's PAN, the EVC OTP and the declaration.

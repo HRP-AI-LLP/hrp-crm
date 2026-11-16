@@ -188,7 +188,7 @@ describe('GST portal through WhiteBooks', () => {
     ids.conn = c.json.id;
     expect(c.json).toMatchObject({ gstin: SELLER, status: 'disconnected', hasEinvPassword: true, hasEwbPassword: true });
     const list = await api('GET', '/api/v1/gst/connections');
-    expect(list.json.gsp).toEqual({ provider: 'WhiteBooks', configured: true, sandbox: true });
+    expect(list.json.gsp).toMatchObject({ provider: 'WhiteBooks', id: 'whitebooks', configured: true, sandbox: true, challan: true, dsc: true });
     expect(list.text).not.toContain('irp-secret');
     expect(list.text).not.toContain('ewb-secret');
     // the public taxpayer search needs no OTP
@@ -198,7 +198,7 @@ describe('GST portal through WhiteBooks', () => {
   });
 
   it('needs the OTP before any portal call, then keeps a 6-hour session', async () => {
-    expect((await api('POST', `/api/v1/gst/connections/${ids.conn}/views/ledger_balance`, { retperiod: PERIOD })).status).toBe(409);
+    expect((await api('POST', `/api/v1/gst/connections/${ids.conn}/views/ledger_balance`, { period: PERIOD })).status).toBe(409);
     expect((await api('POST', `/api/v1/gst/connections/${ids.conn}/verify`, { otp: '575757' })).status).toBe(400); // no OTP requested yet
     const otp = await api('POST', `/api/v1/gst/connections/${ids.conn}/otp`);
     expect(otp.status, JSON.stringify(otp.json)).toBe(200);
@@ -220,16 +220,16 @@ describe('GST portal through WhiteBooks', () => {
   });
 
   it('shows ledgers, notices and returns already filed on the portal', async () => {
-    const bal = await api('POST', `/api/v1/gst/connections/${ids.conn}/views/ledger_balance`, { retperiod: PERIOD });
+    const bal = await api('POST', `/api/v1/gst/connections/${ids.conn}/views/ledger_balance`, { period: PERIOD });
     expect(bal.status, JSON.stringify(bal.json)).toBe(200);
     expect(bal.json.data.itc_bal.igst_bal).toBe(5000);
     expect(calls.at(-1)!.headers.txn).toBe('TXN-LIVE-1');
-    const notices = await api('POST', `/api/v1/gst/connections/${ids.conn}/views/notices`, { date: '2026-04-01' });
+    const notices = await api('POST', `/api/v1/gst/connections/${ids.conn}/views/notices`, { from: '2026-04-01' });
     expect(notices.status).toBe(200);
     expect(calls.at(-1)!.query.date).toBe('01-04-2026'); // sent as dd-mm-yyyy
     expect((await api('POST', `/api/v1/gst/connections/${ids.conn}/views/nope`, {})).status).toBe(400);
-    expect((await api('POST', `/api/v1/gst/connections/${ids.conn}/views/notices`, { date: "1'; drop" })).status).toBe(400);
-    await api('POST', `/api/v1/gst/connections/${ids.conn}/views/return_track`, { returnperiod: PERIOD });
+    expect((await api('POST', `/api/v1/gst/connections/${ids.conn}/views/notices`, { from: "1'; drop" })).status).toBe(400);
+    await api('POST', `/api/v1/gst/connections/${ids.conn}/views/return_track`, { period: PERIOD });
     const ov = await api('GET', `/api/v1/gst/connections/${ids.conn}/overview`);
     expect(ov.status, JSON.stringify(ov.json)).toBe(200);
     expect(ov.json.ledgerBalance.data.cash_bal.igst_tot_bal).toBe(1000);

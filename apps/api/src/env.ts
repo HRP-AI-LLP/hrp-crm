@@ -60,6 +60,13 @@ export interface Env {
   MS_CLIENT_SECRET?: string;
   /** GST portal, e-invoice and e-way bill through the WhiteBooks GSP (developer.whitebooks.in).
    *  WHITEBOOKS_ENV: sandbox (default) or production; the e-invoice / e-way bill keys fall back to the GST API keys. */
+  /** Which GSP: indiacompliance or whitebooks (default: whichever has keys, India Compliance first). */
+  GST_PROVIDER?: string;
+  /** India Compliance (asp.resilient.tech) API key; INDIA_COMPLIANCE_TEST_MODE=true sends e-invoice and
+   *  e-way bill calls to its test servers (returns always go to the live GST portal). */
+  INDIA_COMPLIANCE_API_SECRET?: string;
+  INDIA_COMPLIANCE_TEST_MODE?: string;
+  INDIA_COMPLIANCE_BASE_URL?: string;
   WHITEBOOKS_ENV?: string;
   WHITEBOOKS_BASE_URL?: string;
   WHITEBOOKS_EMAIL?: string;

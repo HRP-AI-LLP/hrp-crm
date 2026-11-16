@@ -1,23 +1,52 @@
-# GST portal, e-invoice and e-way bill (WhiteBooks GSP)
+# GST portal, e-invoice and e-way bill (through a GSP)
 
-Synapse connects to the GST portal through a GST Suvidha Provider (GSP): **WhiteBooks** (developer.whitebooks.in). From **Billing & GST → GST portal** you can:
+Synapse connects to the GST portal through a GST Suvidha Provider (GSP). Two providers are built in:
+
+| | **India Compliance** (Resilient Tech) — recommended for one organisation | **WhiteBooks** |
+|---|---|---|
+| Pricing | Pay per call: 1 credit = 1 call to the government system; small packs; new accounts have been offered free credits | Yearly packs from 1 lakh calls |
+| Returns | GSTR-1 and GSTR-3B saved and filed with EVC; ledgers, return status, GSTR-2B. Other returns: download the JSON and upload it on gst.gov.in | All returns, EVC and DSC, challans, notices |
+| Sandbox | None for returns (calls reach the live GST portal). E-invoice and e-way bill have a test mode | Full sandbox (OTP 575757) |
+| How | GSTN's own API; Synapse does GSTN's encryption itself | The GSP encrypts |
+
+The server uses whichever has keys (India Compliance first); `GST_PROVIDER=indiacompliance` or `whitebooks` in `.env` picks one.
+
+From **Billing & GST → GST portal** you can:
 
 - see the filing calendar with what is due, overdue and filed;
-- see the cash and credit (ITC) ledger balances, the liability ledger, tax payable, notices and orders, and challans;
-- prepare, save and file returns with EVC or DSC:
+- see the cash and credit (ITC) ledger balances, the liability ledger, tax payable, return status and (WhiteBooks) notices and challans;
+- prepare, save and file returns:
   - GSTR-1 and GSTR-3B (built from your invoices, bills and expenses);
   - ITC-04 (from job work);
-  - GSTR-2X (accepting TDS/TCS credits);
-  - GSTR-9;
+  - GSTR-2X (accepting TDS/TCS credits) and GSTR-9 (WhiteBooks);
   - GSTR-7, GSTR-1A, GSTR-9C, GSTR-6, GSTR-8 and CMP-08 (from portal JSON);
+  - whatever the provider can't send: **Download JSON** and upload it on gst.gov.in;
 - fetch GSTR-2B and match it against your bills;
-- create payment challans.
+- create payment challans (WhiteBooks).
 
 On an invoice you can generate the **IRN** (e-invoice) and the **e-way bill**, update the vehicle, and cancel either one. The e-invoice's signed QR code and the e-way bill number are printed on the invoice.
 
 ## Setting it up
 
-### 1. Platform keys (once per server)
+### 1a. India Compliance (once per server)
+
+From the repo folder:
+
+```
+pnpm gst:ic-account trial 09AAAAA0000A1Z5          # is your GSTIN eligible for the free credits?
+pnpm gst:ic-account signup you@company.com 09AAAAA0000A1Z5
+#   → click the sign-in link India Compliance e-mails you, then:
+pnpm gst:ic-account finish                          # saves the API key in .env (never printed)
+pnpm gst:ic-account status                          # credits left
+pnpm gst:ic-account prices                          # price per credit
+```
+
+`finish` writes `INDIA_COMPLIANCE_API_SECRET` and `GST_PROVIDER=indiacompliance` into the repo-root `.env`. Restart with `pnpm local:stop`, then `pnpm local`. Already have an account (for example from ERPNext)? Use `pnpm gst:ic-account login you@company.com`, then `finish`.
+
+- Credits are bought on your India Compliance account (or by writing to them); when they run out, the app says so.
+- `INDIA_COMPLIANCE_TEST_MODE=true` sends e-invoice and e-way bill calls to India Compliance's test servers with its test taxpayer, so you can try them safely. Returns always go to the live portal, so go step by step and read the summary before filing.
+
+### 1b. WhiteBooks (once per server)
 
 Put the keys from developer.whitebooks.in → API keys in the **repo-root `.env`** (it is git-ignored). `pnpm local` passes them to the API.
 
@@ -33,17 +62,17 @@ WHITEBOOKS_EWAYBILL_CLIENT_ID=…
 WHITEBOOKS_EWAYBILL_CLIENT_SECRET=…
 ```
 
-To check the keys, run `pnpm gst:check`. It calls the public taxpayer search and prints only the status, never the keys. Add a GSTIN and a GST portal username to also request an OTP: `pnpm gst:check 09AAAAA0000A1Z5 my_gst_user`.
+To check the keys, run `pnpm gst:check`. It prints only the status, never the keys.
 
-On a deployed Worker, set the same names as secrets with `wrangler secret put WHITEBOOKS_CLIENT_SECRET` and so on.
+Sandbox and production keys are different. The sandbox only knows WhiteBooks' test taxpayers, not your real GSTIN; every sandbox OTP is **575757**.
 
-Sandbox and production keys are different. Sandbox keys only work with `WHITEBOOKS_ENV=sandbox`. In the sandbox, every OTP is **575757**.
+On a deployed Worker, set the same names as secrets with `wrangler secret put …`.
 
 ### 2. The taxpayer (once per GSTIN)
 
 1. On **gst.gov.in**, go to *My Profile → Manage API Access*.
    - Choose **Yes** and a duration (up to 30 days).
-   - If asked, choose WhiteBooks as the GSP.
+   - If asked, choose your provider's GSP.
    - Without this, the OTP request fails.
 2. In Synapse, go to **Billing & GST → GST portal**, add the registration and fill in:
    - **GSTIN** (*Look up* fills in the legal name from the portal);
@@ -54,7 +83,7 @@ Sandbox and production keys are different. Sandbox keys only work with `WHITEBOO
 
 ### 3. E-invoice and e-way bill (optional)
 
-1. On **einvoice1.gst.gov.in**, go to *API Registration → Create API User → Through GSP*, choose WhiteBooks, and create a username and password.
+1. On **einvoice1.gst.gov.in**, go to *API Registration → Create API User → Through GSP*, choose your provider's GSP (India Compliance: ask them which GSP to pick), and create a username and password.
 2. Do the same on **ewaybillgst.gov.in**, under *Registration → For GSP*.
 3. Enter both under **GST portal → Registration**. The passwords are stored encrypted and are never shown again.
 
@@ -67,10 +96,10 @@ Open **Returns → Prepare a return**, or press **Prepare** on a line of the cal
 | 1. Prepare | From issued invoices and credit notes | From the books' GSTR-3B working | ITC-04 from job work; GSTR-2X and GSTR-9 from the portal; the rest from portal JSON |
 | 2. Save to the portal | ✓ | ✓ | ✓ |
 | 3. Check status | Processed, or the portal's error report | ✓ | ✓ |
-| 4. Proceed to file | ✓ (the portal builds the summary) | — | GSTR-6: submit |
+| 4. Proceed to file / submit | ✓ (the portal builds the summary) | India Compliance: Submit (freezes the figures) | GSTR-6: submit |
 | 5. Fetch summary | ✓ | ✓ (with the liability) | ✓ |
 | 6. Offset liability | — | Synapse proposes it from the ledgers; you check it and send it | — |
-| 7. File | EVC (OTP to the signatory) or DSC | EVC or DSC | EVC or DSC |
+| 7. File | EVC (OTP to the signatory); DSC with WhiteBooks | EVC; DSC with WhiteBooks | EVC or DSC |
 
 - **What gets filed** is the summary the portal returns, not Synapse's own figures. Read it before filing.
 - **Download JSON** gives you the exact portal JSON. You can upload it by hand in the GST offline tool instead.
@@ -128,7 +157,7 @@ On an issued invoice, the **E-invoice & e-way bill** panel offers these actions.
 
 - Books or billing admins can use the GST portal, file returns and generate IRNs and e-way bills.
 - Taxpayer search (Look up) is also open to account admins.
-- Platform keys are never sent to the browser.
+- Platform keys (`INDIA_COMPLIANCE_API_SECRET`, `WHITEBOOKS_*`) are never sent to the browser.
 - The e-invoice and e-way bill passwords and the portal session are encrypted with `DATA_ENCRYPTION_KEY`, with the workspace bound in. They are never returned.
 
 ## Good to know
@@ -137,8 +166,9 @@ On an issued invoice, the **E-invoice & e-way bill** panel offers these actions.
   - Quarterly GSTR-3B is due on the 22nd or the 24th, depending on the state.
   - The calendar marks a return filed when it was filed from Synapse, or when *Update filed returns from the portal* finds it filed.
 - **The schema follows GSTN's API** (2025 format: HSN split into B2B and B2C). If WhiteBooks or GSTN change a field, the portal's error report says which one. You can also download the JSON, fix it, and upload it as portal JSON.
-- **DSC filing** needs the signatory's DSC registered on the GST portal and WhiteBooks' signing utility. EVC needs nothing extra.
-- **Sandbox first.** Run the whole flow in WhiteBooks' sandbox before switching `WHITEBOOKS_ENV` to production.
+- **DSC filing** (WhiteBooks only) needs the signatory's DSC registered on the GST portal and WhiteBooks' signing utility. EVC needs nothing extra.
+- **India Compliance has no returns sandbox.** Saving to the portal is safe (you can save again or reset GSTR-1); *Proceed to file* / *Submit* freezes the figures and *File* is final. Check the summary each time.
+- **Encryption with India Compliance:** Synapse encrypts with GSTN's public certificate (fetched from the provider), AES-256 session keys and HMACs, and checks the HMAC on every response.
 
 ## API
 

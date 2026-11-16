@@ -89,7 +89,7 @@ export const gstRoutes = new Hono<AppEnv>()
     const b = z.object({ fyStart: z.number().int().min(2017).max(2100) }).parse(await c.req.json());
     return c.json(await gst.syncReturnTrack(deps(c), id(c), b.fyStart));
   })
-  .get('/gst/views', (c) => c.json(Object.entries(gst.VIEWS).map(([k, v]) => ({ kind: k, label: v.label, params: v.params, optional: v.optional ?? [], dates: v.dates ?? [] }))))
+  .get('/gst/views', (c) => c.json(gst.viewsFor(c.env)))
   .post('/gst/connections/:id/views/:kind', async (c) => {
     const params = z.record(z.string(), z.string().max(64)).parse(await c.req.json().catch(() => ({})));
     return c.json(await gst.fetchView(deps(c), id(c), c.req.param('kind'), params));
