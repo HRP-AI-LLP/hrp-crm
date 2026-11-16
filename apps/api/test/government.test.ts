@@ -154,6 +154,23 @@ describe('a GeM contract with FCI', () => {
     await balanced();
   });
 
+  it('refuses dates before the deposit, and deductions on foreign-currency receipts', async () => {
+    const d = (await api('POST', '/api/v1/deposits', { kind: 'security_deposit', instrument: 'online', accountId: ids.fci, amount: 5000, paidFrom: acc.bank, issueDate: today })).json.id;
+    expect((await api('POST', `/api/v1/deposits/${d}/release`, { date: addDays(today, -3), bankAccountId: acc.bank })).status).toBe(400);
+    expect((await api('POST', `/api/v1/deposits/${d}/release`, { bankAccountId: acc.bank })).status).toBe(200);
+    expect((await api('POST', '/api/v1/payments', { accountId: ids.fci, amount: 100, currency: 'USD', exchangeRate: 83, retentionAmount: 10 })).status).toBe(400);
+  });
+
+  it('a deposit from before the books is released without a journal', async () => {
+    await api('PUT', '/api/v1/books/settings', { enabled: false, booksOfRecord: 'synapse', startDate: fyStart });
+    const d = (await api('POST', '/api/v1/deposits', { kind: 'emd', instrument: 'dd', accountId: ids.fci, amount: 7000 })).json.id;
+    await api('PUT', '/api/v1/books/settings', { enabled: true, booksOfRecord: 'synapse', startDate: fyStart });
+    const before = await balance('emd_deposits');
+    expect((await api('POST', `/api/v1/deposits/${d}/release`, { bankAccountId: acc.bank })).status).toBe(200);
+    expect(await balance('emd_deposits')).toBeCloseTo(before, 2);
+    await balanced();
+  });
+
   it('only billing or books admins see the register', async () => {
     const u = await api('POST', '/api/admin/users', { email: 'rep@acme.test', fullName: 'Rep', password: 'Str0ng-Passw0rd!', roles: ['sales_rep'] });
     expect(u.status).toBe(201);

@@ -10,6 +10,7 @@ import { date, money2 } from '../../lib/format';
 import { Modal, useToast } from '../ui';
 import { type DocLine, LinesEditor, toLineInput } from './LinesEditor';
 import { TallySync } from './TallySync';
+import { Deposits } from '../books/Deposits';
 
 type Json = Record<string, any>;
 const STATUS_CLS: Record<string, string> = { draft: '', issued: 'info', partially_paid: 'warn', paid: 'good', cancelled: 'bad' };
@@ -35,7 +36,7 @@ const DEDUCTIONS: [string, string, string][] = [
   ['tds', 'Income-tax TDS', 'Deducted under 194C / 194J; claim against Form 26AS'],
   ['gstTds', 'GST TDS (section 51)', 'Government buyers deduct 2% of the taxable value on contracts above ₹2.5 lakh'],
   ['ld', 'Liquidated damages / penalty', 'Kept by the buyer: booked as an expense'],
-  ['retention', 'Retention / security withheld', 'Still yours: tracked under Books → Deposits & guarantees until released'],
+  ['retention', 'Retention / security withheld', 'Still yours: tracked under Deposits & guarantees until released'],
   ['charges', 'Bank charges', ''],
 ];
 
@@ -613,7 +614,7 @@ export function OrderBilling({ order, milestones, canEdit }: { order: Json; mile
 
 /** /billing — receivables, GST returns, Tally sync and export, and billing settings. */
 export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
-  const [tab, setTab] = useState<'ar' | 'gst' | 'tally' | 'settings'>('ar');
+  const [tab, setTab] = useState<'ar' | 'gst' | 'deposits' | 'tally' | 'settings'>('ar');
   return (
     <>
       <div className="page-head">
@@ -628,6 +629,7 @@ export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
             [
               ['ar', 'Receivables'],
               ['gst', 'GST returns'],
+              ['deposits', 'Deposits & guarantees'],
               ['tally', 'Tally'],
               ['settings', 'Settings'],
             ] as const
@@ -641,6 +643,11 @@ export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
         </div>
         {tab === 'ar' && <Receivables />}
         {tab === 'gst' && <GstReturns />}
+        {tab === 'deposits' && (
+          <div className="panel-body">
+            <Deposits />
+          </div>
+        )}
         {tab === 'tally' && (
           <>
             <TallySync />
@@ -853,11 +860,16 @@ function BillingSettingsForm() {
             ['igst', 'IGST'],
             ['roundOff', 'Round off'],
             ['bank', 'Bank (receipts)'],
+            ['tds', 'TDS deducted by customers'],
+            ['gstTds', 'GST TDS (section 51)'],
+            ['ld', 'Liquidated damages / penalty'],
+            ['retention', 'Retention money'],
+            ['bankCharges', 'Bank charges'],
           ] as const
         ).map(([k, l]) => (
           <label key={k} className="field">
             {l}
-            <input value={v.ledgers[k]} onChange={(e) => setL(k, e.target.value)} />
+            <input value={v.ledgers[k] ?? ''} onChange={(e) => setL(k, e.target.value)} />
           </label>
         ))}
       </div>

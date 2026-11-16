@@ -35,6 +35,16 @@ export function assertDepositAdmin(ctx: RecordCtx) {
   if (!hasAdmin(p, 'books') && !hasAdmin(p, 'billing')) throw forbidden('Deposits and guarantees need the books or billing permission');
 }
 
+/** Changes post journals when Synapse keeps the books: then they are for books admins only. */
+async function assertDepositWriter(ctx: RecordCtx) {
+  assertDepositAdmin(ctx);
+  if ((await postingOn(ctx.tx, ctx.tenantId)) && !hasAdmin(ctx.principal.permissions, 'books')) throw forbidden('Synapse keeps the books: changing deposits needs the books permission');
+}
+
+function notBefore(date: string, issued: unknown) {
+  if (date < String(issued).slice(0, 10)) throw badRequest('That date is before the deposit was given');
+}
+
 const today = () => new Date().toISOString().slice(0, 10);
 
 async function bankAccount(tx: Tx, tenantId: string, id: string | null | undefined, required: boolean) {
@@ -144,7 +154,7 @@ async function checkLinks(ctx: RecordCtx, input: DepositInput) {
 }
 
 export async function createDeposit(ctx: RecordCtx, input: DepositInput) {
-  assertDepositAdmin(ctx);
+  await assertDepositWriter(ctx);
   await checkLinks(ctx, input);
   const amount = r2(input.amount);
   const margin = r2(input.marginAmount ?? 0);
@@ -161,11 +171,13 @@ export async function createDeposit(ctx: RecordCtx, input: DepositInput) {
   const number = `SD-${String(n!.n).padStart(4, '0')}`;
   const date = input.issueDate ?? today();
   const d = await ctx.tx.one<{ id: string }>(
-    `insert into security_deposits (tenant_id, deposit_number, kind, instrument, account_id, project_id, sales_order_id, deal_id, reference, issuing_bank, amount, margin_amount, issue_date, expiry_date, claim_until, paid_from, notes)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning id`,
+    `insert into security_deposits (tenant_id, deposit_number, kind, instrument, account_id, project_id, sales_order_id, deal_id, reference, issuing_bank, amount, margin_amount, issue_date, expiry_date, claim_until, paid_from, notes, in_ledger)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) returning id`,
     [
       ctx.tenantId, number, input.kind, input.instrument, input.accountId, input.projectId ?? null, input.salesOrderId ?? null, input.dealId ?? null, input.reference ?? null,
       input.issuingBank ?? null, amount, margin, date, input.expiryDate ?? null, input.claimUntil ?? null, paidFrom, input.notes ?? null,
+      // in the ledger: posted now, or the user says it is already in the opening balances
+      (posting && moves && !!paidFrom) || (!!input.opening && !!(await postingOn(ctx.tx, ctx.tenantId))),
     ],
   );
   const ev = await addEvent(ctx, d!.id, { kind: 'place', date, amount, margin, bank: paidFrom, note: input.opening ? 'Already in the opening balances' : null });
@@ -195,16 +207,18 @@ async function settle(ctx: RecordCtx, d: Record<string, any>) {
 
 /** Money (or a guarantee) coming back. Cash deposits and retention can come back in parts; a guarantee is released whole. */
 export async function releaseDeposit(ctx: RecordCtx, id: string, input: { amount?: number | null; date?: string | null; bankAccountId?: string | null; note?: string | null }) {
-  assertDepositAdmin(ctx);
+  await assertDepositWriter(ctx);
   const d = await lockDeposit(ctx, id);
   const held = r2(Number(d.amount) - Number(d.released_amount) - Number(d.forfeited_amount));
   const guarantee = GUARANTEE.includes(d.instrument);
   const amount = guarantee || d.instrument === 'exempt' ? held : r2(input.amount ?? held);
   if (!(amount > 0) || amount > held + 0.009) throw badRequest(`Up to ${held} can be released`);
   const date = input.date ?? today();
+  notBefore(date, d.issue_date);
   const margin = guarantee ? await marginLeft(ctx.tx, ctx.tenantId, d as never) : 0;
   const money = guarantee ? margin : d.instrument === 'exempt' ? 0 : amount;
-  const posting = !!(await postingOn(ctx.tx, ctx.tenantId));
+  // a deposit that never reached the ledger (given before the books, or while Tally kept them) is released without a journal
+  const posting = !!(await postingOn(ctx.tx, ctx.tenantId)) && !!d.in_ledger;
   const bank = await bankAccount(ctx.tx, ctx.tenantId, input.bankAccountId, posting && money > 0);
   const ev = await addEvent(ctx, id, { kind: 'release', date, amount, margin, bank, note: input.note });
   await ctx.tx.query(`update security_deposits set released_amount = released_amount + $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, amount]);
@@ -219,25 +233,30 @@ export async function releaseDeposit(ctx: RecordCtx, id: string, input: { amount
 
 /** The customer keeps some or all of it (liquidated damages recovered, EMD forfeited, guarantee invoked). */
 export async function forfeitDeposit(ctx: RecordCtx, id: string, input: { amount: number; date?: string | null; bankAccountId?: string | null; reason: string }) {
-  assertDepositAdmin(ctx);
+  await assertDepositWriter(ctx);
   const d = await lockDeposit(ctx, id);
   const held = r2(Number(d.amount) - Number(d.released_amount) - Number(d.forfeited_amount));
   const amount = r2(input.amount);
   if (!(amount > 0) || amount > held + 0.009) throw badRequest(`Up to ${held} can be forfeited`);
   if (d.instrument === 'exempt') throw badRequest('Nothing was paid against an exemption');
   const date = input.date ?? today();
+  notBefore(date, d.issue_date);
   const guarantee = GUARANTEE.includes(d.instrument);
   const margin = guarantee ? Math.min(amount, await marginLeft(ctx.tx, ctx.tenantId, d as never)) : 0;
   const fromBank = guarantee ? r2(amount - margin) : 0;
-  const posting = !!(await postingOn(ctx.tx, ctx.tenantId));
-  const bank = await bankAccount(ctx.tx, ctx.tenantId, input.bankAccountId, posting && fromBank > 0);
+  const books = !!(await postingOn(ctx.tx, ctx.tenantId));
+  // a cash deposit that never reached the ledger is forfeited without a journal; a guarantee is always
+  // booked (the bank pays the buyer now), its margin from the margin ledger only when that holds it
+  const posting = books && (guarantee || !!d.in_ledger);
+  const marginFromBank = guarantee && !d.in_ledger ? margin : 0;
+  const bank = await bankAccount(ctx.tx, ctx.tenantId, input.bankAccountId, posting && fromBank + marginFromBank > 0);
   const ev = await addEvent(ctx, id, { kind: 'forfeit', date, amount, margin, bank, note: input.reason });
   await ctx.tx.query(`update security_deposits set forfeited_amount = forfeited_amount + $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, amount]);
   if (posting) {
     const lines: JLine[] = [{ accountId: await sys(ctx.tx, ctx.tenantId, 'liquidated_damages'), debit: amount, partyType: 'customer', partyId: d.account_id, projectId: d.project_id, description: input.reason }];
     if (guarantee) {
-      if (margin) lines.push({ accountId: await sys(ctx.tx, ctx.tenantId, 'bg_margin'), credit: margin, partyType: 'customer', partyId: d.account_id });
-      if (fromBank && bank) lines.push({ accountId: bank, credit: fromBank, description: 'Guarantee invoked: paid by the bank' });
+      if (margin && d.in_ledger) lines.push({ accountId: await sys(ctx.tx, ctx.tenantId, 'bg_margin'), credit: margin, partyType: 'customer', partyId: d.account_id });
+      if (fromBank + marginFromBank && bank) lines.push({ accountId: bank, credit: r2(fromBank + marginFromBank), description: 'Guarantee invoked: paid by the bank / insurer' });
     } else lines.push({ accountId: await depositLedger(ctx.tx, ctx.tenantId, d.instrument), credit: amount, partyType: 'customer', partyId: d.account_id, projectId: d.project_id });
     await post(ctx, ev, date, d.reference || d.deposit_number, `${label(d.kind)} ${d.deposit_number} forfeited: ${input.reason}`, lines);
   }
@@ -247,7 +266,7 @@ export async function forfeitDeposit(ctx: RecordCtx, id: string, input: { amount
 
 /** A guarantee extended or renewed by the bank. */
 export async function extendDeposit(ctx: RecordCtx, id: string, input: { expiryDate: string; claimUntil?: string | null; reference?: string | null; note?: string | null }) {
-  assertDepositAdmin(ctx);
+  await assertDepositWriter(ctx);
   const d = await lockDeposit(ctx, id);
   if (input.expiryDate < String(d.issue_date).slice(0, 10)) throw badRequest('Expiry is before the issue date');
   if (input.claimUntil && input.claimUntil < input.expiryDate) throw badRequest('The claim period ends before expiry');
@@ -260,7 +279,7 @@ export async function extendDeposit(ctx: RecordCtx, id: string, input: { expiryD
 
 /** Entered by mistake: only while nothing has been released or forfeited. Retention goes with its receipt. */
 export async function cancelDeposit(ctx: RecordCtx, id: string, reason: string) {
-  assertDepositAdmin(ctx);
+  await assertDepositWriter(ctx);
   const d = await lockDeposit(ctx, id);
   if (d.payment_id) throw badRequest('Retention withheld on a receipt is cancelled by voiding the receipt');
   if (Number(d.released_amount) || Number(d.forfeited_amount)) throw badRequest('Part of this deposit was released or forfeited; it cannot be cancelled');
@@ -284,9 +303,9 @@ export async function retentionFromReceipt(ctx: RecordCtx, p: { id: string; numb
   const n = await ctx.tx.one<{ n: string }>(`select app.next_counter('deposit') as n`);
   const number = `SD-${String(n!.n).padStart(4, '0')}`;
   const d = await ctx.tx.one<{ id: string }>(
-    `insert into security_deposits (tenant_id, deposit_number, kind, instrument, account_id, project_id, sales_order_id, payment_id, reference, amount, issue_date, notes)
-     values ($1,$2,'retention','withheld',$3,$4,$5,$6,$7,$8,$9,$10) returning id`,
-    [ctx.tenantId, number, p.accountId, proj?.project_id ?? null, p.salesOrderId ?? null, p.id, p.reference ?? null, r2(p.amount), p.date, `Withheld from receipt ${p.number}`],
+    `insert into security_deposits (tenant_id, deposit_number, kind, instrument, account_id, project_id, sales_order_id, payment_id, reference, amount, issue_date, notes, in_ledger)
+     values ($1,$2,'retention','withheld',$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
+    [ctx.tenantId, number, p.accountId, proj?.project_id ?? null, p.salesOrderId ?? null, p.id, p.reference ?? null, r2(p.amount), p.date, `Withheld from receipt ${p.number}`, !!(await postingOn(ctx.tx, ctx.tenantId))],
   );
   await addEvent(ctx, d!.id, { kind: 'place', date: p.date, amount: p.amount, note: `Receipt ${p.number}` });
 }
@@ -304,14 +323,15 @@ export async function retentionOnVoid(ctx: RecordCtx, paymentId: string, reason:
  * the project manager are notified once each; an extension resets the reminders.
  */
 export async function sweepDepositExpiry(tx: Tx, tenantId: string) {
-  for (const days of [30, 7]) {
+  // the nearer threshold first, so a deposit already inside 7 days gets one reminder, not two
+  for (const days of [7, 30]) {
     const rows = await tx.query<{ id: string; deposit_number: string; kind: string; reference: string | null; expiry_date: string; customer: string; created_by: string | null; manager: string | null }>(
       `update security_deposits d set expiry_notice = $2
          from accounts a
         where d.tenant_id = $1 and a.tenant_id = d.tenant_id and a.id = d.account_id and d.status = 'active' and d.expiry_date is not null
           and d.expiry_date <= current_date + $2::int and (d.expiry_notice is null or d.expiry_notice > $2)
         returning d.id, d.deposit_number, d.kind, d.reference, d.expiry_date::text, a.name as customer, d.created_by,
-                  (select p.owner_id from projects p where p.tenant_id = d.tenant_id and p.id = d.project_id) as manager`,
+                  null::uuid as manager`,
       [tenantId, days],
     );
     for (const r of rows)

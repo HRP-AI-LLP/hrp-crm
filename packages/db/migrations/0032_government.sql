@@ -40,8 +40,9 @@ alter table payments
   add column gst_tds_amount   numeric(18, 2) not null default 0 check (gst_tds_amount >= 0),
   add column ld_amount        numeric(18, 2) not null default 0 check (ld_amount >= 0),
   add column retention_amount numeric(18, 2) not null default 0 check (retention_amount >= 0);
+-- NOT VALID: checked for new and changed rows without failing the migration on any old row
 alter table payments add constraint payments_deductions_within_amount
-  check (tds_amount + bank_charges + gst_tds_amount + ld_amount + retention_amount <= amount);
+  check (tds_amount + bank_charges + gst_tds_amount + ld_amount + retention_amount <= amount) not valid;
 
 -- ------------------------------------------------------------------------------- deposits and guarantees
 create table security_deposits (
@@ -66,7 +67,8 @@ create table security_deposits (
   released_amount    numeric(18, 2) not null default 0 check (released_amount >= 0),
   forfeited_amount   numeric(18, 2) not null default 0 check (forfeited_amount >= 0),
   status             text not null default 'active' check (status in ('active', 'closed', 'cancelled')),
-  expiry_notice      smallint,             -- the last reminder sent: 30 or 7 days before expiry
+  expiry_notice      smallint,
+  in_ledger          boolean not null default false,   -- placed with a journal (or already in the opening balances)             -- the last reminder sent: 30 or 7 days before expiry
   notes              text check (length(notes) <= 2000),
   created_by         uuid default app.current_user_id(),
   created_at         timestamptz not null default now(),

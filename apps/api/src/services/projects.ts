@@ -939,10 +939,9 @@ export async function invoiceProject(
   const r = await createRecord(ctx, 'invoice', {
     name: `${project.name}${project.project_code ? ` (${project.project_code})` : ''}`.slice(0, 200),
     account_id: project.account_id,
-    ...(project.customer_ref ? { customer_ref: project.customer_ref, customer_ref_date: project.customer_ref_date ?? null } : {}),
   });
   const id = String(r.record.id);
-  await ctx.tx.query(`update invoices set project_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, projectId]);
+  await ctx.tx.query(`update invoices set project_id = $3, customer_ref = $4, customer_ref_date = $5 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, projectId, project.customer_ref ?? null, project.customer_ref_date ?? null]);
   const events = [...r.events, ...(await saveInvoiceLines(ctx, id, lines.map((l) => ({ ...l, discountPct: 0 })) as never))];
   await ctx.tx.query(`update invoice_lines set project_id = $3 where tenant_id = $1 and order_id = $2`, [ctx.tenantId, id, projectId]);
   if (entries.length) await ctx.tx.query(`update time_entries set status = 'invoiced', invoice_id = $3 where tenant_id = $1 and id = any($2::uuid[])`, [ctx.tenantId, entries.map((e) => e.id), id]);

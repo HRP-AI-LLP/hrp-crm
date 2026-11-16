@@ -30,9 +30,21 @@ When Tally is the books of record, nothing is posted. The register still works, 
 
 ## Who can do what
 
-- **Deposits & guarantees, and deductions on receipts:** books or billing admins.
+- **Deposits & guarantees:**
+  - Viewing: books or billing admins. The register is under Books and under Billing & GST.
+  - Changing: when Synapse keeps the books, only books admins, because changes post journals. Otherwise, billing admins too.
+- **Deductions on receipts:** books or billing admins. GST TDS, liquidated damages and retention are recorded on rupee receipts only.
 - **Milestone acceptance:** project managers.
-- **Reminders:** the person who recorded a deposit, and the project manager, are notified 30 and 7 days before it expires. Extending it resets the reminders.
+- **Reminders:** the person who recorded a deposit is notified 30 and 7 days before it expires. Extending it resets the reminders.
+
+## Good to know
+
+- **Deposits from before the books:** a deposit recorded before the books start, or while Tally keeps the books, never reached the ledger. Releasing or forfeiting it later posts nothing, except a guarantee the bank pays out now. If its balance is in your opening balances, tick *Already in the opening balances* when you record it; it is then released from the ledger like any other.
+- **Tally:**
+  - Create the ledgers for TDS, GST TDS, liquidated damages, retention and bank charges in Tally first, or receipts with deductions will be rejected. Their names are set in Billing & GST → Settings.
+  - Deposits and guarantees are not sent to Tally; your accountant enters them there.
+  - Receipts with TDS that reached Tally before this change were sent with the full amount to the bank. They are not re-sent; correct them in Tally (move the TDS to the TDS ledger).
+- **GST on liquidated damages:** liquidated damages are booked as an expense. Whether GST applies to LD recovered by the buyer is not settled; ask your accountant.
 
 ## Step by step: an FCI order won on GeM
 

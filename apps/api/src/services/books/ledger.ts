@@ -141,13 +141,22 @@ export async function ensureBooks(tx: Tx, tenantId: string) {
   const have = await tx.one<{ n: number }>(`select count(*)::int as n from gl_accounts where tenant_id = $1`, [tenantId]);
   if (have?.n) {
     // later versions add system accounts: create any that are missing
-    for (const a of DEFAULT_CHART)
-      await tx.query(
-        `insert into gl_accounts (tenant_id, code, name, type, subtype, system_key)
-         select $1,$2,$3,$4,$5,$6 where not exists (select 1 from gl_accounts where tenant_id = $1 and (system_key = $6 or lower(name) = lower($3)))
-           and not exists (select 1 from gl_accounts where tenant_id = $1 and code = $2)`,
-        [tenantId, a.code, a.name, a.type, a.subtype, a.key ?? null],
-      );
+    for (const a of DEFAULT_CHART) {
+      if (a.key && (await tx.one(`select 1 from gl_accounts where tenant_id = $1 and system_key = $2`, [tenantId, a.key]))) continue;
+      // an account of the same name and type that the workspace made itself becomes the system account
+      if (a.key) {
+        const same = await tx.one<{ id: string }>(
+          `update gl_accounts set system_key = $4 where id = (select id from gl_accounts where tenant_id = $1 and lower(name) = lower($2) and type = $3 and system_key is null limit 1) returning id`,
+          [tenantId, a.name, a.type, a.key],
+        );
+        if (same) continue;
+      } else if (await tx.one(`select 1 from gl_accounts where tenant_id = $1 and lower(name) = lower($2)`, [tenantId, a.name])) continue;
+      // the code may be taken by the workspace's own account: use the next free one
+      let code = Number(a.code);
+      while (await tx.one(`select 1 from gl_accounts where tenant_id = $1 and code = $2`, [tenantId, String(code)])) code++;
+      const taken = await tx.one(`select 1 from gl_accounts where tenant_id = $1 and lower(name) = lower($2)`, [tenantId, a.name]);
+      await tx.query(`insert into gl_accounts (tenant_id, code, name, type, subtype, system_key) values ($1,$2,$3,$4,$5,$6)`, [tenantId, String(code), taken ? `${a.name} (system)` : a.name, a.type, a.subtype, a.key ?? null]);
+    }
     return;
   }
   for (const a of DEFAULT_CHART) await tx.query(`insert into gl_accounts (tenant_id, code, name, type, subtype, system_key) values ($1,$2,$3,$4,$5,$6)`, [tenantId, a.code, a.name, a.type, a.subtype, a.key ?? null]);

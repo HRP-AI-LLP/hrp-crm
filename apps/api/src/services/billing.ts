@@ -258,9 +258,11 @@ export async function invoiceFromOrder(ctx: RecordCtx, orderId: string, opts: { 
     shipping_address: o.site_address ?? null,
     due_date: new Date(Date.now() + settings.dueDays * 86_400_000).toISOString().slice(0, 10),
     ...(o.terms ? { terms: o.terms } : {}),
-    ...(o.customer_ref ? { customer_ref: o.customer_ref, customer_ref_date: o.customer_ref_date ?? null } : {}),
   });
-  await ctx.tx.query(`update invoices set sales_order_id = $3, milestone_id = $4 where tenant_id = $1 and id = $2`, [ctx.tenantId, r.record.id, orderId, milestone?.id ?? null]);
+  // copied by the system (not through field permissions)
+  await ctx.tx.query(`update invoices set sales_order_id = $3, milestone_id = $4, customer_ref = $5, customer_ref_date = $6 where tenant_id = $1 and id = $2`, [
+    ctx.tenantId, r.record.id, orderId, milestone?.id ?? null, o.customer_ref ?? null, o.customer_ref_date ?? null,
+  ]);
   const events = [...r.events, ...(await saveInvoiceLines(ctx, r.record.id, input))];
   if (milestone) await ctx.tx.query(`update order_milestones set invoice_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, milestone.id, r.record.id]);
   return { id: r.record.id, events };
@@ -514,6 +516,8 @@ export async function recordPayment(ctx: RecordCtx, input: PaymentInput) {
   if (booksFields) {
     if (!hasAdmin(ctx.principal.permissions, 'books') && !hasAdmin(ctx.principal.permissions, 'billing')) throw forbidden('Deductions, deposit account and currency need the billing or books permission');
     if (deductions > input.amount) throw badRequest('The deductions cannot exceed the amount settled');
+    if (input.currency && input.currency !== 'INR' && ((input.gstTdsAmount ?? 0) > 0 || (input.ldAmount ?? 0) > 0 || (input.retentionAmount ?? 0) > 0))
+      throw badRequest('GST TDS, liquidated damages and retention are recorded on rupee receipts only');
     if (input.depositAccountId) {
       const a = await ctx.tx.one<{ subtype: string }>(`select subtype from gl_accounts where tenant_id = $1 and id = $2 and is_active`, [ctx.tenantId, input.depositAccountId]);
       if (!a || !['bank', 'cash'].includes(a.subtype)) throw badRequest('Deposit to a bank or cash account');
