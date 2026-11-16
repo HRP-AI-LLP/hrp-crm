@@ -121,7 +121,7 @@ export async function getProject(ctx: RecordCtx, id: string) {
   );
   const showRates = level === 'manage';
   const milestones = await ctx.tx.query(
-    `select id, name, start_date, due_date, status, amount::float8 as amount, invoice_id, owner_id, position,
+    `select id, name, start_date, due_date, status, amount::float8 as amount, invoice_id, owner_id, position, accepted_on, acceptance_ref,
             (select count(*)::int from project_tasks t where t.tenant_id = m.tenant_id and t.milestone_id = m.id) as tasks,
             (select count(*)::int from project_tasks t where t.tenant_id = m.tenant_id and t.milestone_id = m.id and t.status = 'done') as done
        from project_milestones m where tenant_id = $1 and project_id = $2 order by position, due_date nulls last`,
@@ -229,6 +229,9 @@ export interface MilestoneInput {
   ownerId?: string | null;
   status?: 'open' | 'done';
   position?: number;
+  /** acceptance by the customer: e.g. GeM CRAC, inspection or completion certificate */
+  acceptedOn?: string | null;
+  acceptanceRef?: string | null;
 }
 
 export async function saveMilestone(ctx: RecordCtx, projectId: string, id: string | null, input: MilestoneInput) {
@@ -241,16 +244,20 @@ export async function saveMilestone(ctx: RecordCtx, projectId: string, id: strin
     if (cur.invoice_id && input.amount !== undefined && Number(input.amount ?? 0) !== Number(cur.amount ?? 0)) throw badRequest('This milestone is invoiced; its amount cannot change');
     await ctx.tx.query(
       `update project_milestones set name = $4, start_date = $5, due_date = $6, amount = $7, owner_id = $8, status = coalesce($9, status), position = coalesce($10, position),
-              completed_at = case when $9 = 'done' and status <> 'done' then now() when $9 = 'open' then null else completed_at end
+              completed_at = case when $9 = 'done' and status <> 'done' then now() when $9 = 'open' then null else completed_at end,
+              accepted_on = case when $11 then $12::date else accepted_on end, acceptance_ref = case when $11 then $13 else acceptance_ref end
         where tenant_id = $1 and id = $2 and project_id = $3`,
-      [ctx.tenantId, id, projectId, input.name, input.startDate ?? null, input.dueDate ?? null, input.amount ?? null, input.ownerId ?? null, input.status ?? null, input.position ?? null],
+      [
+        ctx.tenantId, id, projectId, input.name, input.startDate ?? null, input.dueDate ?? null, input.amount ?? null, input.ownerId ?? null, input.status ?? null, input.position ?? null,
+        input.acceptedOn !== undefined || input.acceptanceRef !== undefined, input.acceptedOn ?? null, input.acceptanceRef ?? null,
+      ],
     );
     return { id };
   }
   return ctx.tx.one<{ id: string }>(
-    `insert into project_milestones (tenant_id, project_id, name, start_date, due_date, amount, owner_id, position) values ($1,$2,$3,$4,$5,$6,$7,
-       coalesce($8, (select coalesce(max(position), 0) + 1 from project_milestones where tenant_id = $1 and project_id = $2))) returning id`,
-    [ctx.tenantId, projectId, input.name, input.startDate ?? null, input.dueDate ?? null, input.amount ?? null, input.ownerId ?? null, input.position ?? null],
+    `insert into project_milestones (tenant_id, project_id, name, start_date, due_date, amount, owner_id, position, accepted_on, acceptance_ref) values ($1,$2,$3,$4,$5,$6,$7,
+       coalesce($8, (select coalesce(max(position), 0) + 1 from project_milestones where tenant_id = $1 and project_id = $2)), $9, $10) returning id`,
+    [ctx.tenantId, projectId, input.name, input.startDate ?? null, input.dueDate ?? null, input.amount ?? null, input.ownerId ?? null, input.position ?? null, input.acceptedOn ?? null, input.acceptanceRef ?? null],
   );
 }
 
@@ -853,7 +860,7 @@ export async function unbilled(ctx: RecordCtx, projectId: string, upTo = today()
     [ctx.tenantId, projectId, upTo],
   );
   const milestones = await ctx.tx.query(
-    `select id, name, due_date, status, amount::float8 as amount from project_milestones where tenant_id = $1 and project_id = $2 and amount > 0 and invoice_id is null order by position`,
+    `select id, name, due_date, status, amount::float8 as amount, accepted_on, acceptance_ref from project_milestones where tenant_id = $1 and project_id = $2 and amount > 0 and invoice_id is null order by position`,
     [ctx.tenantId, projectId],
   );
   const invoiced = await ctx.tx.one<{ v: number }>(
@@ -914,13 +921,26 @@ export async function invoiceProject(
   for (const x of exps) lines.push({ name: `Expense: ${x.name}`.slice(0, 300), description: x.expense_number, hsnSac: sac, quantity: 1, unitPrice: Number(x.taxable_amount), taxRate: tax, isService: true });
   const msIds = [...new Set(input.milestoneIds ?? [])];
   const ms = msIds.length
-    ? await ctx.tx.query<{ id: string; name: string; amount: string }>(`select id, name, amount from project_milestones where tenant_id = $1 and project_id = $2 and id = any($3::uuid[]) and amount > 0 and invoice_id is null for update`, [ctx.tenantId, projectId, msIds])
+    ? await ctx.tx.query<{ id: string; name: string; amount: string; accepted_on: string | null; acceptance_ref: string | null }>(`select id, name, amount, accepted_on::text, acceptance_ref from project_milestones where tenant_id = $1 and project_id = $2 and id = any($3::uuid[]) and amount > 0 and invoice_id is null for update`, [ctx.tenantId, projectId, msIds])
     : [];
   if (ms.length !== msIds.length) throw badRequest('Some milestones have no amount or are already invoiced');
-  for (const m of ms) lines.push({ name: `Milestone: ${m.name}`.slice(0, 300), hsnSac: sac, quantity: 1, unitPrice: Number(m.amount), taxRate: tax, isService: true });
+  for (const m of ms)
+    lines.push({
+      name: `Milestone: ${m.name}`.slice(0, 300),
+      description: m.acceptance_ref || m.accepted_on ? `Accepted${m.acceptance_ref ? `: ${m.acceptance_ref}` : ''}${m.accepted_on ? ` on ${m.accepted_on.split('-').reverse().join('-')}` : ''}` : null,
+      hsnSac: sac,
+      quantity: 1,
+      unitPrice: Number(m.amount),
+      taxRate: tax,
+      isService: true,
+    });
   if (input.fixedAmount && input.fixedAmount > 0) lines.push({ name: (input.fixedLabel || `${project.name} — fixed fee`).slice(0, 300), hsnSac: sac, quantity: 1, unitPrice: r2(input.fixedAmount), taxRate: tax, isService: true });
   if (!lines.length) throw badRequest('Choose time, expenses, milestones or an amount to invoice');
-  const r = await createRecord(ctx, 'invoice', { name: `${project.name}${project.project_code ? ` (${project.project_code})` : ''}`.slice(0, 200), account_id: project.account_id });
+  const r = await createRecord(ctx, 'invoice', {
+    name: `${project.name}${project.project_code ? ` (${project.project_code})` : ''}`.slice(0, 200),
+    account_id: project.account_id,
+    ...(project.customer_ref ? { customer_ref: project.customer_ref, customer_ref_date: project.customer_ref_date ?? null } : {}),
+  });
   const id = String(r.record.id);
   await ctx.tx.query(`update invoices set project_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, projectId]);
   const events = [...r.events, ...(await saveInvoiceLines(ctx, id, lines.map((l) => ({ ...l, discountPct: 0 })) as never))];

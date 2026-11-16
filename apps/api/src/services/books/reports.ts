@@ -399,9 +399,10 @@ export async function tdsReport(ctx: RecordCtx, from: string, to: string) {
     [ctx.tenantId, from, to],
   );
   const receivable = await ctx.tx.query(
-    `select a.name as customer, p.payment_number, p.payment_date, p.amount::float8 as amount, p.tds_amount::float8 as tds
+    `select a.name as customer, a.gstin, p.payment_number, p.payment_date, p.amount::float8 as amount, p.tds_amount::float8 as tds, p.gst_tds_amount::float8 as gst_tds,
+            p.ld_amount::float8 as ld, p.retention_amount::float8 as retention
        from payments p left join accounts a on a.tenant_id = p.tenant_id and a.id = p.account_id
-      where p.tenant_id = $1 and p.tds_amount > 0 and p.status = 'received' and p.deleted_at is null and p.payment_date between $2::date and $3::date order by p.payment_date`,
+      where p.tenant_id = $1 and (p.tds_amount > 0 or p.gst_tds_amount > 0 or p.ld_amount > 0 or p.retention_amount > 0) and p.status = 'received' and p.deleted_at is null and p.payment_date between $2::date and $3::date order by p.payment_date`,
     [ctx.tenantId, from, to],
   );
   const bySection = new Map<string, number>();

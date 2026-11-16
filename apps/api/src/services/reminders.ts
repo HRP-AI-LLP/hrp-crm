@@ -11,6 +11,7 @@ import { dispatchPushTx, pushEnabled } from './webpush';
 import type { Env } from '../env';
 import type { Db, Tx } from '../lib/db';
 import { sweepOverdue } from './billing';
+import { sweepDepositExpiry } from './books/deposits';
 import { sweepSla } from './service';
 
 const KEY = 'p:reminders:next';
@@ -72,6 +73,7 @@ export async function sweepTenant(tx: Tx, tenantId: string): Promise<Date | null
   }
   const slaNext = await sweepSla(tx, tenantId);
   await sweepOverdue({ tx }, tenantId);
+  await sweepDepositExpiry(tx, tenantId);
   await tx.query(`update quotes set status = 'expired' where tenant_id = $1 and status = 'sent' and valid_until < current_date and deleted_at is null`, [tenantId]);
   const next = await tx.one<{ t: Date | null }>(
     `select least(

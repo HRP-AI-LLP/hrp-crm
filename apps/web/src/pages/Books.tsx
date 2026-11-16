@@ -13,6 +13,7 @@ import { Empty, Modal, Spinner, useToast } from '../components/ui';
 import { del, download, get, patch, post, put } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { date, money2, moneyShort } from '../lib/format';
+import { Deposits } from '../components/books/Deposits';
 
 type Json = Record<string, any>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -36,10 +37,10 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 const SOURCE_LINK: Record<string, string> = { invoice: 'invoice', credit_note: 'invoice', write_off: 'invoice', payment: 'payment', bill: 'bill', vendor_credit: 'bill', vendor_payment: 'vendor_payment', expense: 'expense', reimbursement: 'expense' };
 
-type Tab = 'overview' | 'payables' | 'banking' | 'journals' | 'accounts' | 'reports' | 'recurring' | 'budgets' | 'assets' | 'gst' | 'settings';
+type Tab = 'overview' | 'payables' | 'banking' | 'journals' | 'accounts' | 'reports' | 'recurring' | 'budgets' | 'assets' | 'deposits' | 'gst' | 'settings';
 const TABS: [Tab, string][] = [
   ['overview', 'Overview'], ['payables', 'Payables'], ['banking', 'Banking'], ['journals', 'Journals'], ['accounts', 'Chart of accounts'], ['reports', 'Reports'],
-  ['recurring', 'Recurring'], ['budgets', 'Budgets'], ['assets', 'Fixed assets'], ['gst', 'GST & TDS'], ['settings', 'Settings'],
+  ['recurring', 'Recurring'], ['budgets', 'Budgets'], ['assets', 'Fixed assets'], ['deposits', 'Deposits & guarantees'], ['gst', 'GST & TDS'], ['settings', 'Settings'],
 ];
 
 export function BooksPage() {
@@ -94,6 +95,7 @@ export function BooksPage() {
           {tab === 'recurring' && <Recurring />}
           {tab === 'budgets' && <Budgets />}
           {tab === 'assets' && <Assets />}
+          {tab === 'deposits' && <Deposits />}
           {tab === 'gst' && <GstTds />}
           {tab === 'settings' && <Settings />}
         </div>
@@ -2617,15 +2619,35 @@ function GstTds() {
           )}
           {tds.data.receivable.length > 0 && (
             <>
-              <b>TDS deducted by customers (claim in your return; check Form 26AS)</b>
+              <b>Deducted by customers</b>
+              <p className="small muted" style={{ margin: 0 }}>
+                Income-tax TDS: claim in your return (check Form 26AS). GST TDS (section 51): accept it in GSTR-2X; it then reaches your electronic cash ledger. Retention is
+                tracked under Deposits &amp; guarantees.
+              </p>
               <table className="data">
+                <thead>
+                  <tr>
+                    <th>Customer</th>
+                    <th>GSTIN</th>
+                    <th>Receipt</th>
+                    <th>Date</th>
+                    <th className="num">TDS</th>
+                    <th className="num">GST TDS</th>
+                    <th className="num">LD / penalty</th>
+                    <th className="num">Retention</th>
+                  </tr>
+                </thead>
                 <tbody>
                   {(tds.data.receivable as Json[]).map((r, i) => (
                     <tr key={i}>
                       <td>{r.customer}</td>
+                      <td className="small">{r.gstin ?? ''}</td>
                       <td>{r.payment_number}</td>
                       <td>{date(r.payment_date)}</td>
-                      <td className="num">{money2(r.tds)}</td>
+                      <td className="num">{r.tds ? money2(r.tds) : ''}</td>
+                      <td className="num">{r.gst_tds ? money2(r.gst_tds) : ''}</td>
+                      <td className="num">{r.ld ? money2(r.ld) : ''}</td>
+                      <td className="num">{r.retention ? money2(r.retention) : ''}</td>
                     </tr>
                   ))}
                 </tbody>

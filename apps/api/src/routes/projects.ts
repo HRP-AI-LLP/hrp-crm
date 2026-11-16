@@ -48,6 +48,8 @@ const milestoneSchema = z.object({
   ownerId: uuid.nullish(),
   status: z.enum(['open', 'done']).optional(),
   position: z.number().int().min(0).max(100000).optional(),
+  acceptedOn: dateStr.nullish(),
+  acceptanceRef: z.string().trim().max(100).nullish(),
 });
 const taskSchema = z
   .object({

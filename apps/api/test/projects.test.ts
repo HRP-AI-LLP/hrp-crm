@@ -4,7 +4,8 @@ import { makeHarness, PW } from './harness';
 
 const today = new Date().toISOString().slice(0, 10);
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
-const monday = weekStart(today);
+// last week: every day of it is in the past whatever weekday the suite runs on
+const monday = weekStart(addDays(today, -7));
 
 let h: Awaited<ReturnType<typeof makeHarness>>;
 let api: ReturnType<typeof h.as>;

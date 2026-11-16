@@ -111,6 +111,9 @@ export const billingRoutes = new Hono<AppEnv>()
         depositAccountId: uuid.nullish(),
         tdsAmount: z.number().min(0).max(1e12).optional(),
         bankCharges: z.number().min(0).max(1e12).optional(),
+        gstTdsAmount: z.number().min(0).max(1e12).optional(),
+        ldAmount: z.number().min(0).max(1e12).optional(),
+        retentionAmount: z.number().min(0).max(1e12).optional(),
         currency: z.string().regex(/^[A-Z]{3}$/).optional(),
         exchangeRate: z.number().positive().max(1e6).optional(),
       })
@@ -181,7 +184,13 @@ const settingsSchema = z.object({
   bankDetails: z.string().max(1000).optional(),
   upiVpa: z.union([z.literal(''), z.string().trim().regex(/^[A-Za-z0-9._-]{2,256}@[A-Za-z][A-Za-z0-9.-]{1,64}$/, 'A UPI ID looks like business@okhdfcbank')]).optional(),
   upiPayee: z.string().trim().max(50).optional(),
-  ledgers: z.object({ sales: z.string().max(80), cgst: z.string().max(80), sgst: z.string().max(80), igst: z.string().max(80), roundOff: z.string().max(80), bank: z.string().max(80) }).partial().optional(),
+  ledgers: z
+    .object({
+      sales: z.string().max(80), cgst: z.string().max(80), sgst: z.string().max(80), igst: z.string().max(80), roundOff: z.string().max(80), bank: z.string().max(80),
+      tds: z.string().max(80), gstTds: z.string().max(80), ld: z.string().max(80), retention: z.string().max(80), bankCharges: z.string().max(80),
+    })
+    .partial()
+    .optional(),
 });
 
 export const billingAdminRoutes = new Hono<AppEnv>().put('/billing/settings', async (c) => {

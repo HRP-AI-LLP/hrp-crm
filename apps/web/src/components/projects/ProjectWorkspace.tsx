@@ -666,6 +666,7 @@ function Milestones({ id, data, manage }: { id: string; data: Json; manage: bool
               <th>Due</th>
               <th>Tasks</th>
               <th className="num">Amount</th>
+              <th>Accepted</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -679,6 +680,10 @@ function Milestones({ id, data, manage }: { id: string; data: Json; manage: bool
                   {m.done}/{m.tasks}
                 </td>
                 <td className="num">{m.amount ? money2(m.amount) : ''}</td>
+                <td className="small">
+                  {m.accepted_on ? date(m.accepted_on) : ''}
+                  {m.acceptance_ref ? <div className="muted">{m.acceptance_ref}</div> : null}
+                </td>
                 <td>
                   <span className={`chip ${m.status === 'done' ? 'good' : ''}`}>{m.status}</span> {m.invoice_id && <span className="chip info">invoiced</span>}
                 </td>
@@ -707,7 +712,10 @@ function Milestones({ id, data, manage }: { id: string; data: Json; manage: bool
 }
 
 function MilestoneModal({ m, who, onClose, onSave }: { m: Json; who: Map<string, string>; onClose: () => void; onSave: (b: Json, remove?: boolean) => void }) {
-  const [f, setF] = useState({ name: m.name ?? '', startDate: d10(m.start_date), dueDate: d10(m.due_date), amount: m.amount ?? '', ownerId: m.owner_id ?? '', status: m.status ?? 'open' });
+  const [f, setF] = useState({
+    name: m.name ?? '', startDate: d10(m.start_date), dueDate: d10(m.due_date), amount: m.amount ?? '', ownerId: m.owner_id ?? '', status: m.status ?? 'open',
+    acceptedOn: d10(m.accepted_on), acceptanceRef: m.acceptance_ref ?? '',
+  });
   return (
     <Modal
       title={m.id ? m.name : 'New milestone'}
@@ -719,7 +727,13 @@ function MilestoneModal({ m, who, onClose, onSave }: { m: Json; who: Map<string,
               Delete
             </button>
           )}
-          <button className="btn primary" disabled={!f.name.trim()} onClick={() => onSave({ name: f.name.trim(), startDate: f.startDate || null, dueDate: f.dueDate || null, amount: f.amount === '' ? null : Number(f.amount), ownerId: f.ownerId || null, status: f.status })}>
+          <button className="btn primary" disabled={!f.name.trim()} onClick={() =>
+              onSave({
+                name: f.name.trim(), startDate: f.startDate || null, dueDate: f.dueDate || null, amount: f.amount === '' ? null : Number(f.amount), ownerId: f.ownerId || null, status: f.status,
+                acceptedOn: f.acceptedOn || null, acceptanceRef: f.acceptanceRef.trim() || null,
+              })
+            }
+          >
             Save
           </button>
         </>
@@ -760,6 +774,17 @@ function MilestoneModal({ m, who, onClose, onSave }: { m: Json; who: Map<string,
             <option value="done">Done</option>
           </select>
         </label>
+        <label className="field">
+          Accepted by the customer on
+          <input type="date" value={f.acceptedOn} onChange={(e) => setF({ ...f, acceptedOn: e.target.value })} />
+        </label>
+        <label className="field">
+          Acceptance ref. (CRAC / inspection / completion certificate)
+          <input value={f.acceptanceRef} maxLength={100} onChange={(e) => setF({ ...f, acceptanceRef: e.target.value })} placeholder="e.g. GeM CRAC number" />
+        </label>
+        <p className="small muted wide" style={{ margin: 0 }}>
+          The acceptance reference and date are printed under the milestone line on its invoice.
+        </p>
       </div>
     </Modal>
   );
@@ -1118,7 +1143,10 @@ function Billing({ id }: { id: string }) {
                   <td style={{ width: 30 }}>
                     <input type="checkbox" checked={s.m.has(x.id)} onChange={() => flip('m', x.id)} aria-label="Include" />
                   </td>
-                  <td>{x.name}</td>
+                  <td>
+                    {x.name}
+                    {(x.acceptance_ref || x.accepted_on) && <div className="small muted">Accepted {x.acceptance_ref ?? ''} {x.accepted_on ? date(x.accepted_on) : ''}</div>}
+                  </td>
                   <td>{x.status === 'done' ? <span className="chip good">done</span> : <span className="chip">open</span>}</td>
                   <td className="num">{money2(x.amount)}</td>
                 </tr>

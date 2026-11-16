@@ -16,8 +16,8 @@ export interface ObjectStorage {
   discriminated: boolean;
 }
 
-export const LEAD_SOURCES = ['website', 'whatsapp', 'instagram', 'facebook', 'google_ads', 'phone_call', 'walk_in', 'referral', 'architect', 'interior_designer', 'dealer', 'campaign', 'event', 'cold_call', 'partner', 'manual', 'other'];
-export const ACCOUNT_TYPES = ['customer', 'prospect', 'architect', 'interior_designer', 'dealer', 'builder', 'partner', 'other'];
+export const LEAD_SOURCES = ['website', 'whatsapp', 'instagram', 'facebook', 'google_ads', 'phone_call', 'walk_in', 'referral', 'architect', 'interior_designer', 'dealer', 'campaign', 'event', 'cold_call', 'partner', 'gem', 'tender', 'manual', 'other'];
+export const ACCOUNT_TYPES = ['customer', 'prospect', 'architect', 'interior_designer', 'dealer', 'builder', 'partner', 'government', 'other'];
 export const APPROVAL_STATUSES = ['not_required', 'required', 'pending', 'approved', 'rejected'] as const;
 const INDUSTRIES = ['technology', 'finance', 'healthcare', 'real_estate', 'retail', 'manufacturing', 'education', 'services', 'other'];
 export const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'expired', 'superseded'] as const;
@@ -38,7 +38,8 @@ export const PROJECT_STATUSES = ['planning', 'active', 'on_hold', 'completed', '
 export const PROJECT_BILLING_METHODS = ['fixed_price', 'time_project_rate', 'time_staff_rate', 'time_task_rate', 'non_billable'] as const;
 export const EXPENSE_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'recorded', 'reimbursed', 'void'] as const;
 export const VENDOR_TYPES = ['manufacturer', 'supplier', 'contractor', 'transporter', 'installer', 'service_provider', 'other'] as const;
-const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
+const LABELS: Record<string, string> = { gem: 'GeM portal', tender: 'Tender (CPPP / e-procurement)' };
+const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: LABELS[v] ?? v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
 
 const owner: FieldDef = { key: 'owner_id', label: 'Owner', type: 'user', standard: true, indexed: true };
 const pipelineFields: FieldDef[] = [
@@ -101,6 +102,9 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'amount', label: 'Amount', type: 'currency', standard: true, options: { min: 0 } },
     { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
     { key: 'close_date', label: 'Close date', type: 'date', standard: true },
+    { key: 'source', label: 'Source', type: 'picklist', standard: true, options: { choices: choices(LEAD_SOURCES) } },
+    { key: 'bid_number', label: 'Bid / tender no.', type: 'text', standard: true, indexed: true, options: { maxLength: 100 }, helpText: 'e.g. GEM/2026/B/1234567' },
+    { key: 'bid_due_date', label: 'Bid closes on', type: 'date', standard: true },
     { key: 'probability', label: 'Probability %', type: 'percent', standard: true },
     { key: 'closed_at', label: 'Closed at', type: 'datetime', standard: true, readOnly: true },
     { key: 'referred_by_id', label: 'Referred by (architect / dealer)', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
@@ -167,6 +171,8 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },
     { key: 'deal_id', label: 'Deal', type: 'lookup', standard: true, options: { lookupObject: 'deal' } },
     { key: 'quote_id', label: 'From quote', type: 'lookup', standard: true, readOnly: true, options: { lookupObject: 'quote' } },
+    { key: 'customer_ref', label: "Buyer's order / contract no.", type: 'text', standard: true, indexed: true, options: { maxLength: 100 }, helpText: 'e.g. the GeM contract number or the purchase order number' },
+    { key: 'customer_ref_date', label: 'Order / contract date', type: 'date', standard: true },
     { key: 'order_date', label: 'Order date', type: 'date', standard: true },
     { key: 'expected_delivery_date', label: 'Expected delivery', type: 'date', standard: true },
     { key: 'warehouse_id', label: 'Ship from', type: 'picklist', standard: true, options: { choices: [] } },
@@ -305,6 +311,8 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },
     { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, readOnly: true, options: { lookupObject: 'sales_order' } },
     { key: 'original_invoice_id', label: 'Against invoice', type: 'lookup', standard: true, readOnly: true, options: { lookupObject: 'invoice' } },
+    { key: 'customer_ref', label: "Buyer's order / contract no.", type: 'text', standard: true, indexed: true, options: { maxLength: 100 }, helpText: 'e.g. the GeM contract number or the purchase order number' },
+    { key: 'customer_ref_date', label: 'Order / contract date', type: 'date', standard: true },
     { key: 'invoice_date', label: 'Invoice date', type: 'date', standard: true, indexed: true },
     { key: 'due_date', label: 'Due date', type: 'date', standard: true, indexed: true },
     { key: 'place_of_supply', label: 'Place of supply', type: 'text', standard: true, helpText: 'State the goods / services are supplied to; defaults to the customer state' },
@@ -342,6 +350,9 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'unallocated', label: 'Unapplied', type: 'currency', standard: true, readOnly: true },
     { key: 'tds_amount', label: 'TDS deducted by customer', type: 'currency', standard: true, options: { min: 0 } },
     { key: 'bank_charges', label: 'Bank charges', type: 'currency', standard: true, options: { min: 0 } },
+    { key: 'gst_tds_amount', label: 'GST TDS (section 51)', type: 'currency', standard: true, readOnly: true },
+    { key: 'ld_amount', label: 'Liquidated damages / penalty', type: 'currency', standard: true, readOnly: true },
+    { key: 'retention_amount', label: 'Retention withheld', type: 'currency', standard: true, readOnly: true },
     { key: 'notes', label: 'Notes', type: 'textarea', standard: true },
     owner,
   ],
@@ -458,6 +469,8 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'account_id', label: 'Customer', type: 'lookup', standard: true, indexed: true, options: { lookupObject: 'account' } },
     { key: 'deal_id', label: 'Deal', type: 'lookup', standard: true, options: { lookupObject: 'deal' } },
     { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, options: { lookupObject: 'sales_order' } },
+    { key: 'customer_ref', label: "Buyer's order / contract no.", type: 'text', standard: true, indexed: true, options: { maxLength: 100 }, helpText: 'e.g. the GeM contract number or the purchase order number' },
+    { key: 'customer_ref_date', label: 'Order / contract date', type: 'date', standard: true },
     { key: 'start_date', label: 'Start date', type: 'date', standard: true, indexed: true },
     { key: 'end_date', label: 'End date', type: 'date', standard: true, indexed: true },
     { key: 'billing_method', label: 'Billing', type: 'picklist', standard: true, options: { choices: choices(PROJECT_BILLING_METHODS) } },

@@ -17,7 +17,16 @@ function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back:
     const billTo = { ...(o.bill_to ?? {}), name: acc?.name ?? o.bill_to?.name, state: o.bill_to?.state ?? acc?.state ?? '', gstin: o.bill_to?.gstin ?? acc?.gstin ?? '', address: o.site_address ?? o.bill_to?.address ?? acc?.address ?? '' };
     return {
       doc: { quote: { ...o, bill_to: billTo, doc_date: o.order_date }, lines: d.lines, account: acc, contact: null, company: d.company },
-      labels: { title: 'Order confirmation', numberLabel: 'Order #', number: o.order_number, party: 'Customer', rows: o.expected_delivery_date ? [['Delivery by', date(o.expected_delivery_date)]] : [] },
+      labels: {
+        title: 'Order confirmation',
+        numberLabel: 'Order #',
+        number: o.order_number,
+        party: 'Customer',
+        rows: [
+          ...(o.customer_ref ? ([["Your order / contract", `${o.customer_ref}${o.customer_ref_date ? ` dt. ${date(o.customer_ref_date)}` : ''}`]] as [string, string][]) : []),
+          ...(o.expected_delivery_date ? ([['Delivery by', date(o.expected_delivery_date)]] as [string, string][]) : []),
+        ],
+      },
       back: `/o/sales_order/${o.id}`,
     };
   }
@@ -41,6 +50,7 @@ function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back:
     const cn = i.doc_type === 'credit_note';
     const billTo = { name: i.buyer_name ?? d.account?.name, address: i.buyer_address ?? [d.account?.address, d.account?.city].filter(Boolean).join(', '), state: i.place_of_supply ?? i.buyer_state ?? d.account?.state ?? '', gstin: i.buyer_gstin ?? d.account?.gstin ?? '' };
     const rows: [string, string][] = [];
+    if (i.customer_ref) rows.push(["Buyer's order / contract", `${i.customer_ref}${i.customer_ref_date ? ` dt. ${date(i.customer_ref_date)}` : ''}`]);
     if (i.due_date && !cn) rows.push(['Due date', date(i.due_date)]);
     if (i.place_of_supply) rows.push(['Place of supply', `${i.place_of_supply}${i.pos_code ? ` (${i.pos_code})` : ''}`]);
     if (i.reverse_charge) rows.push(['Reverse charge', 'Yes']);

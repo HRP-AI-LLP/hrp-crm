@@ -1,4 +1,6 @@
-import type { RecordDto } from '@synapse/shared';
+import { hasAdmin, type RecordDto } from '@synapse/shared';
+import { useAuth } from '../../lib/auth';
+import { useApps } from './OrderPanel';
 import { PaymentLinks } from './PayOnline';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -29,11 +31,34 @@ function useAct(keys: unknown[][]) {
   };
 }
 
-/** Records a payment (receipt) for a customer, applied to chosen invoices or the oldest first. */
+const DEDUCTIONS: [string, string, string][] = [
+  ['tds', 'Income-tax TDS', 'Deducted under 194C / 194J; claim against Form 26AS'],
+  ['gstTds', 'GST TDS (section 51)', 'Government buyers deduct 2% of the taxable value on contracts above ₹2.5 lakh'],
+  ['ld', 'Liquidated damages / penalty', 'Kept by the buyer: booked as an expense'],
+  ['retention', 'Retention / security withheld', 'Still yours: tracked under Books → Deposits & guarantees until released'],
+  ['charges', 'Bank charges', ''],
+];
+
+/** Records a payment (receipt) for a customer, applied to chosen invoices or the oldest first, with any deductions the customer made. */
 export function PaymentModal({ accountId, orderId, invoice, onClose, onDone }: { accountId?: string | null; orderId?: string | null; invoice?: Json | null; onClose: () => void; onDone?: () => void }) {
   const toast = useToast();
-  const [f, setF] = useState({ amount: invoice ? String(invoice.balance_due) : '', date: new Date().toISOString().slice(0, 10), mode: 'bank_transfer', reference: '', apply: invoice ? 'this' : 'auto' });
+  const { me } = useAuth();
+  const apps = useApps();
+  const canDeduct = !!me && (hasAdmin(me.permissions, 'billing') || hasAdmin(me.permissions, 'books'));
+  const books = canDeduct && apps.has('books') && !!me && hasAdmin(me.permissions, 'books');
+  const banks = useQuery({ queryKey: ['books', 'bank-accounts'], queryFn: () => get<Json[]>('/api/v1/books/bank-accounts'), enabled: books, retry: false });
+  const [f, setF] = useState({ amount: invoice ? String(invoice.balance_due) : '', date: new Date().toISOString().slice(0, 10), mode: 'bank_transfer', reference: '', apply: invoice ? 'this' : 'auto', bank: '' });
+  const [d, setD] = useState<Record<string, string>>({});
+  const [showDed, setShowDed] = useState(false);
   const [busy, setBusy] = useState(false);
+  const num = (k: string) => Math.max(0, Number(d[k]) || 0);
+  const totalDed = Math.round(DEDUCTIONS.reduce((s, [k]) => s + num(k), 0) * 100) / 100;
+  const net = Math.round(((Number(f.amount) || 0) - totalDed) * 100) / 100;
+  /** suggests 2% TDS / 2% GST TDS on the invoice's taxable value */
+  const suggest = (k: 'tds' | 'gstTds') => {
+    const taxable = Number(invoice?.taxable_total ?? 0);
+    if (taxable > 0) setD({ ...d, [k]: String(Math.round(taxable * 0.02 * 100) / 100) });
+  };
   return (
     <Modal
       title="Record payment"
@@ -41,13 +66,23 @@ export function PaymentModal({ accountId, orderId, invoice, onClose, onDone }: {
       footer={
         <button
           className="btn primary"
-          disabled={busy || !(Number(f.amount) > 0)}
+          disabled={busy || !(Number(f.amount) > 0) || net < 0}
           onClick={async () => {
             setBusy(true);
             try {
               const amount = Number(f.amount);
               const allocations = f.apply === 'this' && invoice ? [{ invoiceId: invoice.id, amount: Math.min(amount, Number(invoice.balance_due)) }] : f.apply === 'auto' ? 'auto' : null;
-              const r = await post<{ number: string }>('/api/v1/payments', { accountId: accountId ?? null, salesOrderId: orderId ?? null, amount, date: f.date, mode: f.mode, reference: f.reference || null, allocations });
+              const extra = canDeduct
+                ? {
+                    ...(num('tds') ? { tdsAmount: num('tds') } : {}),
+                    ...(num('gstTds') ? { gstTdsAmount: num('gstTds') } : {}),
+                    ...(num('ld') ? { ldAmount: num('ld') } : {}),
+                    ...(num('retention') ? { retentionAmount: num('retention') } : {}),
+                    ...(num('charges') ? { bankCharges: num('charges') } : {}),
+                    ...(f.bank ? { depositAccountId: f.bank } : {}),
+                  }
+                : {};
+              const r = await post<{ number: string }>('/api/v1/payments', { accountId: accountId ?? null, salesOrderId: orderId ?? null, amount, date: f.date, mode: f.mode, reference: f.reference || null, allocations, ...extra });
               toast(`Receipt ${r.number} saved`);
               onDone?.();
               onClose();
@@ -64,7 +99,7 @@ export function PaymentModal({ accountId, orderId, invoice, onClose, onDone }: {
     >
       <div className="modal-body">
         <label className="field">
-          Amount (₹)
+          Amount settled (₹)
           <input inputMode="decimal" value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} autoFocus />
         </label>
         <label className="field">
@@ -83,8 +118,24 @@ export function PaymentModal({ accountId, orderId, invoice, onClose, onDone }: {
         </label>
         <label className="field">
           Reference
-          <input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="UTR, cheque no., UPI ref" />
+          <input value={f.reference} onChange={(e) => setF({ ...f, reference: e.target.value })} placeholder="UTR, cheque no., UPI ref, PFMS ref" />
         </label>
+        {books && (
+          <label className="field">
+            Deposited to
+            <select value={f.bank} onChange={(e) => setF({ ...f, bank: e.target.value })}>
+              <option value="">Default for the mode</option>
+              {(banks.data ?? [])
+                .filter((b) => b.is_active && b.kind !== 'credit_card')
+                .map((b) => (
+                  <option key={b.gl_account_id} value={b.gl_account_id}>
+                    {b.name}
+                    {b.account_last4 ? ` ·${b.account_last4}` : ''}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
         <label className="field wide">
           Apply to
           <select value={f.apply} onChange={(e) => setF({ ...f, apply: e.target.value })}>
@@ -93,6 +144,43 @@ export function PaymentModal({ accountId, orderId, invoice, onClose, onDone }: {
             <option value="none">Keep as an advance (apply later)</option>
           </select>
         </label>
+        {canDeduct && (
+          <div className="wide">
+            <label className="check">
+              <input type="checkbox" checked={showDed || totalDed > 0} onChange={(e) => setShowDed(e.target.checked)} /> The customer deducted something (TDS, GST TDS, penalty, retention, bank charges)
+            </label>
+            {(showDed || totalDed > 0) && (
+              <table className="data" style={{ marginTop: 6 }}>
+                <tbody>
+                  {DEDUCTIONS.map(([k, l, help]) => (
+                    <tr key={k}>
+                      <td>
+                        {l}
+                        {help && <div className="small muted" style={{ whiteSpace: 'normal' }}>{help}</div>}
+                      </td>
+                      <td className="num" style={{ whiteSpace: 'nowrap' }}>
+                        {(k === 'tds' || k === 'gstTds') && Number(invoice?.taxable_total ?? 0) > 0 && (
+                          <button type="button" className="btn ghost sm" onClick={() => suggest(k)} title="2% of the taxable value">
+                            2%
+                          </button>
+                        )}
+                        <input inputMode="decimal" style={{ width: 110 }} value={d[k] ?? ''} onChange={(e) => setD({ ...d, [k]: e.target.value })} aria-label={l} />
+                      </td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td>
+                      <b>Credited to the bank</b>
+                    </td>
+                    <td className={`num${net < 0 ? ' tone-bad' : ''}`}>
+                      <b>{money2(net)}</b>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
       </div>
     </Modal>
   );

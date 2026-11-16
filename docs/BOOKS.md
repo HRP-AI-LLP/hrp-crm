@@ -33,6 +33,8 @@ Switching posting on posts every document dated on or after the **books start da
 | Tax invoice | Receivable (customer) | Sales or service income, output GST, round-off; plus COGS against stock for tracked goods at moving-average cost |
 | Credit note | The reverse of the invoice | |
 | Receipt | Bank or cash (amount − TDS − charges), TDS receivable, bank charges | Receivable at each invoice's own rate; FX difference to exchange gain/loss |
+| Receipt deductions (government buyers) | GST TDS receivable (section 51), Liquidated damages and penalties, Retention money with customers | — (part of the receipt; see GOVERNMENT.md) |
+| Deposit / guarantee placed, released, forfeited | See [GOVERNMENT.md](GOVERNMENT.md) | |
 | Write-off | Bad debts | Receivable |
 | Bill | Stock (tracked goods), the line's account or Purchases; input GST (if ITC-eligible, otherwise into cost) | Payable (net of TDS), TDS payable; for reverse charge also RCM payable |
 | Vendor payment | Payable at the bills' rates; FX difference | Bank, cash or card |

@@ -20,6 +20,8 @@ import { assertProducts } from './lines';
 import { nextFyNumber } from './numbering';
 import { computeLines, letterhead, type LineInput } from './quotes';
 import { createRecord, loadRow, Params, type RecordCtx, type RecordEvent, readRowSystem, toDto, visibilityWhere } from './records';
+import { retentionFromReceipt, retentionOnVoid } from './books/deposits';
+import type { TallyLedgers } from './gst-exports';
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -33,7 +35,7 @@ export interface BillingSettings {
   /** UPI ID printed as a pay-by-QR on invoices (no gateway needed) */
   upiVpa: string;
   upiPayee: string;
-  ledgers: { sales: string; cgst: string; sgst: string; igst: string; roundOff: string; bank: string };
+  ledgers: TallyLedgers;
 }
 
 export async function billingSettings(ctx: RecordCtx): Promise<BillingSettings> {
@@ -48,7 +50,11 @@ export async function billingSettings(ctx: RecordCtx): Promise<BillingSettings> 
     bankDetails: b.bankDetails ?? '',
     upiVpa: b.upiVpa ?? '',
     upiPayee: b.upiPayee ?? '',
-    ledgers: { sales: 'Sales', cgst: 'Output CGST', sgst: 'Output SGST', igst: 'Output IGST', roundOff: 'Round Off', bank: 'Bank', ...(b.ledgers ?? {}) },
+    ledgers: {
+      sales: 'Sales', cgst: 'Output CGST', sgst: 'Output SGST', igst: 'Output IGST', roundOff: 'Round Off', bank: 'Bank',
+      tds: 'TDS Receivable', gstTds: 'GST TDS Receivable', ld: 'Liquidated Damages', retention: 'Retention Money Receivable', bankCharges: 'Bank Charges',
+      ...(b.ledgers ?? {}),
+    },
   };
 }
 
@@ -252,6 +258,7 @@ export async function invoiceFromOrder(ctx: RecordCtx, orderId: string, opts: { 
     shipping_address: o.site_address ?? null,
     due_date: new Date(Date.now() + settings.dueDays * 86_400_000).toISOString().slice(0, 10),
     ...(o.terms ? { terms: o.terms } : {}),
+    ...(o.customer_ref ? { customer_ref: o.customer_ref, customer_ref_date: o.customer_ref_date ?? null } : {}),
   });
   await ctx.tx.query(`update invoices set sales_order_id = $3, milestone_id = $4 where tenant_id = $1 and id = $2`, [ctx.tenantId, r.record.id, orderId, milestone?.id ?? null]);
   const events = [...r.events, ...(await saveInvoiceLines(ctx, r.record.id, input))];
@@ -486,6 +493,10 @@ export interface PaymentInput {
   depositAccountId?: string | null;
   tdsAmount?: number;
   bankCharges?: number;
+  /** deductions government buyers make: GST TDS (section 51), liquidated damages / penalty, retention money */
+  gstTdsAmount?: number;
+  ldAmount?: number;
+  retentionAmount?: number;
   currency?: string;
   exchangeRate?: number;
 }
@@ -498,10 +509,11 @@ export async function recordPayment(ctx: RecordCtx, input: PaymentInput) {
     accountId = (o.account_id as string | null) ?? null;
   }
   if (!accountId) throw badRequest('The order has no customer; choose the customer for this payment');
-  const booksFields = !!input.depositAccountId || !!input.tdsAmount || !!input.bankCharges || (!!input.currency && input.currency !== 'INR');
+  const deductions = r2((input.tdsAmount ?? 0) + (input.bankCharges ?? 0) + (input.gstTdsAmount ?? 0) + (input.ldAmount ?? 0) + (input.retentionAmount ?? 0));
+  const booksFields = !!input.depositAccountId || deductions > 0 || (!!input.currency && input.currency !== 'INR');
   if (booksFields) {
-    if (!hasAdmin(ctx.principal.permissions, 'books') && !hasAdmin(ctx.principal.permissions, 'billing')) throw forbidden('TDS, bank charges, deposit account and currency need the billing or books permission');
-    if (r2((input.tdsAmount ?? 0) + (input.bankCharges ?? 0)) > input.amount) throw badRequest('TDS and bank charges cannot exceed the amount');
+    if (!hasAdmin(ctx.principal.permissions, 'books') && !hasAdmin(ctx.principal.permissions, 'billing')) throw forbidden('Deductions, deposit account and currency need the billing or books permission');
+    if (deductions > input.amount) throw badRequest('The deductions cannot exceed the amount settled');
     if (input.depositAccountId) {
       const a = await ctx.tx.one<{ subtype: string }>(`select subtype from gl_accounts where tenant_id = $1 and id = $2 and is_active`, [ctx.tenantId, input.depositAccountId]);
       if (!a || !['bank', 'cash'].includes(a.subtype)) throw badRequest('Deposit to a bank or cash account');
@@ -523,11 +535,17 @@ export async function recordPayment(ctx: RecordCtx, input: PaymentInput) {
   if (input.milestoneId) await ctx.tx.query(`update payments set milestone_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, input.milestoneId]);
   await ctx.tx.query(`update payments set name = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, `${r.record.payment_number}${input.reference ? ` · ${input.reference}` : ''}`]);
   if (booksFields) {
-    await ctx.tx.query(`update payments set deposit_account_id = $3, tds_amount = $4, bank_charges = $5, currency = $6, exchange_rate = $7 where tenant_id = $1 and id = $2`, [
-      ctx.tenantId, id, input.depositAccountId ?? null, input.tdsAmount ?? 0, input.bankCharges ?? 0, input.currency ?? 'INR', input.exchangeRate ?? 1,
-    ]);
+    await ctx.tx.query(
+      `update payments set deposit_account_id = $3, tds_amount = $4, bank_charges = $5, currency = $6, exchange_rate = $7, gst_tds_amount = $8, ld_amount = $9, retention_amount = $10 where tenant_id = $1 and id = $2`,
+      [
+        ctx.tenantId, id, input.depositAccountId ?? null, input.tdsAmount ?? 0, input.bankCharges ?? 0, input.currency ?? 'INR', input.exchangeRate ?? 1,
+        input.gstTdsAmount ?? 0, input.ldAmount ?? 0, input.retentionAmount ?? 0,
+      ],
+    );
   }
   if (input.allocations) events.push(...(await allocatePayment(ctx, id, input.allocations)));
+  if ((input.retentionAmount ?? 0) > 0)
+    await retentionFromReceipt(ctx, { id, number: String(r.record.payment_number), accountId, amount: input.retentionAmount!, date: String(r.record.payment_date ?? input.date ?? new Date().toISOString().slice(0, 10)).slice(0, 10), salesOrderId: input.salesOrderId ?? null, reference: input.reference ?? null });
   if (input.salesOrderId) events.push(...(await refreshOrderPaid(ctx, input.salesOrderId)));
   await repost(ctx.tx, ctx.tenantId, 'payment', id);
   return { id, number: r.record.payment_number as string, events };
@@ -603,6 +621,7 @@ export async function allocatePayment(ctx: RecordCtx, paymentId: string, allocat
 export async function voidPayment(ctx: RecordCtx, id: string, reason: string): Promise<RecordEvent[]> {
   const { row } = await loadRow(ctx, 'payment', id, 'update', true);
   if (row.status === 'void') throw badRequest('Already void');
+  await retentionOnVoid(ctx, id, `Receipt void: ${reason}`);
   const invs = await ctx.tx.query<{ invoice_id: string }>(`delete from payment_allocations where tenant_id = $1 and payment_id = $2 returning invoice_id`, [ctx.tenantId, id]);
   await ctx.tx.query(`update payments set status = 'void', amount_allocated = 0, void_reason = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, reason]);
   if (row.milestone_id) {

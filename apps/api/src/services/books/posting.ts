@@ -100,6 +100,10 @@ async function buildPayment(tx: Tx, t: string, id: string) {
   const amount = Number(p.amount);
   const tds = Number(p.tds_amount ?? 0);
   const charges = Number(p.bank_charges ?? 0);
+  // deductions government buyers make before paying
+  const gstTds = Number(p.gst_tds_amount ?? 0);
+  const ld = Number(p.ld_amount ?? 0);
+  const retention = Number(p.retention_amount ?? 0);
   // receivable cleared at each invoice's own rate; the rest at the payment's rate
   const allocs = await tx.query<{ amount: string; rate: string }>(
     `select a.amount, i.exchange_rate as rate from payment_allocations a join invoices i on i.tenant_id = a.tenant_id and i.id = a.invoice_id where a.tenant_id = $1 and a.payment_id = $2`,
@@ -109,11 +113,14 @@ async function buildPayment(tx: Tx, t: string, id: string) {
   const arCredit = r2(allocs.reduce((s, a) => s + Number(a.amount) * Number(a.rate), 0) + (amount - allocated) * rate);
   const bank = await cashAccount(tx, t, p.mode, p.deposit_account_id);
   const lines: JLine[] = [
-    { accountId: bank, debit: r2((amount - tds - charges) * rate) },
+    { accountId: bank, debit: r2((amount - tds - charges - gstTds - ld - retention) * rate) },
     { accountId: ar, credit: arCredit, partyType: 'customer', partyId: p.account_id },
   ];
   if (tds) lines.push({ accountId: await sys(tx, t, 'tds_receivable'), debit: r2(tds * rate), taxKind: 'tds' });
   if (charges) lines.push({ accountId: await sys(tx, t, 'bank_charges'), debit: r2(charges * rate) });
+  if (gstTds) lines.push({ accountId: await sys(tx, t, 'gst_tds_receivable'), debit: r2(gstTds * rate), description: 'GST TDS (section 51)' });
+  if (ld) lines.push({ accountId: await sys(tx, t, 'liquidated_damages'), debit: r2(ld * rate), partyType: 'customer', partyId: p.account_id, description: 'Liquidated damages / penalty deducted' });
+  if (retention) lines.push({ accountId: await sys(tx, t, 'retention_receivable'), debit: r2(retention * rate), partyType: 'customer', partyId: p.account_id, description: 'Retention withheld' });
   const fx = r2(arCredit - amount * rate);
   if (fx) {
     const acc = await sys(tx, t, 'fx_gain_loss');

@@ -165,7 +165,11 @@ export async function gstr1(ctx: RecordCtx, month: string, section: 'b2b' | 'b2c
 // ---------------------------------------------------------------------------------- Tally
 export const x = (s: unknown) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const amt = (n: number) => r2(n).toFixed(2);
-export type TallyLedgers = { sales: string; cgst: string; sgst: string; igst: string; roundOff: string; bank: string };
+export type TallyLedgers = {
+  sales: string; cgst: string; sgst: string; igst: string; roundOff: string; bank: string;
+  /** deductions on receipts (income-tax TDS, GST TDS, liquidated damages, retention, bank charges) */
+  tds: string; gstTds: string; ld: string; retention: string; bankCharges: string;
+};
 
 const entry = (ledger: string, amount: number, debit: boolean, bills?: { name: string; type: 'New Ref' | 'Agst Ref'; amount: number }[]) =>
   `<ALLLEDGERENTRIES.LIST><LEDGERNAME>${x(ledger)}</LEDGERNAME><ISDEEMEDPOSITIVE>${debit ? 'Yes' : 'No'}</ISDEEMEDPOSITIVE><AMOUNT>${amt(debit ? -amount : amount)}</AMOUNT>` +
@@ -204,10 +208,23 @@ export function receiptVoucherXml(L: TallyLedgers, p: Record<string, any>, party
     `<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER${remoteId ? ` REMOTEID="${x(remoteId)}"` : ''} VCHTYPE="Receipt" ACTION="${action}" OBJVIEW="Accounting Voucher View">` +
     `<DATE>${ymd(p.payment_date).replace(/-/g, '')}</DATE><VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME><VOUCHERNUMBER>${x(p.payment_number)}</VOUCHERNUMBER>` +
     `<PARTYLEDGERNAME>${x(party)}</PARTYLEDGERNAME><NARRATION>${x([p.mode, p.reference].filter(Boolean).join(' '))}</NARRATION>` +
-    entry(L.bank, amount, true) +
+    deductionEntries(L, p, amount) +
     entry(party, amount, false, refs.length ? refs : undefined) +
     `</VOUCHER></TALLYMESSAGE>`
   );
+}
+
+/** The bank gets the net; each deduction the customer made goes to its own ledger. */
+function deductionEntries(L: TallyLedgers, p: Record<string, any>, amount: number) {
+  const d: [string, number][] = [
+    [L.tds, Number(p.tds_amount ?? 0)],
+    [L.gstTds, Number(p.gst_tds_amount ?? 0)],
+    [L.ld, Number(p.ld_amount ?? 0)],
+    [L.retention, Number(p.retention_amount ?? 0)],
+    [L.bankCharges, Number(p.bank_charges ?? 0)],
+  ];
+  const net = r2(amount - d.reduce((s, [, v]) => s + v, 0));
+  return entry(L.bank, net, true) + d.filter(([, v]) => v > 0).map(([l, v]) => entry(l, v, true)).join('');
 }
 
 /** A customer ledger under Sundry Debtors, with GST registration and address. */

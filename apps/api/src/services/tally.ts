@@ -159,7 +159,9 @@ export async function pendingForTally(ctx: RecordCtx, i: Integration, limit = 50
     );
     for (const p of pays) {
       const bills = ((p.bills as { name: string; amount: number }[] | null) ?? []).filter((b) => b.name);
-      const hash = await hashOf([p.payment_number, p.payment_date, p.amount, bills]);
+      // deductions join the hash only when there are any, so receipts already in Tally are not re-sent
+      const ded = [p.tds_amount, p.gst_tds_amount, p.ld_amount, p.retention_amount, p.bank_charges].map(Number);
+      const hash = await hashOf(ded.some((v) => v > 0) ? [p.payment_number, p.payment_date, p.amount, bills, ded] : [p.payment_number, p.payment_date, p.amount, bills]);
       if (!due('receipt', p.id, hash)) continue;
       // the party is the ledger of the invoices it settles (or the customer's name)
       const party = String(p.account_name ?? '').trim();
