@@ -249,6 +249,12 @@ export async function deleteConnection(deps: GstDeps, id: string) {
 /* ───────────────────────── portal session ───────────────────────── */
 
 const SESSION_MINUTES = 360;
+
+/** The sandbox only knows GSTN's test taxpayers; a real GSTIN or username fails there. */
+export function sandboxHint(sandbox: boolean, message: string) {
+  if (!sandbox) return message;
+  return `${message}. This server uses WhiteBooks' SANDBOX, which only knows the test taxpayers WhiteBooks gives you (test GSTIN and username), not real ones. For your real GSTIN use production keys with WHITEBOOKS_ENV=production.`;
+}
 const REFRESH_WITHIN_MS = 45 * 60_000;
 
 function baseHeaders(c: ConnRow, ip: string, txn?: string): Record<string, string | undefined> {
@@ -269,7 +275,7 @@ export async function requestOtp(deps: GstDeps, id: string) {
   const txn = r.ok ? pick(r, 'txn') : undefined;
   return deps.run(async (ctx) => {
     if (!r.ok || !txn) {
-      const msg = r.ok ? 'The GST system did not return a transaction id' : r.message;
+      const msg = r.ok ? 'The GST system did not return a transaction id' : sandboxHint(cfg.sandbox, r.message);
       await ctx.tx.query(`update gst_connections set last_error = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, msg.slice(0, 1000)]);
       await logEvent(ctx, { connectionId: id, action: 'otp.request', ok: false, message: msg });
       throw new GspError(msg, r.code, r);
@@ -468,7 +474,7 @@ export async function searchTaxpayer(deps: GstDeps, gstin: string) {
     }
   });
   const r = await wbCall(cfg, 'gst', 'GET', '/public/search', { query: { gstin: g } });
-  if (!r.ok) throw new GspError(r.message, r.code, r);
+  if (!r.ok) throw new GspError(sandboxHint(cfg.sandbox, r.message), r.code, r);
   const d = r.data ?? {};
   const addr = d.pradr?.addr ?? {};
   return {

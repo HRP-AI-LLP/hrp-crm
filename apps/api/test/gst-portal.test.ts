@@ -36,7 +36,7 @@ const state = { saved: new Map<string, any>(), filed: new Set<string>(), otpTxn:
 function gsp(path: string, q: Record<string, string>, hd: Record<string, string>, body: any): any {
   const ok = (data: unknown, extra: Record<string, unknown> = {}) => ({ status_cd: '1', status_desc: 'Success', data, ...extra });
   const fail = (message: string, code = 'RET191') => ({ status_cd: '0', status_desc: message, error: { message, error_cd: code } });
-  if (path === '/authentication/otprequest') return { status_cd: '1', header: { txn: state.otpTxn } };
+  if (path === '/authentication/otprequest') return hd.gst_username === 'acme_up' ? { status_cd: '1', header: { txn: state.otpTxn } } : fail('Username does not exist', 'AUTH4037');
   if (path === '/authentication/authtoken') return q.otp === '575757' && hd.txn === state.otpTxn ? { status_cd: '1', header: { txn: state.sessionTxn } } : fail('Invalid OTP', 'AUTH4033');
   if (path === '/authentication/otpforevc') return ok({ message: 'OTP sent' });
   if (path === '/public/search') return ok({ gstin: q.gstin, lgnm: 'FOOD CORPORATION OF INDIA', tradeNam: 'FCI', sts: 'Active', dty: 'Regular', pradr: { addr: { bnm: '16-20 Barakhamba Lane', loc: 'New Delhi', stcd: 'Delhi', pncd: '110001' } } });
@@ -206,6 +206,12 @@ describe('GST portal through WhiteBooks', () => {
     const bad = await api('POST', `/api/v1/gst/connections/${ids.conn}/verify`, { otp: '111111' });
     expect(bad.status).toBe(502);
     expect(bad.json.error.message).toMatch(/Invalid OTP/);
+    // a username the sandbox does not know gets the sandbox hint
+    await api('PATCH', `/api/v1/gst/connections/${ids.conn}`, { gstin: SELLER, gstUsername: 'real_user' });
+    const unknown = await api('POST', `/api/v1/gst/connections/${ids.conn}/otp`);
+    expect(unknown.json.error.message).toMatch(/does not exist.*SANDBOX/);
+    await api('PATCH', `/api/v1/gst/connections/${ids.conn}`, { gstin: SELLER, gstUsername: 'acme_up' });
+    await api('POST', `/api/v1/gst/connections/${ids.conn}/otp`);
     const v = await api('POST', `/api/v1/gst/connections/${ids.conn}/verify`, { otp: '575757' });
     expect(v.status, JSON.stringify(v.json)).toBe(200);
     expect(v.json.status).toBe('active');
