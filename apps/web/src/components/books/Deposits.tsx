@@ -149,12 +149,12 @@ export function Deposits() {
   );
 }
 
-function NewDeposit({ onClose, onDone }: { onClose: () => void; onDone: (id: string) => void }) {
+function NewDeposit({ onClose, onDone, defaults }: { onClose: () => void; onDone: (id: string) => void; defaults?: { kind?: string; accountId?: string; accountName?: string; projectId?: string; dealId?: string; reference?: string } }) {
   const act = useAct([['deposits']]);
   const [q, setQ] = useState('');
   const customers = useQuery({ queryKey: ['deposit-customers', q], queryFn: () => get<{ items: Json[] }>(`/api/v1/records/account?limit=50${q ? `&q=${encodeURIComponent(q)}` : ''}`) });
   const [f, setF] = useState({
-    kind: 'emd', instrument: 'online', accountId: '', projectId: '', reference: '', issuingBank: '', amount: '', marginAmount: '', issueDate: today(), expiryDate: '', claimUntil: '', paidFrom: '', notes: '', opening: false,
+    kind: defaults?.kind ?? 'emd', instrument: defaults?.kind === 'performance_security' ? 'epbg' : 'online', accountId: defaults?.accountId ?? '', projectId: defaults?.projectId ?? '', reference: defaults?.reference ?? '', issuingBank: '', amount: '', marginAmount: '', issueDate: today(), expiryDate: '', claimUntil: '', paidFrom: '', notes: '', opening: false,
   });
   const projects = useQuery({ queryKey: ['deposit-projects', f.accountId], queryFn: () => get<{ items: Json[] }>(`/api/v1/records/project?limit=100`), enabled: !!f.accountId });
   const guarantee = GUARANTEE.has(f.instrument);
@@ -173,7 +173,7 @@ function NewDeposit({ onClose, onDone }: { onClose: () => void; onDone: (id: str
             const r = (await act(
               () =>
                 post<{ id: string }>('/api/v1/deposits', {
-                  kind: f.kind, instrument: f.instrument, accountId: f.accountId, projectId: f.projectId || null, reference: f.reference || null, issuingBank: f.issuingBank || null,
+                  kind: f.kind, instrument: f.instrument, accountId: f.accountId, projectId: f.projectId || null, dealId: defaults?.dealId ?? null, reference: f.reference || null, issuingBank: f.issuingBank || null,
                   amount: Number(f.amount), marginAmount: guarantee ? Number(f.marginAmount) || 0 : 0, issueDate: f.issueDate || null, expiryDate: f.expiryDate || null,
                   claimUntil: f.claimUntil || null, paidFrom: f.paidFrom || null, notes: f.notes || null, opening: f.opening || f.instrument === 'withheld',
                 }),
@@ -212,6 +212,7 @@ function NewDeposit({ onClose, onDone }: { onClose: () => void; onDone: (id: str
           <input placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} />
           <select value={f.accountId} onChange={(e) => set({ accountId: e.target.value, projectId: '' })}>
             <option value="">Choose…</option>
+            {defaults?.accountId && defaults.accountName && !customers.data?.items.some((a) => a.id === defaults.accountId) && <option value={defaults.accountId}>{defaults.accountName}</option>}
             {customers.data?.items.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.title}
@@ -467,5 +468,71 @@ function DepositModal({ id, onClose }: { id: string; onClose: () => void }) {
         )}
       </div>
     </Modal>
+  );
+}
+
+/** On a deal (the bid) or a project (the contract): its EMD, guarantees and retention, and a button to record one. */
+export function RecordDeposits({ object, rec }: { object: 'deal' | 'project'; rec: Json }) {
+  const [open, setOpen] = useState<string | 'new' | null>(null);
+  const accountId = rec.account_id as string | null;
+  const { data } = useQuery({
+    queryKey: ['deposits', 'for', object, rec.id],
+    queryFn: () => get<Json[]>(`/api/v1/deposits${accountId ? `?accountId=${accountId}` : ''}`),
+    enabled: !!accountId,
+  });
+  const account = useQuery({ queryKey: ['record', 'account', accountId], queryFn: () => get<Json>(`/api/v1/records/account/${accountId}`), enabled: !!accountId, retry: false });
+  const mine = (data ?? []).filter((d) => (object === 'deal' ? d.deal_id === rec.id : d.project_id === rec.id) && d.status !== 'cancelled');
+  return (
+    <section className="panel" style={{ marginBottom: 14 }}>
+      <div className="panel-head">
+        <h2>{object === 'deal' ? 'EMD & bid security' : 'Guarantees, deposits & retention'}</h2>
+        {accountId ? (
+          <button className="btn sm primary" onClick={() => setOpen('new')}>
+            {object === 'deal' ? 'Record EMD' : 'Record guarantee / deposit'}
+          </button>
+        ) : (
+          <span className="small muted">Set the {object === 'deal' ? 'account' : 'customer'} first</span>
+        )}
+      </div>
+      <div className="panel-body">
+        {!mine.length ? (
+          <p className="muted small" style={{ margin: 0 }}>
+            {object === 'deal' ? 'No EMD recorded for this bid.' : 'No performance security, deposit or retention recorded for this project.'}
+          </p>
+        ) : (
+          <table className="data">
+            <tbody>
+              {mine.map((d) => (
+                <tr key={d.id} className="click" onClick={() => setOpen(d.id)}>
+                  <td>{d.deposit_number}</td>
+                  <td>
+                    {kindLabel(d.kind)} <span className="small muted">· {instLabel(d.instrument)}</span>
+                  </td>
+                  <td className="small">{d.reference}</td>
+                  <td className="num">{money2(d.held)}</td>
+                  <td>{d.expiry_date ? `till ${date(d.expiry_date)}` : ''}</td>
+                  <td>
+                    <span className={`chip ${d.status === 'active' ? 'info' : 'good'}`}>{d.status}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {open === 'new' && accountId && (
+        <NewDeposit
+          onClose={() => setOpen(null)}
+          onDone={(id) => setOpen(id)}
+          defaults={{
+            kind: object === 'deal' ? 'emd' : 'performance_security',
+            accountId,
+            accountName: String(account.data?.title ?? ''),
+            ...(object === 'deal' ? { dealId: String(rec.id), reference: String(rec.bid_number ?? '') } : { projectId: String(rec.id) }),
+          }}
+        />
+      )}
+      {open && open !== 'new' && <DepositModal id={open} onClose={() => setOpen(null)} />}
+    </section>
   );
 }
