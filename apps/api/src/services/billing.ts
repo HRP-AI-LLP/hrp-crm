@@ -160,7 +160,7 @@ export async function getInvoice(ctx: RecordCtx, id: string) {
   const account = row.account_id ? await ctx.tx.one<Record<string, unknown>>(`select id, name, gstin, address, city, state, pincode from accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, row.account_id]) : null;
   const settings = await billingSettings(ctx);
   return {
-    invoice: { ...toDto(obj, row, ctx.principal.permissions), buyer_name: row.buyer_name, buyer_address: row.buyer_address, buyer_state: row.buyer_state, buyer_pincode: row.buyer_pincode, seller_gstin: row.seller_gstin, seller_state: row.seller_state, pos_code: row.pos_code, round_off: Number(row.round_off), ack_no: row.ack_no, ack_date: row.ack_date, financial_year: row.financial_year, subtotal: Number(row.subtotal), discount_total: Number(row.discount_total), tax_total: Number(row.tax_total) },
+    invoice: { ...toDto(obj, row, ctx.principal.permissions), buyer_name: row.buyer_name, buyer_address: row.buyer_address, buyer_state: row.buyer_state, buyer_pincode: row.buyer_pincode, seller_gstin: row.seller_gstin, seller_state: row.seller_state, pos_code: row.pos_code, round_off: Number(row.round_off), ack_no: row.ack_no, ack_date: row.ack_date, irn_qr: row.irn_cancelled_at ? null : row.irn_qr, irn_cancelled_at: row.irn_cancelled_at, ewb_no: row.ewb_cancelled_at ? null : row.ewb_no, ewb_date: row.ewb_date, ewb_valid_until: row.ewb_valid_until, financial_year: row.financial_year, subtotal: Number(row.subtotal), discount_total: Number(row.discount_total), tax_total: Number(row.tax_total) },
     lines: await invoiceLines(ctx, id),
     payments,
     credits,

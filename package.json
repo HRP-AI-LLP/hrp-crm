@@ -22,7 +22,8 @@
     "local:test": "node scripts/local/local-test.mjs",
     "deploy:dev": "pnpm --filter @synapse/web build && pnpm --filter @synapse/api deploy:dev",
     "deploy:prod": "pnpm --filter @synapse/web build && pnpm --filter @synapse/api deploy:prod",
-    "typecheck:scripts": "tsc -p tsconfig.scripts.json"
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json",
+    "gst:check": "node scripts/local/gsp-check.mjs"
   },
   "devDependencies": {
     "@neondatabase/api-client": "^2.7.3",

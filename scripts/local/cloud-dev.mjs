@@ -27,9 +27,13 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createApiClient } from '@neondatabase/api-client';
+import { loadDotEnv, WHITEBOOKS_KEYS } from './dotenv.mjs';
 import { freePorts } from './ports.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+// optional settings from the repo-root .env (git-ignored); only the names are shown
+const fromDotEnv = loadDotEnv(ROOT);
+if (fromDotEnv.length) console.log(`Read from .env: ${fromDotEnv.join(', ')}`);
 const args = new Set(process.argv.slice(2));
 const win = process.platform === 'win32';
 const step = (m) => console.log(`\n\x1b[36m▸ ${m}\x1b[0m`);
@@ -116,6 +120,8 @@ const vars = {
   META_APP_ID: process.env.META_APP_ID ?? '',
   META_APP_SECRET: process.env.META_APP_SECRET ?? '',
   META_VERIFY_TOKEN: process.env.META_VERIFY_TOKEN ?? '',
+  // GST portal, e-invoice and e-way bill (WhiteBooks GSP): from .env or the terminal
+  ...Object.fromEntries(WHITEBOOKS_KEYS.map((k) => [k, process.env[k] ?? ''])),
 };
 writeFileSync(
   join(ROOT, 'apps', 'api', '.dev.vars'),

@@ -18,6 +18,8 @@
  *   - Files (R2), cache and queue: simulated by wrangler on this computer
  *   - AI: off unless you set GROQ_API_KEY / GEMINI_API_KEY in the terminal (those call the
  *     providers' APIs); everything else has rule-based fallbacks. Knowledge-base vector search is off.
+ *   - GST portal / e-invoice / e-way bill: WHITEBOOKS_* keys from the repo-root .env (see
+ *     docs/GST-PORTAL.md); they call WhiteBooks' sandbox unless WHITEBOOKS_ENV=production.
  *
  * Local passwords and keys are generated once into infra/.local/local.json (git-ignored) and written
  * only to apps/api/.dev.vars (git-ignored). Nothing secret is printed.
@@ -28,9 +30,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { loadDotEnv, WHITEBOOKS_KEYS } from './dotenv.mjs';
 import { freePorts } from './ports.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+// optional settings from the repo-root .env (git-ignored); only the names are shown
+const fromDotEnv = loadDotEnv(ROOT);
+if (fromDotEnv.length) console.log(`Read from .env: ${fromDotEnv.join(', ')}`);
 const args = new Set(process.argv.slice(2));
 const win = process.platform === 'win32';
 const step = (m) => console.log(`\n\x1b[36m▸ ${m}\x1b[0m`);
@@ -188,6 +194,8 @@ const vars = {
   META_APP_ID: process.env.META_APP_ID ?? '',
   META_APP_SECRET: process.env.META_APP_SECRET ?? '',
   META_VERIFY_TOKEN: process.env.META_VERIFY_TOKEN ?? '',
+  // GST portal, e-invoice and e-way bill (WhiteBooks GSP): from .env or the terminal
+  ...Object.fromEntries(WHITEBOOKS_KEYS.map((k) => [k, process.env[k] ?? ''])),
 };
 writeFileSync(
   join(ROOT, 'apps', 'api', '.dev.vars'),

@@ -219,3 +219,31 @@ An independent review of the fifth round found no cross-tenant leaks; these were
 - **Bounds:** costing is computed once per BOM per request and capped at 12 levels and 2,000 BOMs. Explosion is capped at 1,000 nodes and tracing at 20 levels and 500 rows. Work order quantity is at most 10,000,000.
 - **The ITC-04 CSV is formula-safe.**
 
+
+### Eighth round (Nov 2026): GST portal, e-invoice and e-way bill
+
+- **Keys:**
+  - The WhiteBooks platform keys (`WHITEBOOKS_*`) live only in the Worker's secrets, or in `apps/api/.dev.vars` locally (written from the git-ignored `.env`). They are never sent to the browser or logged.
+  - `pnpm gst:check` prints status codes only and blanks the keys out of any error text.
+- **Taxpayer credentials:**
+  - The e-invoice and e-way bill API passwords, the GST portal session (txn) and the IRP token are encrypted with `DATA_ENCRYPTION_KEY`, with the tenant id bound in as AAD.
+  - None of them is ever returned. The API only says whether a password is saved.
+  - Changing the username, password or GSTIN drops the related session.
+- **Who:** the GST portal, filing, IRN and e-way bill need the books or billing admin area. Taxpayer search also allows account admins. Each step re-checks this in its own transaction.
+- **No calls inside transactions:** each step reads what it needs, calls the GSP outside any database transaction, then records the outcome. Calls time out after 45 seconds.
+- **Inputs to the GSP:**
+  - Portal views are an allow-list of paths, and every parameter must match a safe pattern.
+  - The GSP path itself is checked.
+  - Uploaded return JSON must be for the connection's GSTIN and is capped at 5 MB.
+  - The base URL must be https, or http only to localhost.
+- **Filing:**
+  - Filing needs:
+    - the summary fetched from the portal;
+    - proceed-to-file for GSTR-1 / 1A;
+    - the offset for GSTR-3B;
+    - the signatory's PAN;
+    - an explicit declaration.
+  - A filed return cannot be prepared, saved or reset again.
+  - Every call is logged in `gst_events` (append-only for the app role), and filing also writes an audit log entry.
+- **Sessions:** a session-expired answer from the portal marks the connection expired. The OTP must be verified within 15 minutes of the request.
+- **Issued invoices:** the issued-invoice guard was widened only for the IRN's QR code, the IRN cancellation time and the e-way bill fields. Tax content stays frozen.

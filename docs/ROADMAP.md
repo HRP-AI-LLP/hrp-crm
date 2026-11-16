@@ -76,7 +76,7 @@ Three phases, each tested, reviewed and committed before the next:
 4. **More telephony and payment providers:** Knowlarity, MyOperator and Ozonetel behind the same interface; Cashfree and PhonePe as alternatives to Razorpay.
 5. **Argon2id hashing service on Oracle ARM.** This removes the PBKDF2 CPU risk.
 6. **IMAP mailboxes** (Zoho Mail, GoDaddy, cPanel hosts) on the Oracle worker.
-7. **E-invoice IRP / e-way bill API** through a GSP once a customer needs direct filing.
+7. **GST portal through WhiteBooks (done, Nov 2026): test end to end in the WhiteBooks sandbox**, then with a real GSTIN in production. Adjust any field the sandbox reports, and add GSTR-1 amendments (B2BA, CDNRA) built from Synapse.
 8. **iOS store build** with APNs through Firebase, and background location for field teams.
 9. **Restore from backup** (today: download and inspect; restore is done by HRP staff).
 10. **Platform admin console** for HRP staff, using a separate audited role.

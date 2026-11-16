@@ -54,7 +54,11 @@ function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back:
     if (i.due_date && !cn) rows.push(['Due date', date(i.due_date)]);
     if (i.place_of_supply) rows.push(['Place of supply', `${i.place_of_supply}${i.pos_code ? ` (${i.pos_code})` : ''}`]);
     if (i.reverse_charge) rows.push(['Reverse charge', 'Yes']);
-    if (i.irn) rows.push(['IRN', `${String(i.irn).slice(0, 20)}…`]);
+    if (i.irn && !i.irn_cancelled_at) {
+      if (!i.irn_qr) rows.push(['IRN', `${String(i.irn).slice(0, 20)}…`]);
+      if (i.ack_no) rows.push(['Ack no. / date', `${i.ack_no}${i.ack_date ? ` · ${date(i.ack_date)}` : ''}`]);
+    }
+    if (i.ewb_no) rows.push(['E-way bill', `${i.ewb_no}${i.ewb_date ? ` · ${date(i.ewb_date)}` : ''}`]);
     // the letterhead's state must be the seller state snapshot so CGST/SGST vs IGST prints as issued
     const company = { ...d.company, state: i.seller_state ?? d.company.state, gstin: i.seller_gstin ?? d.company.gstin };
     return {
@@ -126,7 +130,27 @@ export function DocPrintPage() {
         </button>
       </div>
       <QuoteDocument doc={s.doc} labels={s.labels} />
+      {kind === 'invoice' && data?.invoice?.irn_qr && <IrnQr qr={data.invoice.irn_qr} irn={data.invoice.irn} />}
       {kind === 'invoice' && data?.upi && <UpiQr upi={data.upi} />}
+    </div>
+  );
+}
+
+/** The e-invoice's signed QR code from the IRP (rule 48(4)): verifiable with the GST "Verify QR" app. */
+function IrnQr({ qr, irn }: { qr: string; irn: string }) {
+  const svg = useMemo(() => {
+    const q = qrcode(0, 'L');
+    q.addData(qr);
+    q.make();
+    return q.createSvgTag({ cellSize: 2, margin: 1, scalable: true });
+  }, [qr]);
+  return (
+    <div className="upi-qr">
+      <div className="qr" role="img" aria-label="E-invoice QR code" dangerouslySetInnerHTML={{ __html: svg }} />
+      <div>
+        <b>E-invoice (signed by the Invoice Registration Portal)</b>
+        <div className="small" style={{ wordBreak: 'break-all' }}>IRN {irn}</div>
+      </div>
     </div>
   );
 }
@@ -189,6 +213,7 @@ export function PublicDocPage() {
         </div>
       </div>
       <QuoteDocument doc={s.doc} labels={s.labels} />
+      {data.kind === 'invoice' && data.data.invoice?.irn_qr && <IrnQr qr={data.data.invoice.irn_qr} irn={data.data.invoice.irn} />}
       {data.kind === 'invoice' && data.data.upi && <UpiQr upi={data.data.upi} />}
     </div>
   );

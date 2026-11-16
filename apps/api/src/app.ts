@@ -17,6 +17,7 @@ import { booksRoutes } from './routes/books';
 import { projectRoutes } from './routes/projects';
 import { manufacturingRoutes } from './routes/manufacturing';
 import { depositRoutes } from './routes/deposits';
+import { gstRoutes } from './routes/gst';
 import { mobileRoutes } from './routes/mobile';
 import { integrationAdminRoutes, integrationPublicRoutes, integrationRoutes } from './routes/integrations';
 import { publicRoutes } from './routes/public';
@@ -78,6 +79,7 @@ export function createApp() {
   app.route('/api/v1', projectRoutes);
   app.route('/api/v1', manufacturingRoutes);
   app.route('/api/v1', depositRoutes);
+  app.route('/api/v1', gstRoutes);
   app.route('/api/v1', mobileRoutes);
   app.route('/api/v1', integrationRoutes);
   app.route('/api/v1', privacyRoutes);

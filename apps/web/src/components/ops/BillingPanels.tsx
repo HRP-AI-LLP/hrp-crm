@@ -11,6 +11,7 @@ import { Modal, useToast } from '../ui';
 import { type DocLine, LinesEditor, toLineInput } from './LinesEditor';
 import { TallySync } from './TallySync';
 import { Deposits } from '../books/Deposits';
+import { GstPortal, InvoiceGst } from '../gst/GstPortal';
 
 type Json = Record<string, any>;
 const STATUS_CLS: Record<string, string> = { draft: '', issued: 'info', partially_paid: 'warn', paid: 'good', cancelled: 'bad' };
@@ -190,6 +191,8 @@ export function PaymentModal({ accountId, orderId, invoice, onClose, onDone }: {
 /** Tax invoice / credit note workspace. */
 export function InvoicePanel({ id, canEdit }: { id: string; canEdit: boolean }) {
   const nav = useNavigate();
+  const { me } = useAuth();
+  const isGstAdmin = !!me && (hasAdmin(me.permissions, 'billing') || hasAdmin(me.permissions, 'books'));
   const { data } = useQuery({ queryKey: ['invoice', id], queryFn: () => get<Json>(`/api/v1/invoices/${id}`) });
   const act = useAct([['invoice', id], ['record', 'invoice', id], ['timeline', 'invoice', id], ['records', 'invoice']]);
   const [modal, setModal] = useState<null | 'pay' | 'cancel' | 'credit' | 'irn'>(null);
@@ -198,6 +201,7 @@ export function InvoicePanel({ id, canEdit }: { id: string; canEdit: boolean }) 
   const inv = data.invoice;
   const status = String(inv.status);
   const isCn = inv.doc_type === 'credit_note';
+  const isProforma = inv.doc_type === 'proforma';
   const draft = status === 'draft';
   const blocked = ['required', 'pending', 'rejected'].includes(String(inv.approval_status));
   return (
@@ -260,6 +264,7 @@ export function InvoicePanel({ id, canEdit }: { id: string; canEdit: boolean }) 
         </div>
       </div>
       <div className="panel-body stack">
+        {!draft && status !== 'cancelled' && !isProforma && isGstAdmin && <InvoiceGst invoiceId={id} canAct={canEdit} />}
         {!isCn && ['issued', 'partially_paid', 'paid'].includes(status) && <PaymentLinks invoiceId={id} due={Number(inv.balance_due)} canCreate={canEdit && status !== 'paid'} />}
         <div className="row small" style={{ gap: 18, flexWrap: 'wrap' }}>
           <span>
@@ -614,7 +619,7 @@ export function OrderBilling({ order, milestones, canEdit }: { order: Json; mile
 
 /** /billing — receivables, GST returns, Tally sync and export, and billing settings. */
 export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
-  const [tab, setTab] = useState<'ar' | 'gst' | 'deposits' | 'tally' | 'settings'>('ar');
+  const [tab, setTab] = useState<'ar' | 'gst' | 'portal' | 'deposits' | 'tally' | 'settings'>('ar');
   return (
     <>
       <div className="page-head">
@@ -629,6 +634,7 @@ export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
             [
               ['ar', 'Receivables'],
               ['gst', 'GST returns'],
+              ['portal', 'GST portal'],
               ['deposits', 'Deposits & guarantees'],
               ['tally', 'Tally'],
               ['settings', 'Settings'],
@@ -643,6 +649,7 @@ export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
         </div>
         {tab === 'ar' && <Receivables />}
         {tab === 'gst' && <GstReturns />}
+        {tab === 'portal' && <GstPortal />}
         {tab === 'deposits' && (
           <div className="panel-body">
             <Deposits />

@@ -121,7 +121,7 @@ Add the consignee and the paying authority as **Contacts** on the account.
    - the GeM contract number and date ("Buyer's order / contract");
    - the milestone line, with "Accepted: CRAC … on …" under it;
    - IGST, or CGST + SGST, from the buyer's state.
-3. Check the draft and **Issue** it. If e-invoicing applies to you, generate the IRN on the IRP and record it with **Add IRN**. Then **Print / Save PDF**.
+3. Check the draft and **Issue** it. If e-invoicing applies to you, press **Generate IRN** on the invoice (see [GST-PORTAL.md](GST-PORTAL.md)); for goods, also **E-way bill**. Without the GST portal connection, generate the IRN on the IRP and record it with **Add IRN**. Then **Print / Save PDF**: the signed QR code is printed.
 4. Upload the invoice on GeM against the CRAC.
 
 ### 7. Payment received
@@ -144,8 +144,8 @@ The invoice becomes **Paid**. The deductions go to their own accounts, and reten
 
 - **Books → GST & TDS** lists every deduction by customer.
   - Income-tax TDS: match it to Form 26AS and claim it in your return.
-  - GST TDS: accept it in GSTR-2X on the GST portal. It then reaches your electronic cash ledger. When you use it to pay GST, post a journal: Dr the output GST it pays, Cr *GST TDS receivable (section 51)*.
-- **GSTR-3B** includes the invoice's outward tax.
+  - GST TDS: accept it in GSTR-2X — in Synapse, **Billing & GST → GST portal → Prepare a return → GSTR-2X** accepts every credit the deductors reported, then save and file it. It then reaches your electronic cash ledger. When you use it to pay GST, post a journal: Dr the output GST it pays, Cr *GST TDS receivable (section 51)*.
+- **GSTR-1 and GSTR-3B** include the invoice. File them from **Billing & GST → GST portal**.
 
 ### 9. Retention, guarantees and closure
 

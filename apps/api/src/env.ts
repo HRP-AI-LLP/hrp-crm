@@ -58,6 +58,17 @@ export interface Env {
   /** Outlook / Microsoft 365 mail + calendar (Entra app registration, multi-tenant) */
   MS_CLIENT_ID?: string;
   MS_CLIENT_SECRET?: string;
+  /** GST portal, e-invoice and e-way bill through the WhiteBooks GSP (developer.whitebooks.in).
+   *  WHITEBOOKS_ENV: sandbox (default) or production; the e-invoice / e-way bill keys fall back to the GST API keys. */
+  WHITEBOOKS_ENV?: string;
+  WHITEBOOKS_BASE_URL?: string;
+  WHITEBOOKS_EMAIL?: string;
+  WHITEBOOKS_CLIENT_ID?: string;
+  WHITEBOOKS_CLIENT_SECRET?: string;
+  WHITEBOOKS_EINVOICE_CLIENT_ID?: string;
+  WHITEBOOKS_EINVOICE_CLIENT_SECRET?: string;
+  WHITEBOOKS_EWAYBILL_CLIENT_ID?: string;
+  WHITEBOOKS_EWAYBILL_CLIENT_SECRET?: string;
   /** Meta (Facebook) app for lead ads: app secret signs the leadgen webhook */
   META_APP_ID?: string;
   META_APP_SECRET?: string;
