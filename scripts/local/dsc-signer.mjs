@@ -82,7 +82,24 @@ export function startDscSigner({ skip = false } = {}) {
     prefixed(child.stdout, process.stdout);
     prefixed(child.stderr, process.stderr);
     child.on('error', (e) => console.log(`${tag} could not start the signer: ${e.message}`));
+    const started = Date.now();
+    let tail = '';
+    child.stderr?.on('data', (d) => (tail = (tail + d.toString()).slice(-600)));
+    child.on('exit', (code) => {
+      if (stopped) return;
+      if (/Port \d+ is in use/.test(tail)) return console.log(`${tag} another signer is already running on that port; that one is used`);
+      // a crash right after starting would only repeat: say so plainly; a later one gets restarted
+      const early = Date.now() - started < 15_000;
+      restarts++;
+      if (early && restarts > 2) {
+        console.log(`\x1b[41m\x1b[37m${tag} THE DSC SIGNER STOPPED (exit code ${code}) - USB-token signing is off.\x1b[0m See the [dsc] lines above, or run it on its own to see why:  pnpm dsc serve`);
+        return;
+      }
+      console.log(`${tag} the signer stopped (exit code ${code}); starting it again in 3 s`);
+      setTimeout(serve, 3000);
+    });
   };
+  let restarts = 0;
   if (installed(py)) {
     serve();
   } else {
