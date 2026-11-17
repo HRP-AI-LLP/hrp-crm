@@ -6,6 +6,7 @@
  * for the IRN (e-invoice) and the e-way bill.
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { useRef, useState } from "react";
 import { del, get, patch, post } from "../../lib/api";
 import { date, dateTime, money2 } from "../../lib/format";
@@ -1798,6 +1799,7 @@ function Gstr2bPanel({ conn }: { conn: Json }) {
   } | null>(null);
   const [results, setResults] = useState<Json[]>([]);
   const stopRef = useRef({ stop: false }).current;
+  const [openMonth, setOpenMonth] = useState<string | null>(null);
 
   const months = rangeMonths(range, { month, fy, from, to });
   const savedSet = new Set((saved ?? []).map((x) => x.period));
@@ -1995,11 +1997,15 @@ function Gstr2bPanel({ conn }: { conn: Json }) {
               unmatched: r.unmatched,
             }))}
             title="This run"
+            onOpen={setOpenMonth}
           />
         )}
         {saved && saved.length > 0 && (
-          <details>
-            <summary>All saved GSTR-2B ({saved.length} month(s))</summary>
+          <details open={results.length === 0}>
+            <summary>
+              All saved GSTR-2B ({saved.length} month(s)) — click a month for
+              its documents
+            </summary>
             <Gstr2bTable
               rows={saved.map((x) => ({
                 period: x.period,
@@ -2010,15 +2016,381 @@ function Gstr2bPanel({ conn }: { conn: Json }) {
                 mismatch: x.match?.mismatch,
                 unmatched: x.match?.unmatched,
               }))}
+              onOpen={setOpenMonth}
             />
           </details>
         )}
       </div>
+      {openMonth && (
+        <Gstr2bMonth
+          conn={conn}
+          period={openMonth}
+          onClose={() => setOpenMonth(null)}
+        />
+      )}
     </section>
   );
 }
 
-function Gstr2bTable({ rows, title }: { rows: Json[]; title?: string }) {
+const MATCH: Record<string, [string, string]> = {
+  matched: ["Matched", "good"],
+  mismatch: ["Differences", "warn"],
+  unmatched: ["Not in your books", "bad"],
+};
+const SECTION_LABEL: Record<string, string> = {
+  b2b: "B2B invoices",
+  b2ba: "B2B amendments",
+  cdnr: "Credit / debit notes",
+  cdnra: "Note amendments",
+  isd: "ISD credits",
+  isda: "ISD amendments",
+  impg: "Import of goods",
+  impgsez: "Imports from SEZ",
+  ecom: "E-commerce",
+  ecoma: "E-commerce amendments",
+};
+
+function csv(rows: (string | number | null | undefined)[][]) {
+  return rows
+    .map((r) =>
+      r
+        .map((v) => {
+          const t = v == null ? "" : String(v);
+          return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+        })
+        .join(","),
+    )
+    .join("\n");
+}
+function saveText(text: string, name: string, type: string) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/** One GSTR-2B month: every supplier document, its match against your bills, and the bills suppliers did not report. */
+function Gstr2bMonth({
+  conn,
+  period,
+  onClose,
+}: {
+  conn: Json;
+  period: string;
+  onClose: () => void;
+}) {
+  const toast = useToast();
+  const { data, error } = useQuery({
+    queryKey: ["gst", "gstr2b-month", conn.id, period],
+    queryFn: () =>
+      get<Json>(`/api/v1/gst/connections/${conn.id}/gstr2b/${period}`),
+  });
+  const [tab, setTab] = useState<
+    "all" | "matched" | "mismatch" | "unmatched" | "missing"
+  >("all");
+  const [q, setQ] = useState("");
+  const lines: Json[] = data?.lines ?? [];
+  const missing: Json[] = data?.missingInGstr2b ?? [];
+  const count = (k: string) => lines.filter((l) => l.match_status === k).length;
+  const needle = q.trim().toLowerCase();
+  const hit = (...xs: unknown[]) =>
+    !needle ||
+    xs.some((x) =>
+      String(x ?? "")
+        .toLowerCase()
+        .includes(needle),
+    );
+  const shown = lines.filter(
+    (l) =>
+      (tab === "all" || l.match_status === tab) &&
+      hit(l.supplier_gstin, l.supplier_name, l.doc_number, l.bill_number),
+  );
+  const shownMissing = missing.filter((b) =>
+    hit(b.vendor_gstin, b.vendor, b.vendor_ref, b.bill_number),
+  );
+  const sum = (xs: Json[], k: string) =>
+    xs.reduce((n, x) => n + Number(x[k] ?? 0), 0);
+  const itcOk = lines.filter((l) => l.itc_available !== false);
+  const downloadCsv = () =>
+    saveText(
+      csv([
+        [
+          "Supplier GSTIN",
+          "Supplier",
+          "Document",
+          "Date",
+          "Taxable",
+          "Tax",
+          "ITC available",
+          "Status",
+          "Note",
+          "Bill",
+        ],
+        ...lines.map((l) => [
+          l.supplier_gstin,
+          l.supplier_name,
+          l.doc_number,
+          l.doc_date,
+          l.taxable,
+          l.tax,
+          l.itc_available === false ? "N" : "Y",
+          MATCH[l.match_status]?.[0] ?? l.match_status,
+          l.note,
+          l.bill_number,
+        ]),
+        ...missing.map((b) => [
+          b.vendor_gstin,
+          b.vendor,
+          b.vendor_ref,
+          b.bill_date,
+          b.taxable,
+          b.tax,
+          "",
+          "Not reported by supplier",
+          "",
+          b.bill_number,
+        ]),
+      ]),
+      `GSTR-2B-${period}-${conn.gstin}.csv`,
+      "text/csv",
+    );
+  const downloadRaw = async () => {
+    try {
+      const r = await get<Json>(
+        `/api/v1/gst/connections/${conn.id}/gstr2b/${period}?raw=1`,
+      );
+      saveJson(
+        r.raw?.length === 1 ? r.raw[0] : r.raw,
+        `GSTR-2B-${period}-${conn.gstin}-portal.json`,
+      );
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
+  const tabs: [typeof tab, string, number][] = [
+    ["all", "All", lines.length],
+    ["matched", "Matched", count("matched")],
+    ["mismatch", "Differences", count("mismatch")],
+    ["unmatched", "Not in your books", count("unmatched")],
+    ["missing", "Bills the supplier didn't report", missing.length],
+  ];
+  return (
+    <Modal
+      title={`GSTR-2B · ${periodLabel(period)}`}
+      onClose={onClose}
+      wide
+      footer={
+        data && (
+          <>
+            <button className="btn" onClick={downloadCsv}>
+              Download CSV
+            </button>
+            {data.files > 0 && (
+              <button className="btn" onClick={downloadRaw}>
+                Portal JSON
+              </button>
+            )}
+          </>
+        )
+      }
+    >
+      {error ? (
+        <div className="muted">{(error as Error).message}</div>
+      ) : !data ? (
+        <Spinner />
+      ) : (
+        <div className="stack">
+          <div className="muted small">
+            {data.fetchedAt
+              ? `Fetched ${dateTime(data.fetchedAt)}`
+              : "Imported from a JSON file"}
+            {data.generatedOn
+              ? ` · generated on the portal ${data.generatedOn}`
+              : ""}
+            {data.importedAt ? ` · matched ${dateTime(data.importedAt)}` : ""}
+            {" · "}ITC available {money2(sum(itcOk, "tax"))} on taxable{" "}
+            {money2(sum(itcOk, "taxable"))}
+          </div>
+          {Object.keys(data.sections ?? {}).length > 0 && (
+            <div className="row small" style={{ gap: 6, flexWrap: "wrap" }}>
+              {Object.entries(data.sections as Record<string, number>).map(
+                ([k, v]) => (
+                  <span key={k} className="chip">
+                    {SECTION_LABEL[k] ?? k.toUpperCase()}: {v}
+                  </span>
+                ),
+              )}
+            </div>
+          )}
+          <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+            {tabs.map(([k, l, n]) => (
+              <button
+                key={k}
+                className={`btn sm ${tab === k ? "primary" : ""}`}
+                onClick={() => setTab(k)}
+              >
+                {l} ({n})
+              </button>
+            ))}
+            <input
+              placeholder="Search supplier, GSTIN, invoice…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              style={{ marginLeft: "auto", minWidth: 220 }}
+            />
+          </div>
+          <div
+            className="table-wrap"
+            style={{ maxHeight: 460, overflow: "auto" }}
+          >
+            {tab === "missing" ? (
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Supplier</th>
+                    <th>Their invoice</th>
+                    <th>Date</th>
+                    <th style={{ textAlign: "right" }}>Taxable</th>
+                    <th style={{ textAlign: "right" }}>Tax</th>
+                    <th>Bill</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shownMissing.map((b) => (
+                    <tr key={b.id}>
+                      <td>
+                        {b.vendor}
+                        <div className="muted small">{b.vendor_gstin}</div>
+                      </td>
+                      <td>{b.vendor_ref ?? "—"}</td>
+                      <td>{date(b.bill_date)}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {money2(b.taxable)}
+                      </td>
+                      <td style={{ textAlign: "right" }}>{money2(b.tax)}</td>
+                      <td>
+                        <Link to={`/o/bill/${b.id}`}>{b.bill_number}</Link>
+                      </td>
+                    </tr>
+                  ))}
+                  {!shownMissing.length && (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="muted"
+                        style={{ textAlign: "center", padding: 16 }}
+                      >
+                        Every eligible bill of this month was reported by its
+                        supplier.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            ) : (
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Supplier</th>
+                    <th>Document</th>
+                    <th>Date</th>
+                    <th style={{ textAlign: "right" }}>Taxable</th>
+                    <th style={{ textAlign: "right" }}>Tax</th>
+                    <th>ITC</th>
+                    <th>Status</th>
+                    <th>Your bill</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shown.map((l) => (
+                    <tr key={l.id}>
+                      <td>
+                        {l.supplier_name ?? "—"}
+                        <div className="muted small">{l.supplier_gstin}</div>
+                      </td>
+                      <td>{l.doc_number}</td>
+                      <td>{l.doc_date ? date(l.doc_date) : ""}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {money2(l.taxable)}
+                      </td>
+                      <td style={{ textAlign: "right" }}>{money2(l.tax)}</td>
+                      <td className="small">
+                        {l.itc_available === false ? "Not available" : "Yes"}
+                      </td>
+                      <td>
+                        <span
+                          className={`chip ${MATCH[l.match_status]?.[1] ?? ""}`}
+                        >
+                          {MATCH[l.match_status]?.[0] ?? l.match_status}
+                        </span>
+                        {l.note && <div className="muted small">{l.note}</div>}
+                      </td>
+                      <td>
+                        {l.bill_id ? (
+                          <Link to={`/o/bill/${l.bill_id}`}>
+                            {l.bill_number}
+                          </Link>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {!shown.length && (
+                    <tr>
+                      <td
+                        colSpan={8}
+                        className="muted"
+                        style={{ textAlign: "center", padding: 16 }}
+                      >
+                        {lines.length
+                          ? "Nothing matches the filter."
+                          : "No supplier documents in this month's GSTR-2B."}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+                {shown.length > 1 && (
+                  <tfoot>
+                    <tr>
+                      <td colSpan={3}>
+                        <b>{shown.length} document(s)</b>
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <b>{money2(sum(shown, "taxable"))}</b>
+                      </td>
+                      <td style={{ textAlign: "right" }}>
+                        <b>{money2(sum(shown, "tax"))}</b>
+                      </td>
+                      <td colSpan={3} />
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            )}
+          </div>
+          {data.itcSummary && (
+            <details>
+              <summary>The portal's ITC summary</summary>
+              <JsonBox value={data.itcSummary} />
+            </details>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function Gstr2bTable({
+  rows,
+  title,
+  onOpen,
+}: {
+  rows: Json[];
+  title?: string;
+  onOpen?: (period: string) => void;
+}) {
   const sum = (k: string) => rows.reduce((n, r) => n + Number(r[k] ?? 0), 0);
   return (
     <div className="table-wrap">
@@ -2037,15 +2409,22 @@ function Gstr2bTable({ rows, title }: { rows: Json[]; title?: string }) {
             <th style={{ textAlign: "right" }}>Matched</th>
             <th style={{ textAlign: "right" }}>Mismatch</th>
             <th style={{ textAlign: "right" }}>Not in books</th>
+            <th />
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.period}>
+            <tr
+              key={r.period}
+              className={r.error ? undefined : "clickable"}
+              style={r.error ? undefined : { cursor: "pointer" }}
+              title={r.error ? undefined : "Open this month's documents"}
+              onClick={() => !r.error && onOpen?.(r.period)}
+            >
               <td>{periodLabel(r.period)}</td>
               {r.error ? (
                 <td
-                  colSpan={6}
+                  colSpan={7}
                   className="small"
                   style={{ color: "var(--bad)" }}
                 >
@@ -2063,6 +2442,16 @@ function Gstr2bTable({ rows, title }: { rows: Json[]; title?: string }) {
                   <td style={{ textAlign: "right" }}>{r.matched ?? "—"}</td>
                   <td style={{ textAlign: "right" }}>{r.mismatch ?? "—"}</td>
                   <td style={{ textAlign: "right" }}>{r.unmatched ?? "—"}</td>
+                  <td>
+                    {onOpen && (
+                      <button
+                        className="btn sm"
+                        onClick={() => onOpen(r.period)}
+                      >
+                        View
+                      </button>
+                    )}
+                  </td>
                 </>
               )}
             </tr>

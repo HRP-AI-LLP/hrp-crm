@@ -207,6 +207,11 @@ describe('GST through gstinapi.in', () => {
     const saved = await api('GET', `/api/v1/gst/connections/${ids.conn}/gstr2b/saved`);
     expect(saved.status, JSON.stringify(saved.json)).toBe(200);
     expect(saved.json).toEqual([expect.objectContaining({ period: PERIOD, files: 1, match: expect.objectContaining({ lines: 1 }) })]);
+    const det = await api('GET', `/api/v1/gst/connections/${ids.conn}/gstr2b/${PERIOD}`);
+    expect(det.status, JSON.stringify(det.json)).toBe(200);
+    expect(det.json).toMatchObject({ period: PERIOD, files: 1, sections: { b2b: 1 }, lines: [expect.objectContaining({ doc_number: 'SS/9', supplier_name: 'Steel' })] });
+    expect(det.json.raw).toBeUndefined();
+    expect((await api('GET', `/api/v1/gst/connections/${ids.conn}/gstr2b/${PERIOD}?raw=1`)).json.raw).toHaveLength(1);
     expect(calls.length).toBe(before2b);
 
     const fy = new Date().getUTCMonth() >= 3 ? new Date().getUTCFullYear() : new Date().getUTCFullYear() - 1;

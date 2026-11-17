@@ -13,7 +13,7 @@ import { hasAdmin, validGstin } from '@synapse/shared';
 import type { Env } from '../../env';
 import { decryptSecret, encryptSecret } from '../../lib/crypto';
 import { ApiError, badRequest, conflict, forbidden, notFound } from '../../lib/errors';
-import { importGstr2b, type Gstr2bRow } from '../books/setup';
+import { gstr2bReport, importGstr2b, type Gstr2bRow } from '../books/setup';
 import type { RecordCtx } from '../records';
 import { BUILDABLE, buildGstr1, buildGstr3b, buildItc04, filingCalendar, fromRetPeriod } from './returns';
 import { getProvider, requireProvider, type Form as FormCode, type GspConn, type GspProvider, type GstOp, type Secrets, type Session } from './provider';
@@ -1216,6 +1216,49 @@ export async function gstr2bSaved(deps: GstDeps, connectionId: string) {
         const i = imports.find((x) => x.period === m.period);
         return { ...m, match: i ? { at: i.created_at, lines: i.lines, matched: i.matched, mismatch: i.mismatch, unmatched: i.lines - i.matched - i.mismatch } : null };
       });
+  });
+}
+
+/**
+ * One GSTR-2B month in full, from our database (no provider call): every supplier document with its match
+ * against bills, the bills the suppliers have not reported, and what else the kept GSTR-2B holds (sections
+ * and the ITC summary). `raw` adds the kept portal answer itself, for download.
+ */
+export async function gstr2bDetail(deps: GstDeps, connectionId: string, period: string, raw = false) {
+  fromRetPeriod(period);
+  return deps.run(async (ctx) => {
+    assertGstAdmin(ctx);
+    await loadConn(ctx, connectionId);
+    const files = await ctx.tx.query<{ key: string; data: any; fetched_at: string }>(
+      `select key, data, fetched_at from gst_portal_cache where tenant_id = $1 and connection_id = $2 and kind = 'gstr2b' and (key = $3 or key like $4) order by key`,
+      [ctx.tenantId, connectionId, period, `${period}|%`],
+    );
+    const report = await gstr2bReport(ctx, period);
+    const sections: Record<string, number> = {};
+    let itcSummary: unknown = null;
+    let generatedOn: string | null = null;
+    for (const f of files) {
+      const d = f.data?.data ?? f.data ?? {};
+      generatedOn ??= d.gendt ?? null;
+      itcSummary ??= d.itcsumm ?? null;
+      for (const [k, v] of Object.entries(d.docdata ?? {})) {
+        if (!Array.isArray(v)) continue;
+        const docs = v.reduce((n: number, x: any) => n + (Array.isArray(x?.inv) ? x.inv.length : Array.isArray(x?.nt) ? x.nt.length : Array.isArray(x?.doclist) ? x.doclist.length : 1), 0);
+        sections[k] = (sections[k] ?? 0) + docs;
+      }
+    }
+    return {
+      period,
+      fetchedAt: files.reduce<string | null>((a, f) => (!a || f.fetched_at > a ? f.fetched_at : a), null),
+      files: files.length,
+      generatedOn,
+      sections,
+      itcSummary,
+      importedAt: report?.importedAt ?? null,
+      lines: report?.lines ?? [],
+      missingInGstr2b: report?.missingInGstr2b ?? [],
+      ...(raw ? { raw: files.map((f) => f.data) } : {}),
+    };
   });
 }
 
