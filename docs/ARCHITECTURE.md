@@ -94,6 +94,13 @@ All tenant tables live in one schema. Every table has `tenant_id`, every index s
 - Custom field values live in each record's `custom jsonb`, so a record is read in one row with no joins.
 - Fields marked *filterable* are mirrored by trigger into `record_index`. These are typed rows (`v_text`, `v_num`, `v_date`, `v_bool`) with B-tree indexes. Filtering and sorting on a custom field therefore uses an index without per-tenant DDL on shared tables.
 - Standard objects are also rows in `custom_objects`, so fields, layouts, permissions, forms and modules treat every object the same way.
+- Picklists people can extend: choosing **Other…** in a form shows a box, and a typed value is saved as
+  a new choice for everyone (lowercase value, the label as typed; matching an existing choice in any case
+  reuses it). Custom picklists are open by default (an admin can turn it off per field in Objects &
+  fields); standard ones only where the application doesn't act on the value (account type and industry,
+  lead and deal source, vendor type, ticket category and channel). Added choices live in
+  `custom_fields.options.choices` or, for standard fields, `custom_objects.settings.extraChoices`.
+  Public web forms and list filters only take existing choices.
 - Any change to metadata bumps `tenants.meta_version` (via a trigger). Edge cache keys include that version, so caches roll over without explicit purges.
 
 ### Industry modules

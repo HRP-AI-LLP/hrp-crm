@@ -138,7 +138,7 @@ export const publicRoutes = new Hono<AppEnv>()
       // a form without a fixed owner hands its records to the assignment rules (fallback: workspace owner)
       input.owner_id = form.settings.ownerId ?? null;
       const principal = systemPrincipal(ownerId, meta.objects.map((o) => o.key));
-      const { record, events } = await createRecord({ tx, meta, principal, tenantId: route.tenant_id }, form.object_key, input, { bypassPermissions: true, autoAssign: !form.settings.ownerId });
+      const { record, events } = await createRecord({ tx, meta, principal, tenantId: route.tenant_id }, form.object_key, input, { bypassPermissions: true, autoAssign: !form.settings.ownerId, fixedChoices: true });
       if ((form.object_key === 'lead' || form.object_key === 'contact') && body.consent === true) {
         // consent evidence: what was shown, when, from where (DPDP: free, specific, informed)
         await recordConsent(tx, route.tenant_id, { object: form.object_key, id: record.id }, {

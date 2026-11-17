@@ -52,7 +52,7 @@ export function PublicFormPage() {
                     <span>
                       {f.label} {f.required && <span className="req">*</span>}
                     </span>
-                    {f.type === 'lookup' || f.type === 'user' ? null : <FieldInput field={{ ...f, standard: false }} objectKey="" value={values[f.key]} onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))} />}
+                    {f.type === 'lookup' || f.type === 'user' ? null : <FieldInput field={{ ...f, standard: false, options: { ...f.options, addable: false } }} objectKey="" value={values[f.key]} onChange={(v) => setValues((s) => ({ ...s, [f.key]: v }))} />}
                   </label>
                 ))}
                 <input name="_hp" tabIndex={-1} autoComplete="off" className="sr-only" aria-hidden="true" onChange={(e) => setValues((s) => ({ ...s, _hp: e.target.value }))} />

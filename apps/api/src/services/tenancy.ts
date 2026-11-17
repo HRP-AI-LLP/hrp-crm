@@ -134,9 +134,13 @@ export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> 
   const disabled = new Set(modules.filter((m) => !m.is_enabled).map((m) => m.module_key));
 
   const objectMetas: ObjectMeta[] = objects.filter((o) => !o.module_key || !disabled.has(o.module_key)).map((o) => {
-    const std = (isStandardObject(o.key) ? STANDARD_FIELDS[o.key] : CUSTOM_OBJECT_BASE_FIELDS).map((f) =>
-      f.standard && f.type === 'picklist' && dynamic[f.key] ? { ...f, options: { ...f.options, choices: dynamic[f.key] } } : f,
-    );
+    // choices people added to a standard picklist ("Other…" and a typed value) follow the built-in ones
+    const extra = (o.settings?.extraChoices ?? {}) as Record<string, { value: string; label: string }[]>;
+    const std = (isStandardObject(o.key) ? STANDARD_FIELDS[o.key] : CUSTOM_OBJECT_BASE_FIELDS).map((f) => {
+      if (f.standard && f.type === 'picklist' && dynamic[f.key]) return { ...f, options: { ...f.options, choices: dynamic[f.key] } };
+      const more = Array.isArray(extra[f.key]) ? extra[f.key]!.filter((c) => !(f.options?.choices ?? []).some((b) => b.value === c.value)) : [];
+      return more.length ? { ...f, options: { ...f.options, choices: [...(f.options?.choices ?? []), ...more] } } : f;
+    });
     const stdKeys = new Set(std.map((f) => f.key));
     const custom: FieldDef[] = fields
       // a custom field shadowed by a newer standard field of the same name is retired (data stays in custom)

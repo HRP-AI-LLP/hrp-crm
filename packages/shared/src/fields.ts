@@ -48,6 +48,12 @@ export interface FieldOptions {
   /** formula conditions: show the field only when true / require it when true */
   visibleWhen?: string;
   requiredWhen?: string;
+  /**
+   * picklists: whether people may type a value that isn't a choice yet ("Other…"); it is then added
+   * as a choice for everyone. Default: yes for custom fields, no for standard ones (whose values the
+   * application acts on) unless the standard field says so.
+   */
+  addable?: boolean;
 }
 
 /** Unified field descriptor for standard columns and tenant custom fields. */
@@ -102,6 +108,7 @@ export const fieldSpecSchema = z.object({
       controlling: z.object({ field: z.string().regex(KEY_PATTERN), map: z.record(z.string().max(80), z.array(z.string().max(80)).max(500)) }).optional(),
       visibleWhen: z.string().trim().max(2000).optional(),
       requiredWhen: z.string().trim().max(2000).optional(),
+      addable: z.boolean().optional(),
     })
     .optional(),
 });
@@ -116,6 +123,32 @@ export function valueType(field: Pick<FieldDef, 'type' | 'options'>): Exclude<Fi
 }
 
 export const isComputed = (f: Pick<FieldDef, 'type'>) => f.type === 'formula' || f.type === 'rollup';
+
+/** Can people add a new choice to this picklist by typing it ("Other…")? */
+export function choicesAddable(f: Pick<FieldDef, 'type' | 'standard' | 'readOnly' | 'options'>): boolean {
+  if (f.type !== 'picklist' && f.type !== 'multipicklist') return false;
+  if (f.readOnly || f.options?.controlling) return false;
+  return f.options?.addable ?? !f.standard;
+}
+
+/** The stored value for a choice typed by a person: lowercase words joined by _ (as the built-in choices are). */
+export function choiceValue(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 60);
+}
+
+/** A typed label matching an existing choice (by value or label, ignoring case) returns that choice. */
+export function findChoice(choices: PicklistChoice[], typed: string): PicklistChoice | undefined {
+  const t = typed.trim().toLowerCase();
+  const v = choiceValue(typed);
+  return choices.find((c) => c.value === typed || c.label.toLowerCase() === t || c.value === v);
+}
 
 /** Builds a zod validator for one field value (null clears the field). */
 export function valueSchema(field: FieldDef): z.ZodType<unknown> {

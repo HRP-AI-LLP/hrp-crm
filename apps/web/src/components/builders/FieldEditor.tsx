@@ -77,6 +77,7 @@ export function FieldEditor({ obj, field, onClose }: { obj: ObjectMeta; field?: 
   const [indexed, setIndexed] = useState(!!field?.indexed);
   const [pii, setPii] = useState(!!field?.pii);
   const [choicesText, setChoicesText] = useState(choicesToText(o.choices));
+  const [addable, setAddable] = useState(o.addable !== false);
   const [lookupObject, setLookupObject] = useState(o.lookupObject ?? 'account');
   const [min, setMin] = useState(o.min?.toString() ?? '');
   const [max, setMax] = useState(o.max?.toString() ?? '');
@@ -106,7 +107,10 @@ export function FieldEditor({ obj, field, onClose }: { obj: ObjectMeta; field?: 
     setBusy(true);
     setError(null);
     const options: Json = {};
-    if (isPick) options.choices = choices;
+    if (isPick) {
+      options.choices = choices;
+      options.addable = addable;
+    }
     if (type === 'lookup') options.lookupObject = lookupObject;
     if (['number', 'currency', 'percent'].includes(type)) {
       if (min !== '') options.min = Number(min);
@@ -125,7 +129,7 @@ export function FieldEditor({ obj, field, onClose }: { obj: ObjectMeta; field?: 
       if (isPick && controlling?.field) options.controlling = controlling;
     }
     // keep options this editor does not manage (e.g. defaults set by modules)
-    const merged = { ...Object.fromEntries(Object.entries(o).filter(([k]) => !['choices', 'lookupObject', 'min', 'max', 'precision', 'maxLength', 'expression', 'returnType', 'rollup', 'visibleWhen', 'requiredWhen', 'controlling'].includes(k))), ...options };
+    const merged = { ...Object.fromEntries(Object.entries(o).filter(([k]) => !['choices', 'addable', 'lookupObject', 'min', 'max', 'precision', 'maxLength', 'expression', 'returnType', 'rollup', 'visibleWhen', 'requiredWhen', 'controlling'].includes(k))), ...options };
     try {
       await put(`/api/admin/objects/${obj.key}/fields/${key}`, { label, type, required: computed ? false : required, indexed, pii, helpText: helpText || null, position: field?.position, options: merged });
       toast(editing ? 'Field saved' : 'Field added');
@@ -210,6 +214,12 @@ export function FieldEditor({ obj, field, onClose }: { obj: ObjectMeta; field?: 
             Choices — one per line (write “Label = value” to set the stored value)
             <textarea rows={4} value={choicesText} onChange={(e) => setChoicesText(e.target.value)} placeholder={'Hot\nWarm\nCold'} />
             <span className="muted small">{choices.length} choice{choices.length === 1 ? '' : 's'}{editing ? '. Changing a stored value does not update existing records.' : ''}</span>
+          </label>
+        )}
+        {isPick && (
+          <label className="row wide" style={{ gap: 8 }}>
+            <input type="checkbox" checked={addable} onChange={(e) => setAddable(e.target.checked)} />
+            People can pick “Other…” and type a new value, which is added to these choices for everyone
           </label>
         )}
         {['number', 'currency', 'percent'].includes(type) && (

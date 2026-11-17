@@ -57,7 +57,7 @@ describe('reading identifiers', () => {
 
 let h: Awaited<ReturnType<typeof makeHarness>>;
 let api: ReturnType<typeof h.as>;
-const ids: Record<string, string> = {};
+const ids = {} as Record<'yes' | 'hdfc' | 'hdfcGl' | 'prashantLedger', string>;
 const sysAcc: Record<string, string> = {};
 const statement = (bank: string, rows: { date: string; description: string; amount: number }[]) => api('POST', `/api/v1/books/bank-accounts/${bank}/statement`, { rows, toDesk: true });
 const txns = async (bank: string) => (await api('GET', `/api/v1/books/bank-accounts/${bank}/transactions?status=all`)).json as any[];
@@ -137,7 +137,7 @@ describe('own accounts on the accounts desk', () => {
 
   it('re-books a line booked as a new customer before the partner was listed', async () => {
     await statement(ids.yes, [{ date: daysAgo(1), description: 'NEFT CR-HDFC0000123-RAHUL VERMA-9876543210', amount: 15000 }]);
-    const np = ((await api('GET', '/api/v1/books/desk/proposals')).json as any[]).find((x) => x.kind === 'new_party');
+    const np = ((await api('GET', '/api/v1/books/desk/proposals')).json as any[]).find((x) => x.kind === 'new_party' && x.description.includes('RAHUL'));
     expect(np).toBeTruthy();
     expect((await api('POST', `/api/v1/books/desk/proposals/${np.id}`, { decision: 'approve' })).status).toBe(200);
     expect((await txns(ids.yes)).find((x) => x.description.includes('RAHUL')).status).toBe('matched');
@@ -157,7 +157,7 @@ describe('own accounts on the accounts desk', () => {
     expect((await txns(ids.yes)).find((x) => x.description.includes('RAHUL')).status).toBe('categorized');
     const rahul = (await api('GET', '/api/v1/books/desk/own')).json.persons.find((x: any) => x.name === 'Rahul Verma');
     expect(await balanceOf(rahul.account_in)).toBe(15000);
-    expect(await balanceOf(sysAcc.customer_advances)).toBe(0);
+    expect(await balanceOf(sysAcc.customer_advances!)).toBe(0);
     expect(((await api('GET', '/api/v1/books/desk/own/misbooked')).json.lines as any[]).length).toBe(0);
     expect((await tb()).totals.balanced).toBe(true);
   });

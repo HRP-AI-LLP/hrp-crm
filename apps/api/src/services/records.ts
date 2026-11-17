@@ -26,6 +26,10 @@ import {
   storageFor,
   valueSchema,
   valueType,
+  choicesAddable,
+  choiceValue,
+  findChoice,
+  type PicklistChoice,
 } from '@synapse/shared';
 import type { Principal } from '../env';
 import type { Tx } from '../lib/db';
@@ -457,7 +461,61 @@ interface Prepared {
   custom: Record<string, unknown>;
 }
 
-async function prepareValues(ctx: RecordCtx, obj: ObjectMeta, input: Record<string, unknown>, mode: 'create' | 'update', bypassFls: boolean): Promise<Prepared> {
+/** A value nobody can mistake for a slug of another script: picks a stable id for labels with no a-z/0-9 (e.g. Hindi). */
+function newChoiceValue(label: string, taken: Set<string>) {
+  let v = choiceValue(label);
+  if (!v) {
+    let h = 2166136261;
+    for (const ch of label.trim()) h = Math.imul(h ^ ch.codePointAt(0)!, 16777619) >>> 0;
+    v = `opt_${h.toString(36)}`;
+  }
+  let out = v;
+  for (let i = 2; taken.has(out); i++) out = `${v}_${i}`;
+  return out;
+}
+
+/**
+ * Picklists people may extend ("Other…" and a typed value): a value that isn't one of the choices is
+ * taken as the label of a new choice, added to the field for everyone, and stored as its value. A typed
+ * label matching an existing choice (any case) uses that choice.
+ */
+async function typedChoices(ctx: RecordCtx, obj: ObjectMeta, f: FieldDef, value: unknown): Promise<unknown> {
+  const choices = (f.options?.choices ?? []) as PicklistChoice[];
+  const added: PicklistChoice[] = [];
+  const resolve = (v: unknown) => {
+    if (typeof v !== 'string') return v;
+    const t = v.trim();
+    if (!t || choices.some((c) => c.value === v)) return v;
+    const hit = findChoice([...choices, ...added], t);
+    if (hit) return hit.value;
+    if (t.length > 80) return v; // left for validation to refuse
+    const c = { value: newChoiceValue(t, new Set([...choices, ...added].map((x) => x.value))), label: t.replace(/\s+/g, ' ') };
+    added.push(c);
+    return c.value;
+  };
+  const out = Array.isArray(value) ? value.map(resolve) : resolve(value);
+  if (!added.length) return out;
+  if (choices.length + added.length > 500) throw badRequest('Validation failed', [{ field: f.key, message: 'this list has too many choices; ask an admin to tidy it in Objects & fields' }]);
+  const json = JSON.stringify(added);
+  if (f.standard)
+    await ctx.tx.query(
+      `update custom_objects set settings = coalesce(settings, '{}'::jsonb) || jsonb_build_object('extraChoices',
+          coalesce(settings -> 'extraChoices', '{}'::jsonb) || jsonb_build_object($3::text, coalesce(settings -> 'extraChoices' -> $3::text, '[]'::jsonb) || $4::jsonb))
+        where tenant_id = $1 and key = $2`,
+      [ctx.tenantId, obj.key, f.key, json],
+    );
+  else
+    await ctx.tx.query(
+      `update custom_fields set options = coalesce(options, '{}'::jsonb) || jsonb_build_object('choices', coalesce(options -> 'choices', '[]'::jsonb) || $4::jsonb)
+        where tenant_id = $1 and object_key = $2 and key = $3`,
+      [ctx.tenantId, obj.key, f.key, json],
+    );
+  // later values in this request (an import, say) see the new choices too
+  f.options = { ...f.options, choices: [...choices, ...added] };
+  return out;
+}
+
+async function prepareValues(ctx: RecordCtx, obj: ObjectMeta, input: Record<string, unknown>, mode: 'create' | 'update', bypassFls: boolean, fixedChoices = false): Promise<Prepared> {
   const fm = fieldMap(obj);
   const out: Prepared = { columns: {}, custom: {} };
   const errors: { field: string; message: string }[] = [];
@@ -479,7 +537,8 @@ async function prepareValues(ctx: RecordCtx, obj: ObjectMeta, input: Record<stri
       errors.push({ field: key, message: 'you cannot edit this field' });
       continue;
     }
-    const value = raw === '' && f.type !== 'text' && f.type !== 'textarea' ? null : raw;
+    let value = raw === '' && f.type !== 'text' && f.type !== 'textarea' ? null : raw;
+    if (!fixedChoices && choicesAddable(f) && value !== null && value !== undefined) value = await typedChoices(ctx, obj, f, value);
     const parsed = valueSchema(f).safeParse(value);
     if (!parsed.success) {
       errors.push({ field: key, message: parsed.error.issues[0]?.message ?? 'invalid value' });
@@ -546,14 +605,15 @@ export async function createRecord(
   ctx: RecordCtx,
   objectKey: string,
   input: Record<string, unknown>,
-  opts: { bypassPermissions?: boolean; fromAutomation?: boolean; autoAssign?: boolean; viaService?: boolean } = {},
+  /** fixedChoices: picklist values must be existing choices (public web forms: visitors don't add to your lists) */
+  opts: { bypassPermissions?: boolean; fromAutomation?: boolean; autoAssign?: boolean; viaService?: boolean; fixedChoices?: boolean } = {},
 ): Promise<{ record: RecordDto; events: RecordEvent[] }> {
   const obj = getObject(ctx.meta, objectKey);
   // money documents that post to the ledger are created only through their own service
   if (SERVICE_ONLY.has(objectKey) && !opts.viaService) throw badRequest(`${obj.plural} are recorded from their own screen (they post to the books), not as plain records`);
   if (!opts.bypassPermissions && !objectPerm(ctx.principal.permissions, objectKey).create) throw forbidden();
   const s = storageFor(objectKey);
-  const prepared = await prepareValues(ctx, obj, input, 'create', !!opts.bypassPermissions);
+  const prepared = await prepareValues(ctx, obj, input, 'create', !!opts.bypassPermissions, !!opts.fixedChoices);
   const cols = prepared.columns;
   let assignedBy: string | null = null;
   if (opts.autoAssign) {

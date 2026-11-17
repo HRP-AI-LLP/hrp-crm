@@ -1,6 +1,6 @@
-import { allowedChoices, type FieldDef, fieldRequired, fieldVisible, isComputed, type ObjectMeta, type PicklistChoice, type RecordDto, resolveLayout, valueType } from '@synapse/shared';
-import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { allowedChoices, choicesAddable, findChoice, type FieldDef, fieldRequired, fieldVisible, isComputed, type ObjectMeta, type PicklistChoice, type RecordDto, resolveLayout, valueType } from '@synapse/shared';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ApiError, get, post } from '../lib/api';
 import { date, dateTime, money, number } from '../lib/format';
@@ -108,6 +108,7 @@ export function FieldInput({ field, value, onChange, objectKey, choices }: { fie
     case 'boolean':
       return <input id={id} type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} />;
     case 'picklist':
+      if (!choices && choicesAddable(field)) return <OpenPicklist id={id} field={field} opts={opts} value={str} onChange={onChange} />;
       return (
         <select id={id} value={str} onChange={(e) => onChange(e.target.value || null)}>
           <option value="">{choices && !choices.length ? 'Choose the controlling field first' : '—'}</option>
@@ -118,16 +119,22 @@ export function FieldInput({ field, value, onChange, objectKey, choices }: { fie
           ))}
         </select>
       );
-    case 'multipicklist':
+    case 'multipicklist': {
+      const cur = (value as string[]) ?? [];
+      const typed = cur.filter((v) => !opts.some((c) => c.value === v));
       return (
-        <select id={id} multiple value={(value as string[]) ?? []} onChange={(e) => onChange([...e.target.selectedOptions].map((o) => o.value))}>
-          {opts.map((c) => (
-            <option key={c.value} value={c.value}>
-              {c.label}
-            </option>
-          ))}
-        </select>
+        <div className="stack" style={{ gap: 4 }}>
+          <select id={id} multiple value={cur} onChange={(e) => onChange([...[...e.target.selectedOptions].map((o) => o.value), ...typed])}>
+            {opts.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+          {!choices && choicesAddable(field) && <AddChoice typed={typed} onAdd={(t) => onChange([...cur, t])} onRemove={(t) => onChange(cur.filter((v) => v !== t))} opts={opts} cur={cur} />}
+        </div>
       );
+    }
     case 'user':
       return (
         <select id={id} value={str} onChange={(e) => onChange(e.target.value || null)}>
@@ -150,6 +157,129 @@ export function FieldInput({ field, value, onChange, objectKey, choices }: { fie
     default:
       return <input id={id} value={str} onChange={(e) => onChange(e.target.value)} />;
   }
+}
+
+const OTHER = '__other__';
+
+/** When an editor that took a new typed choice closes (saved), reload the field lists so the choice shows everywhere. */
+function useRefreshMetaOnClose() {
+  const qc = useQueryClient();
+  const typed = useRef(false);
+  useEffect(
+    () => () => {
+      if (typed.current) setTimeout(() => qc.invalidateQueries({ queryKey: ['meta'] }), 300);
+    },
+    [qc],
+  );
+  return () => {
+    typed.current = true;
+  };
+}
+
+/**
+ * A picklist people can extend: "Other…" (or the list's own "Other") shows a box to type the value. A
+ * typed value is saved as a new choice for everyone and appears in the list from then on.
+ */
+function OpenPicklist({ id, field, opts, value, onChange }: { id: string; field: FieldDef; opts: PicklistChoice[]; value: string; onChange: (v: unknown) => void }) {
+  const known = !value || opts.some((c) => c.value === value);
+  const hasOther = opts.some((c) => c.value === 'other');
+  const [typing, setTyping] = useState(!known);
+  const [text, setText] = useState(known ? '' : value);
+  const markTyped = useRefreshMetaOnClose();
+  const sel = typing ? (hasOther ? 'other' : OTHER) : value;
+  return (
+    <div className="stack" style={{ gap: 4 }}>
+      <select
+        id={id}
+        value={sel}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === OTHER || v === 'other') {
+            setTyping(true);
+            onChange(text.trim() ? text : v === 'other' ? 'other' : null);
+          } else {
+            setTyping(false);
+            onChange(v || null);
+          }
+        }}
+      >
+        <option value="">—</option>
+        {opts.map((c) => (
+          <option key={c.value} value={c.value}>
+            {c.label}
+          </option>
+        ))}
+        {!hasOther && <option value={OTHER}>Other…</option>}
+      </select>
+      {typing && (
+        <>
+          <input
+            aria-label={`Other ${field.label.toLowerCase()}`}
+            placeholder={`Type the ${field.label.toLowerCase()}`}
+            maxLength={80}
+            value={text}
+            autoFocus
+            onChange={(e) => {
+              setText(e.target.value);
+              markTyped();
+              const t = e.target.value.trim();
+              const hit = t ? findChoice(opts, t) : undefined;
+              onChange(hit ? hit.value : t || (hasOther ? 'other' : null));
+            }}
+          />
+          <span className="muted small">{text.trim() && !findChoice(opts, text) ? `“${text.trim()}” is added to the list when you save` : hasOther ? 'Leave empty to keep it as Other' : ''}</span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AddChoice({ typed, opts, cur, onAdd, onRemove }: { typed: string[]; opts: PicklistChoice[]; cur: string[]; onAdd: (t: string) => void; onRemove: (t: string) => void }) {
+  const [text, setText] = useState('');
+  const markTyped = useRefreshMetaOnClose();
+  const add = () => {
+    const t = text.trim();
+    if (!t) return;
+    markTyped();
+    const hit = findChoice(opts, t);
+    const v = hit ? hit.value : t;
+    if (!cur.includes(v)) onAdd(v);
+    setText('');
+  };
+  return (
+    <>
+      {!!typed.length && (
+        <div className="row" style={{ gap: 4, flexWrap: 'wrap' }}>
+          {typed.map((t) => (
+            <span key={t} className="chip">
+              {t}{' '}
+              <button type="button" className="btn ghost sm" aria-label={`Remove ${t}`} onClick={() => onRemove(t)} style={{ padding: '0 4px' }}>
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="row" style={{ gap: 4 }}>
+        <input
+          placeholder="Other… type a value"
+          maxLength={80}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              add();
+            }
+          }}
+          style={{ flex: 1 }}
+        />
+        <button type="button" className="btn ghost sm" onClick={add} disabled={!text.trim()}>
+          Add
+        </button>
+      </div>
+    </>
+  );
 }
 
 function toLocalInput(iso: string) {

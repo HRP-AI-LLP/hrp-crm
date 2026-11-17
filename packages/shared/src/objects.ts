@@ -17,7 +17,7 @@ export interface ObjectStorage {
 }
 
 export const LEAD_SOURCES = ['website', 'whatsapp', 'instagram', 'facebook', 'google_ads', 'phone_call', 'walk_in', 'referral', 'architect', 'interior_designer', 'dealer', 'campaign', 'event', 'cold_call', 'partner', 'gem', 'tender', 'manual', 'other'];
-export const ACCOUNT_TYPES = ['customer', 'prospect', 'architect', 'interior_designer', 'dealer', 'builder', 'partner', 'government', 'other'];
+export const ACCOUNT_TYPES = ['customer', 'prospect', 'architect', 'interior_designer', 'dealer', 'builder', 'partner', 'government', 'ngo', 'other'];
 export const APPROVAL_STATUSES = ['not_required', 'required', 'pending', 'approved', 'rejected'] as const;
 const INDUSTRIES = ['technology', 'finance', 'healthcare', 'real_estate', 'retail', 'manufacturing', 'education', 'services', 'other'];
 export const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'expired', 'superseded'] as const;
@@ -38,7 +38,7 @@ export const PROJECT_STATUSES = ['planning', 'active', 'on_hold', 'completed', '
 export const PROJECT_BILLING_METHODS = ['fixed_price', 'time_project_rate', 'time_staff_rate', 'time_task_rate', 'non_billable'] as const;
 export const EXPENSE_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'recorded', 'reimbursed', 'void'] as const;
 export const VENDOR_TYPES = ['manufacturer', 'supplier', 'contractor', 'transporter', 'installer', 'service_provider', 'other'] as const;
-const LABELS: Record<string, string> = { gem: 'GeM portal', tender: 'Tender (CPPP / e-procurement)' };
+const LABELS: Record<string, string> = { gem: 'GeM portal', tender: 'Tender (CPPP / e-procurement)', ngo: 'NGO / trust / society' };
 const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: LABELS[v] ?? v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
 
 const owner: FieldDef = { key: 'owner_id', label: 'Owner', type: 'user', standard: true, indexed: true };
@@ -55,7 +55,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'company', label: 'Company', type: 'text', standard: true },
     { key: 'email', label: 'Email', type: 'email', standard: true, pii: true, indexed: true },
     { key: 'phone', label: 'Phone', type: 'phone', standard: true, pii: true },
-    { key: 'source', label: 'Source', type: 'picklist', standard: true, indexed: true, options: { choices: choices(LEAD_SOURCES) } },
+    { key: 'source', label: 'Source', type: 'picklist', standard: true, indexed: true, options: { addable: true, choices: choices(LEAD_SOURCES) } },
     { key: 'source_detail', label: 'Source detail', type: 'text', standard: true, helpText: 'Campaign name, referrer, showroom…' },
     { key: 'referred_by_id', label: 'Referred by (architect / dealer)', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
     ...pipelineFields,
@@ -81,8 +81,8 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
   account: [
     { key: 'name', label: 'Account name', type: 'text', standard: true, required: true },
     { key: 'domain', label: 'Domain', type: 'text', standard: true },
-    { key: 'account_type', label: 'Type', type: 'picklist', standard: true, options: { choices: choices(ACCOUNT_TYPES) } },
-    { key: 'industry', label: 'Industry', type: 'picklist', standard: true, options: { choices: choices(INDUSTRIES) } },
+    { key: 'account_type', label: 'Type', type: 'picklist', standard: true, options: { addable: true, choices: choices(ACCOUNT_TYPES) } },
+    { key: 'industry', label: 'Industry', type: 'picklist', standard: true, options: { addable: true, choices: choices(INDUSTRIES) } },
     { key: 'phone', label: 'Phone', type: 'phone', standard: true },
     { key: 'website', label: 'Website', type: 'url', standard: true },
     { key: 'annual_revenue', label: 'Annual revenue', type: 'currency', standard: true },
@@ -102,7 +102,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'amount', label: 'Amount', type: 'currency', standard: true, options: { min: 0 } },
     { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
     { key: 'close_date', label: 'Close date', type: 'date', standard: true },
-    { key: 'source', label: 'Source', type: 'picklist', standard: true, options: { choices: choices(LEAD_SOURCES) } },
+    { key: 'source', label: 'Source', type: 'picklist', standard: true, options: { addable: true, choices: choices(LEAD_SOURCES) } },
     { key: 'bid_number', label: 'Bid / tender no.', type: 'text', standard: true, indexed: true, options: { maxLength: 100 }, helpText: 'e.g. GEM/2026/B/1234567' },
     { key: 'bid_due_date', label: 'Bid closes on', type: 'date', standard: true },
     { key: 'probability', label: 'Probability %', type: 'percent', standard: true },
@@ -198,7 +198,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
   vendor: [
     { key: 'name', label: 'Vendor name', type: 'text', standard: true, required: true },
     { key: 'vendor_code', label: 'Vendor code', type: 'text', standard: true },
-    { key: 'vendor_type', label: 'Type', type: 'picklist', standard: true, indexed: true, options: { choices: choices(VENDOR_TYPES) } },
+    { key: 'vendor_type', label: 'Type', type: 'picklist', standard: true, indexed: true, options: { addable: true, choices: choices(VENDOR_TYPES) } },
     { key: 'category', label: 'Supplies', type: 'text', standard: true, helpText: 'e.g. Fabric, Plywood, Hardware, Transport' },
     { key: 'status', label: 'Status', type: 'picklist', standard: true, options: { choices: choices(['active', 'on_hold', 'blocked']) } },
     { key: 'contact_person', label: 'Contact person', type: 'text', standard: true },
@@ -283,8 +283,8 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'ticket_number', label: 'Ticket #', type: 'text', standard: true, readOnly: true, indexed: true },
     { key: 'status', label: 'Status', type: 'picklist', standard: true, indexed: true, options: { choices: choices(TICKET_STATUSES) } },
     { key: 'priority', label: 'Priority', type: 'picklist', standard: true, indexed: true, options: { choices: choices(TICKET_PRIORITIES) } },
-    { key: 'category', label: 'Category', type: 'picklist', standard: true, indexed: true, options: { choices: choices(TICKET_CATEGORIES) } },
-    { key: 'channel', label: 'Channel', type: 'picklist', standard: true, options: { choices: choices(['phone', 'email', 'whatsapp', 'instagram', 'web', 'walk_in', 'internal']) } },
+    { key: 'category', label: 'Category', type: 'picklist', standard: true, indexed: true, options: { addable: true, choices: choices(TICKET_CATEGORIES) } },
+    { key: 'channel', label: 'Channel', type: 'picklist', standard: true, options: { addable: true, choices: choices(['phone', 'email', 'whatsapp', 'instagram', 'web', 'walk_in', 'internal']) } },
     { key: 'description', label: 'Description', type: 'textarea', standard: true },
     { key: 'account_id', label: 'Customer', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
     { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },

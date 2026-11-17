@@ -114,7 +114,7 @@ export function FilterBuilder({ obj, value, onChange, onClose }: { obj: ObjectMe
                         </button>
                       </div>
                     ) : (
-                      <FieldInput field={{ ...def, type: def.type === 'multipicklist' ? 'picklist' : def.type === 'textarea' ? 'text' : def.type }} objectKey={obj.key} value={r.value} onChange={(v) => set(i, { value: v })} />
+                      <FieldInput field={{ ...def, type: def.type === 'multipicklist' ? 'picklist' : def.type === 'textarea' ? 'text' : def.type, options: { ...def.options, addable: false } }} objectKey={obj.key} value={r.value} onChange={(v) => set(i, { value: v })} />
                     )
                   ) : (
                     <span className="muted small">—</span>
