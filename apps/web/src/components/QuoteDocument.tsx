@@ -54,8 +54,51 @@ export interface DocLabels {
   verifyBase?: string | null;
 }
 
-export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabels }) {
+/** A document template (Settings → Document templates); null prints the classic design. */
+export interface DocTemplate {
+  id?: string;
+  name?: string;
+  base: 'classic' | 'modern' | 'compact' | 'gst_detailed' | 'letterhead' | 'html';
+  settings: {
+    accent: string;
+    accent2: string;
+    text: string;
+    font: 'sans' | 'serif' | 'mono' | 'rounded' | 'condensed';
+    fontSize: number;
+    logo?: string | null;
+    logoPosition: 'left' | 'right' | 'none';
+    showCompany: boolean;
+    showGstSummary: boolean;
+    showWords: boolean;
+    showBank: boolean;
+    showSignature: boolean;
+    showQr: boolean;
+    columns: { hsn: boolean; qty: boolean; rate: boolean; discount: boolean; taxable: boolean; gst: boolean };
+    labels: { title?: string | null; billTo?: string | null; subject?: string | null; total?: string | null };
+    headerNote?: string | null;
+    footerNote?: string | null;
+    margins: { top: number; bottom: number; left: number; right: number };
+  };
+  letterhead?: string | null;
+  html?: string | null;
+}
+
+export const FONTS: Record<DocTemplate['settings']['font'], string> = {
+  sans: 'Inter, "Segoe UI", Arial, sans-serif',
+  serif: 'Georgia, "Times New Roman", serif',
+  mono: '"IBM Plex Mono", Consolas, monospace',
+  rounded: 'Nunito, "Segoe UI", system-ui, sans-serif',
+  condensed: '"Roboto Condensed", "Arial Narrow", sans-serif',
+};
+
+export function QuoteDocument({ doc, labels, template }: { doc: QuoteDoc; labels?: DocLabels; template?: DocTemplate | null }) {
   const { quote: q, lines, account, contact, company } = doc;
+  const t = template && template.base !== 'html' ? template : null;
+  const st = t?.settings;
+  const col = st?.columns ?? { hsn: true, qty: true, rate: true, discount: true, taxable: true, gst: true };
+  const detailed = t?.base === 'gst_detailed';
+  const letterhead = t?.base === 'letterhead' && t.letterhead ? t.letterhead : null;
+  const showCompany = st ? st.showCompany && !(letterhead && st.showCompany === undefined) : true;
   const cur = String(q.currency ?? 'INR');
   const billTo = (q.bill_to ?? {}) as Record<string, string>;
   const intra = intraState(company.state, billTo.state);
@@ -68,19 +111,31 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
     r.tax += l.lineTax ?? 0;
     byRate.set(l.taxRate, r);
   }
-  return (
-    <article className="qdoc">
-      <header className="qdoc-head">
-        <div>
+  const style = st
+    ? ({ '--acc': st.accent, '--acc2': st.accent2, '--txt': st.text, fontFamily: FONTS[st.font] ?? FONTS.sans, fontSize: `${st.fontSize}px`, color: st.text } as React.CSSProperties)
+    : undefined;
+  const logo = st?.logo && st.logoPosition !== 'none' ? <img className="qdoc-logo" src={st.logo} alt="" /> : null;
+  const body = (
+    <>
+      {st?.headerNote && <p className="qdoc-headnote">{st.headerNote}</p>}
+      <header className={`qdoc-head${showCompany ? '' : ' no-company'}`}>
+        {showCompany ? (
+        <div className={`qdoc-co${st?.logoPosition === 'right' ? ' logo-right' : ''}`}>
+          {logo}
+          <div>
           <h1>{company.name}</h1>
           {company.address && <p>{company.address}</p>}
           <p>
             {[company.phone, company.email, company.website].filter(Boolean).join(' · ')}
           </p>
           {company.gstin && <p>GSTIN: {company.gstin}{company.state ? ` · ${company.state}` : ''}</p>}
+          </div>
         </div>
+        ) : (
+          <div>{company.gstin && <p className="small">GSTIN: {company.gstin}</p>}</div>
+        )}
         <div className="qdoc-title">
-          <h2>{labels?.title ?? 'Quotation'}</h2>
+          <h2>{st?.labels?.title || labels?.title || 'Quotation'}</h2>
           <table>
             <tbody>
               <tr>
@@ -110,7 +165,7 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
 
       <section className="qdoc-parties">
         <div>
-          <h3>{labels?.party ?? 'Bill to'}</h3>
+          <h3>{(labels?.party === 'Bill to' && st?.labels?.billTo) || labels?.party || 'Bill to'}</h3>
           <b>{billTo.name || account?.name || contact?.name || '—'}</b>
           {(billTo.address || addr(account?.billing_address)) && <p>{billTo.address || addr(account?.billing_address)}</p>}
           {billTo.state && <p>State: {billTo.state}</p>}
@@ -118,7 +173,7 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
           {contact && <p>Attn: {contact.name}</p>}
         </div>
         <div>
-          <h3>Subject</h3>
+          <h3>{st?.labels?.subject || 'Subject'}</h3>
           <b>{q.subject || q.name}</b>
         </div>
       </section>
@@ -128,12 +183,13 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
           <tr>
             <th>#</th>
             <th>Item</th>
-            <th>HSN/SAC</th>
-            <th className="num">Qty</th>
-            <th className="num">Rate</th>
-            <th className="num">Disc.</th>
-            <th className="num">Taxable</th>
-            <th className="num">GST</th>
+            {col.hsn && <th>HSN/SAC</th>}
+            {col.qty && <th className="num">Qty</th>}
+            {col.rate && <th className="num">Rate</th>}
+            {col.discount && <th className="num">Disc.</th>}
+            {col.taxable && <th className="num">Taxable</th>}
+            {col.gst && <th className="num">GST</th>}
+            {detailed && (intra ? (<><th className="num">CGST</th><th className="num">SGST</th></>) : <th className="num">IGST</th>)}
             <th className="num">Amount</th>
           </tr>
         </thead>
@@ -145,14 +201,25 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
                 <b>{l.name}</b>
                 {l.description && <div className="qdoc-desc">{l.description}</div>}
               </td>
-              <td>{l.hsnSac ?? ''}</td>
-              <td className="num">
-                {l.quantity.toLocaleString('en-IN')} {l.unit ?? ''}
-              </td>
-              <td className="num">{money2(l.unitPrice, cur)}</td>
-              <td className="num">{l.discountPct ? `${l.discountPct}%` : '—'}</td>
-              <td className="num">{money2(l.lineSubtotal ?? 0, cur)}</td>
-              <td className="num">{l.taxRate}%</td>
+              {col.hsn && <td>{l.hsnSac ?? ''}</td>}
+              {col.qty && (
+                <td className="num">
+                  {Number(l.quantity).toLocaleString('en-IN')} {l.unit ?? ''}
+                </td>
+              )}
+              {col.rate && <td className="num">{money2(l.unitPrice, cur)}</td>}
+              {col.discount && <td className="num">{l.discountPct ? `${l.discountPct}%` : '—'}</td>}
+              {col.taxable && <td className="num">{money2(l.lineSubtotal ?? 0, cur)}</td>}
+              {col.gst && <td className="num">{l.taxRate}%</td>}
+              {detailed &&
+                (intra ? (
+                  <>
+                    <td className="num">{money2((l.lineTax ?? 0) / 2, cur)}</td>
+                    <td className="num">{money2((l.lineTax ?? 0) / 2, cur)}</td>
+                  </>
+                ) : (
+                  <td className="num">{money2(l.lineTax ?? 0, cur)}</td>
+                ))}
               <td className="num">{money2(l.lineTotal ?? 0, cur)}</td>
             </tr>
           ))}
@@ -161,7 +228,7 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
 
       <section className="qdoc-bottom">
         <div className="qdoc-gst">
-          {lines.length > 0 && tax > 0 && (
+          {lines.length > 0 && tax > 0 && (st?.showGstSummary ?? true) && (
             <table>
               <thead>
                 <tr>
@@ -197,8 +264,8 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
               </tbody>
             </table>
           )}
-          {cur === 'INR' && <p className="qdoc-words">{rupeesInWords(Number(q.grand_total ?? 0))}</p>}
-          {labels?.footerNote && <p className="qdoc-desc" style={{ whiteSpace: 'pre-wrap' }}>{labels.footerNote}</p>}
+          {cur === 'INR' && (st?.showWords ?? true) && <p className="qdoc-words">{rupeesInWords(Number(q.grand_total ?? 0))}</p>}
+          {labels?.footerNote && (st?.showBank ?? true) && <p className="qdoc-desc" style={{ whiteSpace: 'pre-wrap' }}>{labels.footerNote}</p>}
         </div>
         <table className="qdoc-totals">
           <tbody>
@@ -236,7 +303,7 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
               </tr>
             )}
             <tr className="grand">
-              <th>Total</th>
+              <th>{st?.labels?.total || 'Total'}</th>
               <td>{money2(q.grand_total, cur)}</td>
             </tr>
             {!!q.tax_inclusive && (
@@ -262,7 +329,7 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
           <p>{q.terms}</p>
         </section>
       )}
-      <footer className="qdoc-sign">
+      {(st?.showSignature ?? true) && <footer className="qdoc-sign">
         {q.status === 'accepted' && q.accepted_by ? (
           <p className="qdoc-accepted">
             Accepted by <b>{q.accepted_by}</b> on {date(q.accepted_at)}
@@ -297,7 +364,35 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
             </div>
           )}
         </div>
-      </footer>
+      </footer>}
+      {st?.footerNote && <p className="qdoc-footnote">{st.footerNote}</p>}
+    </>
+  );
+  const cls = `qdoc t-${t?.base ?? 'classic'}${letterhead ? ' has-lh' : ''}`;
+  if (!letterhead) return <article className={cls} style={style}>{body}</article>;
+  const m = st!.margins;
+  return (
+    <article className={cls} style={{ ...style, paddingLeft: `${m.left}mm`, paddingRight: `${m.right}mm` }}>
+      <style>{`@media print { @page { size: A4; margin: 0 } .qdoc.has-lh { padding: 0 ${m.right}mm 0 ${m.left}mm !important } }`}</style>
+      <img className="qdoc-lh" src={letterhead} alt="" />
+      {/* the header and footer space repeat on every printed page, clear of the letterhead artwork */}
+      <table className="qdoc-lh-wrap">
+        <thead>
+          <tr>
+            <td style={{ height: `${m.top}mm` }} />
+          </tr>
+        </thead>
+        <tfoot>
+          <tr>
+            <td style={{ height: `${m.bottom}mm` }} />
+          </tr>
+        </tfoot>
+        <tbody>
+          <tr>
+            <td>{body}</td>
+          </tr>
+        </tbody>
+      </table>
     </article>
   );
 }

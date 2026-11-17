@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import qrcode from 'qrcode-generator';
 import { Link, useParams } from 'react-router-dom';
-import { type DocLabels, QuoteDocument, type QuoteDoc } from '../components/QuoteDocument';
+import { type DocLabels, type DocTemplate, type QuoteDoc } from '../components/QuoteDocument';
+import { TemplatedDocument } from '../components/DocTemplateView';
 import { Spinner } from '../components/ui';
 import { get } from '../lib/api';
 import { date } from '../lib/format';
@@ -14,7 +15,7 @@ const TERMS: Record<string, string> = { due_on_receipt: 'Due on receipt', end_of
 for (const n of [7, 15, 30, 45, 60]) TERMS[`net_${n}`] = `Net ${n} days`;
 
 /** Builds the printable document (shared A4 layout) for orders, purchase orders and invoices. */
-function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back: string } | null {
+export function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back: string } | null {
   if (kind === 'sales_order') {
     const o = d.order;
     const acc = d.account;
@@ -110,7 +111,7 @@ function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back:
 
 const shapeOrNull = (kind: string, data: Json | undefined) => (data ? shape(kind, data) : null);
 
-const SOURCES: Record<string, (id: string) => string> = {
+export const SOURCES: Record<string, (id: string) => string> = {
   sales_order: (id) => `/api/v1/orders/${id}`,
   purchase_order: (id) => `/api/v1/purchase-orders/${id}`,
   invoice: (id) => `/api/v1/invoices/${id}`,
@@ -124,6 +125,10 @@ export function DocPrintPage() {
   const signable = ['invoice', 'sales_order', 'purchase_order'].includes(kind);
   const sigs = useQuery({ queryKey: ['doc-signatures', kind, id], queryFn: () => get<Json[]>(`/api/v1/documents/${kind}/${id}/signatures`), enabled: signable, staleTime: 30_000 });
   const { me } = useAuth();
+  const [tplId, setTplId] = useState<string>(() => new URLSearchParams(location.search).get('template') ?? '');
+  const tplKind = ['invoice', 'sales_order', 'purchase_order'].includes(kind) ? kind : null;
+  const tpl = useQuery({ queryKey: ['doc-template', tplKind, tplId], queryFn: () => get<DocTemplate | null>(`/api/v1/doc-templates/for/${tplKind}${tplId ? `?id=${tplId}` : ''}`), enabled: !!tplKind, staleTime: 60_000 });
+  const tplList = useQuery({ queryKey: ['doc-templates'], queryFn: () => get<{ templates: Json[] }>('/api/v1/doc-templates'), enabled: !!tplKind, staleTime: 60_000 });
   const base = shapeOrNull(kind, data);
   const s = base && signable ? { ...base, labels: { ...base.labels, signatures: (sigs.data ?? []) as NonNullable<DocLabels['signatures']>, verifyBase: me?.tenant?.id ? `${location.origin}/verify/${me.tenant.id}` : null } } : base;
   useEffect(() => {
@@ -136,13 +141,23 @@ export function DocPrintPage() {
       <div className="print-bar no-print">
         <Link to={s.back}>← Back</Link>
         <span className="muted small">Tip: choose “Save as PDF” as the printer to download a PDF.</span>
+        {tplKind && (tplList.data?.templates.length ?? 0) > 0 && (
+          <select aria-label="Template" value={tplId} onChange={(e) => setTplId(e.target.value)} style={{ maxWidth: 220 }}>
+            <option value="">Default template</option>
+            {tplList.data!.templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        )}
         <button className="btn primary" onClick={() => window.print()}>
           Print / Save PDF
         </button>
       </div>
-      <QuoteDocument doc={s.doc} labels={s.labels} />
+      <TemplatedDocument doc={s.doc} labels={s.labels} template={tpl.data ?? null} />
       {kind === 'invoice' && data?.invoice?.irn_qr && <IrnQr qr={data.invoice.irn_qr} irn={data.invoice.irn} />}
-      {kind === 'invoice' && data?.upi && <UpiQr upi={data.upi} />}
+      {kind === 'invoice' && data?.upi && (tpl.data?.settings?.showQr ?? true) && <UpiQr upi={data.upi} />}
     </div>
   );
 }
@@ -223,7 +238,7 @@ export function PublicDocPage() {
           </button>
         </div>
       </div>
-      <QuoteDocument doc={s.doc} labels={s.labels} />
+      <TemplatedDocument doc={s.doc} labels={{ ...s.labels, signatures: (data.data.signatures ?? []) as NonNullable<DocLabels['signatures']>, verifyBase: data.data.verifyBase ?? null }} template={data.data.template ?? null} />
       {data.kind === 'invoice' && data.data.invoice?.irn_qr && <IrnQr qr={data.data.invoice.irn_qr} irn={data.data.invoice.irn} />}
       {data.kind === 'invoice' && data.data.upi && <UpiQr upi={data.data.upi} />}
     </div>

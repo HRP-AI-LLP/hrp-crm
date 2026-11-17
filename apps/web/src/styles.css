@@ -531,16 +531,16 @@ input.num { text-align: right; }
 .print-page { background: #e9eef4; min-height: 100vh; padding: 24px 12px 40px; }
 .print-bar { max-width: 210mm; margin: 0 auto 12px; display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .qdoc { background: #fff; color: #0f172a; max-width: 210mm; margin: 0 auto; padding: 14mm 14mm 12mm; box-shadow: 0 8px 30px rgba(15, 23, 42, .12); font-size: 12.5px; line-height: 1.45; }
-.qdoc h1 { font-size: 20px; margin: 0 0 4px; color: #075492; }
-.qdoc h2 { font-size: 22px; margin: 0 0 6px; letter-spacing: .08em; text-transform: uppercase; color: #06a6c7; text-align: right; }
+.qdoc h1 { font-size: 20px; margin: 0 0 4px; color: var(--acc, #075492); }
+.qdoc h2 { font-size: 22px; margin: 0 0 6px; letter-spacing: .08em; text-transform: uppercase; color: var(--acc2, #06a6c7); text-align: right; }
 .qdoc h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; margin: 0 0 4px; }
 .qdoc p { margin: 0 0 2px; }
-.qdoc-head { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 10px; border-bottom: 3px solid #075492; }
+.qdoc-head { display: flex; justify-content: space-between; gap: 16px; padding-bottom: 10px; border-bottom: 3px solid var(--acc, #075492); }
 .qdoc-title table th { text-align: left; color: #64748b; font-weight: 500; padding-right: 12px; }
 .qdoc-title table td { text-align: right; font-weight: 600; }
 .qdoc-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 14px 0; }
 .qdoc-lines { width: 100%; border-collapse: collapse; }
-.qdoc-lines th { background: #075492; color: #fff; font-weight: 600; text-align: left; padding: 6px; font-size: 11.5px; }
+.qdoc-lines th { background: var(--acc, #075492); color: #fff; font-weight: 600; text-align: left; padding: 6px; font-size: 11.5px; }
 .qdoc-lines td { padding: 6px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
 .qdoc-lines .num, .qdoc .num { text-align: right; white-space: nowrap; }
 .qdoc-desc { color: #475569; font-size: 11.5px; white-space: pre-wrap; }
@@ -551,11 +551,38 @@ input.num { text-align: right; }
 .qdoc-totals { border-collapse: collapse; min-width: 240px; }
 .qdoc-totals th { text-align: left; font-weight: 500; color: #475569; padding: 3px 14px 3px 0; }
 .qdoc-totals td { text-align: right; padding: 3px 0; white-space: nowrap; }
-.qdoc-totals .grand th, .qdoc-totals .grand td { font-size: 15px; font-weight: 800; color: #075492; border-top: 2px solid #075492; padding-top: 6px; }
+.qdoc-totals .grand th, .qdoc-totals .grand td { font-size: 15px; font-weight: 800; color: var(--acc, #075492); border-top: 2px solid var(--acc, #075492); padding-top: 6px; }
 .qdoc-note { margin-top: 14px; white-space: pre-wrap; }
 .qdoc-sign { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 28px; }
 .qdoc-sigline { margin-top: 36px; border-top: 1px solid #94a3b8; padding-top: 4px; color: #64748b; min-width: 180px; text-align: center; }
 .qdoc-accepted { color: #047857; }
+/* document templates */
+.qdoc { position: relative; }
+.qdoc-co { display: flex; gap: 12px; align-items: flex-start; }
+.qdoc-co.logo-right { flex-direction: row-reverse; text-align: right; }
+.qdoc-logo { max-height: 64px; max-width: 160px; object-fit: contain; }
+.qdoc-headnote { font-size: .9em; color: #475569; margin: 0 0 8px !important; white-space: pre-wrap; }
+.qdoc-footnote { margin-top: 18px !important; padding-top: 8px; border-top: 1px solid #e2e8f0; font-size: .85em; color: #475569; text-align: center; white-space: pre-wrap; }
+.qdoc-head.no-company { border-bottom: 0; padding-bottom: 0; }
+.qdoc.t-modern .qdoc-head { border-bottom: 0; padding: 0 0 14px; }
+.qdoc.t-modern::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 8px; background: linear-gradient(90deg, var(--acc, #075492), var(--acc2, #06a6c7)); }
+.qdoc.t-modern h2 { font-size: 28px; letter-spacing: .02em; text-transform: none; font-weight: 800; }
+.qdoc.t-modern .qdoc-lines th { background: color-mix(in srgb, var(--acc, #075492) 10%, #fff); color: var(--acc, #075492); border-bottom: 2px solid var(--acc, #075492); }
+.qdoc.t-modern .qdoc-totals { background: color-mix(in srgb, var(--acc, #075492) 6%, #fff); border-radius: 8px; padding: 8px 12px; border-collapse: separate; }
+.qdoc.t-modern .qdoc-parties > div { background: #f8fafc; border-radius: 8px; padding: 10px 12px; }
+.qdoc.t-compact { font-size: 11px; padding: 10mm 10mm 8mm; }
+.qdoc.t-compact h1 { font-size: 16px; }
+.qdoc.t-compact h2 { font-size: 16px; }
+.qdoc.t-compact .qdoc-lines th, .qdoc.t-compact .qdoc-lines td { padding: 3px 4px; }
+.qdoc.t-compact .qdoc-parties { margin: 8px 0; }
+.qdoc.t-compact .qdoc-sign { margin-top: 14px; }
+.qdoc.t-gst_detailed .qdoc-lines { font-size: .92em; }
+.qdoc.t-gst_detailed .qdoc-lines td, .qdoc.t-gst_detailed .qdoc-lines th { border: 1px solid #cbd5e1; }
+.qdoc.has-lh { padding-top: 0; padding-bottom: 0; min-height: 297mm; overflow: hidden; }
+.qdoc-lh { position: absolute; left: 0; top: 0; width: 210mm; height: 297mm; object-fit: fill; z-index: 0; pointer-events: none; }
+.qdoc-lh-wrap { position: relative; z-index: 1; width: 100%; border-collapse: collapse; }
+.qdoc-lh-wrap > tbody > tr > td, .qdoc-lh-wrap > thead td, .qdoc-lh-wrap > tfoot td { padding: 0; }
+.qdoc-html { background: #fff; max-width: 210mm; margin: 0 auto; box-shadow: 0 8px 30px rgba(15, 23, 42, .12); }
 .respond { max-width: 210mm; margin: 16px auto 0; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
 .respond h2 { margin: 0 0 10px; font-size: 18px; }
 .public-wrap { max-width: 640px; margin: 80px auto; padding: 24px; text-align: center; }
@@ -574,6 +601,10 @@ input.num { text-align: right; }
   .qdoc { box-shadow: none; max-width: none; padding: 0; }
   .qdoc-lines th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .qdoc-lines tr { break-inside: avoid; }
+  .qdoc.has-lh { min-height: 0; overflow: visible; }
+  .qdoc-lh { position: fixed; left: 0; top: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .qdoc.t-modern::before, .qdoc.t-modern .qdoc-lines th, .qdoc.t-modern .qdoc-totals, .qdoc.t-modern .qdoc-parties > div { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .qdoc-html { box-shadow: none; max-width: none; }
 }
 table.qlines td > input, table.qlines td > select { display: block; width: 100%; }
 table.data.qlines td { white-space: normal; }

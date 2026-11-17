@@ -368,6 +368,9 @@ export const whatsappAdminRoutes = new Hono<AppEnv>()
     });
   });
 
+import { templateFor } from '../services/doc-templates';
+import { documentSignatures } from '../services/organisation';
+
 export const whatsappPublicRoutes = new Hono<AppEnv>().get('/docs/:token', async (c) => {
   const t = await readDocToken(c.env, c.req.param('token'));
   if (!t) throw notFound('This link has expired. Ask for a new one.');
@@ -384,13 +387,18 @@ export const whatsappPublicRoutes = new Hono<AppEnv>().get('/docs/:token', async
       const inv = (await getInvoice(ctx, t.id)) as Record<string, any>;
       if (!inv.invoice || ['draft', 'cancelled'].includes(inv.invoice.status)) throw notFound();
       const link = await tx.one<{ short_url: string }>(`select short_url from payment_links where tenant_id = $1 and invoice_id = $2 and status in ('created', 'partially_paid') and short_url is not null order by created_at desc limit 1`, [t.tenantId, t.id]);
-      return { kind: t.kind, data: { ...inv, invoice: scrub('invoice', { ...inv.invoice }), payments: undefined, payUrl: link?.short_url ?? null } };
+      // printed with the workspace's template and its signatures, as on paper
+      const template = await templateFor(ctx, 'invoice');
+      const signatures = (await documentSignatures(ctx, 'invoice', t.id)).filter((x) => !x.revoked).map(({ signerName, designation, image, signedAt, verifyCode, valid, method }) => ({ signerName, designation, image, signedAt, verifyCode, valid, method }));
+      return { kind: t.kind, data: { ...inv, invoice: scrub('invoice', { ...inv.invoice }), payments: undefined, payUrl: link?.short_url ?? null, template, signatures, verifyBase: `${new URL(c.req.url).origin}/verify/${t.tenantId}` } };
     }
     const o = (await getOrder(ctx, t.id)) as Record<string, any>;
     if (['draft', 'cancelled'].includes(o.order.status)) throw notFound();
     // milestones show what is due, not internal notes; the workspace's plan template stays inside
     const milestones = (o.milestones as Record<string, unknown>[]).map(({ notes: _n, invoice_id: _i, ...m }) => m);
-    return { kind: t.kind, data: { ...o, milestones, milestonePlan: undefined, order: scrub('sales_order', { ...o.order }) } };
+    const template = await templateFor(ctx, 'sales_order');
+    const signatures = (await documentSignatures(ctx, 'sales_order', t.id)).filter((x) => !x.revoked).map(({ signerName, designation, image, signedAt, verifyCode, valid, method }) => ({ signerName, designation, image, signedAt, verifyCode, valid, method }));
+    return { kind: t.kind, data: { ...o, milestones, milestonePlan: undefined, order: scrub('sales_order', { ...o.order }), template, signatures, verifyBase: `${new URL(c.req.url).origin}/verify/${t.tenantId}` } };
   });
   return c.json(out);
 });

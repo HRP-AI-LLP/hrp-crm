@@ -83,3 +83,46 @@ recurring invoice it was one of.
 | Lines | every `PUT …/lines` takes `taxInclusive` |
 | Organisation | `GET/PUT /api/v1/organisation`, `GET/POST /api/v1/organisation/people`, `PUT/DELETE /api/v1/organisation/people/:id`, `POST /api/v1/organisation/bank-accounts`, `PUT /api/v1/organisation/bank-accounts/:id` |
 | Signatures | `GET/POST /api/v1/organisation/signatures`, `PUT/DELETE /api/v1/organisation/signatures/:id`, `GET /api/v1/documents/:object/:id/signatures`, `POST /api/v1/documents/:object/:id/sign` (`signatureId`), `POST /api/v1/documents/:object/:id/signatures/:sid/revoke` (`reason`), public `GET /api/public/verify/:tenant/:code` |
+
+## Document templates
+
+Settings → Company → **Document templates** (also Organisation → Document templates) holds any number of
+designs for invoices, quotes, sales orders, purchase orders and credit notes. Whoever can manage the
+organisation (an admin with the Organisation area, or a designated manager) can create, copy, delete and
+choose the default per document kind ("Use for…"). Every document Synapse prints, shares, emails or signs
+uses the default for its kind; the print page has a template picker to try another one.
+
+A template starts from one of:
+
+| Base | What it is |
+| --- | --- |
+| Classic / Modern / Compact / GST detailed | Built-in designs. Colours, font and size, logo and its side, which blocks show (company header, GST summary, amount in words, bank details, UPI QR, signature block), which columns show, the labels ("Tax invoice", "Bill to"…), notes, terms and footer are all editable with a live preview. |
+| Your letterhead | Upload an A4 image or PDF of your letterhead (header and footer on a blank page). It becomes the background of every page and the document is laid out inside the top/bottom/left/right margins you set. The design controls above still apply on top of it. |
+| HTML template | Your own HTML and CSS, uploaded as a file or written in the editor, with `{{placeholders}}` (Mustache): `{{number}}`, `{{customer.name}}`, `{{#lines}}…{{/lines}}`, `{{total}}`… — the editor lists them all. Scripts and external content are stripped; it renders in an isolated box. |
+| Design with AI | Describe the look ("minimal, teal, logo right, GST per line") and optionally add your letterhead; the AI proposes a design (or HTML), which you then adjust and save. |
+
+## Digital signature certificates (DSC)
+
+Organisation → **Digital signatures (DSC)**. Invoices, sales orders and purchase orders can be signed with a
+Class 3 DSC from the document's Signatures panel ("Sign with DSC: name"). Synapse draws the document in its
+default template as an A4 PDF, signs it (PAdES-style detached CMS, SHA-256, a visible stamp with the
+verification link on the last page), verifies the result, stores the signed PDF in the record's Files and
+records the signature (who, when, certificate, hash). Anyone can check a signed PDF at `/verify/<workspace>`
+or by its code; Adobe Reader shows it as signed (it trusts the issuer once the CCA India root is trusted).
+
+Two ways to hold the certificate — both sign only from Synapse:
+
+- **.pfx / .p12 file** — upload it with its password. Both are encrypted (AES-GCM, workspace-bound) and can
+  never be downloaded again; removing the certificate deletes them. Choose who may sign with it.
+- **USB token (ePass, ProxKey, mToken, WatchData…)** — the key never leaves the token. Run the small signer in
+  `tools/dsc-signer` on the computer with the token (Python 3.10+, `pip install -r requirements.txt`):
+  1. Organisation → Digital signatures → **Pair a signer**; run the shown `python dsc_signer.py pair …` once.
+  2. Start it with `start-signer.bat` (or `python dsc_signer.py serve --lib <driver .dll>`), plug in the token.
+  3. **Add the token's certificate** reads it from the token (PIN if the token needs it) and registers it.
+  4. On a document, "Sign with DSC (token)" asks for the PIN; the PIN goes only to the signer on this computer.
+  The signer listens on `127.0.0.1` only, answers only the paired Synapse address, and signs only with a
+  ticket Synapse issued for that exact PDF (hash and length), certificate and user, valid 10 minutes. Synapse
+  checks the returned file: original bytes untouched, signature valid, same certificate, whole file covered.
+
+Limits: the signed PDF is a picture of the document (text is not selectable); the PDF to sign can be up to
+about 15 MB; a timestamp from a TSA is not added yet (the signing time is the signer's clock).

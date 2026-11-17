@@ -267,3 +267,20 @@ An independent review of the fifth round found no cross-tenant leaks; these were
 - **What the agents may post:** only through the same functions people use (match, categorise, record receipt, record vendor payment, exclude), each under a savepoint so one failure leaves the rest. In the default mode only bank rules, exact matches (≥ 95%) and consistent history (≥ 90%) are posted; AI and keyword guesses always wait for a person. Every proposal, decision and run is kept (`acct_proposals`, `acct_runs`); everything posted can be undone from Banking.
 - **AI:** bank narrations, account names, customer and vendor names and open document numbers are sent to the workspace's own AI model (flagged as containing personal data, so only PII-allowed providers are used), as short refs (T1, A3, I2) so the model cannot invent ids; every answer is validated (direction, open balance, party for receivable/payable accounts) and capped at 85% confidence. The controller's note gets only totals. The model can be switched off in desk settings.
 - **Gateway receipts:** with books on, Razorpay payment-link receipts now go to "UPI / payment gateway clearing" instead of the bank; the settlement (net + fee + GST on the fee) clears it.
+
+## Digital signature certificates and document templates (Nov 2026)
+
+- **.pfx keys** are stored only as AES-GCM ciphertext (`dsc_certificates.pfx_enc`, `pass_enc`) bound to the
+  workspace as associated data, under the deployment's `DATA_ENCRYPTION_KEY`. No API returns them; signing decrypts
+  in memory for the one request. Removing a certificate nulls both columns. Only users listed on the
+  certificate may sign with it; managing certificates needs `canManageOrg`.
+- **USB tokens**: the private key never leaves the token. The local signer binds to `127.0.0.1`, answers CORS
+  and Private Network Access only for the paired origin, and refuses any request without a ticket. A ticket
+  is an HMAC (per-signer pairing secret, stored encrypted server-side) over workspace, signer, user, document,
+  certificate thumbprint, PDF SHA-256 and length, and a 10-minute expiry. The server then checks the signed
+  file is an incremental update of exactly those bytes, verifies the CMS signature, matches the thumbprint and
+  requires the signature to cover the whole file. Unpairing revokes the secret at once. The PIN is sent only
+  to the local signer.
+- **HTML templates** render through Mustache (escaped by default) and DOMPurify, without scripts, event
+  handlers or external fetches, inside a shadow root. Letterheads are stored as data URLs (≤ 6 MB).
+- New tables (`doc_templates`, `dsc_certificates`, `dsc_signers`) are FORCE RLS with the tenant policy.

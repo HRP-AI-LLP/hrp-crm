@@ -15,6 +15,8 @@
     "@synapse/shared": "workspace:*",
     "hono": "^4.13.13",
     "jose": "^6.2.12",
+    "node-forge": "1.3.1",
+    "pdf-lib": "1.17.1",
     "pg": "^8.23.1",
     "zod": "^4.6.7"
   },
@@ -22,6 +24,7 @@
     "@cloudflare/workers-types": "^5.20261013.1",
     "@synapse/db": "workspace:*",
     "@types/node": "^22.15.0",
+    "@types/node-forge": "1.3.11",
     "@types/pg": "^8.23.1",
     "typescript": "^6.0.3",
     "vitest": "^5.0.4",

@@ -15,6 +15,8 @@ import { hasAdmin } from '@synapse/shared';
 import { z } from 'zod';
 import { randomToken, sha256Hex } from '../lib/crypto';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
+import type { Env } from '../env';
+import { signedFileUrl } from './files';
 import { loadRow, readRowSystem, type RecordCtx } from './records';
 
 /* ───────────────────────── who manages it ───────────────────────── */
@@ -172,7 +174,7 @@ export async function removeSignature(ctx: RecordCtx, id: string) {
 }
 
 /** Documents that can be signed, and how to read what is signed. */
-const SIGNABLE: Record<string, { number: string; date: string; party: string; lines: { table: string; fk: string } | null; draft?: string }> = {
+export const SIGNABLE: Record<string, { number: string; date: string; party: string; lines: { table: string; fk: string } | null; draft?: string }> = {
   invoice: { number: 'invoice_number', date: 'invoice_date', party: 'account_id', lines: { table: 'invoice_lines', fk: 'order_id' }, draft: 'draft' },
   quote: { number: 'quote_number', date: 'created_at', party: 'account_id', lines: { table: 'quote_lines', fk: 'quote_id' } },
   sales_order: { number: 'order_number', date: 'order_date', party: 'account_id', lines: { table: 'sales_order_lines', fk: 'order_id' } },
@@ -182,7 +184,7 @@ const SIGNABLE: Record<string, { number: string; date: string; party: string; li
 const d10 = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v).slice(0, 10) : null);
 
 /** A hash of what a reader relies on: number, date, party, totals and every line. */
-async function docHash(ctx: RecordCtx, objectKey: string, row: Record<string, unknown>) {
+export async function docHash(ctx: RecordCtx, objectKey: string, row: Record<string, unknown>) {
   const s = SIGNABLE[objectKey]!;
   const lines = s.lines
     ? await ctx.tx.query<Record<string, unknown>>(`select name, hsn_sac, quantity::text, unit_price::text, discount_pct::text, tax_rate::text, line_total::text from ${s.lines.table} where tenant_id = $1 and ${s.lines.fk} = $2 order by position`, [ctx.tenantId, row.id])
@@ -201,7 +203,7 @@ async function docHash(ctx: RecordCtx, objectKey: string, row: Record<string, un
 }
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-function verifyCode() {
+export function verifyCode() {
   const raw = randomToken(24);
   let out = '';
   for (let i = 0; out.length < 12; i++) out += CODE_CHARS[raw.charCodeAt(i % raw.length) % CODE_CHARS.length];
@@ -242,16 +244,16 @@ export async function revokeSignature(ctx: RecordCtx, objectKey: string, recordI
 }
 
 /** Signatures on a document, each checked against the document as it is now. */
-export async function documentSignatures(ctx: RecordCtx, objectKey: string, recordId: string) {
+export async function documentSignatures(ctx: RecordCtx, objectKey: string, recordId: string, env?: Env) {
   if (!SIGNABLE[objectKey]) return [];
-  const rows = await ctx.tx.query<{ id: string; signer_name: string; designation: string | null; image: string; doc_hash: string; verify_code: string; signed_at: Date; revoked_at: Date | null; revoke_reason: string | null }>(
-    `select id, signer_name, designation, image, doc_hash, verify_code, signed_at, revoked_at, revoke_reason from document_signatures where tenant_id = $1 and object_key = $2 and record_id = $3 order by signed_at`,
+  const rows = await ctx.tx.query<{ id: string; signer_name: string; designation: string | null; image: string | null; doc_hash: string; verify_code: string; signed_at: Date; revoked_at: Date | null; revoke_reason: string | null; method: string; cert_subject: string | null; cert_serial: string | null; file_id: string | null }>(
+    `select id, signer_name, designation, image, doc_hash, verify_code, signed_at, revoked_at, revoke_reason, method, cert_subject, cert_serial, file_id from document_signatures where tenant_id = $1 and object_key = $2 and record_id = $3 order by signed_at`,
     [ctx.tenantId, objectKey, recordId],
   );
   if (!rows.length) return [];
   const row = await readRowSystem(ctx, objectKey, recordId);
   const now = row ? await docHash(ctx, objectKey, row) : null;
-  return rows.map((r) => ({
+  const out = rows.map((r) => ({
     id: r.id,
     signerName: r.signer_name,
     designation: r.designation,
@@ -261,13 +263,19 @@ export async function documentSignatures(ctx: RecordCtx, objectKey: string, reco
     revoked: !!r.revoked_at,
     revokeReason: r.revoke_reason,
     valid: !r.revoked_at && r.doc_hash === now,
+    method: r.method,
+    certSubject: r.cert_subject,
+    certSerial: r.cert_serial,
+    fileId: r.file_id,
   }));
+  if (env) for (const o of out) if (o.fileId) (o as Record<string, unknown>).fileUrl = await signedFileUrl(env, ctx.tenantId, o.fileId, false).catch(() => null);
+  return out;
 }
 
 /** Public check of a signature code (the code printed on the document). */
 export async function verifyByCode(ctx: RecordCtx, code: string) {
-  const r = await ctx.tx.one<{ object_key: string; record_id: string; signer_name: string; designation: string | null; doc_hash: string; signed_at: Date; revoked_at: Date | null }>(
-    `select object_key, record_id, signer_name, designation, doc_hash, signed_at, revoked_at from document_signatures where tenant_id = $1 and verify_code = $2`,
+  const r = await ctx.tx.one<{ object_key: string; record_id: string; signer_name: string; designation: string | null; doc_hash: string; signed_at: Date; revoked_at: Date | null; method: string; cert_subject: string | null; cert_serial: string | null; pdf_sha256: string | null }>(
+    `select object_key, record_id, signer_name, designation, doc_hash, signed_at, revoked_at, method, cert_subject, cert_serial, pdf_sha256 from document_signatures where tenant_id = $1 and verify_code = $2`,
     [ctx.tenantId, code.toUpperCase()],
   );
   if (!r) return { found: false as const };
@@ -280,6 +288,9 @@ export async function verifyByCode(ctx: RecordCtx, code: string) {
     issuer: company.legalName ?? null,
     document: { type: r.object_key, number: row ? (row[s.number] ?? null) : null, date: row ? d10(row[s.date]) : null, total: row?.grand_total != null ? Number(row.grand_total) : null, status: row?.status ?? 'deleted' },
     signer: { name: r.signer_name, designation: r.designation },
+    method: r.method,
+    certificate: r.cert_subject ? { subject: r.cert_subject, serial: r.cert_serial } : null,
+    pdfSha256: r.pdf_sha256,
     signedAt: r.signed_at,
     valid: !!row && !r.revoked_at && now === r.doc_hash && row.status !== 'cancelled',
     revoked: !!r.revoked_at,

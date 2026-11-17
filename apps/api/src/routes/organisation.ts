@@ -11,6 +11,8 @@ import { createBankAccount } from '../services/books/banking';
 import * as own from '../services/books/own-accounts';
 import { ensureBooks } from '../services/books/ledger';
 import * as org from '../services/organisation';
+import * as dsc from '../services/dsc';
+import * as tpl from '../services/doc-templates';
 import type { RecordCtx } from '../services/records';
 import { loadMeta } from '../services/tenancy';
 import { systemPrincipal } from '../services/worker';
@@ -19,6 +21,11 @@ function rctx(c: { var: AppEnv['Variables'] }, tx: RecordCtx['tx']): RecordCtx {
   return { tx, meta: c.var.meta, principal: c.var.principal, tenantId: c.var.tenant.id };
 }
 const id = (c: { req: { param: (k: string) => string } }, k = 'id') => z.string().uuid().parse(c.req.param(k));
+/** The verification page for signature codes printed on documents. */
+const verifyBase = (c: { req: { url: string; header: (k: string) => string | undefined }; var: AppEnv['Variables'] }) => {
+  const origin = c.req.header('origin') ?? new URL(c.req.url).origin;
+  return /^https?:\/\//.test(origin) ? `${origin}/verify/${c.var.tenant.id}` : null;
+};
 
 export const organisationRoutes = new Hono<AppEnv>()
   .get('/organisation', async (c) => {
@@ -100,9 +107,79 @@ export const organisationRoutes = new Hono<AppEnv>()
     await c.var.db.tx(scope(c), (tx) => org.removeSignature(rctx(c, tx), id(c)));
     return c.json({ ok: true });
   })
+  // document templates
+  .get('/doc-templates', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => tpl.listTemplates(rctx(c, tx)))))
+  .get('/doc-templates/for/:kind', async (c) => {
+    const kind = z.enum(tpl.DOC_KINDS).parse(c.req.param('kind'));
+    const t = c.req.query('id');
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => tpl.templateFor(rctx(c, tx), kind, t && /^[0-9a-f-]{36}$/i.test(t) ? t : null)));
+  })
+  .post('/doc-templates', async (c) => {
+    const b = tpl.templateSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => tpl.saveTemplate(rctx(c, tx), null, b)), 201);
+  })
+  .put('/doc-templates/:id', async (c) => {
+    const b = tpl.templateSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => tpl.saveTemplate(rctx(c, tx), id(c), b)));
+  })
+  .delete('/doc-templates/:id', async (c) => {
+    await c.var.db.tx(scope(c), (tx) => tpl.deleteTemplate(rctx(c, tx), id(c)));
+    return c.json({ ok: true });
+  })
+  .post('/doc-templates/:id/defaults', async (c) => {
+    const b = z.object({ kinds: z.array(z.string()).max(4) }).parse(await c.req.json());
+    await c.var.db.tx(scope(c), (tx) => tpl.setDefaults(rctx(c, tx), id(c), b.kinds));
+    return c.json({ ok: true });
+  })
+  .post('/doc-templates/ai', async (c) => {
+    const b = tpl.aiSchema.parse(await c.req.json());
+    return c.json(await tpl.aiTemplate({ env: c.env, db: c.var.db, tenantId: c.var.tenant.id, userId: c.var.principal.user.id, requestId: c.var.requestId, meta: c.var.meta }, b));
+  })
+  // digital signature certificates
+  .get('/organisation/dsc', async (c) => {
+    return c.json(await c.var.db.tx(scope(c, true), async (tx) => ({ certificates: await dsc.listCerts(rctx(c, tx)), signers: await dsc.listSigners(rctx(c, tx)) })));
+  })
+  .post('/organisation/dsc/pfx', async (c) => {
+    const b = dsc.pfxSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.addPfx(rctx(c, tx), c.env, b)), 201);
+  })
+  .post('/organisation/dsc/token', async (c) => {
+    const b = dsc.tokenCertSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.addTokenCert(rctx(c, tx), b)), 201);
+  })
+  .put('/organisation/dsc/:id', async (c) => {
+    const b = dsc.certUpdateSchema.parse(await c.req.json());
+    await c.var.db.tx(scope(c), (tx) => dsc.updateCert(rctx(c, tx), id(c), b));
+    return c.json({ ok: true });
+  })
+  .delete('/organisation/dsc/:id', async (c) => {
+    await c.var.db.tx(scope(c), (tx) => dsc.removeCert(rctx(c, tx), id(c)));
+    return c.json({ ok: true });
+  })
+  .post('/organisation/dsc-signers', async (c) => {
+    const b = z.object({ label: z.string().trim().min(1).max(120) }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.pairSigner(rctx(c, tx), c.env, b.label)), 201);
+  })
+  .delete('/organisation/dsc-signers/:id', async (c) => {
+    await c.var.db.tx(scope(c), (tx) => dsc.revokeSigner(rctx(c, tx), id(c)));
+    return c.json({ ok: true });
+  })
+  .post('/documents/:object/:id/dsc/pfx', async (c) => {
+    const b = dsc.pfxSignSchema.parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => dsc.signWithPfx(rctx(c, tx), c.env, c.req.param('object'), id(c), b, verifyBase(c)));
+    return c.json(r);
+  })
+  .post('/documents/:object/:id/dsc/ticket', async (c) => {
+    const b = dsc.ticketSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.signTicket(rctx(c, tx), c.env, c.req.param('object'), id(c), b, verifyBase(c))));
+  })
+  .post('/documents/:object/:id/dsc/token', async (c) => {
+    const b = dsc.tokenCompleteSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.completeTokenSign(rctx(c, tx), c.env, c.req.param('object'), id(c), b)));
+  })
   // signing a document
   .get('/documents/:object/:id/signatures', async (c) => {
-    return c.json(await c.var.db.tx(scope(c, true), (tx) => org.documentSignatures(rctx(c, tx), c.req.param('object'), id(c))));
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => org.documentSignatures(rctx(c, tx), c.req.param('object'), id(c), c.env)));
   })
   .post('/documents/:object/:id/sign', async (c) => {
     const b = z.object({ signatureId: z.string().uuid() }).parse(await c.req.json());
@@ -115,8 +192,27 @@ export const organisationRoutes = new Hono<AppEnv>()
     return c.json(await c.var.db.tx(scope(c, true), (tx) => org.documentSignatures(rctx(c, tx), c.req.param('object'), id(c))));
   });
 
+async function publicCtx(c: { env: AppEnv['Bindings'] }, tx: RecordCtx['tx'], tenant: string): Promise<RecordCtx> {
+  const t = await tx.one<{ id: string; slug: string; name: string; status: string; meta_version: number }>(`select * from tenants where id = $1`, [tenant]);
+  if (!t) throw notFound();
+  const meta = await loadMeta(c.env, tx, { id: t.id, slug: t.slug, name: t.name, status: t.status, metaVersion: t.meta_version });
+  const owner = await tx.one<{ id: string }>(`select id from users where tenant_id = $1 and is_owner limit 1`, [tenant]);
+  return { tx, meta, tenantId: tenant, principal: systemPrincipal(owner?.id ?? null, meta.objects.map((o) => o.key)) };
+}
+
 /** Anyone holding a printed document can check its signature code. */
-export const verifyPublicRoutes = new Hono<AppEnv>().get('/verify/:tenant/:code', async (c) => {
+export const verifyPublicRoutes = new Hono<AppEnv>()
+  .post('/verify-pdf/:tenant', async (c) => {
+    const tenant = c.req.param('tenant');
+    if (!/^[0-9a-f-]{36}$/i.test(tenant)) throw notFound();
+    const body = new Uint8Array(await c.req.arrayBuffer());
+    if (body.length > 25 * 1024 * 1024) throw badRequest('The PDF is too large');
+    if (!(body[0] === 0x25 && body[1] === 0x50)) throw badRequest('Not a PDF');
+    const out = await c.var.db.tx({ tenantId: tenant, readOnly: true }, async (tx) => dsc.verifyUploadedPdf(await publicCtx(c, tx, tenant), body));
+    c.header('cache-control', 'no-store');
+    return c.json(out);
+  })
+  .get('/verify/:tenant/:code', async (c) => {
   const tenant = c.req.param('tenant');
   const code = c.req.param('code').toUpperCase();
   if (!/^[0-9a-f-]{36}$/i.test(tenant)) throw notFound();

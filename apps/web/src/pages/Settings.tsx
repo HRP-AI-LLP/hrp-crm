@@ -6,6 +6,7 @@ import { AgentsAdmin, CompetitorsAdmin } from '../components/admin/IntelAdmin';
 import { QuickReplies, TemplatesModal } from '../components/admin/WhatsAppAdmin';
 import { useOAuthReturn } from '../lib/oauthReturn';
 import { OrganisationTab } from './Organisation';
+import { DocTemplatesTab } from '../components/admin/DocTemplates';
 import { AutomationsTab } from '../components/builders/AutomationBuilder';
 import { FieldEditor, TYPE_LABELS } from '../components/builders/FieldEditor';
 import { LayoutBuilder } from '../components/builders/LayoutBuilder';
@@ -29,6 +30,7 @@ type Json = Record<string, any>;
 const GROUPS: [string, [string, string, string][]][] = [
   ['Company', [
     ['organisation', 'Organisation', 'organisation'],
+    ['templates', 'Document templates', 'billing'],
   ]],
   ['Customise', [
     ['fields', 'Objects & fields', 'metadata'],
@@ -119,6 +121,7 @@ export function SettingsPage() {
         </div>
         <div className="panel-body">
           {tab === 'organisation' && <OrganisationTab />}
+          {tab === 'templates' && <DocTemplatesTab />}
           {tab === 'fields' && <ObjectsTab />}
           {tab === 'pipelines' && <PipelinesTab />}
           {tab === 'sales' && <SalesSetup />}

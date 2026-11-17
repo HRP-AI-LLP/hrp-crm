@@ -12,6 +12,10 @@
   "dependencies": {
     "@synapse/shared": "workspace:*",
     "@tanstack/react-query": "^5.104.2",
+    "dompurify": "3.2.6",
+    "html-to-image": "1.11.13",
+    "mustache": "4.2.0",
+    "pdf-lib": "1.17.1",
     "pdfjs-dist": "4.10.38",
     "qrcode-generator": "1.4.4",
     "react": "^19.3.0",
@@ -20,6 +24,7 @@
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
+    "@types/mustache": "4.2.6",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^6.1.2",

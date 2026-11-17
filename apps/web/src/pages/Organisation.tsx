@@ -6,11 +6,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { BankModal, ORG_PATHS, PersonModal, ROLES } from '../components/books/OwnAccounts';
+import { DocTemplatesTab } from '../components/admin/DocTemplates';
+import { local, setSignerPort, signerPort } from '../lib/dsc';
+import { date as fmtDate } from '../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
 import { del, get, post, put } from '../lib/api';
 
 type Json = Record<string, any>;
-type Tab = 'profile' | 'contacts' | 'people' | 'banks' | 'signatures';
+type Tab = 'profile' | 'contacts' | 'people' | 'banks' | 'signatures' | 'dsc' | 'templates';
 
 const CONSTITUTIONS: [string, string][] = [
   ['llp', 'Limited liability partnership (LLP)'],
@@ -59,6 +62,8 @@ export function OrganisationTab() {
             ['people', 'Partners & directors'],
             ['banks', 'Bank accounts'],
             ['signatures', 'Signatures'],
+            ['dsc', 'Digital signatures (DSC)'],
+            ['templates', 'Document templates'],
           ] as [Tab, string][]
         ).map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
@@ -71,6 +76,8 @@ export function OrganisationTab() {
       {tab === 'people' && <People d={d} />}
       {tab === 'banks' && <Banks d={d} />}
       {tab === 'signatures' && <Signatures d={d} />}
+      {tab === 'dsc' && <Dsc d={d} />}
+      {tab === 'templates' && <DocTemplatesTab />}
     </div>
   );
 }
@@ -626,6 +633,398 @@ function SignatureModal({ sig, users, onClose, onSaved }: { sig: Json; users: Js
             ))}
           </div>
         </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ───────────────────────── digital signature certificates ───────────────────────── */
+
+const fileB64 = (f: File) =>
+  new Promise<string>((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1] ?? '');
+    r.onerror = () => rej(r.error);
+    r.readAsDataURL(f);
+  });
+
+function Dsc({ d }: { d: Json }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['org-dsc'], queryFn: () => get<Json>('/api/v1/organisation/dsc') });
+  const sigs = useQuery({ queryKey: ['org-signatures'], queryFn: () => get<Json[]>('/api/v1/organisation/signatures') });
+  const [modal, setModal] = useState<'pfx' | 'token' | 'pair' | null>(null);
+  const [edit, setEdit] = useState<Json | null>(null);
+  const [paired, setPaired] = useState<Json | null>(null);
+  const refresh = () => qc.invalidateQueries({ queryKey: ['org-dsc'] });
+  if (q.isLoading) return <Spinner />;
+  const certs = (q.data?.certificates ?? []) as Json[];
+  const signers = (q.data?.signers ?? []) as Json[];
+  return (
+    <div className="stack">
+      <p className="muted small" style={{ margin: 0 }}>
+        Sign invoices, orders and purchase orders with your digital signature certificate (Class 3 DSC). The signed PDF shows as signed in Adobe Reader and is kept with the document. A certificate kept as a <b>.pfx file</b> is stored encrypted and is never handed back — it signs only from Synapse. A certificate on a <b>USB token</b> stays on the token: the DSC signer on the computer with the token signs only what this Synapse asks it to.
+      </p>
+      {d.canManage && (
+        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+          <button className="btn primary sm" onClick={() => setModal('pfx')}>
+            Add a .pfx certificate
+          </button>
+          <button className="btn sm" onClick={() => setModal('pair')}>
+            Pair a signer (USB token)
+          </button>
+          <button className="btn sm" onClick={() => setModal('token')} disabled={!signers.length} title={signers.length ? '' : 'Pair a signer first'}>
+            Add the token's certificate
+          </button>
+        </div>
+      )}
+      {!certs.length ? (
+        <Empty title="No certificates yet">Add your .pfx, or pair the signer and add the certificate on your USB token.</Empty>
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Certificate</th>
+                <th>Issued by</th>
+                <th>Valid until</th>
+                <th>Kept as</th>
+                <th>Who signs</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {certs.map((c) => (
+                <tr key={c.id}>
+                  <td style={{ whiteSpace: 'normal' }}>
+                    <b>{c.subjectCn}</b>
+                    <div className="muted small">{c.label}</div>
+                  </td>
+                  <td className="small" style={{ whiteSpace: 'normal', maxWidth: 260 }}>
+                    {c.issuer}
+                  </td>
+                  <td>{c.expired ? <span className="chip bad">Expired {fmtDate(c.validTo)}</span> : fmtDate(c.validTo)}</td>
+                  <td>{c.kind === 'pfx' ? 'Certificate file (encrypted)' : 'USB token'}</td>
+                  <td className="small" style={{ whiteSpace: 'normal' }}>
+                    {(c.userIds as string[]).map((id) => d.users.find((u: Json) => u.id === id)?.name ?? '—').join(', ') || 'No one yet'}
+                  </td>
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                    {c.canEdit && (
+                      <>
+                        <button className="btn ghost sm" onClick={() => setEdit(c)}>
+                          Edit
+                        </button>
+                        <button
+                          className="btn ghost sm"
+                          onClick={async () => {
+                            if (!confirm(`Remove ${c.subjectCn}'s certificate? The encrypted key is deleted; documents already signed stay signed.`)) return;
+                            await del(`/api/v1/organisation/dsc/${c.id}`).catch((e) => toast((e as Error).message, true));
+                            refresh();
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <h3 style={{ margin: '8px 0 0' }}>Paired signers</h3>
+      {!signers.length ? (
+        <span className="muted small">None. A signer is needed only for a certificate on a USB token.</span>
+      ) : (
+        signers.map((s) => (
+          <div key={s.id} className="row small" style={{ gap: 8 }}>
+            <span>
+              🔐 <b>{s.label}</b> · paired {fmtDate(s.created_at)}
+              {s.last_used_at ? ` · last used ${fmtDate(s.last_used_at)}` : ''}
+            </span>
+            {d.canManage && (
+              <button
+                className="btn ghost sm"
+                onClick={async () => {
+                  if (!confirm(`Unpair “${s.label}”? It stops signing for this workspace at once.`)) return;
+                  await del(`/api/v1/organisation/dsc-signers/${s.id}`).catch((e) => toast((e as Error).message, true));
+                  refresh();
+                }}
+              >
+                Unpair
+              </button>
+            )}
+          </div>
+        ))
+      )}
+      <label className="field small" style={{ maxWidth: 260 }}>
+        Signer port on this computer
+        <input type="number" defaultValue={signerPort()} onBlur={(e) => setSignerPort(Number(e.target.value) || 47321)} />
+      </label>
+
+      {modal === 'pfx' && <PfxModal d={d} sigs={sigs.data ?? []} onClose={() => setModal(null)} onSaved={refresh} />}
+      {modal === 'pair' && (
+        <PairModal
+          onClose={() => setModal(null)}
+          onPaired={(r) => {
+            setPaired(r);
+            setModal(null);
+            refresh();
+          }}
+        />
+      )}
+      {paired && (
+        <Modal title="Signer paired" onClose={() => setPaired(null)} footer={<button className="btn primary" onClick={() => setPaired(null)}>Done</button>}>
+          <div className="modal-body stack">
+            <p className="small" style={{ margin: 0 }}>
+              On the computer with the USB token (see <span className="mono">tools/dsc-signer/README.md</span>), run this once — the code is shown only now:
+            </p>
+            <pre className="mono small" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f1f5f9', padding: 10, borderRadius: 8 }}>
+              python dsc_signer.py pair {paired.pairingCode} --origin {location.origin}
+            </pre>
+            <button className="btn sm" onClick={() => navigator.clipboard?.writeText(`python dsc_signer.py pair ${paired.pairingCode} --origin ${location.origin}`).then(() => toast('Copied'))}>
+              Copy
+            </button>
+            <p className="small muted" style={{ margin: 0 }}>
+              Then start it (start-signer.bat), plug in the token and use “Add the token's certificate”.
+            </p>
+          </div>
+        </Modal>
+      )}
+      {modal === 'token' && <TokenCertModal d={d} sigs={sigs.data ?? []} signers={signers} onClose={() => setModal(null)} onSaved={refresh} />}
+      {edit && <CertEditModal d={d} sigs={sigs.data ?? []} cert={edit} onClose={() => setEdit(null)} onSaved={refresh} />}
+    </div>
+  );
+}
+
+function WhoSigns({ users, value, onChange }: { users: Json[]; value: string[]; onChange: (v: string[]) => void }) {
+  return (
+    <div className="field">
+      Who may sign with it
+      <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
+        {users.map((u) => (
+          <label key={u.id} className="row small" style={{ gap: 4 }}>
+            <input type="checkbox" checked={value.includes(u.id)} onChange={(e) => onChange(e.target.checked ? [...value, u.id] : value.filter((x) => x !== u.id))} />
+            {u.name}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SigPick({ sigs, value, onChange }: { sigs: Json[]; value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="field">
+      Signature image on the document (optional)
+      <select value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">None — the DSC stamp only</option>
+        {sigs.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.signerName}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function PfxModal({ d, sigs, onClose, onSaved }: { d: Json; sigs: Json[]; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast();
+  const [f, setF] = useState({ label: '', pfx: '', password: '', userIds: [] as string[], signatureId: '' });
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal
+      title="Add a .pfx certificate"
+      onClose={onClose}
+      footer={
+        <button
+          className="btn primary"
+          disabled={busy || !f.pfx || !f.label.trim()}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await post<Json>('/api/v1/organisation/dsc/pfx', { ...f, signatureId: f.signatureId || null });
+              toast(`Added ${r.subjectCn}'s certificate (valid until ${fmtDate(r.validTo)})`);
+              onSaved();
+              onClose();
+            } catch (e) {
+              toast((e as Error).message, true);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? 'Checking…' : 'Add'}
+        </button>
+      }
+    >
+      <div className="modal-body stack">
+        <label className="field">
+          Name
+          <input value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} placeholder="Harsha Rani — Class 3 signing" />
+        </label>
+        <label className="field">
+          Certificate file (.pfx / .p12, with the private key)
+          <input type="file" accept=".pfx,.p12,application/x-pkcs12" onChange={async (e) => e.target.files?.[0] && setF({ ...f, pfx: await fileB64(e.target.files[0]) })} />
+        </label>
+        <label className="field">
+          Its password
+          <input type="password" autoComplete="off" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
+        </label>
+        <WhoSigns users={d.users} value={f.userIds} onChange={(userIds) => setF({ ...f, userIds })} />
+        <SigPick sigs={sigs} value={f.signatureId} onChange={(signatureId) => setF({ ...f, signatureId })} />
+        <p className="muted small" style={{ margin: 0 }}>
+          The file and password are encrypted and kept by Synapse; nobody can download them again. Remove the certificate here to delete them.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+function PairModal({ onClose, onPaired }: { onClose: () => void; onPaired: (r: Json) => void }) {
+  const toast = useToast();
+  const [label, setLabel] = useState('');
+  return (
+    <Modal
+      title="Pair a DSC signer"
+      onClose={onClose}
+      footer={
+        <button
+          className="btn primary"
+          disabled={!label.trim()}
+          onClick={async () => {
+            try {
+              onPaired(await post<Json>('/api/v1/organisation/dsc-signers', { label }));
+            } catch (e) {
+              toast((e as Error).message, true);
+            }
+          }}
+        >
+          Pair
+        </button>
+      }
+    >
+      <div className="modal-body stack">
+        <label className="field">
+          Which computer
+          <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Prashant's laptop" autoFocus />
+        </label>
+        <p className="muted small" style={{ margin: 0 }}>
+          The signer is a small program (tools/dsc-signer) that runs on the computer where the USB token is plugged in. Pairing gives it a secret so it signs only what this workspace asks.
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+function TokenCertModal({ d, sigs, signers, onClose, onSaved }: { d: Json; sigs: Json[]; signers: Json[]; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast();
+  const [pin, setPin] = useState('');
+  const [found, setFound] = useState<Json[] | null>(null);
+  const [pick, setPick] = useState<Json | null>(null);
+  const [f, setF] = useState({ label: '', userIds: [] as string[], signatureId: '' });
+  const read = async () => {
+    try {
+      const st = await local<{ signers: Json[] }>('/v1/status');
+      if (!st.signers.some((x) => signers.some((p) => p.id === x.signer))) throw new Error('The signer on this computer is paired with another workspace');
+      const r = await local<{ certificates: Json[] }>('/v1/certificates', { pin: pin || undefined });
+      setFound(r.certificates);
+      if (r.certificates.length === 1) setPick(r.certificates[0]!);
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
+  return (
+    <Modal
+      title="Add the token's certificate"
+      onClose={onClose}
+      footer={
+        <button
+          className="btn primary"
+          disabled={!pick || !f.label.trim()}
+          onClick={async () => {
+            try {
+              const r = await post<Json>('/api/v1/organisation/dsc/token', { label: f.label, certPem: pick!.pem, userIds: f.userIds, signatureId: f.signatureId || null });
+              toast(`Added ${r.subjectCn}'s token certificate`);
+              onSaved();
+              onClose();
+            } catch (e) {
+              toast((e as Error).message, true);
+            }
+          }}
+        >
+          Add
+        </button>
+      }
+    >
+      <div className="modal-body stack">
+        <p className="muted small" style={{ margin: 0 }}>
+          With the token plugged in and the signer running on this computer, read the certificate from the token. Some tokens show certificates only after the PIN.
+        </p>
+        <div className="row" style={{ gap: 8 }}>
+          <input type="password" autoComplete="off" placeholder="Token PIN (if needed)" value={pin} onChange={(e) => setPin(e.target.value)} />
+          <button className="btn sm" onClick={read}>
+            Read from the token
+          </button>
+        </div>
+        {found &&
+          (found.length ? (
+            found.map((c) => (
+              <label key={c.thumbprint} className="row small" style={{ gap: 6 }}>
+                <input type="radio" name="tokcert" checked={pick?.thumbprint === c.thumbprint} onChange={() => setPick(c)} />
+                {c.label} <span className="muted mono">{c.thumbprint.slice(0, 12)}…</span>
+              </label>
+            ))
+          ) : (
+            <span className="small">No certificate found on the token.</span>
+          ))}
+        <label className="field">
+          Name
+          <input value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} placeholder="Prashant — USB token" />
+        </label>
+        <WhoSigns users={d.users} value={f.userIds} onChange={(userIds) => setF({ ...f, userIds })} />
+        <SigPick sigs={sigs} value={f.signatureId} onChange={(signatureId) => setF({ ...f, signatureId })} />
+      </div>
+    </Modal>
+  );
+}
+
+function CertEditModal({ d, sigs, cert, onClose, onSaved }: { d: Json; sigs: Json[]; cert: Json; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast();
+  const [f, setF] = useState({ label: cert.label, userIds: cert.userIds as string[], signatureId: cert.signatureId ?? '' });
+  return (
+    <Modal
+      title={`${cert.subjectCn}'s certificate`}
+      onClose={onClose}
+      footer={
+        <button
+          className="btn primary"
+          onClick={async () => {
+            try {
+              await put(`/api/v1/organisation/dsc/${cert.id}`, { ...f, signatureId: f.signatureId || null });
+              onSaved();
+              onClose();
+            } catch (e) {
+              toast((e as Error).message, true);
+            }
+          }}
+        >
+          Save
+        </button>
+      }
+    >
+      <div className="modal-body stack">
+        <label className="field">
+          Name
+          <input value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} />
+        </label>
+        <WhoSigns users={d.users} value={f.userIds} onChange={(userIds) => setF({ ...f, userIds })} />
+        <SigPick sigs={sigs} value={f.signatureId} onChange={(signatureId) => setF({ ...f, signatureId })} />
+        <p className="muted small mono" style={{ margin: 0, wordBreak: 'break-all' }}>
+          {cert.subject} · serial {cert.serial} · SHA-1 {cert.thumbprint}
+        </p>
       </div>
     </Modal>
   );
