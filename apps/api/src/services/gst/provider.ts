@@ -8,10 +8,14 @@
  *    Pay per call. Returns always go to the live GST portal (there is no returns sandbox).
  *  - whitebooks: WhiteBooks — a GSP that encrypts for us; has a sandbox.
  *
- * GST_PROVIDER picks one; otherwise whichever has keys (India Compliance first).
+ *  - gstinapi: gstinapi.in — one API key; the GSP behind it encrypts and keeps the session;
+ *    saving is free, 1 credit per filing; a test mode for every call.
+ *
+ * GST_PROVIDER picks one; otherwise whichever has keys (gstinapi.in, India Compliance, WhiteBooks).
  */
 import type { Env } from '../../env';
 import { ApiError } from '../../lib/errors';
+import { gstinapiProvider } from './gstinapi';
 import { indiaComplianceProvider } from './indiacompliance';
 import { whitebooksProvider, type WbResult } from './whitebooks';
 
@@ -46,7 +50,7 @@ export type Form = 'GSTR1' | 'GSTR1A' | 'GSTR3B' | 'GSTR7' | 'GSTR2X' | 'ITC04' 
 
 export type GstOp =
   | { op: 'view'; kind: string; q: Record<string, string> }
-  | { op: 'save'; form: Form; period: string; body: unknown }
+  | { op: 'save'; form: Form; period: string; body: unknown; pan?: string | null }
   | { op: 'status'; form: Form; period: string; refId: string }
   | { op: 'proceed'; form: Form; period: string; nil: boolean }
   | { op: 'summary'; form: Form; period: string }
@@ -79,7 +83,7 @@ export interface NicStep {
 }
 
 export interface GspProvider {
-  id: 'whitebooks' | 'indiacompliance';
+  id: 'whitebooks' | 'indiacompliance' | 'gstinapi';
   label: string;
   /** returns go to a test system */
   sandbox: boolean;
@@ -91,6 +95,9 @@ export interface GspProvider {
   forms: readonly Form[];
   /** the step between saving and filing, if any */
   proceed(form: Form): 'r1' | 'r1a' | 'submit' | null;
+  /** steps the provider has separately (default: all). gstr1OtpOnSave: saving GSTR-1 also proceeds,
+   *  returns the summary and sends the EVC OTP */
+  steps?: { status: boolean; summary: boolean; gstr1OtpOnSave?: boolean };
   challan: boolean;
   dsc: boolean;
   /** advice to add to an error from the GSP */
@@ -116,11 +123,13 @@ export interface GspProvider {
 
 export function getProvider(env: Env): GspProvider | null {
   const want = (env.GST_PROVIDER ?? '').trim().toLowerCase();
+  const gi = gstinapiProvider(env);
   const ic = indiaComplianceProvider(env);
   const wb = whitebooksProvider(env);
+  if (want === 'gstinapi' || want === 'gstinapi.in') return gi;
   if (want === 'indiacompliance' || want === 'india_compliance') return ic;
   if (want === 'whitebooks') return wb;
-  return ic ?? wb;
+  return gi ?? ic ?? wb;
 }
 
 export function requireProvider(env: Env): GspProvider {
@@ -129,7 +138,7 @@ export function requireProvider(env: Env): GspProvider {
     throw new ApiError(
       503,
       'gsp_not_configured',
-      'No GST Suvidha Provider is set up on this server. Add INDIA_COMPLIANCE_API_SECRET (or the WHITEBOOKS_* keys) to .env and restart.',
+      'No GST provider is set up on this server. Add GSTINAPI_KEY (gstinapi.in) to .env and restart (or INDIA_COMPLIANCE_API_SECRET / the WHITEBOOKS_* keys).',
     );
   return p;
 }

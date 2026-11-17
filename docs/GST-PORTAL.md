@@ -1,15 +1,17 @@
 # GST portal, e-invoice and e-way bill (through a GSP)
 
-Synapse connects to the GST portal through a GST Suvidha Provider (GSP). Two providers are built in:
+Synapse connects to the GST portal through a GST provider. Three are built in:
 
-| | **India Compliance** (Resilient Tech) — recommended for one organisation | **WhiteBooks** |
-|---|---|---|
-| Pricing | Pay per call: 1 credit = 1 call to the government system; small packs; new accounts have been offered free credits | Yearly packs from 1 lakh calls |
-| Returns | GSTR-1 and GSTR-3B saved and filed with EVC; ledgers, return status, GSTR-2B. Other returns: download the JSON and upload it on gst.gov.in | All returns, EVC and DSC, challans, notices |
-| Sandbox | None for returns (calls reach the live GST portal). E-invoice and e-way bill have a test mode | Full sandbox (OTP 575757) |
-| How | GSTN's own API; Synapse does GSTN's encryption itself | The GSP encrypts |
+| | **gstinapi.in** — recommended | **India Compliance** | **WhiteBooks** |
+|---|---|---|---|
+| Pricing | Credits: saving, OTPs and the offset are free; 1 credit per filing; IRN / e-way bill 3; GSTR-2B 3; lookups 1. Free credits at signup | Pay per call; small packs | Yearly packs from 1 lakh calls |
+| Returns | GSTR-1 and GSTR-3B with EVC; GSTR-2B; return history | GSTR-1 and GSTR-3B with EVC; ledgers, return status, GSTR-2B | All returns, EVC and DSC, challans, notices, ledgers |
+| Test mode | `GSTINAPI_TEST_MODE=true`: every call answers synthetically, free | E-invoice / e-way bill only | Full sandbox |
+| Session | Kept and refreshed by gstinapi.in for the API-access duration you choose on gst.gov.in (up to 30 days) | 6 hours, renewed while you work | 6 hours, renewed while you work |
 
-The server uses whichever has keys (India Compliance first); `GST_PROVIDER=indiacompliance` or `whitebooks` in `.env` picks one.
+The server uses whichever has keys (gstinapi.in, then India Compliance, then WhiteBooks); `GST_PROVIDER=gstinapi`, `indiacompliance` or `whitebooks` in `.env` picks one.
+
+**Paid answers are kept.** Everything a provider returns is stored in Synapse's database: lookups, return history, GSTR-2B and ledgers in a cache that is read first, and every call's answer with its activity log. Screens show *Saved copy from …*; the provider is called again only when you press **Refresh from the portal** (or *Update …* on the overview). Filing steps always go to the portal.
 
 From **Billing & GST → GST portal** you can:
 
@@ -27,6 +29,21 @@ From **Billing & GST → GST portal** you can:
 On an invoice you can generate the **IRN** (e-invoice) and the **e-way bill**, update the vehicle, and cancel either one. The e-invoice's signed QR code and the e-way bill number are printed on the invoice.
 
 ## Setting it up
+
+### 1. gstinapi.in (once per server)
+
+1. Sign up at https://www.gstinapi.in/dashboard and copy the API key (`gak_…`).
+2. Put it in the **repo-root `.env`** (git-ignored):
+   ```
+   GST_PROVIDER=gstinapi
+   GSTINAPI_KEY=gak_…
+   GSTINAPI_TEST_MODE=true     # first: every call is a free synthetic test; remove for real filing
+   ```
+3. `pnpm gst:check` checks the key (free calls only). Restart with `pnpm local:stop`, then `pnpm local`.
+4. On gst.gov.in, under *My Profile → Manage API Access*, choose **Yes**, a duration (up to 30 days) and the **GSP-ASP combination gstinapi.in lists** at gstinapi.in/gst-portal-api-access.
+5. Live filing needs a purchased credit pack on gstinapi.in (until then, filing and offset answer "not switched on").
+
+Connecting sends a real OTP even in test mode. With gstinapi.in, **saving GSTR-1 also proceeds to file, returns the summary and sends the filing OTP** to the signatory, so enter the signatory's PAN under Registration first. GSTR-3B: save (summary and checksum), work out and send the offset, request the OTP, file. Because gstinapi.in has no ledger API, the offset uses this return's own ITC; check your cash ledger on gst.gov.in covers the cash part.
 
 ### 1a. India Compliance (once per server)
 

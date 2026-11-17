@@ -9,7 +9,27 @@ import { loadDotEnv } from './dotenv.mjs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 loadDotEnv(ROOT);
 const e = /** @type {Record<string, string>} */ (process.env);
-if (e.INDIA_COMPLIANCE_API_SECRET && (e.GST_PROVIDER ?? '').toLowerCase() !== 'whitebooks') {
+const want = (e.GST_PROVIDER ?? '').toLowerCase();
+if (e.GSTINAPI_KEY && (!want || want.startsWith('gstinapi'))) {
+  // gstinapi.in: today's usage (free) and the test GSTIN (free, never charged)
+  console.log(`GST provider: gstinapi.in${/^(1|true|yes)$/i.test(e.GSTINAPI_TEST_MODE ?? '') ? ' (TEST MODE: nothing reaches the GST network)' : ''}`);
+  const base = (e.GSTINAPI_BASE_URL || 'https://www.gstinapi.in').replace(/\/+$/, '');
+  for (const [label, path] of /** @type {[string, string][]} */ ([['Key and usage today', '/v1/gstin/stats/me'], ['Test lookup (free)', '/v1/gstin/00AAAAA0000A1ZT']])) {
+    try {
+      const r = await fetch(base + path, { headers: { 'x-api-key': e.GSTINAPI_KEY ?? '' }, signal: AbortSignal.timeout(20_000) });
+      /** @type {any} */
+      const j = await r.json().catch(() => null);
+      const ok = r.ok && j?.success !== false;
+      console.log(`${ok ? '✓' : '✗'} ${label}: HTTP ${r.status}${ok ? '' : ` — ${String(j?.error ?? j?.message ?? '').slice(0, 200)}`}`);
+      if (ok && path.endsWith('/me')) console.log(`  calls today ${j?.total_calls ?? j?.data?.total_calls ?? '—'}, credits used today ${j?.credits_used ?? j?.data?.credits_used ?? '—'}`);
+      if (ok && j?.credits_remaining !== undefined) console.log(`  credits left: ${j.credits_remaining}`);
+    } catch (err) {
+      console.log(`✗ ${label}: ${/** @type {Error} */ (err).message}`);
+    }
+  }
+  process.exit(0);
+}
+if (e.INDIA_COMPLIANCE_API_SECRET && want !== 'whitebooks') {
   // India Compliance: show the account (credits) without spending a credit
   const { execFileSync } = await import('node:child_process');
   console.log('GST Suvidha Provider: India Compliance');

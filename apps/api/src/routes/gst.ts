@@ -30,6 +30,7 @@ function deps(c: Context<AppEnv>, readOnly = false): gst.GstDeps {
       c.var.db.tx(scope(c, readOnly), (tx) => fn({ tx, meta: c.var.meta, principal: c.var.principal, tenantId: c.var.tenant.id })),
   };
 }
+const isRefresh = (c: Context<AppEnv>) => /^(1|true|yes)$/i.test(c.req.query('refresh') ?? '');
 const id = (c: { req: { param: (k: string) => string } }, k = 'id') => {
   const v = c.req.param(k);
   if (!uuid.safeParse(v).success) throw notFound();
@@ -86,15 +87,16 @@ export const gstRoutes = new Hono<AppEnv>()
   // ------------------------------------------------------------ dashboard
   .get('/gst/connections/:id/overview', async (c) => c.json(await gst.overview(deps(c, true), id(c))))
   .post('/gst/connections/:id/sync-returns', async (c) => {
-    const b = z.object({ fyStart: z.number().int().min(2017).max(2100) }).parse(await c.req.json());
-    return c.json(await gst.syncReturnTrack(deps(c), id(c), b.fyStart));
+    const b = z.object({ fyStart: z.number().int().min(2017).max(2100), refresh: z.boolean().default(true) }).parse(await c.req.json());
+    return c.json(await gst.syncReturnTrack(deps(c), id(c), b.fyStart, b.refresh));
   })
   .get('/gst/views', (c) => c.json(gst.viewsFor(c.env)))
   .post('/gst/connections/:id/views/:kind', async (c) => {
     const params = z.record(z.string(), z.string().max(64)).parse(await c.req.json().catch(() => ({})));
-    return c.json(await gst.fetchView(deps(c), id(c), c.req.param('kind'), params));
+    // stored answer unless ?refresh=1 (the Refresh button): provider calls are paid
+    return c.json(await gst.fetchView(deps(c), id(c), c.req.param('kind'), params, isRefresh(c)));
   })
-  .get('/gst/search/:gstin', async (c) => c.json(await gst.searchTaxpayer(deps(c, true), c.req.param('gstin'))))
+  .get('/gst/search/:gstin', async (c) => c.json(await gst.searchTaxpayer(deps(c), c.req.param('gstin'), isRefresh(c))))
   .get('/gst/calendar', (c) => {
     const q = z.object({ gstin: z.string().length(15), frequency: z.enum(['monthly', 'quarterly']).default('monthly'), from: z.string().regex(/^\d{4}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}$/) }).parse(c.req.query());
     toRetPeriod(q.from);
@@ -121,8 +123,8 @@ export const gstRoutes = new Hono<AppEnv>()
     return c.json(await gst.prepareFromPortal(deps(c), id(c), b.returnType, b.period), 201);
   })
   .post('/gst/connections/:id/gstr2b', async (c) => {
-    const b = z.object({ period }).parse(await c.req.json());
-    return c.json(await gst.importGstr2bFromPortal(deps(c), id(c), b.period));
+    const b = z.object({ period, refresh: z.boolean().default(false) }).parse(await c.req.json());
+    return c.json(await gst.importGstr2bFromPortal(deps(c), id(c), b.period, b.refresh));
   })
   .post('/gst/connections/:id/challans', async (c) => {
     const b = z

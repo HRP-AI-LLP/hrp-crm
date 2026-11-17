@@ -131,8 +131,18 @@ async function loadConn(ctx: RecordCtx, id: string, lock = false) {
   return c;
 }
 
-export async function logEvent(ctx: RecordCtx, e: { connectionId?: string | null; filingId?: string | null; invoiceId?: string | null; action: string; ok: boolean; message?: string | null }) {
-  await ctx.tx.query(`insert into gst_events (tenant_id, connection_id, filing_id, invoice_id, action, ok, message) values ($1,$2,$3,$4,$5,$6,$7)`, [
+/** Keeps a provider's answer with the event, up to 1 MB (the paid answers are never thrown away). */
+export function keepable(data: unknown): string | null {
+  if (data === undefined || data === null) return null;
+  const j = JSON.stringify(data);
+  return j.length <= 1_000_000 ? j : JSON.stringify({ truncated: true, bytes: j.length });
+}
+
+export async function logEvent(
+  ctx: RecordCtx,
+  e: { connectionId?: string | null; filingId?: string | null; invoiceId?: string | null; action: string; ok: boolean; message?: string | null; provider?: string | null; data?: unknown },
+) {
+  await ctx.tx.query(`insert into gst_events (tenant_id, connection_id, filing_id, invoice_id, action, ok, message, provider, data) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [
     ctx.tenantId,
     e.connectionId ?? null,
     e.filingId ?? null,
@@ -140,7 +150,46 @@ export async function logEvent(ctx: RecordCtx, e: { connectionId?: string | null
     e.action.slice(0, 60),
     e.ok,
     e.message ? e.message.slice(0, 2000) : null,
+    e.provider ?? null,
+    keepable(e.data),
   ]);
+}
+
+/* ───────────────────────── our own copy of what the APIs returned ───────────────────────── */
+
+export interface CacheHit<T> {
+  data: T;
+  /** true when served from the database without calling the provider */
+  cached: boolean;
+  fetchedAt: string;
+}
+
+/**
+ * Reads (taxpayer details, return history, …) come from gst_api_cache when we have them; the
+ * provider is called only when nothing is stored or `refresh` is asked for (the Refresh buttons).
+ */
+export async function cachedLookup<T>(deps: GstDeps, spec: { scope: string; kind: string; key?: string }, refresh: boolean, fetch: () => Promise<T>): Promise<CacheHit<T>> {
+  const key = (spec.key ?? '').slice(0, 120);
+  if (!refresh) {
+    const hit = await deps.run(async (ctx) => {
+      const row = await ctx.tx.one<{ data: T; fetched_at: string }>(
+        `update gst_api_cache set hits = hits + 1 where tenant_id = $1 and scope = $2 and kind = $3 and key = $4 returning data, fetched_at`,
+        [ctx.tenantId, spec.scope, spec.kind, key],
+      );
+      return row;
+    });
+    if (hit) return { data: hit.data, cached: true, fetchedAt: new Date(hit.fetched_at).toISOString() };
+  }
+  const data = await fetch();
+  const provider = getProvider(deps.env)?.id ?? null;
+  await deps.run((ctx) =>
+    ctx.tx.query(
+      `insert into gst_api_cache (tenant_id, scope, kind, key, provider, data) values ($1,$2,$3,$4,$5,$6)
+       on conflict (tenant_id, scope, kind, key) do update set data = excluded.data, provider = excluded.provider, fetched_at = now(), fetched_by = app.current_user_id()`,
+      [ctx.tenantId, spec.scope, spec.kind, key, provider, keepable(data) ?? 'null'],
+    ),
+  );
+  return { data, cached: false, fetchedAt: new Date().toISOString() };
 }
 
 export async function listConnections(deps: GstDeps) {
@@ -155,8 +204,20 @@ export async function listConnections(deps: GstDeps) {
     }
     return {
       gsp: gp
-        ? { provider: gp.label, id: gp.id, configured: true, sandbox: gp.sandbox, nicSandbox: gp.nicSandbox, forms: gp.forms, challan: gp.challan, dsc: gp.dsc, views: gp.views }
-        : { provider: null, id: null, configured: false, sandbox: false, nicSandbox: false, forms: [], challan: false, dsc: false, views: [] },
+        ? {
+            provider: gp.label,
+            id: gp.id,
+            configured: true,
+            sandbox: gp.sandbox,
+            nicSandbox: gp.nicSandbox,
+            forms: gp.forms,
+            challan: gp.challan,
+            dsc: gp.dsc,
+            views: gp.views,
+            steps: gp.steps ?? { status: true, summary: true },
+            publicTrack: !!gp.returnTrack,
+          }
+        : { provider: null, id: null, configured: false, sandbox: false, nicSandbox: false, forms: [], challan: false, dsc: false, views: [], steps: { status: true, summary: true }, publicTrack: false },
       connections: out,
     };
   });
@@ -356,11 +417,11 @@ async function portalOp(deps: GstDeps, id: string, op: GstOp, log: { action: str
   const { c, session } = await liveSession(deps, gp, id);
   const r = await gp.call(gspConn(c), session, deps.ip, op);
   const gone = !r.ok && gp.sessionGone(r);
-  if (!r.ok || !log.quiet)
-    await deps.run(async (ctx) => {
-      if (gone) await ctx.tx.query(`update gst_connections set status = 'expired', session_expires_at = null where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
-      await logEvent(ctx, { connectionId: id, filingId: log.filingId, action: log.action, ok: r.ok, message: r.ok ? null : r.message });
-    });
+  // every call is recorded with what came back, so nothing paid for is lost
+  await deps.run(async (ctx) => {
+    if (gone) await ctx.tx.query(`update gst_connections set status = 'expired', session_expires_at = null where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
+    await logEvent(ctx, { connectionId: id, filingId: log.filingId, action: log.action, ok: r.ok, message: r.ok ? null : r.message, provider: gp.id, data: r.ok ? r.data : r.raw });
+  });
   if (!r.ok) {
     if (gone) throw new ApiError(409, 'gst_session_required', `The GST portal session has ended (${r.message}). Request a new OTP.`);
     throw new GspError(gp.hint(r.message), r.code, r);
@@ -409,7 +470,7 @@ const PARAM_RE = /^[A-Za-z0-9_.\-/ ]{1,64}$/;
 const toDmy = (s: string) => (/^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s.slice(8, 10)}-${s.slice(5, 7)}-${s.slice(0, 4)}` : s);
 
 /** Fetches one portal view and keeps the latest copy for the dashboard. */
-export async function fetchView(deps: GstDeps, id: string, kind: string, params: Record<string, string>) {
+export async function fetchView(deps: GstDeps, id: string, kind: string, params: Record<string, string>, refresh = false) {
   const v = VIEWS[kind];
   if (!v) throw badRequest('Unknown GST portal view');
   if (!requireProvider(deps.env).views.includes(kind)) throw badRequest(`${v.label} is not available with this GST Suvidha Provider`);
@@ -423,12 +484,15 @@ export async function fetchView(deps: GstDeps, id: string, kind: string, params:
     if (!PARAM_RE.test(val)) throw badRequest(`${p} is not valid`);
     query[p] = v.dates?.includes(p) ? toDmy(val) : val;
   }
-  await deps.run(async (ctx) => {
+  const cacheKey = Object.values(query).join('|').slice(0, 60);
+  const stored = await deps.run(async (ctx) => {
     assertGstAdmin(ctx);
     await loadConn(ctx, id);
+    if (refresh) return null;
+    return ctx.tx.one<{ data: any; fetched_at: string }>(`select data, fetched_at from gst_portal_cache where tenant_id = $1 and connection_id = $2 and kind = $3 and key = $4`, [ctx.tenantId, id, kind, cacheKey]);
   });
+  if (stored) return { kind, label: v.label, params: query, data: stored.data, fetchedAt: new Date(stored.fetched_at).toISOString(), cached: true };
   const r = await portalOp(deps, id, { op: 'view', kind, q: query }, { action: `view.${kind}`, quiet: true });
-  const cacheKey = Object.values(query).join('|').slice(0, 60);
   await deps.run(async (ctx) => {
     await ctx.tx.query(
       `insert into gst_portal_cache (tenant_id, connection_id, kind, key, data) values ($1,$2,$3,$4,$5)
@@ -436,11 +500,11 @@ export async function fetchView(deps: GstDeps, id: string, kind: string, params:
       [ctx.tenantId, id, kind, cacheKey, JSON.stringify(r.data ?? r.raw ?? null)],
     );
   });
-  return { kind, label: v.label, params: query, data: r.data ?? null, fetchedAt: new Date().toISOString() };
+  return { kind, label: v.label, params: query, data: r.data ?? null, fetchedAt: new Date().toISOString(), cached: false };
 }
 
 /** Public taxpayer search (no OTP needed): legal name, trade name, status, address of any GSTIN. */
-export async function searchTaxpayer(deps: GstDeps, gstin: string) {
+export async function searchTaxpayer(deps: GstDeps, gstin: string, refresh = false) {
   const g = gstin.trim().toUpperCase();
   if (!validGstin(g)) throw badRequest('That GSTIN is not valid');
   const gp = requireProvider(deps.env);
@@ -449,11 +513,17 @@ export async function searchTaxpayer(deps: GstDeps, gstin: string) {
       throw forbidden();
     }
   });
-  const r = await gp.search(g);
-  if (!r.ok) throw new GspError(gp.hint(r.message), r.code, r);
-  const d = r.data ?? {};
+  const hit = await cachedLookup(deps, { scope: g, kind: 'taxpayer' }, refresh, async () => {
+    const r = await gp.search(g);
+    await deps.run((ctx) => logEvent(ctx, { action: 'search', ok: r.ok, message: r.ok ? g : r.message, provider: gp.id, data: r.ok ? r.data : r.raw }));
+    if (!r.ok) throw new GspError(gp.hint(r.message), r.code, r);
+    return r.data ?? {};
+  });
+  const d: any = hit.data ?? {};
   const addr = d.pradr?.addr ?? {};
   return {
+    cached: hit.cached,
+    fetchedAt: hit.fetchedAt,
     gstin: d.gstin ?? g,
     legalName: d.lgnm ?? null,
     tradeName: d.tradeNam ?? null,
@@ -537,18 +607,23 @@ export async function overview(deps: GstDeps, id: string, today = new Date()) {
 }
 
 /** Fetches the portal's record of returns filed for each month of a financial year (for the calendar). */
-export async function syncReturnTrack(deps: GstDeps, id: string, fyStart: number) {
+export async function syncReturnTrack(deps: GstDeps, id: string, fyStart: number, refresh = true) {
   const gp = requireProvider(deps.env);
   if (gp.returnTrack) {
     // one public call for the whole year, no OTP needed
     const fy = `${fyStart}-${String(fyStart + 1).slice(2)}`;
-    const gstin = await deps.run(async (ctx) => {
+    const { gstin, stored } = await deps.run(async (ctx) => {
       assertGstAdmin(ctx);
-      return (await loadConn(ctx, id)).gstin;
+      const gstin = (await loadConn(ctx, id)).gstin;
+      const stored = refresh
+        ? null
+        : await ctx.tx.one<{ fetched_at: string }>(`select fetched_at from gst_portal_cache where tenant_id = $1 and connection_id = $2 and kind = 'return_track' and key = $3`, [ctx.tenantId, id, `fy ${fy}`]);
+      return { gstin, stored };
     });
+    if (stored) return [{ period: fy, ok: true, cached: true, fetchedAt: stored.fetched_at }];
     const r = await gp.returnTrack(gstin, fy);
     await deps.run(async (ctx) => {
-      await logEvent(ctx, { connectionId: id, action: 'view.return_track', ok: r.ok, message: r.ok ? `FY ${fy}` : r.message });
+      await logEvent(ctx, { connectionId: id, action: 'view.return_track', ok: r.ok, message: r.ok ? `FY ${fy}` : r.message, provider: gp.id, data: r.ok ? r.data : r.raw });
       if (r.ok)
         await ctx.tx.query(
           `insert into gst_portal_cache (tenant_id, connection_id, kind, key, data) values ($1,$2,'return_track',$3,$4)
@@ -567,7 +642,7 @@ export async function syncReturnTrack(deps: GstDeps, id: string, fyStart: number
     if (d > new Date()) break;
     const period = `${String(m).padStart(2, '0')}${y}`;
     try {
-      await fetchView(deps, id, 'return_track', { period });
+      await fetchView(deps, id, 'return_track', { period }, refresh);
       out.push({ period, ok: true });
     } catch (e) {
       if (e instanceof ApiError && e.code === 'gst_session_required') throw e;
@@ -800,8 +875,18 @@ export async function saveFiling(deps: GstDeps, id: string) {
   const { f, c, form, gp } = await filingContext(deps, id, ['prepared', 'error', 'saved']);
   if (!f.payload) throw badRequest('Prepare the return first');
   if (!gp.forms.includes(f.return_type)) throw badRequest(`${form.label} can't be sent through ${gp.label}. Download the JSON and upload it on the GST portal.`);
-  const r = await portalOp(deps, c.id, { op: 'save', form: f.return_type, period: f.period, body: f.payload }, { action: 'save', filingId: id });
+  const r = await portalOp(deps, c.id, { op: 'save', form: f.return_type, period: f.period, body: f.payload, pan: c.signatory_pan }, { action: 'save', filingId: id });
   const ref = pick(r, 'reference_id', 'ref_id', 'refid', 'referenceId', 'reference_no');
+  // providers that save, proceed and summarise in one call (gstinapi.in) hand back the summary
+  const summary = r.data && typeof r.data === 'object' && 'summary' in r.data ? r.data.summary : undefined;
+  if (summary !== undefined && gp.steps && !gp.steps.status)
+    return updateFiling(deps, id, {
+      status: r.data.proceeded ? 'submitted' : 'saved',
+      ref_id: ref ? String(ref) : null,
+      portal_status: 'P',
+      error_report: null,
+      summary: summary ?? null,
+    });
   return updateFiling(deps, id, ref ? { status: 'saving', ref_id: String(ref), portal_status: 'REC', error_report: null } : { status: 'saved', portal_status: 'P', error_report: null });
 }
 
@@ -809,7 +894,8 @@ const STATUS_TEXT: Record<string, string> = { P: 'Processed', PE: 'Processed wit
 
 /** Asks the portal how the last save (or proceed) went. */
 export async function checkFiling(deps: GstDeps, id: string) {
-  const { f, c } = await filingContext(deps, id, ['saving', 'saved', 'error', 'submitted', 'offset']);
+  const { f, c, gp } = await filingContext(deps, id, ['saving', 'saved', 'error', 'submitted', 'offset']);
+  if (gp.steps && !gp.steps.status) throw badRequest(`${gp.label} reports the outcome when you save; there is no separate status to check`);
   if (!f.ref_id) throw badRequest('Nothing is being processed on the portal for this return');
   const r = await portalOp(deps, c.id, { op: 'status', form: f.return_type, period: f.period, refId: f.ref_id }, { action: 'status', filingId: id });
   const st = String(pick(r, 'status_cd') ?? '').toUpperCase();
@@ -835,7 +921,8 @@ export async function proceedFiling(deps: GstDeps, id: string, opts: { nil?: boo
 
 /** Fetches the return summary from the portal; it is what gets filed. */
 export async function summaryFiling(deps: GstDeps, id: string) {
-  const { f, c } = await filingContext(deps, id, ['saved', 'submitted', 'offset', 'error', 'filed']);
+  const { f, c, gp } = await filingContext(deps, id, ['saved', 'submitted', 'offset', 'error', 'filed']);
+  if (gp.steps && !gp.steps.summary) throw badRequest(`With ${gp.label} the summary comes back when you save; save the return again to refresh it`);
   const r = await portalOp(deps, c.id, { op: 'summary', form: f.return_type, period: f.period }, { action: 'summary', filingId: id });
   if (r.data == null) throw new GspError('The portal returned no summary yet; try again in a minute', null, r);
   return updateFiling(deps, id, { summary: r.data });
@@ -853,16 +940,25 @@ const rr = (x: number) => Math.round(x * 100) / 100;
  * from the portal; the user reviews it before it is sent.
  */
 export async function proposeOffset(deps: GstDeps, id: string) {
-  const { f, c } = await filingContext(deps, id, ['saved', 'submitted', 'error']);
+  const { f, c, gp } = await filingContext(deps, id, ['saved', 'submitted', 'error']);
   if (f.return_type !== 'GSTR3B') throw badRequest('Only GSTR-3B is offset');
   if (!f.summary) throw badRequest('Fetch the return summary first');
-  const bal = await portalOp(deps, c.id, { op: 'view', kind: 'ledger_balance', q: { period: f.period } }, { action: 'view.ledger_balance', quiet: true });
-  const itcBal = bal.data?.itc_bal ?? {};
-  const credit = { i: n(itcBal.igst_bal), c: n(itcBal.cgst_bal), s: n(itcBal.sgst_bal), cs: n(itcBal.cess_bal) };
-  const cashBal = bal.data?.cash_bal ?? {};
-  const cashAvail = { i: n(cashBal.igst_tot_bal ?? cashBal.igst?.tot), c: n(cashBal.cgst_tot_bal ?? cashBal.cgst?.tot), s: n(cashBal.sgst_tot_bal ?? cashBal.sgst?.tot), cs: n(cashBal.cess_tot_bal ?? cashBal.cess?.tot) };
+  let credit: { i: number; c: number; s: number; cs: number };
+  let cashAvail: { i: number; c: number; s: number; cs: number } | null;
+  if (gp.views.includes('ledger_balance')) {
+    const bal = await portalOp(deps, c.id, { op: 'view', kind: 'ledger_balance', q: { period: f.period } }, { action: 'view.ledger_balance', quiet: true });
+    const itcBal = bal.data?.itc_bal ?? {};
+    credit = { i: n(itcBal.igst_bal), c: n(itcBal.cgst_bal), s: n(itcBal.sgst_bal), cs: n(itcBal.cess_bal) };
+    const cashBal = bal.data?.cash_bal ?? {};
+    cashAvail = { i: n(cashBal.igst_tot_bal ?? cashBal.igst?.tot), c: n(cashBal.cgst_tot_bal ?? cashBal.cgst?.tot), s: n(cashBal.sgst_tot_bal ?? cashBal.sgst?.tot), cs: n(cashBal.cess_tot_bal ?? cashBal.cess?.tot) };
+  } else {
+    // no ledger API: use this return's net ITC (the credit ledger may hold more — check it on gst.gov.in)
+    const net = f.summary?.itc_elg?.itc_net ?? f.payload?.itc_elg?.itc_net ?? {};
+    credit = { i: n(net.iamt), c: n(net.camt), s: n(net.samt), cs: n(net.csamt) };
+    cashAvail = null;
+  }
   const rows: any[] = f.summary?.tx_pmt?.tx_py ?? f.summary?.tx_pmt?.txpy ?? [];
-  if (!rows.length) throw badRequest('The summary has no tax payable (tx_pmt); fetch it again after saving GSTR-3B');
+  if (!rows.length) throw badRequest('The summary has no tax payable (tx_pmt) with the ledger ids the portal needs; save GSTR-3B again, or offset on gst.gov.in');
   const pdcash: any[] = [];
   let pditc: any = null;
   const cashNeed = { i: 0, c: 0, s: 0, cs: 0 };
@@ -909,8 +1005,16 @@ export async function proposeOffset(deps: GstDeps, id: string) {
       s_lfeepd: fee.s,
     });
   }
-  const shortfall = { igst: rr(Math.max(0, cashNeed.i - cashAvail.i)), cgst: rr(Math.max(0, cashNeed.c - cashAvail.c)), sgst: rr(Math.max(0, cashNeed.s - cashAvail.s)), cess: rr(Math.max(0, cashNeed.cs - cashAvail.cs)) };
-  return { offset: { pdcash, ...(pditc ? { pditc } : {}) }, cashNeeded: { igst: cashNeed.i, cgst: cashNeed.c, sgst: cashNeed.s, cess: cashNeed.cs }, cashAvailable: { igst: cashAvail.i, cgst: cashAvail.c, sgst: cashAvail.s, cess: cashAvail.cs }, shortfall };
+  const shortfall = cashAvail
+    ? { igst: rr(Math.max(0, cashNeed.i - cashAvail.i)), cgst: rr(Math.max(0, cashNeed.c - cashAvail.c)), sgst: rr(Math.max(0, cashNeed.s - cashAvail.s)), cess: rr(Math.max(0, cashNeed.cs - cashAvail.cs)) }
+    : null;
+  return {
+    offset: { pdcash, ...(pditc ? { pditc } : {}) },
+    cashNeeded: { igst: cashNeed.i, cgst: cashNeed.c, sgst: cashNeed.s, cess: cashNeed.cs },
+    cashAvailable: cashAvail ? { igst: cashAvail.i, cgst: cashAvail.c, sgst: cashAvail.s, cess: cashAvail.cs } : null,
+    shortfall,
+    note: cashAvail ? null : "ITC here is this return's own credit; your credit ledger may hold more. Check the cash ledger on gst.gov.in covers what is paid in cash.",
+  };
 }
 
 /** Sends the reviewed offset (GSTR-3B): pays the liability from the ledgers. */
@@ -918,8 +1022,10 @@ export async function offsetFiling(deps: GstDeps, id: string, body: { pdcash: un
   const { f, c } = await filingContext(deps, id, ['saved', 'submitted', 'error']);
   if (f.return_type !== 'GSTR3B') throw badRequest('Only GSTR-3B is offset');
   if (!Array.isArray(body.pdcash)) throw badRequest('pdcash is required');
-  await portalOp(deps, c.id, { op: 'offset', period: f.period, body }, { action: 'offset', filingId: id });
-  return updateFiling(deps, id, { status: 'offset' });
+  const r = await portalOp(deps, c.id, { op: 'offset', period: f.period, body }, { action: 'offset', filingId: id });
+  // a fresh summary (and checksum) after paying, when the provider returns one
+  const summary = r.data && typeof r.data === 'object' && r.data.summary ? r.data.summary : null;
+  return updateFiling(deps, id, summary ? { status: 'offset', summary } : { status: 'offset' });
 }
 
 /* filing */
@@ -990,20 +1096,16 @@ export function gstr2bRows(data: any): Gstr2bRow[] {
 }
 
 /** Fetches GSTR-2B for a period and matches it against bills (the reconciliation in Books). */
-export async function importGstr2bFromPortal(deps: GstDeps, connectionId: string, period: string) {
+export async function importGstr2bFromPortal(deps: GstDeps, connectionId: string, period: string, refresh = false) {
   fromRetPeriod(period);
-  await deps.run(async (ctx) => {
-    assertGstAdmin(ctx);
-    await loadConn(ctx, connectionId);
-  });
-  const first = await portalOp(deps, connectionId, { op: 'view', kind: 'gstr2b', q: { period } }, { action: 'view.gstr2b' });
+  const first = await fetchView(deps, connectionId, 'gstr2b', { period }, refresh);
   const rows = gstr2bRows(first.data);
   const fc = n(first.data?.data?.fc ?? first.data?.fc);
   for (let k = 2; k <= Math.min(fc, 50); k++) {
-    const r = await portalOp(deps, connectionId, { op: 'view', kind: 'gstr2b', q: { period, fileNo: String(k) } }, { action: 'view.gstr2b', quiet: true });
+    const r = await fetchView(deps, connectionId, 'gstr2b', { period, fileNo: String(k) }, refresh);
     rows.push(...gstr2bRows(r.data));
   }
-  return deps.run(async (ctx) => ({ ...(await importGstr2b(ctx, period, rows)), fetched: rows.length }));
+  return deps.run(async (ctx) => ({ ...(await importGstr2b(ctx, period, rows)), fetched: rows.length, cached: first.cached, fetchedAt: first.fetchedAt }));
 }
 
 /* ───────────────────────── challan ───────────────────────── */

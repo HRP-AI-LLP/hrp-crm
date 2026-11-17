@@ -384,7 +384,8 @@ function Overview({ conn }: { conn: Json }) {
   const itc = bal?.itc_bal ?? {};
   const view = (kind: string, params: Json, ok: string) =>
     act(
-      () => post(`/api/v1/gst/connections/${conn.id}/views/${kind}`, params),
+      () =>
+        post(`/api/v1/gst/connections/${conn.id}/views/${kind}?refresh=1`, params),
       ok,
     );
   const rows = show === "pending" ? data.pending : data.calendar;
@@ -396,7 +397,7 @@ function Overview({ conn }: { conn: Json }) {
       <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
         <button
           className="btn sm"
-          disabled={!live && gsp.id !== "indiacompliance"}
+          disabled={!live && !gsp.publicTrack}
           onClick={() =>
             act(
               () =>
@@ -892,6 +893,8 @@ function FilingWizard({
   onClose: () => void;
 }) {
   const gsp = useGsp();
+  const steps: Json = gsp.steps ?? {};
+  const otpOnSave = !!steps.gstr1OtpOnSave;
   const act = useAct([["gst"]]);
   const { data: f } = useQuery({
     queryKey: ["gst", "filing", id],
@@ -1010,13 +1013,21 @@ function FilingWizard({
             >
               {st === "prepared" ? "Save to the portal" : "Save again"}
             </button>
-            <button
-              className="btn sm"
-              disabled={!live || !f.refId || st === "filed"}
-              onClick={() => call("status", "Status updated")}
-            >
-              Check status
-            </button>
+            {otpOnSave && f.canSend && (
+              <span className="muted small">
+                Saving also proceeds to file, fetches the summary and sends the
+                filing OTP to the signatory ({conn.signatoryPan || "set the PAN under Registration"}).
+              </span>
+            )}
+            {steps.status !== false && (
+              <button
+                className="btn sm"
+                disabled={!live || !f.refId || st === "filed"}
+                onClick={() => call("status", "Status updated")}
+              >
+                Check status
+              </button>
+            )}
             {["GSTR1", "GSTR1A"].includes(f.returnType) &&
               ["saved", "error"].includes(st) && (
                 <button
@@ -1078,15 +1089,19 @@ function FilingWizard({
 
         <div className="stack">
           <b>{f.needsProceed ? "4" : "3"}. Summary on the portal</b>
-          <div className="row">
-            <button
-              className="btn sm"
-              disabled={!live || !at("saved") || st === "error"}
-              onClick={() => call("summary", "Summary fetched")}
-            >
-              {f.summary ? "Fetch again" : "Fetch summary"}
-            </button>
-          </div>
+          {steps.summary !== false ? (
+            <div className="row">
+              <button
+                className="btn sm"
+                disabled={!live || !at("saved") || st === "error"}
+                onClick={() => call("summary", "Summary fetched")}
+              >
+                {f.summary ? "Fetch again" : "Fetch summary"}
+              </button>
+            </div>
+          ) : (
+            !f.summary && <div className="muted small">It comes back when you save.</div>
+          )}
           {f.summary && (
             <details>
               <summary>Summary (this is what gets filed)</summary>
@@ -1138,7 +1153,7 @@ function FilingWizard({
                   <tbody>
                     {(
                       ["cashNeeded", "cashAvailable", "shortfall"] as const
-                    ).map((k) => (
+                    ).filter((k) => offset[k]).map((k) => (
                       <tr
                         key={k}
                         style={
@@ -1163,6 +1178,7 @@ function FilingWizard({
                     ))}
                   </tbody>
                 </table>
+                {offset.note && <div className="small">{offset.note}</div>}
                 <label className="field">
                   Offset (edit only if you know the portal format)
                   <textarea
@@ -1249,6 +1265,9 @@ function FilingWizard({
                         }
                         style={{ width: 110 }}
                       />
+                      {otpOnSave && f.returnType === "GSTR1" ? (
+                        <span className="muted small">Sent when you saved; save again for a new one.</span>
+                      ) : (
                       <button
                         className="btn sm"
                         disabled={
@@ -1264,6 +1283,7 @@ function FilingWizard({
                       >
                         Send OTP
                       </button>
+                      )}
                     </div>
                   </label>
                 )}
@@ -1357,6 +1377,24 @@ function PortalViews({ conn }: { conn: Json }) {
   const [kind, setKind] = useState("ledger_balance");
   const [params, setParams] = useState<Record<string, string>>({});
   const [result, setResult] = useState<Json | null>(null);
+  /** the saved copy when there is one; refresh = call the provider (paid) */
+  const fetchIt = async (refresh: boolean) => {
+    if (!v) return;
+    const all = Object.fromEntries(
+      [...v.params, ...v.optional]
+        .map((p: string) => [p, params[p] ?? defaults(p)])
+        .filter(([, x]) => x !== ""),
+    );
+    const r = await act(
+      () =>
+        post<Json>(
+          `/api/v1/gst/connections/${conn.id}/views/${kind}${refresh ? "?refresh=1" : ""}`,
+          all,
+        ),
+      refresh ? "Fetched fresh from the portal" : "Loaded",
+    );
+    if (r) setResult(r);
+  };
   const [period2b, setPeriod2b] = useState(ymPrev());
   const [challan, setChallan] = useState(false);
   const live = conn.status === "active";
@@ -1423,25 +1461,10 @@ function PortalViews({ conn }: { conn: Json }) {
               ))}
             <button
               className="btn primary"
-              disabled={!live || !v}
-              onClick={async () => {
-                const all = Object.fromEntries(
-                  [...v!.params, ...v!.optional]
-                    .map((p: string) => [p, params[p] ?? defaults(p)])
-                    .filter(([, x]) => x !== ""),
-                );
-                const r = await act(
-                  () =>
-                    post<Json>(
-                      `/api/v1/gst/connections/${conn.id}/views/${kind}`,
-                      all,
-                    ),
-                  "Fetched",
-                );
-                if (r) setResult(r);
-              }}
+              disabled={!v}
+              onClick={() => fetchIt(false)}
             >
-              Fetch
+              Show
             </button>
           </div>
           <div className="muted small">
@@ -1453,8 +1476,17 @@ function PortalViews({ conn }: { conn: Json }) {
               <div className="row" style={{ gap: 8 }}>
                 <b>{result.label}</b>
                 <span className="muted small">
+                  {result.cached ? "Saved copy from " : "Fetched "}
                   {dateTime(result.fetchedAt)}
                 </span>
+                <button
+                  className="btn sm"
+                  disabled={!live}
+                  title="Calls the GST provider again (may use credits)"
+                  onClick={() => fetchIt(true)}
+                >
+                  Refresh from the portal
+                </button>
                 <button
                   className="btn sm ghost"
                   onClick={() =>
@@ -1487,22 +1519,40 @@ function PortalViews({ conn }: { conn: Json }) {
           </label>
           <button
             className="btn"
-            disabled={!live}
             onClick={() =>
               act(
                 () =>
                   post<Json>(`/api/v1/gst/connections/${conn.id}/gstr2b`, {
                     period: toPeriod(period2b),
+                    refresh: false,
                   }),
-                "GSTR-2B fetched and matched against your bills (Books → GST & TDS)",
+                "GSTR-2B matched against your bills (Books → GST & TDS)",
               )
             }
           >
-            Fetch GSTR-2B and match
+            Match GSTR-2B
+          </button>
+          <button
+            className="btn ghost"
+            disabled={!live}
+            title="Fetches GSTR-2B again from the portal (uses credits)"
+            onClick={() =>
+              act(
+                () =>
+                  post<Json>(`/api/v1/gst/connections/${conn.id}/gstr2b`, {
+                    period: toPeriod(period2b),
+                    refresh: true,
+                  }),
+                "GSTR-2B fetched fresh and matched",
+              )
+            }
+          >
+            Refresh from the portal
           </button>
           <span className="muted small">
-            Replaces any earlier import of that month. The result is under Books
-            → GST & TDS → GSTR-2B.
+            Uses the copy already saved for that month when there is one (no
+            charge); Refresh fetches it again. The result is under Books → GST &
+            TDS → GSTR-2B.
           </span>
         </div>
       </section>
@@ -1719,14 +1769,19 @@ function RegistrationForm({
     ewbUsername: conn?.ewbUsername ?? "",
     ewbPassword: "",
   });
+  const [found, setFound] = useState<Json | null>(null);
   const set = (k: string) => (e: { target: { value: string } }) =>
     setF({ ...f, [k]: e.target.value });
-  const lookup = async () => {
+  const lookup = async (refresh = false) => {
     const r = await act(
-      () => get<Json>(`/api/v1/gst/search/${f.gstin.trim().toUpperCase()}`),
+      () =>
+        get<Json>(
+          `/api/v1/gst/search/${f.gstin.trim().toUpperCase()}${refresh ? "?refresh=1" : ""}`,
+        ),
       "Found on the GST portal",
     );
     if (r?.legalName) setF({ ...f, legalName: r.legalName });
+    if (r) setFound(r);
   };
   const save = async () => {
     const body: Json = { ...f, gstin: f.gstin.trim().toUpperCase() };
@@ -1759,11 +1814,21 @@ function RegistrationForm({
             <button
               className="btn sm ghost"
               disabled={f.gstin.length !== 15}
-              onClick={lookup}
+              onClick={() => lookup(false)}
             >
               Look up
             </button>
           </div>
+          {found && (
+            <span className="muted small">
+              {found.legalName} · {found.status ?? ""} ·{" "}
+              {found.cached ? "saved copy from " : "fetched "}
+              {dateTime(found.fetchedAt)}{" "}
+              <button className="btn sm ghost" onClick={() => lookup(true)}>
+                Refresh
+              </button>
+            </span>
+          )}
         </label>
         <label className="field">
           Legal name

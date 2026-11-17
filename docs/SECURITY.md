@@ -253,3 +253,8 @@ An independent review of the fifth round found no cross-tenant leaks; these were
 - **Two providers, one interface:** `services/gst/provider.ts`. India Compliance's key (`INDIA_COMPLIANCE_API_SECRET`) is a Worker secret; `pnpm gst:ic-account` writes it to the git-ignored `.env` and never prints it.
 - **GSTN encryption in the app** (`gstn-crypto.ts`): AES-256-ECB, HMAC-SHA256 and RSA PKCS#1 v1.5 with GSTN's public certificate. Tests check them against OpenSSL. Every encrypted response's HMAC is verified before it is used. The session key (sek), auth token and app key live only in the sealed session. A fresh app key is made for every OTP.
 - **No returns sandbox** with India Compliance: filing still needs the fetched summary, the proceed/submit step, the GSTR-3B offset, the signatory's PAN, the EVC OTP and the declaration.
+
+#### gstinapi.in and keeping paid answers
+
+- `GSTINAPI_KEY` is a Worker secret (locally the git-ignored `.env` → `.dev.vars`). The e-invoice and e-way bill API passwords are sent to gstinapi.in per call (they say they don't store them) and are kept encrypted here.
+- Every provider answer is stored: `gst_api_cache` (latest answer per GSTIN and lookup, read first, refreshed only on request) and `gst_events.data` (each call's answer, capped at 1 MB). Both are tenant-isolated (RLS) and never hold credentials; tests check that the passwords don't appear.

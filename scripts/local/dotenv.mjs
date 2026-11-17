@@ -30,6 +30,9 @@ export function loadDotEnv(root) {
 /** The GST Suvidha Provider settings passed through to apps/api/.dev.vars. */
 export const WHITEBOOKS_KEYS = [
   'GST_PROVIDER',
+  'GSTINAPI_KEY',
+  'GSTINAPI_TEST_MODE',
+  'GSTINAPI_BASE_URL',
   'INDIA_COMPLIANCE_API_SECRET',
   'INDIA_COMPLIANCE_TEST_MODE',
   'INDIA_COMPLIANCE_BASE_URL',

@@ -147,6 +147,18 @@ async function nic(
       );
     });
   }
+  // keep what came back (IRN, signed QR, e-way bill…) with the event
+  await deps.run((ctx) =>
+    logEvent(ctx, {
+      connectionId: conn.id,
+      invoiceId,
+      action: `${kind}.${op.op}.call`,
+      ok: step.result.ok,
+      message: step.result.ok ? null : step.result.message,
+      provider: gp.id,
+      data: step.result.ok ? step.result.data : step.result.raw,
+    }),
+  );
   return step.result;
 }
 

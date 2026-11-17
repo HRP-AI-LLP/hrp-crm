@@ -294,7 +294,9 @@ describe('GST portal through India Compliance', () => {
 
   it('ends the session when the portal says so', async () => {
     gstn.authToken = 'ROTATED';
-    const r = await api('POST', `/api/v1/gst/connections/${ids.conn}/views/ledger_balance`, { period: PERIOD });
+    // a stored answer is served without calling the portal
+    expect((await api('POST', `/api/v1/gst/connections/${ids.conn}/views/ledger_balance`, { period: PERIOD })).json.cached).toBe(true);
+    const r = await api('POST', `/api/v1/gst/connections/${ids.conn}/views/ledger_balance?refresh=1`, { period: PERIOD });
     expect(r.status).toBe(409);
     const list = await api('GET', '/api/v1/gst/connections');
     expect(list.json.connections[0].status).toBe('expired');
