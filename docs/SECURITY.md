@@ -289,3 +289,7 @@ An independent review of the fifth round found no cross-tenant leaks; these were
   POST that writes `audit_logs` (`reveal`, `person_identity`). Identity papers (`org_documents`) are stored
   under the `organisation` object key, which the generic file routes refuse, and are served by 15-minute
   signed links to the profile's managers (and, for team members, admins with the users area).
+- **CSP and the local signer**: `connect-src` allows `http://127.0.0.1:*` so the page can reach the DSC signer on
+  this computer (any loopback port, since the signer's port is configurable), and Google Fonts so the signed
+  PDF draws in the app's font. Only loopback is opened; the signer itself answers only paired origins with a
+  valid ticket.
