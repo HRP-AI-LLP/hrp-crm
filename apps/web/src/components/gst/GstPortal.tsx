@@ -11,6 +11,7 @@ import { useRef, useState } from "react";
 import { del, get, patch, post } from "../../lib/api";
 import { date, dateTime, money2 } from "../../lib/format";
 import { Empty, Modal, Spinner, useToast } from "../ui";
+import { SelectAll } from "../SelectAll";
 
 type Json = Record<string, any>;
 const ymNow = () => new Date().toISOString().slice(0, 7);
@@ -2391,7 +2392,13 @@ function Gstr2bMonth({
                 <table className="data">
                   <thead>
                     <tr>
-                      <th style={{ width: 28 }} />
+                      <th style={{ width: 28 }}>
+                        <SelectAll
+                          ids={shown.filter(addable).map((l) => l.id)}
+                          sel={sel}
+                          setSel={setSel}
+                        />
+                      </th>
                       <th>Supplier</th>
                       <th>Document</th>
                       <th>Date</th>

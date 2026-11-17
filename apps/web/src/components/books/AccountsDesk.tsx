@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom';
 import { del, get, patch, post, put } from '../../lib/api';
 import { date, money2 } from '../../lib/format';
 import { combineStatements, PdfPasswordError, readStatementFile, type StatementLine } from '../../lib/statement';
+import { SelectAll } from '../SelectAll';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 
 type Json = Record<string, any>;
@@ -300,7 +301,11 @@ function Queue() {
           <table className="data">
             <thead>
               <tr>
-                {status === 'pending' && <th style={{ width: 28 }} />}
+                {status === 'pending' && (
+                  <th style={{ width: 28 }}>
+                    <SelectAll ids={rows.map((p) => p.id)} sel={sel} setSel={setSel} />
+                  </th>
+                )}
                 <th>Date</th>
                 <th>Bank line</th>
                 <th className="num">Amount</th>
