@@ -305,7 +305,15 @@ def main() -> None:
     a = ap.parse_args()
     cfg = load_config()
     if a.cmd == "pair":
-        tenant, signer, secret = a.code.split(".", 2)
+        import re
+
+        m = re.fullmatch(r"([0-9a-f-]{36})\.([0-9a-f-]{36})\.([A-Za-z0-9_-]{20,})", a.code.strip())
+        if not m:
+            raise SystemExit(
+                "That is not a pairing code. In Synapse open Organisation > Digital signatures (DSC) > Pair a signer,\n"
+                "then copy the whole command it shows (it starts with: pnpm dsc pair) and run it here."
+            )
+        tenant, signer, secret = m.groups()
         cfg["pairings"] = [x for x in cfg["pairings"] if not (x["tenant"] == tenant and x["signer"] == signer)]
         origins = sorted({o.rstrip("/") for o in a.origin})
         cfg["pairings"].append({"tenant": tenant, "signer": signer, "secret": secret, "origin": origins[0], "origins": origins})
