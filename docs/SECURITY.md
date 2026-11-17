@@ -258,3 +258,12 @@ An independent review of the fifth round found no cross-tenant leaks; these were
 
 - `GSTINAPI_KEY` is a Worker secret (locally the git-ignored `.env` → `.dev.vars`). The e-invoice and e-way bill API passwords are sent to gstinapi.in per call (they say they don't store them) and are kept encrypted here.
 - Every provider answer is stored: `gst_api_cache` (latest answer per GSTIN and lookup, read first, refreshed only on request) and `gst_events.data` (each call's answer, capped at 1 MB). Both are tenant-isolated (RLS) and never hold credentials; tests check that the passwords don't appear.
+
+### Ninth round (Nov 2026): the accounts desk
+
+- **Who:** every desk screen and action (runs, the review queue, findings, feeds) needs the books admin area. The daily round runs as the workspace's system principal, only for workspaces that saved desk settings or connected a feed.
+- **Bank feed keys:** RazorpayX key id and secret are checked with RazorpayX before they are stored, sealed with `DATA_ENCRYPTION_KEY` (tenant id as AAD) in `bank_feeds.secret_ciphertext`, and never returned; the list shows only the last four digits of the account. Razorpay gateway settlements use the existing Razorpay integration's sealed keys.
+- **No calls inside transactions:** feeds, settlements and the model are called between short transactions. Feed calls time out after 30 seconds.
+- **What the agents may post:** only through the same functions people use (match, categorise, record receipt, record vendor payment, exclude), each under a savepoint so one failure leaves the rest. In the default mode only bank rules, exact matches (≥ 95%) and consistent history (≥ 90%) are posted; AI and keyword guesses always wait for a person. Every proposal, decision and run is kept (`acct_proposals`, `acct_runs`); everything posted can be undone from Banking.
+- **AI:** bank narrations, account names, customer and vendor names and open document numbers are sent to the workspace's own AI model (flagged as containing personal data, so only PII-allowed providers are used), as short refs (T1, A3, I2) so the model cannot invent ids; every answer is validated (direction, open balance, party for receivable/payable accounts) and capped at 85% confidence. The controller's note gets only totals. The model can be switched off in desk settings.
+- **Gateway receipts:** with books on, Razorpay payment-link receipts now go to "UPI / payment gateway clearing" instead of the bank; the settlement (net + fee + GST on the fee) clears it.

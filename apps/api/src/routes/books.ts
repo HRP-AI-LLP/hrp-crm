@@ -30,6 +30,8 @@ import {
 } from '../services/books/bills';
 import { expenseAction, expenseBooks, setExpenseAccounts } from '../services/books/expenses';
 import * as rep from '../services/books/reports';
+import * as desk from '../services/books/desk';
+import * as feeds from '../services/books/feeds';
 import * as g2b from '../services/books/gstr2b';
 import * as setup from '../services/books/setup';
 import { enqueue, eventJobs } from '../services/jobs';
@@ -63,6 +65,17 @@ function requireAdmin(c: { var: AppEnv['Variables'] }) {
 async function emit(c: C, events: RecordEvent[]) {
   if (events.length) await enqueue(c.env, safeCtx(c), eventJobs(c.var.tenant.id, c.var.principal.user.id, events));
 }
+/** The accounts desk acts as the signed-in user; AI goes through the workspace's own model settings. */
+function deskDeps(c: C): desk.DeskDeps {
+  return {
+    env: c.env,
+    db: c.var.db,
+    tenantId: c.var.tenant.id,
+    run: (fn, readOnly = false) => c.var.db.tx(scope(c, readOnly), (tx) => fn(rctx(c, tx))),
+    ai: { env: c.env, db: c.var.db, tenantId: c.var.tenant.id, userId: c.var.principal.user.id, requestId: c.var.requestId, meta: c.var.meta },
+  };
+}
+const AGENT = z.enum(['bank_clerk', 'bookkeeper', 'compliance', 'controller']);
 const q = (c: { req: { query: (k: string) => string | undefined } }, k: string) => c.req.query(k) || null;
 const qDate = (c: { req: { query: (k: string) => string | undefined } }, k: string, dflt: string) => {
   const v = c.req.query(k);
@@ -328,8 +341,18 @@ export const booksRoutes = new Hono<AppEnv>()
   })
   .post('/books/bank-accounts/:id/statement', async (c) => {
     requireAdmin(c);
-    const b = z.object({ rows: z.array(z.object({ date: dateStr, description: z.string().trim().min(1).max(500), reference: z.string().max(120).nullish(), amount: signed.refine((v) => v !== 0, 'Amount cannot be zero'), balance: signed.nullish() })).min(1).max(5000) }).parse(await c.req.json());
-    return c.json(await c.var.db.tx(scope(c), (tx) => bank.importStatement(rctx(c, tx), qUuid(c), b.rows)));
+    const b = z
+      .object({
+        rows: z.array(z.object({ date: dateStr, description: z.string().trim().min(1).max(500), reference: z.string().max(120).nullish(), amount: signed.refine((v) => v !== 0, 'Amount cannot be zero'), balance: signed.nullish() })).min(1).max(5000),
+        /** hand the new lines to the accounts desk's bookkeeper instead of applying rules here */
+        toDesk: z.boolean().optional(),
+      })
+      .parse(await c.req.json());
+    if (!b.toDesk) return c.json(await c.var.db.tx(scope(c), (tx) => bank.importStatement(rctx(c, tx), qUuid(c), b.rows)));
+    const r = await c.var.db.tx(scope(c), (tx) => bank.importStatement(rctx(c, tx), qUuid(c), b.rows, { auto: false }));
+    const k = r.added ? await desk.runBookkeeper(deskDeps(c), { trigger: 'import', bankAccountId: qUuid(c) }) : null;
+    if (k) await emit(c, k.events);
+    return c.json({ ...r, bookkeeper: k ? { ...k, events: undefined } : null });
   })
   .get('/books/bank-accounts/:id/transactions', async (c) => {
     requireAdmin(c);
@@ -564,6 +587,100 @@ export const booksRoutes = new Hono<AppEnv>()
       })
       .parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => setup.importGstr2b(rctx(c, tx), b.period, b.rows)));
+  })
+  // ── the accounts desk: agents that keep the books, people approve what matters ──
+  .get('/books/desk', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => desk.deskOverview(rctx(c, tx))));
+  })
+  .put('/books/desk/settings', async (c) => {
+    requireAdmin(c);
+    const b = desk.settingsSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => desk.saveSettings(rctx(c, tx), b)));
+  })
+  .post('/books/desk/run', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ agents: z.array(AGENT).min(1).max(4).optional(), period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).nullish() }).parse(await c.req.json().catch(() => ({})));
+    const r = await desk.runDesk(deskDeps(c), { trigger: 'manual', agents: b.agents, period: b.period ?? null });
+    await emit(c, r.events);
+    const { events: _e, ...rest } = r;
+    return c.json(rest);
+  })
+  .get('/books/desk/runs', async (c) => {
+    requireAdmin(c);
+    const a = c.req.query('agent');
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => desk.listRuns(rctx(c, tx), a ? AGENT.parse(a) : null)));
+  })
+  .get('/books/desk/proposals', async (c) => {
+    requireAdmin(c);
+    const st = z.enum(['pending', 'applied', 'rejected', 'failed', 'stale', 'done', 'all']).parse(c.req.query('status') ?? 'pending');
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => desk.listProposals(rctx(c, tx), st)));
+  })
+  .post('/books/desk/proposals/approve', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ ids: z.array(uuid).min(1).max(500) }).parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => desk.approveMany(rctx(c, tx), b.ids));
+    await emit(c, r.events);
+    return c.json({ results: r.results, approved: r.approved });
+  })
+  .post('/books/desk/proposals/:id', async (c) => {
+    requireAdmin(c);
+    const b = desk.decideSchema.parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => desk.decide(rctx(c, tx), qUuid(c), b));
+    await emit(c, r.events);
+    const { events: _e, ...rest } = r;
+    return c.json(rest);
+  })
+  .get('/books/desk/open-documents', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => desk.openDocuments(rctx(c, tx))));
+  })
+  .get('/books/desk/findings', async (c) => {
+    requireAdmin(c);
+    const st = z.enum(['open', 'done', 'dismissed', 'all']).parse(c.req.query('status') ?? 'open');
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => desk.listFindings(rctx(c, tx), st)));
+  })
+  .post('/books/desk/findings/:id', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ status: z.enum(['done', 'dismissed', 'open']) }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => desk.resolveFinding(rctx(c, tx), qUuid(c), b.status)));
+  })
+  // live bank feeds (the bank clerk's sources)
+  .get('/books/feeds', async (c) => {
+    requireAdmin(c);
+    return c.json({ providers: feeds.feedProviders(), feeds: await c.var.db.tx(scope(c, true), (tx) => feeds.listFeeds(rctx(c, tx))) });
+  })
+  .post('/books/feeds', async (c) => {
+    requireAdmin(c);
+    const b = z
+      .object({
+        bankAccountId: uuid,
+        provider: z.enum(['razorpayx']),
+        accountRef: z.string().trim().regex(/^[A-Za-z0-9_-]{3,40}$/, 'Enter the account number shown in RazorpayX'),
+        keyId: z.string().trim().min(8).max(100),
+        keySecret: z.string().trim().min(8).max(200),
+        label: z.string().trim().max(120).nullish(),
+        syncFrom: dateStr.nullish(),
+      })
+      .parse(await c.req.json());
+    return c.json(await feeds.connectFeed(deskDeps(c), b), 201);
+  })
+  .patch('/books/feeds/:id', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ status: z.enum(['active', 'paused']) }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => feeds.updateFeed(rctx(c, tx), qUuid(c), b)));
+  })
+  .delete('/books/feeds/:id', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => feeds.deleteFeed(rctx(c, tx), qUuid(c))));
+  })
+  .post('/books/feeds/:id/sync', async (c) => {
+    requireAdmin(c);
+    const r = await feeds.syncFeed(deskDeps(c), qUuid(c));
+    // new lines go straight to the bookkeeper
+    const k = r.added ? await desk.runBookkeeper(deskDeps(c), { trigger: 'feed', bankAccountId: r.bankAccountId }) : null;
+    if (k) await emit(c, k.events);
+    return c.json({ ...r, bookkeeper: k ? { ...k, events: undefined } : null });
   })
   // GSTR-2B documents not in the books: match again, link by hand, or enter as bills (no GST provider call)
   .post('/books/gstr-2b/:period/rematch', async (c) => {

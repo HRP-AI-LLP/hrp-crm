@@ -14,6 +14,8 @@ import type { Tx } from '../lib/db';
 import { badRequest, notFound } from '../lib/errors';
 import { enabledApps } from './apps';
 import { milestoneReceipt, recordPayment } from './billing';
+import { sys } from './books/ledger';
+import { repost } from './books/posting';
 import { activeOf, claimRef, type Integration, markOk, ProviderError, providerFetch, readSecret } from './integrations';
 import { recordMilestonePayment } from './orders';
 import { loadRow, type RecordCtx, type RecordEvent } from './records';
@@ -230,6 +232,16 @@ export async function applyRazorpayEvent(ctx: RecordCtx, i: Integration, event: 
       events = p.events;
     } else {
       await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'sales_order',$3)`, [ctx.tenantId, `Paid online: ₹${amount.toLocaleString('en-IN')} (${reference}) — record it against a milestone`, link.sales_order_id]);
+    }
+  }
+  // with books on, money collected online sits in the gateway clearing account until Razorpay settles it
+  // (net of its fee and GST) into the bank; the accounts desk books the settlement against it
+  if (paymentId && enabledApps(ctx.meta).has('books')) {
+    const cfg = await ctx.tx.one<{ enabled: boolean }>(`select enabled from books_config where tenant_id = $1`, [ctx.tenantId]).catch(() => null);
+    if (cfg?.enabled) {
+      const clearing = await sys(ctx.tx, ctx.tenantId, 'gateway_clearing');
+      await ctx.tx.query(`update payments set deposit_account_id = $3 where tenant_id = $1 and id = $2 and deposit_account_id is null`, [ctx.tenantId, paymentId, clearing]);
+      await repost(ctx.tx, ctx.tenantId, 'payment', paymentId);
     }
   }
   await ctx.tx.query(`update payment_links set amount_paid = amount_paid + $3, payment_id = coalesce($4, payment_id), paid_at = now(),

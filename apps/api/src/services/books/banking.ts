@@ -61,10 +61,16 @@ export interface StatementRow {
   reference?: string | null;
   amount: number;
   balance?: number | null;
+  /** the provider's own id for the line (live feeds): the line is never imported twice */
+  externalId?: string | null;
+  counterparty?: string | null;
 }
 
-/** Imports statement lines; the same line imported twice is skipped. */
-export async function importStatement(ctx: RecordCtx, bankAccountId: string, rows: StatementRow[]) {
+/**
+ * Imports statement lines; the same line imported twice is skipped. `auto` (default) applies the bank
+ * rules and exact ledger matches straight away; the accounts desk passes false and decides itself.
+ */
+export async function importStatement(ctx: RecordCtx, bankAccountId: string, rows: StatementRow[], opts: { source?: 'statement' | 'feed' | 'manual'; auto?: boolean } = {}) {
   const b = await bankAccount(ctx, bankAccountId);
   if (rows.length > 5000) throw badRequest('Import at most 5,000 lines at a time');
   const batch = new Date().toISOString();
@@ -79,18 +85,22 @@ export async function importStatement(ctx: RecordCtx, bankAccountId: string, row
     const base = `${r.date}|${r.amount.toFixed(2)}|${r.description.trim().toLowerCase()}|${(r.reference ?? '').trim()}`;
     const k = (seen.get(base) ?? 0) + 1;
     seen.set(base, k);
-    const hash = (await sha256Hex(`${base}|${k}`)).slice(0, 40);
+    const hash = r.externalId ? `x:${(await sha256Hex(r.externalId)).slice(0, 38)}` : (await sha256Hex(`${base}|${k}`)).slice(0, 40);
     const ins = await ctx.tx.one<{ id: string }>(
-      `insert into bank_transactions (tenant_id, bank_account_id, txn_date, description, reference, amount, balance, import_batch, dedupe_hash)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) on conflict (tenant_id, bank_account_id, dedupe_hash) do nothing returning id`,
-      [ctx.tenantId, b.id, r.date, r.description.slice(0, 500) || '(no description)', r.reference?.slice(0, 120) ?? null, r2(r.amount), r.balance ?? null, batch, hash],
+      `insert into bank_transactions (tenant_id, bank_account_id, txn_date, description, reference, amount, balance, import_batch, dedupe_hash, source, external_id, counterparty)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) on conflict (tenant_id, bank_account_id, dedupe_hash) do nothing returning id`,
+      [
+        ctx.tenantId, b.id, r.date, r.description.slice(0, 500) || '(no description)', r.reference?.slice(0, 120) ?? null, r2(r.amount), r.balance ?? null, batch, hash,
+        opts.source ?? 'statement', r.externalId?.slice(0, 120) ?? null, r.counterparty?.slice(0, 200) ?? null,
+      ],
     );
     if (ins) added++;
     else skipped++;
   }
   await ctx.tx.query(`update bank_accounts set last_statement_date = greatest(coalesce(last_statement_date, '1900-01-01'), (select max(txn_date) from bank_transactions where tenant_id = $1 and bank_account_id = $2)) where tenant_id = $1 and id = $2`, [ctx.tenantId, b.id]);
+  if (opts.auto === false) return { added, skipped, autoCategorized: 0, autoMatched: 0, batch };
   const auto = await applyRules(ctx, b.id);
-  return { added, skipped, autoCategorized: auto.categorized, autoMatched: (await autoMatch(ctx, b.id)).matched };
+  return { added, skipped, autoCategorized: auto.categorized, autoMatched: (await autoMatch(ctx, b.id)).matched, batch };
 }
 
 export async function transactions(ctx: RecordCtx, bankAccountId: string, status: string, limit = 200) {

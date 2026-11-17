@@ -14,6 +14,8 @@ import { del, download, get, patch, post, put } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { date, money2, moneyShort } from '../lib/format';
 import { Deposits } from '../components/books/Deposits';
+import { AccountsDesk } from '../components/books/AccountsDesk';
+import { readStatementFile } from '../lib/statement';
 
 type Json = Record<string, any>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -37,9 +39,9 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 const SOURCE_LINK: Record<string, string> = { invoice: 'invoice', credit_note: 'invoice', write_off: 'invoice', payment: 'payment', bill: 'bill', vendor_credit: 'bill', vendor_payment: 'vendor_payment', expense: 'expense', reimbursement: 'expense' };
 
-type Tab = 'overview' | 'payables' | 'banking' | 'journals' | 'accounts' | 'reports' | 'recurring' | 'budgets' | 'assets' | 'deposits' | 'gst' | 'settings';
+type Tab = 'overview' | 'desk' | 'payables' | 'banking' | 'journals' | 'accounts' | 'reports' | 'recurring' | 'budgets' | 'assets' | 'deposits' | 'gst' | 'settings';
 const TABS: [Tab, string][] = [
-  ['overview', 'Overview'], ['payables', 'Payables'], ['banking', 'Banking'], ['journals', 'Journals'], ['accounts', 'Chart of accounts'], ['reports', 'Reports'],
+  ['overview', 'Overview'], ['desk', 'Accounts desk'], ['payables', 'Payables'], ['banking', 'Banking'], ['journals', 'Journals'], ['accounts', 'Chart of accounts'], ['reports', 'Reports'],
   ['recurring', 'Recurring'], ['budgets', 'Budgets'], ['assets', 'Fixed assets'], ['deposits', 'Deposits & guarantees'], ['gst', 'GST & TDS'], ['settings', 'Settings'],
 ];
 
@@ -87,6 +89,7 @@ export function BooksPage() {
         </div>
         <div className="panel-body">
           {tab === 'overview' && <Overview go={go} />}
+          {tab === 'desk' && <AccountsDesk go={(t) => go(t as Tab)} />}
           {tab === 'payables' && <Payables />}
           {tab === 'banking' && <Banking />}
           {tab === 'journals' && <Journals />}
@@ -262,61 +265,6 @@ function Payables() {
 }
 
 /* ───────────────────────── banking ───────────────────────── */
-
-/** Parses a bank statement CSV: date, description, reference, amount (or debit/credit), balance. */
-function parseStatement(text: string) {
-  const rows: string[][] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    const cells: string[] = [];
-    let cur = '';
-    let q = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i]!;
-      if (ch === '"') {
-        if (q && line[i + 1] === '"') {
-          cur += '"';
-          i++;
-        } else q = !q;
-      } else if (ch === ',' && !q) {
-        cells.push(cur);
-        cur = '';
-      } else cur += ch;
-    }
-    cells.push(cur);
-    rows.push(cells.map((c) => c.trim()));
-  }
-  const head = (rows.shift() ?? []).map((h) => h.toLowerCase());
-  // whole-word match, so "cr" does not hit "description" and "dr" does not hit "address"
-  const words = head.map((h) => h.split(/[^a-z0-9]+/).filter(Boolean));
-  const col = (...names: string[]) => words.findIndex((ws) => names.some((n) => ws.includes(n)));
-  const cDate = col('date');
-  const cDesc = col('narration', 'description', 'particulars', 'details', 'remarks', 'transaction');
-  const cRef = col('ref', 'cheque', 'utr');
-  const cAmt = head.findIndex((h) => h === 'amount');
-  const cDr = col('debit', 'withdrawal', 'withdrawals', 'dr');
-  const cCr = col('credit', 'deposit', 'deposits', 'cr');
-  const cBal = col('balance');
-  const num = (s: string | undefined) => (s ? Number(s.replace(/[₹,\s]/g, '').replace(/^\((.*)\)$/, '-$1')) || 0 : 0);
-  const toIso = (s: string) => {
-    const t = s.trim();
-    if (/^\d{4}-\d{2}-\d{2}/.test(t)) return t.slice(0, 10);
-    const m = /^(\d{1,2})[/\-. ](\d{1,2}|[A-Za-z]{3})[/\-. ](\d{2,4})$/.exec(t);
-    if (!m) return '';
-    const mon = /^\d+$/.test(m[2]!) ? Number(m[2]) : ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(m[2]!.toLowerCase()) + 1;
-    const y = m[3]!.length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
-    return `${y}-${String(mon).padStart(2, '0')}-${String(Number(m[1])).padStart(2, '0')}`;
-  };
-  return rows
-    .map((r) => ({
-      date: toIso(r[cDate] ?? ''),
-      description: (r[cDesc] ?? '').slice(0, 500) || '(no description)',
-      reference: cRef >= 0 ? r[cRef] || null : null,
-      amount: cAmt >= 0 ? num(r[cAmt]) : num(r[cCr]) - num(r[cDr]),
-      balance: cBal >= 0 && r[cBal] ? num(r[cBal]) : null,
-    }))
-    .filter((r) => r.date && r.amount);
-}
 
 function Banking() {
   const { data, refetch } = useQuery({ queryKey: ['books', 'bank-accounts'], queryFn: () => get<Json[]>('/api/v1/books/bank-accounts') });
@@ -601,17 +549,17 @@ function BankAccountView({ acc, back }: { acc: Json; back: () => void }) {
         </div>
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <label className="btn sm">
-            Import statement (CSV)
+            Import statement (CSV / Excel)
             <input
               type="file"
-              accept=".csv,text/csv"
+              accept=".csv,.tsv,.txt,.xls,.xlsx,text/csv"
               hidden
               onChange={async (e) => {
                 const file = e.target.files?.[0];
                 e.target.value = '';
                 if (!file) return;
-                const rows = parseStatement(await file.text());
-                if (!rows.length) return toast('No lines found. The file needs a header row with Date, Description and Amount (or Debit / Credit).', true);
+                const rows = await readStatementFile(file).catch(() => []);
+                if (!rows.length) return toast('No lines found. The file needs a header row with Date, Narration / Description and Amount (or Debit / Credit).', true);
                 try {
                   const r = await post<Json>(`/api/v1/books/bank-accounts/${acc.id}/statement`, { rows: rows.slice(0, 5000) });
                   toast(`${r.added} line(s) imported, ${r.skipped} already there; ${r.autoMatched} matched and ${r.autoCategorized} categorised automatically`);

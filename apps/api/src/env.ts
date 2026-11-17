@@ -68,6 +68,8 @@ export interface Env {
   GSTINAPI_KEY?: string;
   GSTINAPI_TEST_MODE?: string;
   GSTINAPI_BASE_URL?: string;
+  /** bank feeds: RazorpayX API base (tests point it at a fake) */
+  RAZORPAYX_BASE_URL?: string;
   INDIA_COMPLIANCE_API_SECRET?: string;
   INDIA_COMPLIANCE_TEST_MODE?: string;
   INDIA_COMPLIANCE_BASE_URL?: string;

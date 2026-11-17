@@ -762,182 +762,190 @@ function ReturnDetail({
         </>
       }
     >
-      {error ? (
-        <div className="muted">{(error as Error).message}</div>
-      ) : !data ? (
-        <Spinner />
-      ) : (
-        <div className="stack">
-          <div className="kpis" style={{ margin: 0 }}>
-            <div className="panel kpi">
-              <div className="l">Status</div>
-              <div className="v" style={{ fontSize: 18 }}>
-                <span className={`chip ${STATUS[item.status]?.[1] ?? ""}`}>
-                  {STATUS[item.status]?.[0] ?? item.status}
-                </span>
-              </div>
-              <div className="muted small">
-                {item.source === "portal"
-                  ? "Filed on the portal (outside Synapse)"
-                  : item.source === "synapse"
-                    ? "Filed from Synapse"
-                    : `Due ${date(item.dueDate)}`}
-              </div>
-            </div>
-            <div className="panel kpi">
-              <div className="l">Filed on</div>
-              <div className="v" style={{ fontSize: 18 }}>
-                {f?.filedAt ? date(f.filedAt) : (p?.date ?? "—")}
-              </div>
-              <div className="muted small">
-                {p?.mode ? `Mode: ${p.mode}` : ""}
-                {p?.valid ? ` · Valid: ${p.valid}` : ""}
-              </div>
-            </div>
-            <div className="panel kpi">
-              <div className="l">ARN</div>
-              <div
-                className="v"
-                style={{ fontSize: 16, wordBreak: "break-all" }}
-              >
-                {f?.arn ?? p?.arn ?? "—"}
-              </div>
-              <div className="muted small">
-                {p?.fetchedAt
-                  ? `Portal list updated ${dateTime(p.fetchedAt)}`
-                  : "Not in the portal's filed list (update it from the Overview)"}
-              </div>
-            </div>
-          </div>
-
-          {b?.kind === "GSTR1" && (
-            <section>
-              <h3 style={{ margin: "4px 0 8px" }}>
-                What your books show for this month
-              </h3>
-              <TaxRows
-                rows={[["Outward supplies (net of credit notes)", b.totals]]}
-              />
-              <div className="muted small" style={{ marginTop: 6 }}>
-                B2B invoices {b.counts?.b2b ?? 0} · B2C large{" "}
-                {b.counts?.b2cl ?? 0} · B2C small rows {b.counts?.b2cs ?? 0} ·
-                Credit/debit notes {b.counts?.cdnr ?? 0} · Exports{" "}
-                {b.counts?.exp ?? 0} · Cancelled {b.counts?.cancelled ?? 0}
-              </div>
-            </section>
-          )}
-          {b?.kind === "GSTR3B" && (
-            <section>
-              <h3 style={{ margin: "4px 0 8px" }}>
-                What your books show for this month
-              </h3>
-              <TaxRows
-                rows={[
-                  ["3.1(a) Outward taxable supplies", b.outward],
-                  ["3.1(b) Zero-rated (exports, SEZ)", b.zeroRated],
-                  ["3.1(c) Nil-rated / exempt", { taxable: b.nilExempt }],
-                  [
-                    "3.1(d) Inward supplies on reverse charge",
-                    b.inwardReverseCharge,
-                  ],
-                  ["4 Eligible ITC", b.itc],
-                  ["Tax liability", b.liability],
-                  ["Payable in cash", b.payableInCash],
-                  ["Credit carried forward", b.creditCarriedForward],
-                ]}
-              />
-            </section>
-          )}
-          {b && (
-            <div className="muted small">
-              Worked out from your invoices, bills and expenses as they stand
-              today; if something was changed after filing, it will differ from
-              what was filed.
-            </div>
-          )}
-
-          {data.portalSummaryView && (
-            <section>
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <h3 style={{ margin: "4px 0 8px" }}>
-                  The portal's figures{" "}
-                  {ps?.fetchedAt && (
-                    <span className="muted small">
-                      · {dateTime(ps.fetchedAt)}
-                    </span>
-                  )}
-                </h3>
-                <div className="row">
-                  {!ps && (
-                    <button
-                      className="btn sm"
-                      disabled={!live}
-                      onClick={() => fetchSummary(false)}
-                    >
-                      Fetch from the portal
-                    </button>
-                  )}
-                  {ps && (
-                    <button
-                      className="btn sm"
-                      disabled={!live}
-                      onClick={() => fetchSummary(true)}
-                    >
-                      Refresh
-                    </button>
-                  )}
+      <div className="modal-body stack">
+        {error ? (
+          <div className="muted">{(error as Error).message}</div>
+        ) : !data ? (
+          <Spinner />
+        ) : (
+          <div className="stack">
+            <div className="kpis" style={{ margin: 0 }}>
+              <div className="panel kpi">
+                <div className="l">Status</div>
+                <div className="v" style={{ fontSize: 18 }}>
+                  <span className={`chip ${STATUS[item.status]?.[1] ?? ""}`}>
+                    {STATUS[item.status]?.[0] ?? item.status}
+                  </span>
                 </div>
-              </div>
-              {ps ? (
-                <JsonBox value={ps.data} />
-              ) : (
                 <div className="muted small">
-                  Not fetched yet. Fetching is a paid call and needs an active
-                  portal session; the answer is kept for next time.
+                  {item.source === "portal"
+                    ? "Filed on the portal (outside Synapse)"
+                    : item.source === "synapse"
+                      ? "Filed from Synapse"
+                      : `Due ${date(item.dueDate)}`}
                 </div>
-              )}
-            </section>
-          )}
-          {!data.portalSummaryView && item.source === "portal" && (
-            <div className="muted small">
-              Your GST Suvidha Provider gives the filed list (ARN, date, status)
-              but not the filed return's figures. To see the exact filed
-              figures, open the return on gst.gov.in (Returns Dashboard → View)
-              or download its PDF there.
-            </div>
-          )}
-
-          {f && (
-            <details className="panel" style={{ padding: 12 }}>
-              <summary>
-                What Synapse sent{" "}
-                <span className="muted small">
-                  · {STATUS[f.status]?.[0] ?? f.status}
-                  {f.portalStatus === "TEST" ? " · test mode" : ""}
-                </span>
-              </summary>
-              {f.summary && (
-                <>
-                  <div className="muted small" style={{ margin: "8px 0 4px" }}>
-                    Portal summary
-                  </div>
-                  <JsonBox value={f.summary} />
-                </>
-              )}
-              <div className="muted small" style={{ margin: "8px 0 4px" }}>
-                Return JSON
               </div>
-              <JsonBox value={f.payload} />
-            </details>
-          )}
-          {p && (
-            <details className="panel" style={{ padding: 12 }}>
-              <summary>The portal's record</summary>
-              <JsonBox value={p.raw} height={160} />
-            </details>
-          )}
-        </div>
-      )}
+              <div className="panel kpi">
+                <div className="l">Filed on</div>
+                <div className="v" style={{ fontSize: 18 }}>
+                  {f?.filedAt ? date(f.filedAt) : (p?.date ?? "—")}
+                </div>
+                <div className="muted small">
+                  {p?.mode ? `Mode: ${p.mode}` : ""}
+                  {p?.valid ? ` · Valid: ${p.valid}` : ""}
+                </div>
+              </div>
+              <div className="panel kpi">
+                <div className="l">ARN</div>
+                <div
+                  className="v"
+                  style={{ fontSize: 16, wordBreak: "break-all" }}
+                >
+                  {f?.arn ?? p?.arn ?? "—"}
+                </div>
+                <div className="muted small">
+                  {p?.fetchedAt
+                    ? `Portal list updated ${dateTime(p.fetchedAt)}`
+                    : "Not in the portal's filed list (update it from the Overview)"}
+                </div>
+              </div>
+            </div>
+
+            {b?.kind === "GSTR1" && (
+              <section>
+                <h3 style={{ margin: "4px 0 8px" }}>
+                  What your books show for this month
+                </h3>
+                <TaxRows
+                  rows={[["Outward supplies (net of credit notes)", b.totals]]}
+                />
+                <div className="muted small" style={{ marginTop: 6 }}>
+                  B2B invoices {b.counts?.b2b ?? 0} · B2C large{" "}
+                  {b.counts?.b2cl ?? 0} · B2C small rows {b.counts?.b2cs ?? 0} ·
+                  Credit/debit notes {b.counts?.cdnr ?? 0} · Exports{" "}
+                  {b.counts?.exp ?? 0} · Cancelled {b.counts?.cancelled ?? 0}
+                </div>
+              </section>
+            )}
+            {b?.kind === "GSTR3B" && (
+              <section>
+                <h3 style={{ margin: "4px 0 8px" }}>
+                  What your books show for this month
+                </h3>
+                <TaxRows
+                  rows={[
+                    ["3.1(a) Outward taxable supplies", b.outward],
+                    ["3.1(b) Zero-rated (exports, SEZ)", b.zeroRated],
+                    ["3.1(c) Nil-rated / exempt", { taxable: b.nilExempt }],
+                    [
+                      "3.1(d) Inward supplies on reverse charge",
+                      b.inwardReverseCharge,
+                    ],
+                    ["4 Eligible ITC", b.itc],
+                    ["Tax liability", b.liability],
+                    ["Payable in cash", b.payableInCash],
+                    ["Credit carried forward", b.creditCarriedForward],
+                  ]}
+                />
+              </section>
+            )}
+            {b && (
+              <div className="muted small">
+                Worked out from your invoices, bills and expenses as they stand
+                today; if something was changed after filing, it will differ
+                from what was filed.
+              </div>
+            )}
+
+            {data.portalSummaryView && (
+              <section>
+                <div
+                  className="row"
+                  style={{ justifyContent: "space-between" }}
+                >
+                  <h3 style={{ margin: "4px 0 8px" }}>
+                    The portal's figures{" "}
+                    {ps?.fetchedAt && (
+                      <span className="muted small">
+                        · {dateTime(ps.fetchedAt)}
+                      </span>
+                    )}
+                  </h3>
+                  <div className="row">
+                    {!ps && (
+                      <button
+                        className="btn sm"
+                        disabled={!live}
+                        onClick={() => fetchSummary(false)}
+                      >
+                        Fetch from the portal
+                      </button>
+                    )}
+                    {ps && (
+                      <button
+                        className="btn sm"
+                        disabled={!live}
+                        onClick={() => fetchSummary(true)}
+                      >
+                        Refresh
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {ps ? (
+                  <JsonBox value={ps.data} />
+                ) : (
+                  <div className="muted small">
+                    Not fetched yet. Fetching is a paid call and needs an active
+                    portal session; the answer is kept for next time.
+                  </div>
+                )}
+              </section>
+            )}
+            {!data.portalSummaryView && item.source === "portal" && (
+              <div className="muted small">
+                Your GST Suvidha Provider gives the filed list (ARN, date,
+                status) but not the filed return's figures. To see the exact
+                filed figures, open the return on gst.gov.in (Returns Dashboard
+                → View) or download its PDF there.
+              </div>
+            )}
+
+            {f && (
+              <details className="panel" style={{ padding: 12 }}>
+                <summary>
+                  What Synapse sent{" "}
+                  <span className="muted small">
+                    · {STATUS[f.status]?.[0] ?? f.status}
+                    {f.portalStatus === "TEST" ? " · test mode" : ""}
+                  </span>
+                </summary>
+                {f.summary && (
+                  <>
+                    <div
+                      className="muted small"
+                      style={{ margin: "8px 0 4px" }}
+                    >
+                      Portal summary
+                    </div>
+                    <JsonBox value={f.summary} />
+                  </>
+                )}
+                <div className="muted small" style={{ margin: "8px 0 4px" }}>
+                  Return JSON
+                </div>
+                <JsonBox value={f.payload} />
+              </details>
+            )}
+            {p && (
+              <details className="panel" style={{ padding: 12 }}>
+                <summary>The portal's record</summary>
+                <JsonBox value={p.raw} height={160} />
+              </details>
+            )}
+          </div>
+        )}
+      </div>
     </Modal>
   );
 }
@@ -2244,307 +2252,313 @@ function Gstr2bMonth({
         )
       }
     >
-      {error ? (
-        <div className="muted">{(error as Error).message}</div>
-      ) : !data ? (
-        <Spinner />
-      ) : (
-        <div className="stack">
-          <div className="muted small">
-            {data.fetchedAt
-              ? `Fetched ${dateTime(data.fetchedAt)}`
-              : "Imported from a JSON file"}
-            {data.generatedOn
-              ? ` · generated on the portal ${data.generatedOn}`
-              : ""}
-            {data.importedAt ? ` · matched ${dateTime(data.importedAt)}` : ""}
-            {" · "}ITC available {money2(sum(itcOk, "tax"))} on taxable{" "}
-            {money2(sum(itcOk, "taxable"))}
-          </div>
-          {Object.keys(data.sections ?? {}).length > 0 && (
-            <div className="row small" style={{ gap: 6, flexWrap: "wrap" }}>
-              {Object.entries(data.sections as Record<string, number>).map(
-                ([k, v]) => (
-                  <span key={k} className="chip">
-                    {SECTION_LABEL[k] ?? k.toUpperCase()}: {v}
-                  </span>
-                ),
-              )}
+      <div className="modal-body stack">
+        {error ? (
+          <div className="muted">{(error as Error).message}</div>
+        ) : !data ? (
+          <Spinner />
+        ) : (
+          <div className="stack">
+            <div className="muted small">
+              {data.fetchedAt
+                ? `Fetched ${dateTime(data.fetchedAt)}`
+                : "Imported from a JSON file"}
+              {data.generatedOn
+                ? ` · generated on the portal ${data.generatedOn}`
+                : ""}
+              {data.importedAt ? ` · matched ${dateTime(data.importedAt)}` : ""}
+              {" · "}ITC available {money2(sum(itcOk, "tax"))} on taxable{" "}
+              {money2(sum(itcOk, "taxable"))}
             </div>
-          )}
-          <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-            {tabs.map(([k, l, n]) => (
-              <button
-                key={k}
-                className={`btn sm ${tab === k ? "primary" : ""}`}
-                onClick={() => setTab(k)}
-              >
-                {l} ({n})
-              </button>
-            ))}
-            <input
-              placeholder="Search supplier, GSTIN, invoice…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              style={{ marginLeft: "auto", minWidth: 220 }}
-            />
-          </div>
-          <div
-            className="row"
-            style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}
-          >
-            <button
-              className="btn sm"
-              disabled={busy}
-              title="Match this month against your bills again — picks up bills entered or corrected since (free)"
-              onClick={syncBooks}
+            {Object.keys(data.sections ?? {}).length > 0 && (
+              <div className="row small" style={{ gap: 6, flexWrap: "wrap" }}>
+                {Object.entries(data.sections as Record<string, number>).map(
+                  ([k, v]) => (
+                    <span key={k} className="chip">
+                      {SECTION_LABEL[k] ?? k.toUpperCase()}: {v}
+                    </span>
+                  ),
+                )}
+              </div>
+            )}
+            <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+              {tabs.map(([k, l, n]) => (
+                <button
+                  key={k}
+                  className={`btn sm ${tab === k ? "primary" : ""}`}
+                  onClick={() => setTab(k)}
+                >
+                  {l} ({n})
+                </button>
+              ))}
+              <input
+                placeholder="Search supplier, GSTIN, invoice…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                style={{ marginLeft: "auto", minWidth: 220 }}
+              />
+            </div>
+            <div
+              className="row"
+              style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}
             >
-              Sync with books
-            </button>
-            {count("unmatched") > 0 && (
-              <>
-                <button
-                  className="btn sm primary"
-                  disabled={busy || !sel.size}
-                  onClick={() => setAdding([...sel])}
-                >
-                  Add selected to books{sel.size ? ` (${sel.size})` : ""}
-                </button>
-                <button
-                  className="btn sm ghost"
-                  disabled={busy}
-                  onClick={() =>
-                    setSel(new Set(lines.filter(addable).map((l) => l.id)))
-                  }
-                >
-                  Select all not in books
-                </button>
-                {sel.size > 0 && (
+              <button
+                className="btn sm"
+                disabled={busy}
+                title="Match this month against your bills again — picks up bills entered or corrected since (free)"
+                onClick={syncBooks}
+              >
+                Sync with books
+              </button>
+              {count("unmatched") > 0 && (
+                <>
+                  <button
+                    className="btn sm primary"
+                    disabled={busy || !sel.size}
+                    onClick={() => setAdding([...sel])}
+                  >
+                    Add selected to books{sel.size ? ` (${sel.size})` : ""}
+                  </button>
                   <button
                     className="btn sm ghost"
-                    onClick={() => setSel(new Set())}
+                    disabled={busy}
+                    onClick={() =>
+                      setSel(new Set(lines.filter(addable).map((l) => l.id)))
+                    }
                   >
-                    Clear
+                    Select all not in books
                   </button>
-                )}
-              </>
-            )}
-          </div>
-          <div
-            className="table-wrap"
-            style={{ maxHeight: 460, overflow: "auto" }}
-          >
-            {tab === "missing" ? (
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>Supplier</th>
-                    <th>Their invoice</th>
-                    <th>Date</th>
-                    <th style={{ textAlign: "right" }}>Taxable</th>
-                    <th style={{ textAlign: "right" }}>Tax</th>
-                    <th>Bill</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shownMissing.map((b) => (
-                    <tr key={b.id}>
-                      <td>
-                        {b.vendor}
-                        <div className="muted small">{b.vendor_gstin}</div>
-                      </td>
-                      <td>{b.vendor_ref ?? "—"}</td>
-                      <td>{date(b.bill_date)}</td>
-                      <td style={{ textAlign: "right" }}>
-                        {money2(b.taxable)}
-                      </td>
-                      <td style={{ textAlign: "right" }}>{money2(b.tax)}</td>
-                      <td>
-                        <Link to={`/o/bill/${b.id}`}>{b.bill_number}</Link>
-                      </td>
-                    </tr>
-                  ))}
-                  {!shownMissing.length && (
-                    <tr>
-                      <td
-                        colSpan={6}
-                        className="muted"
-                        style={{ textAlign: "center", padding: 16 }}
-                      >
-                        Every eligible bill of this month was reported by its
-                        supplier.
-                      </td>
-                    </tr>
+                  {sel.size > 0 && (
+                    <button
+                      className="btn sm ghost"
+                      onClick={() => setSel(new Set())}
+                    >
+                      Clear
+                    </button>
                   )}
-                </tbody>
-              </table>
-            ) : (
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th style={{ width: 28 }} />
-                    <th>Supplier</th>
-                    <th>Document</th>
-                    <th>Date</th>
-                    <th style={{ textAlign: "right" }}>Taxable</th>
-                    <th style={{ textAlign: "right" }}>Tax</th>
-                    <th>ITC</th>
-                    <th>Status</th>
-                    <th>Your bill</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((l) => (
-                    <tr key={l.id}>
-                      <td>
-                        {addable(l) && (
-                          <input
-                            type="checkbox"
-                            checked={sel.has(l.id)}
-                            onChange={() => toggle(l.id)}
-                            aria-label={`Select ${l.doc_number}`}
-                          />
-                        )}
-                      </td>
-                      <td>
-                        {l.supplier_name ?? "—"}
-                        <div className="muted small">{l.supplier_gstin}</div>
-                      </td>
-                      <td>{l.doc_number}</td>
-                      <td>{l.doc_date ? date(l.doc_date) : ""}</td>
-                      <td style={{ textAlign: "right" }}>
-                        {money2(l.taxable)}
-                      </td>
-                      <td style={{ textAlign: "right" }}>{money2(l.tax)}</td>
-                      <td className="small">
-                        {l.itc_available === false ? "Not available" : "Yes"}
-                      </td>
-                      <td>
-                        <span
-                          className={`chip ${MATCH[l.match_status]?.[1] ?? ""}`}
+                </>
+              )}
+            </div>
+            <div
+              className="table-wrap"
+              style={{ maxHeight: 460, overflow: "auto" }}
+            >
+              {tab === "missing" ? (
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th>Supplier</th>
+                      <th>Their invoice</th>
+                      <th>Date</th>
+                      <th style={{ textAlign: "right" }}>Taxable</th>
+                      <th style={{ textAlign: "right" }}>Tax</th>
+                      <th>Bill</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shownMissing.map((b) => (
+                      <tr key={b.id}>
+                        <td>
+                          {b.vendor}
+                          <div className="muted small">{b.vendor_gstin}</div>
+                        </td>
+                        <td>{b.vendor_ref ?? "—"}</td>
+                        <td>{date(b.bill_date)}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {money2(b.taxable)}
+                        </td>
+                        <td style={{ textAlign: "right" }}>{money2(b.tax)}</td>
+                        <td>
+                          <Link to={`/o/bill/${b.id}`}>{b.bill_number}</Link>
+                        </td>
+                      </tr>
+                    ))}
+                    {!shownMissing.length && (
+                      <tr>
+                        <td
+                          colSpan={6}
+                          className="muted"
+                          style={{ textAlign: "center", padding: 16 }}
                         >
-                          {MATCH[l.match_status]?.[0] ?? l.match_status}
-                        </span>
-                        {l.note && <div className="muted small">{l.note}</div>}
-                      </td>
-                      <td>
-                        {l.bill_id && (
-                          <div>
-                            <Link to={`/o/bill/${l.bill_id}`}>
-                              {l.bill_number ?? "Draft bill"}
-                            </Link>
-                            {l.bill_status === "draft" && (
-                              <span
-                                className="chip warn"
-                                style={{ marginLeft: 6 }}
-                              >
-                                Draft
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        <div className="row" style={{ gap: 4, marginTop: 2 }}>
+                          Every eligible bill of this month was reported by its
+                          supplier.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="data">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 28 }} />
+                      <th>Supplier</th>
+                      <th>Document</th>
+                      <th>Date</th>
+                      <th style={{ textAlign: "right" }}>Taxable</th>
+                      <th style={{ textAlign: "right" }}>Tax</th>
+                      <th>ITC</th>
+                      <th>Status</th>
+                      <th>Your bill</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {shown.map((l) => (
+                      <tr key={l.id}>
+                        <td>
                           {addable(l) && (
-                            <button
-                              className="btn sm"
-                              disabled={busy}
-                              onClick={() => setAdding([l.id])}
-                            >
-                              Add to books
-                            </button>
+                            <input
+                              type="checkbox"
+                              checked={sel.has(l.id)}
+                              onChange={() => toggle(l.id)}
+                              aria-label={`Select ${l.doc_number}`}
+                            />
                           )}
-                          {l.match_status !== "matched" &&
-                            l.bill_status !== "draft" && (
+                        </td>
+                        <td>
+                          {l.supplier_name ?? "—"}
+                          <div className="muted small">{l.supplier_gstin}</div>
+                        </td>
+                        <td>{l.doc_number}</td>
+                        <td>{l.doc_date ? date(l.doc_date) : ""}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {money2(l.taxable)}
+                        </td>
+                        <td style={{ textAlign: "right" }}>{money2(l.tax)}</td>
+                        <td className="small">
+                          {l.itc_available === false ? "Not available" : "Yes"}
+                        </td>
+                        <td>
+                          <span
+                            className={`chip ${MATCH[l.match_status]?.[1] ?? ""}`}
+                          >
+                            {MATCH[l.match_status]?.[0] ?? l.match_status}
+                          </span>
+                          {l.note && (
+                            <div className="muted small">{l.note}</div>
+                          )}
+                        </td>
+                        <td>
+                          {l.bill_id && (
+                            <div>
+                              <Link to={`/o/bill/${l.bill_id}`}>
+                                {l.bill_number ?? "Draft bill"}
+                              </Link>
+                              {l.bill_status === "draft" && (
+                                <span
+                                  className="chip warn"
+                                  style={{ marginLeft: 6 }}
+                                >
+                                  Draft
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          <div className="row" style={{ gap: 4, marginTop: 2 }}>
+                            {addable(l) && (
+                              <button
+                                className="btn sm"
+                                disabled={busy}
+                                onClick={() => setAdding([l.id])}
+                              >
+                                Add to books
+                              </button>
+                            )}
+                            {l.match_status !== "matched" &&
+                              l.bill_status !== "draft" && (
+                                <button
+                                  className="btn sm ghost"
+                                  disabled={busy}
+                                  title="Match it to a bill already in your books (when its number was typed differently)"
+                                  onClick={() => setLinking(l)}
+                                >
+                                  Link to a bill
+                                </button>
+                              )}
+                            {/Linked by hand/.test(l.note ?? "") && (
                               <button
                                 className="btn sm ghost"
                                 disabled={busy}
-                                title="Match it to a bill already in your books (when its number was typed differently)"
-                                onClick={() => setLinking(l)}
+                                onClick={() => unlink(l)}
                               >
-                                Link to a bill
+                                Unlink
                               </button>
                             )}
-                          {/Linked by hand/.test(l.note ?? "") && (
-                            <button
-                              className="btn sm ghost"
-                              disabled={busy}
-                              onClick={() => unlink(l)}
-                            >
-                              Unlink
-                            </button>
-                          )}
-                          {["credit_note", "debit_note"].includes(l.doc_type) &&
-                            l.match_status === "unmatched" && (
-                              <span className="muted small">
-                                Enter as a vendor credit on the bill
-                              </span>
-                            )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {!shown.length && (
-                    <tr>
-                      <td
-                        colSpan={9}
-                        className="muted"
-                        style={{ textAlign: "center", padding: 16 }}
-                      >
-                        {lines.length
-                          ? "Nothing matches the filter."
-                          : "No supplier documents in this month's GSTR-2B."}
-                      </td>
-                    </tr>
+                            {["credit_note", "debit_note"].includes(
+                              l.doc_type,
+                            ) &&
+                              l.match_status === "unmatched" && (
+                                <span className="muted small">
+                                  Enter as a vendor credit on the bill
+                                </span>
+                              )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {!shown.length && (
+                      <tr>
+                        <td
+                          colSpan={9}
+                          className="muted"
+                          style={{ textAlign: "center", padding: 16 }}
+                        >
+                          {lines.length
+                            ? "Nothing matches the filter."
+                            : "No supplier documents in this month's GSTR-2B."}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                  {shown.length > 1 && (
+                    <tfoot>
+                      <tr>
+                        <td colSpan={4}>
+                          <b>{shown.length} document(s)</b>
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          <b>{money2(sum(shown, "taxable"))}</b>
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          <b>{money2(sum(shown, "tax"))}</b>
+                        </td>
+                        <td colSpan={3} />
+                      </tr>
+                    </tfoot>
                   )}
-                </tbody>
-                {shown.length > 1 && (
-                  <tfoot>
-                    <tr>
-                      <td colSpan={4}>
-                        <b>{shown.length} document(s)</b>
-                      </td>
-                      <td style={{ textAlign: "right" }}>
-                        <b>{money2(sum(shown, "taxable"))}</b>
-                      </td>
-                      <td style={{ textAlign: "right" }}>
-                        <b>{money2(sum(shown, "tax"))}</b>
-                      </td>
-                      <td colSpan={3} />
-                    </tr>
-                  </tfoot>
-                )}
-              </table>
+                </table>
+              )}
+            </div>
+            {data.itcSummary && (
+              <details>
+                <summary>The portal's ITC summary</summary>
+                <JsonBox value={data.itcSummary} />
+              </details>
             )}
           </div>
-          {data.itcSummary && (
-            <details>
-              <summary>The portal's ITC summary</summary>
-              <JsonBox value={data.itcSummary} />
-            </details>
-          )}
-        </div>
-      )}
-      {adding && (
-        <AddToBooks
-          lines={lines.filter((l) => adding.includes(l.id))}
-          onClose={() => setAdding(null)}
-          onDone={() => {
-            setAdding(null);
-            setSel(new Set());
-            refresh();
-          }}
-        />
-      )}
-      {linking && (
-        <LinkBill
-          line={linking}
-          onClose={() => setLinking(null)}
-          onDone={() => {
-            setLinking(null);
-            refresh();
-          }}
-        />
-      )}
+        )}
+        {adding && (
+          <AddToBooks
+            lines={lines.filter((l) => adding.includes(l.id))}
+            onClose={() => setAdding(null)}
+            onDone={() => {
+              setAdding(null);
+              setSel(new Set());
+              refresh();
+            }}
+          />
+        )}
+        {linking && (
+          <LinkBill
+            line={linking}
+            onClose={() => setLinking(null)}
+            onDone={() => {
+              setLinking(null);
+              refresh();
+            }}
+          />
+        )}
+      </div>
     </Modal>
   );
 }
@@ -2628,89 +2642,94 @@ function AddToBooks({
         )
       }
     >
-      {!result ? (
-        <div className="stack">
-          <div className="muted small">
-            Each document becomes a bill with the supplier's invoice number and
-            date, and one line for the taxable value ({money2(total("taxable"))}{" "}
-            in all) at the GST rate it implies (tax {money2(total("tax"))}). A
-            supplier not yet in Synapse is added from its GSTIN.
-          </div>
-          <label className="field">
-            Book the purchase to
-            <select
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value)}
+      <div className="modal-body stack">
+        {!result ? (
+          <div className="stack">
+            <div className="muted small">
+              Each document becomes a bill with the supplier's invoice number
+              and date, and one line for the taxable value (
+              {money2(total("taxable"))} in all) at the GST rate it implies (tax{" "}
+              {money2(total("tax"))}). A supplier not yet in Synapse is added
+              from its GSTIN.
+            </div>
+            <label className="field">
+              Book the purchase to
+              <select
+                value={accountId}
+                onChange={(e) => setAccountId(e.target.value)}
+              >
+                <option value="">Purchases (default)</option>
+                {usable.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.code ? `${a.code} · ` : ""}
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="row" style={{ gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={postIt}
+                onChange={(e) => setPostIt(e.target.checked)}
+              />
+              Post the bills now (they then match GSTR-2B and count for ITC).
+              Leave unticked to review them as drafts first.
+            </label>
+            <div
+              className="table-wrap"
+              style={{ maxHeight: 240, overflow: "auto" }}
             >
-              <option value="">Purchases (default)</option>
-              {usable.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.code ? `${a.code} · ` : ""}
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="row" style={{ gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={postIt}
-              onChange={(e) => setPostIt(e.target.checked)}
-            />
-            Post the bills now (they then match GSTR-2B and count for ITC).
-            Leave unticked to review them as drafts first.
-          </label>
-          <div
-            className="table-wrap"
-            style={{ maxHeight: 240, overflow: "auto" }}
-          >
+              <table className="data">
+                <tbody>
+                  {lines.map((l) => (
+                    <tr key={l.id}>
+                      <td>
+                        {l.supplier_name ?? l.supplier_gstin}
+                        <div className="muted small">{l.supplier_gstin}</div>
+                      </td>
+                      <td>{l.doc_number}</td>
+                      <td>{l.doc_date ? date(l.doc_date) : ""}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {money2(l.taxable)}
+                      </td>
+                      <td style={{ textAlign: "right" }}>{money2(l.tax)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
+          <div className="table-wrap">
             <table className="data">
               <tbody>
-                {lines.map((l) => (
-                  <tr key={l.id}>
-                    <td>
-                      {l.supplier_name ?? l.supplier_gstin}
-                      <div className="muted small">{l.supplier_gstin}</div>
-                    </td>
-                    <td>{l.doc_number}</td>
-                    <td>{l.doc_date ? date(l.doc_date) : ""}</td>
-                    <td style={{ textAlign: "right" }}>{money2(l.taxable)}</td>
-                    <td style={{ textAlign: "right" }}>{money2(l.tax)}</td>
-                  </tr>
-                ))}
+                {(result.results as Json[]).map((r) => {
+                  const l = lines.find((x) => x.id === r.lineId);
+                  return (
+                    <tr key={r.lineId}>
+                      <td>{l?.doc_number}</td>
+                      <td className="small">
+                        {r.ok ? (
+                          <>
+                            <Link to={`/o/bill/${r.billId}`}>
+                              {r.billNumber ?? "Draft bill"}
+                            </Link>{" "}
+                            · {r.status === "open" ? "posted" : r.status}
+                            {r.vendorCreated ? " · new supplier" : ""}
+                          </>
+                        ) : (
+                          <span style={{ color: "var(--bad)" }}>{r.error}</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        </div>
-      ) : (
-        <div className="table-wrap">
-          <table className="data">
-            <tbody>
-              {(result.results as Json[]).map((r) => {
-                const l = lines.find((x) => x.id === r.lineId);
-                return (
-                  <tr key={r.lineId}>
-                    <td>{l?.doc_number}</td>
-                    <td className="small">
-                      {r.ok ? (
-                        <>
-                          <Link to={`/o/bill/${r.billId}`}>
-                            {r.billNumber ?? "Draft bill"}
-                          </Link>{" "}
-                          · {r.status === "open" ? "posted" : r.status}
-                          {r.vendorCreated ? " · new supplier" : ""}
-                        </>
-                      ) : (
-                        <span style={{ color: "var(--bad)" }}>{r.error}</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+        )}
+      </div>
     </Modal>
   );
 }
@@ -2751,65 +2770,69 @@ function LinkBill({
   };
   return (
     <Modal title={`Link ${line.doc_number} to a bill`} onClose={onClose} wide>
-      <div className="stack">
-        <div className="muted small">
-          {line.supplier_name ?? ""} {line.supplier_gstin} · taxable{" "}
-          {money2(line.taxable)} · tax {money2(line.tax)}. Posted bills from
-          this supplier within six months, closest amount first. The link is
-          kept when the month is fetched again.
-        </div>
-        {error ? (
-          <div className="muted">{(error as Error).message}</div>
-        ) : !data ? (
-          <Spinner />
-        ) : !data.bills.length ? (
-          <Empty title="No posted bill from this supplier around that date">
-            Enter it with <b>Add to books</b> instead, or post the bill first if
-            it is still a draft.
-          </Empty>
-        ) : (
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Bill</th>
-                  <th>Their number</th>
-                  <th>Date</th>
-                  <th style={{ textAlign: "right" }}>Taxable</th>
-                  <th style={{ textAlign: "right" }}>Tax</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {(data.bills as Json[]).map((b) => (
-                  <tr key={b.id}>
-                    <td>
-                      <Link to={`/o/bill/${b.id}`}>{b.bill_number}</Link>
-                      {b.sameAmount && (
-                        <span className="chip good" style={{ marginLeft: 6 }}>
-                          Same amount
-                        </span>
-                      )}
-                    </td>
-                    <td>{b.vendor_ref ?? "—"}</td>
-                    <td>{date(b.bill_date)}</td>
-                    <td style={{ textAlign: "right" }}>{money2(b.taxable)}</td>
-                    <td style={{ textAlign: "right" }}>{money2(b.tax)}</td>
-                    <td>
-                      <button
-                        className="btn sm primary"
-                        disabled={busy}
-                        onClick={() => link(b.id)}
-                      >
-                        Link
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      <div className="modal-body stack">
+        <div className="stack">
+          <div className="muted small">
+            {line.supplier_name ?? ""} {line.supplier_gstin} · taxable{" "}
+            {money2(line.taxable)} · tax {money2(line.tax)}. Posted bills from
+            this supplier within six months, closest amount first. The link is
+            kept when the month is fetched again.
           </div>
-        )}
+          {error ? (
+            <div className="muted">{(error as Error).message}</div>
+          ) : !data ? (
+            <Spinner />
+          ) : !data.bills.length ? (
+            <Empty title="No posted bill from this supplier around that date">
+              Enter it with <b>Add to books</b> instead, or post the bill first
+              if it is still a draft.
+            </Empty>
+          ) : (
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Bill</th>
+                    <th>Their number</th>
+                    <th>Date</th>
+                    <th style={{ textAlign: "right" }}>Taxable</th>
+                    <th style={{ textAlign: "right" }}>Tax</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.bills as Json[]).map((b) => (
+                    <tr key={b.id}>
+                      <td>
+                        <Link to={`/o/bill/${b.id}`}>{b.bill_number}</Link>
+                        {b.sameAmount && (
+                          <span className="chip good" style={{ marginLeft: 6 }}>
+                            Same amount
+                          </span>
+                        )}
+                      </td>
+                      <td>{b.vendor_ref ?? "—"}</td>
+                      <td>{date(b.bill_date)}</td>
+                      <td style={{ textAlign: "right" }}>
+                        {money2(b.taxable)}
+                      </td>
+                      <td style={{ textAlign: "right" }}>{money2(b.tax)}</td>
+                      <td>
+                        <button
+                          className="btn sm primary"
+                          disabled={busy}
+                          onClick={() => link(b.id)}
+                        >
+                          Link
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       </div>
     </Modal>
   );
