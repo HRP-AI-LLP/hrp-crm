@@ -26,6 +26,31 @@ After a fix the agent looks again, and the finding clears when it is resolved.
 
 The bookkeeper proposes creating what is missing — a **new customer** for money received (kept as an advance until the invoice is raised and the receipt allocated) or a **new vendor** for money paid (an advance until the bill is entered) — named from the narration. These always wait for approval, and the name and the choice can be changed first (*Change* → Customer / Vendor advance, existing or new). If it was something else (capital, a loan, an expense), book it to that account instead.
 
+## Own accounts: owners, partners and the company's other accounts
+
+Money moving between the business and its owners, or between the company's own bank accounts, is a
+transfer, not income or an expense. Accounts desk → **Own accounts** lists:
+
+- **Owners, partners and directors**, each with what identifies their personal accounts: mobile numbers
+  (UPI narrations print them), UPI ids, account numbers, and optionally the name the bank prints. Money
+  in from them / out to them is booked to their own ledger, created on first save from the business's
+  constitution (the PAN's 4th letter, also the GSTIN's 6th character): a partner gets "<name> — partner's
+  current account" (equity), a director "Loan from <name> (director)" (liability), a proprietor Owner's
+  capital (in) and Drawings (out). Any other ledger can be chosen instead.
+- **The company's bank accounts**, each with its full account number (and UPI id). A line on one account
+  naming another is booked once as a transfer between them; the line on the other account then matches
+  that entry. Without numbers, money leaving one account and the same amount arriving in another within
+  two days (with a transfer word in the narration) is suggested, and waits for approval.
+
+A mobile number matches only where it stands alone (with or without +91 / 0), never inside a longer
+number. Lines named by a number or UPI id are booked straight away in "Book the sure ones"; lines named
+only by a name wait for approval. An identifier belongs to one person or account only.
+
+**Booked another way** lists lines that name an own account but were booked before it was listed (as a
+new customer's advance, an expense, excluded…). Re-booking undoes that booking, voiding the advance
+receipt or payment the desk had recorded, and books the line as a transfer. Lines matched to invoices or
+bills, and reconciled lines, are listed for you to check by hand.
+
 ## How much the agents do on their own (Settings)
 
 - **Book the sure ones, ask about the rest** (default): your bank rules, exact matches (≥ 95%: amount equals the open balance and the invoice / bill number, the party's name or the settlement UTR is in the narration) and payees always booked the same way (≥ 90%) are posted. Everything else — keyword and AI guesses, ambiguous matches — waits in the **Review queue**.
@@ -67,5 +92,6 @@ All under `/api/v1/books`, books admins only.
 | Findings | `GET /desk/findings?status=` (each with `resolution`: steps and actions), `POST /desk/findings/:id` (`status`: done, dismissed, open), `POST /desk/findings/:id/fix` (`action`) |
 | Book by payee | `GET /desk/unbooked`, `POST /desk/unbooked/book` (`txnIds` with `accountId` + optional `rule`, or `advance`: customer / vendor, existing or new) |
 | Feeds | `GET /feeds`, `POST /feeds`, `PATCH /feeds/:id`, `DELETE /feeds/:id`, `POST /feeds/:id/sync` |
+| Own accounts | `GET /desk/own`, `POST /desk/own/persons`, `PUT /desk/own/persons/:id` (`name`, `role`, `accountIn`, `accountOut`, `identifiers`), `DELETE /desk/own/persons/:id`, `PUT /desk/own/banks/:id` (`identifiers`), `GET /desk/own/misbooked`, `POST /desk/own/rebook` (`txnIds`) |
 | Statements | `POST /bank-accounts/:id/statement` with `toDesk: true` hands the new lines to the bookkeeper |
 | Invoice import | `POST /imports`, `POST /imports/:id/files` (`pages` text, `rows`, or `images`), `GET /imports`, `GET /imports/:id`, `PATCH /imports/items/:id` (`data`, `choices`), `POST /imports/items/:id/ai`, `POST /imports/items/:id/reject`, `POST /imports/items/approve` (`ids`) |

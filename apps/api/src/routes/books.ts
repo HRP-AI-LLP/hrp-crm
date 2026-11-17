@@ -12,6 +12,7 @@ import { badRequest, forbidden, notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import * as bank from '../services/books/banking';
+import * as ownAcc from '../services/books/own-accounts';
 import {
   applyVendorCredit,
   allocateVendorPayment,
@@ -598,6 +599,53 @@ export const booksRoutes = new Hono<AppEnv>()
     requireAdmin(c);
     const b = desk.settingsSchema.parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => desk.saveSettings(rctx(c, tx), b)));
+  })
+  // ── own accounts: owners / partners and their personal accounts, the company's other accounts ──
+  .get('/books/desk/own', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => ownAcc.listOwn(rctx(c, tx))));
+  })
+  .post('/books/desk/own/persons', async (c) => {
+    requireAdmin(c);
+    const b = ownAcc.personSchema.parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => ownAcc.savePerson(rctx(c, tx), null, b));
+    const k = await desk.runBookkeeper(deskDeps(c), { trigger: 'manual' }).catch(() => null);
+    if (k) await emit(c, k.events);
+    return c.json({ ...r, proposed: k?.proposed ?? 0, applied: k?.applied ?? 0 });
+  })
+  .put('/books/desk/own/persons/:id', async (c) => {
+    requireAdmin(c);
+    const b = ownAcc.personSchema.parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => ownAcc.savePerson(rctx(c, tx), qUuid(c), b));
+    const k = await desk.runBookkeeper(deskDeps(c), { trigger: 'manual' }).catch(() => null);
+    if (k) await emit(c, k.events);
+    return c.json({ ...r, proposed: k?.proposed ?? 0, applied: k?.applied ?? 0 });
+  })
+  .delete('/books/desk/own/persons/:id', async (c) => {
+    requireAdmin(c);
+    await c.var.db.tx(scope(c), (tx) => ownAcc.deletePerson(rctx(c, tx), qUuid(c)));
+    return c.json({ ok: true });
+  })
+  .put('/books/desk/own/banks/:id', async (c) => {
+    requireAdmin(c);
+    const b = ownAcc.bankIdentsSchema.parse(await c.req.json());
+    await c.var.db.tx(scope(c), (tx) => ownAcc.saveBankIdents(rctx(c, tx), qUuid(c), b));
+    const k = await desk.runBookkeeper(deskDeps(c), { trigger: 'manual' }).catch(() => null);
+    if (k) await emit(c, k.events);
+    return c.json({ ok: true, proposed: k?.proposed ?? 0, applied: k?.applied ?? 0 });
+  })
+  .get('/books/desk/own/misbooked', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => ownAcc.misbooked(rctx(c, tx))));
+  })
+  .post('/books/desk/own/rebook', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ txnIds: z.array(z.string().uuid()).min(1).max(500) }).parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => ownAcc.unbookForOwn(rctx(c, tx), b.txnIds));
+    await emit(c, r.events);
+    const k = r.undone ? await desk.runBookkeeper(deskDeps(c), { trigger: 'manual' }).catch(() => null) : null;
+    if (k) await emit(c, k.events);
+    return c.json({ undone: r.undone, skipped: r.skipped, proposed: k?.proposed ?? 0, applied: k?.applied ?? 0 });
   })
   .post('/books/desk/run', async (c) => {
     requireAdmin(c);

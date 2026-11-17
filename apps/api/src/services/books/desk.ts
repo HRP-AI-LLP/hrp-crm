@@ -28,13 +28,14 @@ import { categorize, excludeTxn, matchTxn, reconcile, saveRule, suggestions } fr
 import { recordVendorPayment } from './bills';
 import { syncAllFeeds, syncGatewaySettlements } from './feeds';
 import { assertBooksAdmin, d10, postJournal, r2, sys } from './ledger';
+import { findOwn, identConfidence, loadOwn, type Own } from './own-accounts';
 import { stateCode } from '@synapse/shared';
 import { balanceSheet, profitAndLoss, tdsReport, trialBalance } from './reports';
 
 export type Agent = 'bank_clerk' | 'bookkeeper' | 'compliance' | 'controller';
 export type Autonomy = 'suggest' | 'auto_sure' | 'auto_all';
 export type Kind = 'match' | 'receipt' | 'vendor_payment' | 'categorize' | 'exclude' | 'settlement' | 'new_party';
-type Source = 'rule' | 'ledger' | 'invoice' | 'bill' | 'gateway' | 'history' | 'keyword' | 'ai' | 'person' | 'missing';
+type Source = 'rule' | 'ledger' | 'invoice' | 'bill' | 'gateway' | 'history' | 'keyword' | 'ai' | 'person' | 'missing' | 'own';
 
 export const AGENTS: { key: Agent; name: string; role: string }[] = [
   { key: 'bank_clerk', name: 'Bank clerk', role: 'Brings in bank transactions from live feeds and keeps out duplicates' },
@@ -164,6 +165,7 @@ interface Book {
   customers: { id: string; name: string }[];
   vendors: { id: string; name: string }[];
   rejected: Map<string, Set<string>>;
+  own: Own;
 }
 
 async function loadBook(ctx: RecordCtx): Promise<Book> {
@@ -217,10 +219,75 @@ async function loadBook(ctx: RecordCtx): Promise<Book> {
   );
   const customers = await ctx.tx.query<{ id: string; name: string }>(`select id, name from accounts where tenant_id = $1 and deleted_at is null limit 5000`, [ctx.tenantId]);
   const vendors = await ctx.tx.query<{ id: string; name: string }>(`select id, name from vendors where tenant_id = $1 and deleted_at is null limit 5000`, [ctx.tenantId]);
-  return { accounts, rules, invoices, bills, history, rejected, settlements, customers, vendors };
+  const own = await loadOwn(ctx);
+  return { accounts, rules, invoices, bills, history, rejected, settlements, customers, vendors, own };
 }
 
 const money = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** Words banks print on a transfer between two accounts of the same holder. */
+const TRANSFER_WORDS = /\b(SELF|OWN|TRANSFER|TRF|TRFR|IFT|FT|SWEEP|FUND TRANSFER|IMPS|NEFT|RTGS)\b/;
+
+/**
+ * A line naming one of the workspace's own people or accounts (Accounts desk → Own accounts) is a
+ * transfer, whatever else it looks like. Without an identifier, money leaving one company account and
+ * the same amount arriving in another within two days is suggested as a transfer too (not booked alone).
+ */
+async function ownCandidate(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>): Promise<Proposal | null> {
+  const inflow = t.amount > 0;
+  const amt = Math.abs(t.amount);
+  const hit = findOwn(book.own, t);
+  if (hit?.type === 'person') {
+    const accountId = inflow ? hit.person.account_in : hit.person.account_out;
+    const role = { partner: 'partner', director: 'director', proprietor: 'proprietor', other: 'owner' }[hit.person.role];
+    return {
+      txnId: t.id,
+      kind: 'categorize',
+      title: `${inflow ? `From ${hit.person.name}` : `To ${hit.person.name}`} (own transfer) → ${book.accounts.find((a) => a.id === accountId)?.name ?? 'their account'}`,
+      reason: `The narration has ${hit.ident.value}, listed as ${hit.person.name}'s (${role}) personal account: ${inflow ? 'money brought in' : 'money taken out'}, not ${inflow ? 'a sale' : 'an expense'}`,
+      payload: { accountId, ownPersonId: hit.person.id, ownIdentId: hit.ident.id },
+      confidence: identConfidence(hit.ident.kind),
+      source: 'own',
+    };
+  }
+  // the other company account, named on this line or paired by amount
+  let other = hit?.type === 'company' ? hit.bank : null;
+  let paired = false;
+  if (!other && TRANSFER_WORDS.test(t.description.toUpperCase())) {
+    const twin = await ctx.tx.one<{ bank_account_id: string }>(
+      `select o.bank_account_id from bank_transactions o join bank_accounts b on b.tenant_id = o.tenant_id and b.id = o.bank_account_id
+        where o.tenant_id = $1 and o.bank_account_id <> $2 and b.is_active and b.kind in ('bank','wallet') and o.status = 'unmatched'
+          and o.amount = $3 and abs(o.txn_date - $4::date) <= 2 limit 2`,
+      [ctx.tenantId, t.bank_account_id, -t.amount, t.txn_date],
+    );
+    const bank = twin && book.own.banks.find((b) => b.id === twin.bank_account_id);
+    if (bank) [other, paired] = [bank, true];
+  }
+  if (!other) return null;
+  const label = `${inflow ? `From ${other.name}` : `To ${other.name}`} (between your accounts)`;
+  // the other side may already be booked: then this line matches that entry
+  const posted = await ctx.tx.query<{ line_id: string; days: number }>(
+    `select l.id as line_id, abs(j.entry_date - $5::date) as days from journal_lines l join journals j on j.tenant_id = l.tenant_id and j.id = l.journal_id
+      where l.tenant_id = $1 and l.account_id = $2 and j.status = 'posted' and l.bank_txn_id is null and l.reconciliation_id is null
+        and (l.debit - l.credit) = $3 and abs(j.entry_date - $5::date) <= 5
+        and exists (select 1 from journal_lines o where o.tenant_id = j.tenant_id and o.journal_id = j.id and o.account_id = $4)
+      order by 2 limit 5`,
+    [ctx.tenantId, t.gl_account_id, t.amount, other.gl_account_id, t.txn_date],
+  );
+  const free = posted.find((p) => !taken.has(p.line_id));
+  const why = hit ? `The narration has ${hit.ident.value}, listed as ${other.name}` : `${money(amt)} ${inflow ? 'left' : 'arrived in'} ${other.name} within two days, and the narration reads like a transfer`;
+  if (free)
+    return { txnId: t.id, kind: 'match', title: `${label}: match the transfer already booked`, reason: `${why}; the other side is already booked`, payload: { lineId: free.line_id }, confidence: paired ? 0.8 : 0.99, source: 'own' };
+  return {
+    txnId: t.id,
+    kind: 'categorize',
+    title: `${label} → ${other.name}`,
+    reason: `${why}. Booked as a transfer; the line on ${other.name} then matches the same entry`,
+    payload: { accountId: other.gl_account_id },
+    confidence: paired ? 0.72 : 0.99,
+    source: 'own',
+  };
+}
 
 /** Every rule-based candidate for one bank line, best first. */
 async function candidates(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string> = new Set()): Promise<Proposal[]> {
@@ -230,6 +297,10 @@ async function candidates(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>
   const desc = t.description.toUpperCase();
   const descN = norm(`${t.description} ${t.reference ?? ''}`);
   const acc = (id: string) => book.accounts.find((a) => a.id === id);
+
+  // 0. the workspace's own money: an owner's / partner's personal account, or another company account
+  const own = await ownCandidate(ctx, t, book, taken);
+  if (own) return [own];
 
   // 1. the workspace's own bank rules
   const rule = book.rules.find((r) => (!r.bank_account_id || r.bank_account_id === t.bank_account_id) && desc.includes(r.contains.toUpperCase()) && (r.direction === 'any' || (r.direction === 'in') === inflow));
@@ -719,6 +790,8 @@ function autoOk(s: DeskSettings, p: { confidence: number; source: Source; kind: 
   if (s.autonomy === 'auto_all') return p.confidence >= s.minConfidence && p.kind !== 'exclude';
   // auto_sure: your rules, exact matches and payees always booked the same way — never AI or keyword guesses
   if (p.source === 'rule') return true;
+  // own accounts you listed by number or UPI id; a name alone or an amount pairing waits for approval
+  if (p.source === 'own') return p.confidence >= 0.95;
   if (['ledger', 'invoice', 'bill', 'gateway'].includes(p.source)) return p.confidence >= 0.95;
   if (p.source === 'history') return p.confidence >= 0.9;
   return false;

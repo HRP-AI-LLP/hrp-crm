@@ -11,17 +11,18 @@ import { date, money2 } from '../../lib/format';
 import { combineStatements, PdfPasswordError, readStatementFile, type StatementLine } from '../../lib/statement';
 import { SelectAll } from '../SelectAll';
 import { InvoiceImport } from './InvoiceImport';
+import { OwnAccounts } from './OwnAccounts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 
 type Json = Record<string, any>;
-type View = 'queue' | 'findings' | 'close' | 'sources' | 'invoices' | 'activity';
+type View = 'queue' | 'findings' | 'close' | 'sources' | 'own' | 'invoices' | 'activity';
 
 const AUTONOMY: [string, string, string][] = [
   ['auto_sure', 'Book the sure ones, ask about the rest', 'Your bank rules, exact matches to invoices, bills and entries, and payees always booked the same way are posted by the agents. Everything else waits for you.'],
   ['suggest', 'Suggest only', 'Nothing is posted until a person approves it.'],
   ['auto_all', 'Book everything above the threshold', 'The agents post every suggestion at or above the confidence threshold; you review afterwards (everything can be undone in Banking).'],
 ];
-const SOURCE: Record<string, string> = { rule: 'Your rule', ledger: 'Posted entry', invoice: 'Open invoice', bill: 'Open bill', gateway: 'Razorpay settlement', missing: 'Nothing in the books fits', history: 'Booked like this before', keyword: 'Narration', ai: 'AI', person: 'You' };
+const SOURCE: Record<string, string> = { rule: 'Your rule', ledger: 'Posted entry', invoice: 'Open invoice', bill: 'Open bill', gateway: 'Razorpay settlement', missing: 'Nothing in the books fits', history: 'Booked like this before', keyword: 'Narration', ai: 'AI', person: 'You', own: 'Own account' };
 const KIND: Record<string, string> = { match: 'Match', receipt: 'Receipt', vendor_payment: 'Vendor payment', categorize: 'Categorise', exclude: 'Exclude', settlement: 'Settlement', new_party: 'New party' };
 const SEV: Record<string, [string, string]> = { risk: ['Risk', 'bad'], warn: ['Needs attention', 'warn'], info: ['Note', 'info'] };
 const AGENT_ICON: Record<string, string> = { bank_clerk: '🏦', bookkeeper: '📒', compliance: '🧾', controller: '📊' };
@@ -154,6 +155,7 @@ export function AccountsDesk({ go }: { go?: (tab: string) => void }) {
             ['findings', `Findings${c.findings ? ` (${c.findings})` : ''}`],
             ['close', 'Month-end close'],
             ['sources', 'Bank feeds & statements'],
+            ['own', 'Own accounts'],
             ['invoices', 'Import invoices'],
             ['activity', 'Activity'],
           ] as [View, string][]
@@ -167,6 +169,7 @@ export function AccountsDesk({ go }: { go?: (tab: string) => void }) {
       {view === 'findings' && <Findings go={go} setView={setView} />}
       {view === 'close' && <Close last={data.lastClose} go={go} />}
       {view === 'sources' && <Sources />}
+      {view === 'own' && <OwnAccounts />}
       {view === 'invoices' && <InvoiceImport />}
       {view === 'activity' && <Activity />}
       {settings && <SettingsModal current={s} onClose={() => setSettings(false)} onSaved={refresh} />}
@@ -616,7 +619,7 @@ function Findings({ go, setView }: { go?: (tab: string) => void; setView: (v: Vi
   const navigate = useNavigate();
   const doAction = async (f: Json, a: Json) => {
     if (a.kind === 'tab') {
-      if (['queue', 'findings', 'close', 'sources', 'invoices', 'activity'].includes(a.target)) setView(a.target as View);
+      if (['queue', 'findings', 'close', 'sources', 'own', 'invoices', 'activity'].includes(a.target)) setView(a.target as View);
       else go?.(a.target);
       return;
     }
