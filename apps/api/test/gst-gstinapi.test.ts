@@ -202,6 +202,12 @@ describe('GST through gstinapi.in', () => {
     expect(count('/v1/gstr2b/fetch')).toBe(1);
     await api('POST', `/api/v1/gst/connections/${ids.conn}/gstr2b`, { period: PERIOD, refresh: true });
     expect(count('/v1/gstr2b/fetch')).toBe(2);
+    // the months already kept, with the latest match (read from our database, free)
+    const before2b = calls.length;
+    const saved = await api('GET', `/api/v1/gst/connections/${ids.conn}/gstr2b/saved`);
+    expect(saved.status, JSON.stringify(saved.json)).toBe(200);
+    expect(saved.json).toEqual([expect.objectContaining({ period: PERIOD, files: 1, match: expect.objectContaining({ lines: 1 }) })]);
+    expect(calls.length).toBe(before2b);
 
     const fy = new Date().getUTCMonth() >= 3 ? new Date().getUTCFullYear() : new Date().getUTCFullYear() - 1;
     await api('POST', `/api/v1/gst/connections/${ids.conn}/sync-returns`, { fyStart: fy, refresh: false });

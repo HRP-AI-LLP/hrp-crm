@@ -6,7 +6,7 @@
  * for the IRN (e-invoice) and the e-way bill.
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { del, get, patch, post } from "../../lib/api";
 import { date, dateTime, money2 } from "../../lib/format";
 import { Empty, Modal, Spinner, useToast } from "../ui";
@@ -1697,6 +1697,402 @@ function FilingWizard({
 
 /* ───────────────────────── ledgers, notices, 2B, challans ───────────────────────── */
 
+/* ───────────────────────── GSTR-2B over a range ───────────────────────── */
+
+/** months YYYY-MM from `from` to `to`, inclusive */
+function monthsBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  let y = Number(from.slice(0, 4));
+  let m = Number(from.slice(5, 7));
+  const end = Number(to.slice(0, 4)) * 12 + Number(to.slice(5, 7));
+  while (y * 12 + m <= end && out.length < 240) {
+    out.push(`${y}-${String(m).padStart(2, "0")}`);
+    m++;
+    if (m > 12) {
+      m = 1;
+      y++;
+    }
+  }
+  return out;
+}
+const addMonths = (ym: string, k: number) => {
+  const d = new Date(
+    Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 1 + k, 1),
+  );
+  return d.toISOString().slice(0, 7);
+};
+/** GSTR-2B for a month is generated on the 14th of the next month: the latest month that has one */
+function latest2b(): string {
+  const now = new Date(Date.now() + 5.5 * 3_600_000); // IST
+  return addMonths(
+    now.toISOString().slice(0, 7),
+    now.getUTCDate() >= 14 ? -1 : -2,
+  );
+}
+const fyLabel = (y: number) => `${y}-${String(y + 1).slice(2)}`;
+
+type Range =
+  "month" | "lastMonth" | "lastQuarter" | "fyToDate" | "fy" | "custom" | "all";
+const RANGES: [Range, string][] = [
+  ["lastMonth", "Last month"],
+  ["lastQuarter", "Last quarter"],
+  ["fyToDate", "This financial year to date"],
+  ["fy", "A financial year"],
+  ["month", "One month"],
+  ["custom", "From – to"],
+  ["all", "Everything (since July 2017)"],
+];
+
+function rangeMonths(
+  r: Range,
+  o: { month: string; fy: number; from: string; to: string },
+): string[] {
+  const last = latest2b();
+  const clip = (xs: string[]) => xs.filter((x) => x <= last);
+  switch (r) {
+    case "month":
+      return clip([o.month]);
+    case "lastMonth":
+      return [last];
+    case "lastQuarter": {
+      // the last GST quarter (Apr–Jun, Jul–Sep, Oct–Dec, Jan–Mar) whose GSTR-2B are all out
+      const m = Number(last.slice(5, 7));
+      const endM = m % 3 === 0 ? m : m - (m % 3);
+      const end =
+        endM === 0
+          ? `${Number(last.slice(0, 4)) - 1}-12`
+          : `${last.slice(0, 4)}-${String(endM).padStart(2, "0")}`;
+      return monthsBetween(addMonths(end, -2), end);
+    }
+    case "fyToDate":
+      return clip(monthsBetween(`${fyStart()}-04`, `${fyStart() + 1}-03`));
+    case "fy":
+      return clip(monthsBetween(`${o.fy}-04`, `${o.fy + 1}-03`));
+    case "custom":
+      return o.from && o.to && o.from <= o.to
+        ? clip(monthsBetween(o.from, o.to))
+        : [];
+    case "all":
+      return monthsBetween("2017-07", last);
+  }
+}
+
+function Gstr2bPanel({ conn }: { conn: Json }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const live = conn.status === "active";
+  const { data: saved } = useQuery({
+    queryKey: ["gst", "gstr2b-saved", conn.id],
+    queryFn: () =>
+      get<Json[]>(`/api/v1/gst/connections/${conn.id}/gstr2b/saved`),
+  });
+  const [range, setRange] = useState<Range>("lastMonth");
+  const [month, setMonth] = useState(latest2b());
+  const [fy, setFy] = useState(fyStart() - 1);
+  const [from, setFrom] = useState(`${fyStart()}-04`);
+  const [to, setTo] = useState(latest2b());
+  const [run, setRun] = useState<{
+    done: number;
+    total: number;
+    stop: boolean;
+  } | null>(null);
+  const [results, setResults] = useState<Json[]>([]);
+  const stopRef = useRef({ stop: false }).current;
+
+  const months = rangeMonths(range, { month, fy, from, to });
+  const savedSet = new Set((saved ?? []).map((x) => x.period));
+  const unsaved = months.filter((m) => !savedSet.has(toPeriod(m)));
+  const fys: number[] = [];
+  for (let y = fyStart(); y >= 2017; y--) fys.push(y);
+
+  const go = async (refresh: boolean) => {
+    const list = months;
+    const paid = refresh ? list.length : unsaved.length;
+    if (
+      paid > 3 &&
+      !window.confirm(
+        `This fetches ${paid} month(s) from the portal, at least one API credit each. Go ahead?`,
+      )
+    )
+      return;
+    stopRef.stop = false;
+    setResults([]);
+    setRun({ done: 0, total: list.length, stop: false });
+    const out: Json[] = [];
+    for (const [i, ym] of list.entries()) {
+      if (stopRef.stop) break;
+      const period = toPeriod(ym);
+      try {
+        const r = await post<Json>(
+          `/api/v1/gst/connections/${conn.id}/gstr2b`,
+          { period, refresh },
+        );
+        out.push({ period, ok: true, ...r });
+      } catch (e) {
+        const msg = (e as Error).message;
+        out.push({ period, ok: false, error: msg });
+        // the session ended or credits ran out: the rest would fail the same way
+        if (/session|connect|otp|credit|402|expired/i.test(msg)) {
+          toast(msg, true);
+          break;
+        }
+      }
+      setResults([...out]);
+      setRun({ done: i + 1, total: list.length, stop: false });
+    }
+    setRun(null);
+    qc.invalidateQueries({ queryKey: ["gst"] });
+    qc.invalidateQueries({ queryKey: ["books"] });
+    const ok = out.filter((x) => x.ok).length;
+    toast(
+      `GSTR-2B: ${ok} of ${list.length} month(s) matched against your bills`,
+      ok < out.length,
+    );
+  };
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <h2>GSTR-2B → purchase reconciliation</h2>
+      </div>
+      <div className="panel-body stack">
+        <div
+          className="row"
+          style={{ gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}
+        >
+          <label className="field">
+            Period
+            <select
+              value={range}
+              onChange={(e) => setRange(e.target.value as Range)}
+            >
+              {RANGES.map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+          {range === "month" && (
+            <label className="field">
+              Month
+              <input
+                type="month"
+                value={month}
+                max={latest2b()}
+                onChange={(e) => setMonth(e.target.value)}
+              />
+            </label>
+          )}
+          {range === "fy" && (
+            <label className="field">
+              Financial year
+              <select
+                value={fy}
+                onChange={(e) => setFy(Number(e.target.value))}
+              >
+                {fys.map((y) => (
+                  <option key={y} value={y}>
+                    FY {fyLabel(y)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {range === "custom" && (
+            <>
+              <label className="field">
+                From
+                <input
+                  type="month"
+                  value={from}
+                  min="2017-07"
+                  max={latest2b()}
+                  onChange={(e) => setFrom(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                To
+                <input
+                  type="month"
+                  value={to}
+                  min="2017-07"
+                  max={latest2b()}
+                  onChange={(e) => setTo(e.target.value)}
+                />
+              </label>
+            </>
+          )}
+          <button
+            className="btn primary"
+            disabled={!!run || !months.length || (!live && unsaved.length > 0)}
+            onClick={() => go(false)}
+          >
+            Fetch & match
+          </button>
+          <button
+            className="btn ghost"
+            disabled={!!run || !months.length || !live}
+            title="Fetches every month in the range again from the portal (uses credits)"
+            onClick={() => go(true)}
+          >
+            Refresh from the portal
+          </button>
+          {run && (
+            <button className="btn ghost" onClick={() => (stopRef.stop = true)}>
+              Stop
+            </button>
+          )}
+        </div>
+        <div className="muted small">
+          {months.length ? (
+            <>
+              {months.length === 1
+                ? periodLabel(toPeriod(months[0]!))
+                : `${periodLabel(toPeriod(months[0]!))} – ${periodLabel(toPeriod(months[months.length - 1]!))}`}{" "}
+              · {months.length} month(s): {months.length - unsaved.length}{" "}
+              already saved (no charge), {unsaved.length} to fetch from the
+              portal (about one credit each).
+            </>
+          ) : (
+            "No GSTR-2B in that range yet — it is generated on the 14th of the following month."
+          )}{" "}
+          Results go to Books → GST & TDS → GSTR-2B.
+        </div>
+        {run && (
+          <div>
+            <div className="muted small">
+              Working… {run.done} of {run.total}
+            </div>
+            <div
+              style={{
+                height: 6,
+                background: "var(--surface-2, #eef0f3)",
+                borderRadius: 4,
+              }}
+            >
+              <div
+                style={{
+                  height: 6,
+                  width: `${(100 * run.done) / Math.max(run.total, 1)}%`,
+                  background: "var(--accent, #2563eb)",
+                  borderRadius: 4,
+                }}
+              />
+            </div>
+          </div>
+        )}
+        {results.length > 0 && (
+          <Gstr2bTable
+            rows={results.map((r) => ({
+              period: r.period,
+              error: r.error,
+              source: r.ok ? (r.cached ? "Saved copy" : "Portal") : null,
+              fetchedAt: r.fetchedAt,
+              lines: r.lines,
+              matched: r.matched,
+              mismatch: r.mismatch,
+              unmatched: r.unmatched,
+            }))}
+            title="This run"
+          />
+        )}
+        {saved && saved.length > 0 && (
+          <details>
+            <summary>All saved GSTR-2B ({saved.length} month(s))</summary>
+            <Gstr2bTable
+              rows={saved.map((x) => ({
+                period: x.period,
+                fetchedAt: x.fetchedAt,
+                files: x.files,
+                lines: x.match?.lines,
+                matched: x.match?.matched,
+                mismatch: x.match?.mismatch,
+                unmatched: x.match?.unmatched,
+              }))}
+            />
+          </details>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function Gstr2bTable({ rows, title }: { rows: Json[]; title?: string }) {
+  const sum = (k: string) => rows.reduce((n, r) => n + Number(r[k] ?? 0), 0);
+  return (
+    <div className="table-wrap">
+      {title && (
+        <div className="muted small" style={{ margin: "4px 0" }}>
+          {title}
+        </div>
+      )}
+      <table className="data">
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th>From</th>
+            <th>Fetched</th>
+            <th style={{ textAlign: "right" }}>Lines</th>
+            <th style={{ textAlign: "right" }}>Matched</th>
+            <th style={{ textAlign: "right" }}>Mismatch</th>
+            <th style={{ textAlign: "right" }}>Not in books</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.period}>
+              <td>{periodLabel(r.period)}</td>
+              {r.error ? (
+                <td
+                  colSpan={6}
+                  className="small"
+                  style={{ color: "var(--bad)" }}
+                >
+                  {r.error}
+                </td>
+              ) : (
+                <>
+                  <td className="small">
+                    {r.source ?? (r.files > 1 ? `${r.files} files` : "Saved")}
+                  </td>
+                  <td className="small">
+                    {r.fetchedAt ? dateTime(r.fetchedAt) : ""}
+                  </td>
+                  <td style={{ textAlign: "right" }}>{r.lines ?? "—"}</td>
+                  <td style={{ textAlign: "right" }}>{r.matched ?? "—"}</td>
+                  <td style={{ textAlign: "right" }}>{r.mismatch ?? "—"}</td>
+                  <td style={{ textAlign: "right" }}>{r.unmatched ?? "—"}</td>
+                </>
+              )}
+            </tr>
+          ))}
+          {rows.length > 1 && (
+            <tr>
+              <td>
+                <b>Total</b>
+              </td>
+              <td colSpan={2} />
+              <td style={{ textAlign: "right" }}>
+                <b>{sum("lines")}</b>
+              </td>
+              <td style={{ textAlign: "right" }}>
+                <b>{sum("matched")}</b>
+              </td>
+              <td style={{ textAlign: "right" }}>
+                <b>{sum("mismatch")}</b>
+              </td>
+              <td style={{ textAlign: "right" }}>
+                <b>{sum("unmatched")}</b>
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function PortalViews({ conn }: { conn: Json }) {
   const gsp = useGsp();
   const act = useAct([["gst"]]);
@@ -1726,7 +2122,6 @@ function PortalViews({ conn }: { conn: Json }) {
     );
     if (r) setResult(r);
   };
-  const [period2b, setPeriod2b] = useState(ymPrev());
   const [challan, setChallan] = useState(false);
   const live = conn.status === "active";
   const v = views?.find((x) => x.kind === kind);
@@ -1832,61 +2227,7 @@ function PortalViews({ conn }: { conn: Json }) {
           )}
         </div>
       </section>
-      <section className="panel">
-        <div className="panel-head">
-          <h2>GSTR-2B → purchase reconciliation</h2>
-        </div>
-        <div
-          className="panel-body row"
-          style={{ gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}
-        >
-          <label className="field">
-            Month
-            <input
-              type="month"
-              value={period2b}
-              onChange={(e) => setPeriod2b(e.target.value)}
-            />
-          </label>
-          <button
-            className="btn"
-            onClick={() =>
-              act(
-                () =>
-                  post<Json>(`/api/v1/gst/connections/${conn.id}/gstr2b`, {
-                    period: toPeriod(period2b),
-                    refresh: false,
-                  }),
-                "GSTR-2B matched against your bills (Books → GST & TDS)",
-              )
-            }
-          >
-            Match GSTR-2B
-          </button>
-          <button
-            className="btn ghost"
-            disabled={!live}
-            title="Fetches GSTR-2B again from the portal (uses credits)"
-            onClick={() =>
-              act(
-                () =>
-                  post<Json>(`/api/v1/gst/connections/${conn.id}/gstr2b`, {
-                    period: toPeriod(period2b),
-                    refresh: true,
-                  }),
-                "GSTR-2B fetched fresh and matched",
-              )
-            }
-          >
-            Refresh from the portal
-          </button>
-          <span className="muted small">
-            Uses the copy already saved for that month when there is one (no
-            charge); Refresh fetches it again. The result is under Books → GST &
-            TDS → GSTR-2B.
-          </span>
-        </div>
-      </section>
+      <Gstr2bPanel conn={conn} />
       {gsp.challan ? (
         <section className="panel">
           <div className="panel-head">

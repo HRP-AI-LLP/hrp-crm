@@ -128,6 +128,8 @@ export const gstRoutes = new Hono<AppEnv>()
     const b = z.object({ returnType: z.enum(['GSTR9', 'GSTR2X']), period }).parse(await c.req.json());
     return c.json(await gst.prepareFromPortal(deps(c), id(c), b.returnType, b.period), 201);
   })
+  // the GSTR-2B months already kept (free): lets the screen fetch a whole year paying only for new months
+  .get('/gst/connections/:id/gstr2b/saved', async (c) => c.json(await gst.gstr2bSaved(deps(c, true), id(c))))
   .post('/gst/connections/:id/gstr2b', async (c) => {
     const b = z.object({ period, refresh: z.boolean().default(false) }).parse(await c.req.json());
     return c.json(await gst.importGstr2bFromPortal(deps(c), id(c), b.period, b.refresh));

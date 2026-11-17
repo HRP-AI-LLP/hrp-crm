@@ -1178,6 +1178,47 @@ export async function importGstr2bFromPortal(deps: GstDeps, connectionId: string
   return deps.run(async (ctx) => ({ ...(await importGstr2b(ctx, period, rows)), fetched: rows.length, cached: first.cached, fetchedAt: first.fetchedAt }));
 }
 
+/**
+ * Every GSTR-2B month already kept for this connection (no provider call): when it was fetched, how many
+ * files, and the latest match against bills. Lets the screen show what a range will cost before fetching.
+ */
+export async function gstr2bSaved(deps: GstDeps, connectionId: string) {
+  return deps.run(async (ctx) => {
+    assertGstAdmin(ctx);
+    await loadConn(ctx, connectionId);
+    const cache = await ctx.tx.query<{ key: string; fetched_at: string }>(
+      `select key, fetched_at from gst_portal_cache where tenant_id = $1 and connection_id = $2 and kind = 'gstr2b' order by key`,
+      [ctx.tenantId, connectionId],
+    );
+    const imports = await ctx.tx.query<{ period: string; created_at: string; lines: number; matched: number; mismatch: number }>(
+      `select i.period, i.created_at, i.lines,
+              count(*) filter (where l.match_status = 'matched')::int as matched,
+              count(*) filter (where l.match_status = 'mismatch')::int as mismatch
+         from gstr2b_imports i left join gstr2b_lines l on l.tenant_id = i.tenant_id and l.import_id = i.id
+        where i.tenant_id = $1 group by i.id`,
+      [ctx.tenantId],
+    );
+    const months = new Map<string, { period: string; fetchedAt: string; files: number }>();
+    for (const r of cache) {
+      const period = r.key.split('|')[0]!;
+      if (!/^\d{6}$/.test(period)) continue;
+      const m = months.get(period);
+      if (!m) months.set(period, { period, fetchedAt: r.fetched_at, files: 1 });
+      else {
+        m.files++;
+        if (r.fetched_at > m.fetchedAt) m.fetchedAt = r.fetched_at;
+      }
+    }
+    const sortKey = (p: string) => p.slice(2) + p.slice(0, 2);
+    return [...months.values()]
+      .sort((a, b) => sortKey(b.period).localeCompare(sortKey(a.period)))
+      .map((m) => {
+        const i = imports.find((x) => x.period === m.period);
+        return { ...m, match: i ? { at: i.created_at, lines: i.lines, matched: i.matched, mismatch: i.mismatch, unmatched: i.lines - i.matched - i.mismatch } : null };
+      });
+  });
+}
+
 /* ───────────────────────── challan ───────────────────────── */
 
 export interface ChallanInput {

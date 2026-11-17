@@ -182,6 +182,7 @@ On an issued invoice, the **E-invoice & e-way bill** panel offers these actions.
 - **Due dates** are the regular ones. They are not adjusted for extensions; check gst.gov.in.
   - Quarterly GSTR-3B is due on the 22nd or the 24th, depending on the state.
   - The calendar marks a return filed when it was filed from Synapse, or when *Update filed returns from the portal* finds it filed.
+  - **GSTR-2B for a range** (Ledgers, notices & payments): last month, last quarter, this FY to date, any FY, from–to, or everything since July 2017. Months already kept cost nothing; the screen says how many need a paid call before it starts, stops on an expired session or no credits, and lists every saved month with its match against bills.
   - Click any row of the calendar (or *View* on a filed one) to open that return: the portal's record (ARN, date, mode), Synapse's own filing if there is one, and what the books show for that month (GSTR-1 totals and counts, GSTR-3B tables) — all without a paid call. gstinapi.in gives the filed list but not a filed return's figures; with a provider that has the GSTR-1 / GSTR-3B summary views, *Fetch from the portal* gets them once and keeps them.
 - **The schema follows GSTN's API** (2025 format: HSN split into B2B and B2C). If WhiteBooks or GSTN change a field, the portal's error report says which one. You can also download the JSON, fix it, and upload it as portal JSON.
 - **DSC filing** (WhiteBooks only) needs the signatory's DSC registered on the GST portal and WhiteBooks' signing utility. EVC needs nothing extra.
@@ -193,7 +194,7 @@ On an issued invoice, the **E-invoice & e-way bill** panel offers these actions.
 | Area | Endpoints (under `/api/v1/gst`) |
 |---|---|
 | Registrations and session | `GET /connections`, `POST /connections`, `PATCH /connections/:id`, `DELETE /connections/:id`, `POST /connections/:id/otp`, `/verify`, `/disconnect` |
-| Dashboard | `GET /connections/:id/overview`, `GET /connections/:id/returns/:type/:period`, `POST /connections/:id/sync-returns`, `POST /connections/:id/views/:kind` (see `GET /views`), `GET /search/:gstin` |
+| Dashboard | `GET /connections/:id/overview`, `GET /connections/:id/returns/:type/:period`, `GET /connections/:id/gstr2b/saved`, `POST /connections/:id/sync-returns`, `POST /connections/:id/views/:kind` (see `GET /views`), `GET /search/:gstin` |
 | Returns | `POST /connections/:id/filings`, `POST /connections/:id/filings/from-portal`, `GET /filings/:id` |
 | Filing steps | `POST /filings/:id/save`, `/status`, `/proceed`, `/summary`, `/offset/propose`, `/offset`, `/reset`, `/evc-otp`, `/file` |
 | GSTR-2B and payments | `POST /connections/:id/gstr2b`, `POST /connections/:id/challans` |
