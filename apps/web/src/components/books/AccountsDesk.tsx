@@ -5,7 +5,7 @@
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { del, get, patch, post, put } from '../../lib/api';
 import { date, money2 } from '../../lib/format';
 import { combineStatements, PdfPasswordError, readStatementFile, type StatementLine } from '../../lib/statement';
@@ -20,8 +20,8 @@ const AUTONOMY: [string, string, string][] = [
   ['suggest', 'Suggest only', 'Nothing is posted until a person approves it.'],
   ['auto_all', 'Book everything above the threshold', 'The agents post every suggestion at or above the confidence threshold; you review afterwards (everything can be undone in Banking).'],
 ];
-const SOURCE: Record<string, string> = { rule: 'Your rule', ledger: 'Posted entry', invoice: 'Open invoice', bill: 'Open bill', gateway: 'Razorpay settlement', history: 'Booked like this before', keyword: 'Narration', ai: 'AI', person: 'You' };
-const KIND: Record<string, string> = { match: 'Match', receipt: 'Receipt', vendor_payment: 'Vendor payment', categorize: 'Categorise', exclude: 'Exclude', settlement: 'Settlement' };
+const SOURCE: Record<string, string> = { rule: 'Your rule', ledger: 'Posted entry', invoice: 'Open invoice', bill: 'Open bill', gateway: 'Razorpay settlement', missing: 'Nothing in the books fits', history: 'Booked like this before', keyword: 'Narration', ai: 'AI', person: 'You' };
+const KIND: Record<string, string> = { match: 'Match', receipt: 'Receipt', vendor_payment: 'Vendor payment', categorize: 'Categorise', exclude: 'Exclude', settlement: 'Settlement', new_party: 'New party' };
 const SEV: Record<string, [string, string]> = { risk: ['Risk', 'bad'], warn: ['Needs attention', 'warn'], info: ['Note', 'info'] };
 const AGENT_ICON: Record<string, string> = { bank_clerk: '🏦', bookkeeper: '📒', compliance: '🧾', controller: '📊' };
 
@@ -162,7 +162,7 @@ export function AccountsDesk({ go }: { go?: (tab: string) => void }) {
         ))}
       </div>
       {view === 'queue' && <Queue />}
-      {view === 'findings' && <Findings go={go} />}
+      {view === 'findings' && <Findings go={go} setView={setView} />}
       {view === 'close' && <Close last={data.lastClose} go={go} />}
       {view === 'sources' && <Sources />}
       {view === 'activity' && <Activity />}
@@ -243,6 +243,7 @@ function Queue() {
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [change, setChange] = useState<Json | null>(null);
+  const [grouping, setGrouping] = useState(false);
   const [q, setQ] = useState('');
   const refresh = () => {
     setSel(new Set());
@@ -288,7 +289,10 @@ function Queue() {
             )}
           </>
         )}
-        <input placeholder="Search narration…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginLeft: 'auto', maxWidth: 240 }} />
+        <button className="btn sm" style={{ marginLeft: 'auto' }} title="Lines with no suggestion, grouped by payee" onClick={() => setGrouping(true)}>
+          Book by payee
+        </button>
+        <input placeholder="Search narration…" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 240 }} />
       </div>
       {!data ? (
         <Spinner />
@@ -394,6 +398,7 @@ function Queue() {
         Lines with no suggestion at all are in Books → Banking, where you can categorise them by hand. Everything booked here can be undone there (un-match / un-categorise).
       </div>
       {change && <ChangeModal p={change} onClose={() => setChange(null)} onDone={refresh} />}
+      {grouping && <BookByPayee onClose={() => setGrouping(false)} />}
     </div>
   );
 }
@@ -414,7 +419,7 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
   const docs = useQuery({ queryKey: ['books', 'desk', 'open-documents'], queryFn: () => get<Json>('/api/v1/books/desk/open-documents') });
   const customers = useQuery({ queryKey: ['books', 'parties', 'accounts_receivable'], queryFn: () => get<{ items: Json[] }>('/api/v1/records/account?limit=200&sort=name&dir=asc') });
   const vendors = useQuery({ queryKey: ['books', 'parties', 'accounts_payable'], queryFn: () => get<{ items: Json[] }>('/api/v1/records/vendor?limit=200&sort=name&dir=asc') });
-  const initialKind = ['receipt', 'vendor_payment', 'categorize'].includes(p.kind) ? p.kind : 'categorize';
+  const initialKind = ['receipt', 'vendor_payment', 'categorize', 'new_party'].includes(p.kind) ? p.kind : 'categorize';
   const [kind, setKind] = useState<string>(initialKind);
   const [f, setF] = useState<Json>({
     accountId: p.kind === 'categorize' ? (p.payload.accountId ?? '') : '',
@@ -423,6 +428,8 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
     billId: p.payload.billId ?? '',
     tdsAmount: p.payload.tdsAmount ?? 0,
     narration: '',
+    party: p.kind === 'new_party' ? (p.payload.partyId ?? 'new') : 'new',
+    partyName: p.kind === 'new_party' ? (p.payload.name ?? '') : (p.counterparty ?? ''),
   });
   const [rule, setRule] = useState(false);
   const [ruleText_, setRuleText] = useState(ruleText(p.description, p.counterparty));
@@ -442,7 +449,9 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
             ? { kind, invoiceId: f.invoiceId || null, tdsAmount: Number(f.tdsAmount) || 0 }
             : kind === 'vendor_payment'
               ? { kind, billId: f.billId || null }
-              : { kind };
+              : kind === 'new_party'
+                ? { kind, partyType: inflow ? 'customer' : 'vendor', partyId: f.party !== 'new' ? f.party : null, partyName: f.party === 'new' ? f.partyName : null }
+                : { kind };
       await post(`/api/v1/books/desk/proposals/${p.id}`, { decision: 'approve', change, makeRule: rule && kind === 'categorize' && ruleText_.trim().length >= 2 ? { contains: ruleText_.trim() } : null });
       toast(rule ? 'Booked, and the rule will book lines like it from now on' : 'Booked');
       onDone();
@@ -476,9 +485,9 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
           </div>
         </div>
         <div className="seg">
-          {(inflow ? ['receipt', 'categorize', 'exclude'] : ['vendor_payment', 'categorize', 'exclude']).map((k) => (
+          {(inflow ? ['receipt', 'new_party', 'categorize', 'exclude'] : ['vendor_payment', 'new_party', 'categorize', 'exclude']).map((k) => (
             <button key={k} aria-pressed={kind === k} onClick={() => setKind(k)}>
-              {k === 'receipt' ? 'Customer receipt' : k === 'vendor_payment' ? 'Bill payment' : k === 'categorize' ? 'Book to an account' : 'Not a business transaction'}
+              {k === 'receipt' ? 'Against an invoice' : k === 'vendor_payment' ? 'Against a bill' : k === 'new_party' ? (inflow ? 'Customer advance' : 'Vendor advance') : k === 'categorize' ? 'Book to an account' : 'Not business'}
             </button>
           ))}
         </div>
@@ -560,6 +569,31 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
             </select>
           </label>
         )}
+        {kind === 'new_party' && (
+          <>
+            <label className="field">
+              {inflow ? 'Customer' : 'Vendor'}
+              <select value={f.party} onChange={(e) => setF({ ...f, party: e.target.value })}>
+                <option value="new">➕ New {inflow ? 'customer' : 'vendor'}…</option>
+                {(inflow ? (customers.data?.items ?? []) : (vendors.data?.items ?? [])).map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {f.party === 'new' && (
+              <label className="field">
+                Name of the new {inflow ? 'customer' : 'vendor'}
+                <input value={f.partyName} maxLength={120} onChange={(e) => setF({ ...f, partyName: e.target.value })} />
+              </label>
+            )}
+            <div className="muted small">
+              The {inflow ? 'receipt' : 'payment'} is recorded against the {inflow ? 'customer' : 'vendor'} as an advance, so the bank line is booked now; it is applied to the {inflow ? 'invoice' : 'bill'} when that is
+              {inflow ? ' raised' : ' entered'} (Payments → allocate).
+            </div>
+          </>
+        )}
         {kind === 'exclude' && <div className="muted small">The line stays in the statement but is left out of the books (e.g. a failed payment and its reversal).</div>}
       </div>
     </Modal>
@@ -568,12 +602,43 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
 
 /* ───────────────────────── findings ───────────────────────── */
 
-function Findings({ go }: { go?: (tab: string) => void }) {
+function Findings({ go, setView }: { go?: (tab: string) => void; setView: (v: View) => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [status, setStatus] = useState<'open' | 'done' | 'dismissed'>('open');
   const { data } = useQuery({ queryKey: ['books', 'desk', 'findings', status], queryFn: () => get<Json[]>(`/api/v1/books/desk/findings?status=${status}`) });
   const [running, setRunning] = useState(false);
+  const [fixing, setFixing] = useState<string | null>(null);
+  const [grouping, setGrouping] = useState(false);
+  const navigate = useNavigate();
+  const doAction = async (f: Json, a: Json) => {
+    if (a.kind === 'tab') {
+      if (['queue', 'findings', 'close', 'sources', 'activity'].includes(a.target)) setView(a.target as View);
+      else go?.(a.target);
+      return;
+    }
+    if (a.kind === 'link') {
+      if (/^https?:/.test(a.target)) window.open(a.target, '_blank', 'noopener');
+      else if (a.target.startsWith('/books#') && go) go(a.target.slice(7));
+      else navigate(a.target);
+      return;
+    }
+    if (a.kind === 'ui') {
+      if (a.key === 'group') setGrouping(true);
+      return;
+    }
+    if (a.confirm && !window.confirm(a.confirm)) return;
+    setFixing(`${f.id}:${a.key}`);
+    try {
+      const r = await post<Json>(`/api/v1/books/desk/findings/${f.id}/fix`, { action: a.key });
+      toast(`${r.message}${r.cleared ? ' — resolved' : ''}`);
+      qc.invalidateQueries({ queryKey: ['books'] });
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setFixing(null);
+    }
+  };
   const set = async (id: string, st: string) => {
     try {
       await post(`/api/v1/books/desk/findings/${id}`, { status: st });
@@ -624,9 +689,36 @@ function Findings({ go }: { go?: (tab: string) => void }) {
                   </div>
                   <b style={{ display: 'block', marginTop: 4 }}>{f.title}</b>
                   {f.body && <div className="muted small" style={{ marginTop: 2 }}>{f.body}</div>}
+                  {status === 'open' && f.resolution && (f.resolution.steps?.length > 0 || f.resolution.actions?.length > 0) && (
+                    <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'var(--accent-soft, #eef4ff)' }}>
+                      <div className="small" style={{ fontWeight: 600, marginBottom: 4 }}>
+                        How to resolve
+                      </div>
+                      {f.resolution.steps?.length > 0 && (
+                        <ol className="small" style={{ margin: '0 0 6px', paddingLeft: 18 }}>
+                          {(f.resolution.steps as string[]).map((st, i) => (
+                            <li key={i} style={{ marginBottom: 2 }}>
+                              {st}
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                      {f.resolution.actions?.length > 0 && (
+                        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                          {(f.resolution.actions as Json[]).map((a) => (
+                            <button key={a.key} className={`btn sm${a.primary ? ' primary' : ''}`} disabled={!!fixing} onClick={() => doAction(f, a)}>
+                              {fixing === `${f.id}:${a.key}` ? 'Working…' : a.label}
+                              {a.kind === 'link' && /^https?:/.test(a.target) ? ' ↗' : ''}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
                   {f.link &&
+                    !(status === 'open' && f.resolution?.actions?.length) &&
                     (f.link.startsWith('/books#') && go ? (
                       <button className="btn sm" onClick={() => go(f.link.slice(7))}>
                         Open
@@ -656,7 +748,167 @@ function Findings({ go }: { go?: (tab: string) => void }) {
           ))}
         </div>
       )}
+      {grouping && <BookByPayee onClose={() => setGrouping(false)} />}
     </div>
+  );
+}
+
+/** Bank lines nobody placed, grouped by payee: book a whole group to one account, optionally as a rule. */
+export function BookByPayee({ onClose }: { onClose: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const { data, refetch } = useQuery({ queryKey: ['books', 'desk', 'unbooked'], queryFn: () => get<Json[]>('/api/v1/books/desk/unbooked') });
+  const accounts = useQuery({ queryKey: ['books', 'accounts'], queryFn: () => get<Json[]>('/api/v1/books/accounts'), staleTime: 30_000 });
+  const customers = useQuery({ queryKey: ['books', 'parties', 'accounts_receivable'], queryFn: () => get<{ items: Json[] }>('/api/v1/records/account?limit=200&sort=name&dir=asc') });
+  const vendors = useQuery({ queryKey: ['books', 'parties', 'accounts_payable'], queryFn: () => get<{ items: Json[] }>('/api/v1/records/vendor?limit=200&sort=name&dir=asc') });
+  const [pick, setPick] = useState<Record<string, { accountId: string; partyId: string; rule: boolean; ruleText: string; partyName?: string }>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [q, setQ] = useState('');
+  const accs = (accounts.data ?? []).filter((a) => a.is_active && !['retained_earnings'].includes(a.subtype));
+  const groupsOf = ['asset', 'liability', 'equity', 'income', 'expense'];
+  const gid = (g: Json) => `${g.inflow ? 'in' : 'out'}|${g.key}`;
+  const titleCase = (x: string) => x.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  const book = async (g: Json) => {
+    const p: { accountId: string; partyId: string; rule: boolean; ruleText: string; partyName?: string } = pick[gid(g)] ?? { accountId: g.suggestedAccountId ?? '', partyId: '', rule: !!g.ruleText, ruleText: g.ruleText ?? '' };
+    if (p.accountId.startsWith('adv:')) {
+      const who = p.accountId.slice(4);
+      const name = who === 'new' ? (p.partyName ?? titleCase(g.key)).trim() : null;
+      if (who === 'new' && (!name || name.length < 2)) return toast('Name the new customer or vendor', true);
+      setBusy(gid(g));
+      try {
+        const r = await post<Json>('/api/v1/books/desk/unbooked/book', { txnIds: g.txnIds, advance: { partyType: g.inflow ? 'customer' : 'vendor', partyId: who === 'new' ? null : who, name } });
+        toast(`${r.booked} line(s) recorded as ${g.inflow ? 'receipts from' : 'payments to'} ${name ?? 'the ' + (g.inflow ? 'customer' : 'vendor')} (advance)${r.failed ? `; ${r.failed} not booked: ${r.errors[0]}` : ''}`, r.failed > 0);
+        qc.invalidateQueries({ queryKey: ['books'] });
+        refetch();
+      } catch (e) {
+        toast((e as Error).message, true);
+      } finally {
+        setBusy(null);
+      }
+      return;
+    }
+    const acc = accs.find((a) => a.id === p.accountId);
+    if (!acc) return toast('Choose the account first', true);
+    const needsParty = ['accounts_receivable', 'accounts_payable'].includes(acc.subtype);
+    if (needsParty && !p.partyId) return toast(`Choose the ${acc.subtype === 'accounts_payable' ? 'vendor' : 'customer'}`, true);
+    setBusy(gid(g));
+    try {
+      const r = await post<Json>('/api/v1/books/desk/unbooked/book', {
+        txnIds: g.txnIds,
+        accountId: p.accountId,
+        partyType: needsParty ? (acc.subtype === 'accounts_payable' ? 'vendor' : 'customer') : null,
+        partyId: needsParty ? p.partyId : null,
+        rule: p.rule && p.ruleText.trim().length >= 2 ? { contains: p.ruleText.trim(), direction: g.inflow ? 'in' : 'out' } : null,
+      });
+      toast(`${r.booked} line(s) booked to ${acc.name}${r.rule ? '; lines like these will be booked automatically' : ''}${r.failed ? `; ${r.failed} not booked: ${r.errors[0]}` : ''}`, r.failed > 0);
+      qc.invalidateQueries({ queryKey: ['books'] });
+      refetch();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const rows = (data ?? []).filter((g) => !q.trim() || `${g.key} ${g.samples.join(' ')}`.toLowerCase().includes(q.trim().toLowerCase()));
+  return (
+    <Modal title="Book bank lines by payee" onClose={onClose} wide>
+      <div className="modal-body stack">
+        <div className="row" style={{ gap: 8 }}>
+          <span className="muted small">Bank lines not booked yet (other than ones matched to an invoice or bill), grouped by who was paid or who paid you. Choose the account once for a whole group; "Always" keeps it as a bank rule for next time.</span>
+          <input placeholder="Search…" value={q} onChange={(e) => setQ(e.target.value)} style={{ marginLeft: 'auto', maxWidth: 200 }} />
+        </div>
+        {!data ? (
+          <Spinner />
+        ) : !rows.length ? (
+          <Empty title="Nothing to place">Every bank line is booked or has a suggestion waiting in the review queue.</Empty>
+        ) : (
+          <div className="table-wrap" style={{ maxHeight: 520, overflow: 'auto' }}>
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Payee</th>
+                  <th className="num">Lines</th>
+                  <th className="num">Total</th>
+                  <th>Book to</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((g) => {
+                  const p: { accountId: string; partyId: string; rule: boolean; ruleText: string; partyName?: string } = pick[gid(g)] ?? { accountId: g.suggestedAccountId ?? '', partyId: '', rule: !!g.ruleText, ruleText: g.ruleText ?? '' };
+                  const set = (x: Partial<typeof p>) => setPick((cur) => ({ ...cur, [gid(g)]: { ...p, ...x } }));
+                  const adv = p.accountId.startsWith('adv:');
+                  const partyList = g.inflow ? (customers.data?.items ?? []) : (vendors.data?.items ?? []);
+                  const acc = accs.find((a) => a.id === p.accountId);
+                  const parties = acc?.subtype === 'accounts_payable' ? (vendors.data?.items ?? []) : acc?.subtype === 'accounts_receivable' ? (customers.data?.items ?? []) : null;
+                  return (
+                    <tr key={gid(g)}>
+                      <td style={{ whiteSpace: 'normal', maxWidth: 300 }}>
+                        <b className="small">{g.key}</b> <span className={`chip ${g.inflow ? 'good' : ''}`}>{g.inflow ? 'money in' : 'money out'}</span>
+                        <div className="muted small" style={{ wordBreak: 'break-word' }}>
+                          {g.samples[0]}
+                          {g.count > 1 ? ` · ${date(g.from)} – ${date(g.to)}` : ` · ${date(g.from)}`}
+                        </div>
+                      </td>
+                      <td className="num">{g.count}</td>
+                      <td className="num">{money2(g.total)}</td>
+                      <td style={{ whiteSpace: 'normal', minWidth: 240 }}>
+                        <select value={p.accountId} onChange={(e) => set({ accountId: e.target.value, partyId: '' })} style={{ width: '100%' }}>
+                          <option value="">Choose account</option>
+                          <optgroup label={g.inflow ? 'From a customer (kept as an advance)' : 'To a vendor (kept as an advance)'}>
+                            <option value="adv:new">➕ New {g.inflow ? 'customer' : 'vendor'} “{titleCase(g.key)}”</option>
+                            {partyList.map((x) => (
+                              <option key={x.id} value={`adv:${x.id}`}>
+                                {x.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                          {groupsOf.map((t) => {
+                            const xs = accs.filter((a) => a.type === t && (g.inflow ? a.type !== 'expense' : a.type !== 'income'));
+                            return xs.length ? (
+                              <optgroup key={t} label={t[0]!.toUpperCase() + t.slice(1)}>
+                                {xs.map((a) => (
+                                  <option key={a.id} value={a.id}>
+                                    {a.name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            ) : null;
+                          })}
+                        </select>
+                        {p.accountId === 'adv:new' && (
+                          <input value={p.partyName ?? titleCase(g.key)} onChange={(e) => set({ partyName: e.target.value })} style={{ width: '100%', marginTop: 4 }} placeholder="Name" />
+                        )}
+                        {parties && (
+                          <select value={p.partyId} onChange={(e) => set({ partyId: e.target.value })} style={{ width: '100%', marginTop: 4 }}>
+                            <option value="">Choose {acc!.subtype === 'accounts_payable' ? 'vendor' : 'customer'}</option>
+                            {parties.map((x) => (
+                              <option key={x.id} value={x.id}>
+                                {x.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        {!adv && <label className="small" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, fontWeight: 400, whiteSpace: 'nowrap' }}>
+                          <input type="checkbox" checked={p.rule} onChange={(e) => set({ rule: e.target.checked })} />
+                          Always, when the narration has
+                        </label>}
+                        {!adv && p.rule && <input value={p.ruleText} onChange={(e) => set({ ruleText: e.target.value })} style={{ width: '100%', marginTop: 4 }} placeholder="e.g. ZOMATO" />}
+                      </td>
+                      <td>
+                        <button className="btn sm primary" disabled={!!busy || !p.accountId} onClick={() => book(g)}>
+                          {busy === gid(g) ? 'Booking…' : `Book ${g.count}`}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 

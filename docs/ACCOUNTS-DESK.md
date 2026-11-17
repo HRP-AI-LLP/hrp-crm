@@ -9,6 +9,23 @@ Books → **Accounts desk** is a small department of agents that keeps the books
 | 🧾 Compliance clerk | GST and TDS: GSTR-2B invoices not in the books (ITC waiting) and mismatches, TDS deducted but not deposited (due the 7th), GST returns overdue or due within five days, bank lines nobody booked for two weeks. |
 | 📊 Controller | Month-end close: unbooked bank lines, accounts not reconciled, draft documents, amounts in "Uncategorised expense", online collections not yet settled, depreciation, trial balance; the month's income, expenses, net profit against the previous month, cash, assets and liabilities, and a short note. |
 
+## Findings come with the fix
+
+Every finding says how to resolve it, in steps, with buttons that do it there and then. Examples:
+
+- **GSTR-2B: supplier invoices not in your books** → *Match with books again* (free) or *Enter N as bills* (one posted bill per invoice; new suppliers added from their GSTIN; asks first). Credit notes and lines without ITC are explained.
+- **Bank lines not booked** → review the suggestions, or **Book by payee**: lines grouped by who was paid / who paid you, booked a whole group at a time to an account, or as receipts from / payments to a customer or vendor (new or existing) kept as advances; *Always* turns the choice into a bank rule.
+- **The books and the statement disagree** → the controller explains the difference: lines not booked yet, the balance brought forward before the books started (*Bring the opening balance from the statement* posts it against Opening balance adjustments), and anything left over. When they agree, it **reconciles the account by itself**.
+- **TDS to deposit** → the amount per section and due date, how to pay ITNS-281, interest if late, the 26Q return.
+- **GST return due** → how to prepare, offset and file it, late fee if late.
+- **Depreciation not run** → *Run depreciation up to the month end*.
+
+After a fix the agent looks again, and the finding clears when it is resolved.
+
+## When nothing in the books explains a bank line
+
+The bookkeeper proposes creating what is missing — a **new customer** for money received (kept as an advance until the invoice is raised and the receipt allocated) or a **new vendor** for money paid (an advance until the bill is entered) — named from the narration. These always wait for approval, and the name and the choice can be changed first (*Change* → Customer / Vendor advance, existing or new). If it was something else (capital, a loan, an expense), book it to that account instead.
+
 ## How much the agents do on their own (Settings)
 
 - **Book the sure ones, ask about the rest** (default): your bank rules, exact matches (≥ 95%: amount equals the open balance and the invoice / bill number, the party's name or the settlement UTR is in the narration) and payees always booked the same way (≥ 90%) are posted. Everything else — keyword and AI guesses, ambiguous matches — waits in the **Review queue**.
@@ -37,6 +54,7 @@ All under `/api/v1/books`, books admins only.
 | --- | --- |
 | Desk | `GET /desk`, `PUT /desk/settings`, `POST /desk/run` (`agents`, `period`), `GET /desk/runs` |
 | Review | `GET /desk/proposals?status=pending\|done\|all`, `POST /desk/proposals/:id` (`decision`, `change`, `makeRule`), `POST /desk/proposals/approve` (`ids`), `GET /desk/open-documents` |
-| Findings | `GET /desk/findings?status=`, `POST /desk/findings/:id` (`status`: done, dismissed, open) |
+| Findings | `GET /desk/findings?status=` (each with `resolution`: steps and actions), `POST /desk/findings/:id` (`status`: done, dismissed, open), `POST /desk/findings/:id/fix` (`action`) |
+| Book by payee | `GET /desk/unbooked`, `POST /desk/unbooked/book` (`txnIds` with `accountId` + optional `rule`, or `advance`: customer / vendor, existing or new) |
 | Feeds | `GET /feeds`, `POST /feeds`, `PATCH /feeds/:id`, `DELETE /feeds/:id`, `POST /feeds/:id/sync` |
 | Statements | `POST /bank-accounts/:id/statement` with `toDesk: true` hands the new lines to the bookkeeper |

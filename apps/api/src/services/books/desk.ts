@@ -23,8 +23,8 @@ import { badRequest, conflict, notFound } from '../../lib/errors';
 import { type AiCtx, guardedChat } from '../ai/features';
 import { extractJson } from '../ai/router';
 import { recordPayment } from '../billing';
-import type { RecordCtx, RecordEvent } from '../records';
-import { categorize, excludeTxn, matchTxn, saveRule, suggestions } from './banking';
+import { createRecord, type RecordCtx, type RecordEvent } from '../records';
+import { categorize, excludeTxn, matchTxn, reconcile, saveRule, suggestions } from './banking';
 import { recordVendorPayment } from './bills';
 import { syncAllFeeds, syncGatewaySettlements } from './feeds';
 import { assertBooksAdmin, d10, postJournal, r2, sys } from './ledger';
@@ -33,8 +33,8 @@ import { balanceSheet, profitAndLoss, tdsReport, trialBalance } from './reports'
 
 export type Agent = 'bank_clerk' | 'bookkeeper' | 'compliance' | 'controller';
 export type Autonomy = 'suggest' | 'auto_sure' | 'auto_all';
-export type Kind = 'match' | 'receipt' | 'vendor_payment' | 'categorize' | 'exclude' | 'settlement';
-type Source = 'rule' | 'ledger' | 'invoice' | 'bill' | 'gateway' | 'history' | 'keyword' | 'ai' | 'person';
+export type Kind = 'match' | 'receipt' | 'vendor_payment' | 'categorize' | 'exclude' | 'settlement' | 'new_party';
+type Source = 'rule' | 'ledger' | 'invoice' | 'bill' | 'gateway' | 'history' | 'keyword' | 'ai' | 'person' | 'missing';
 
 export const AGENTS: { key: Agent; name: string; role: string }[] = [
   { key: 'bank_clerk', name: 'Bank clerk', role: 'Brings in bank transactions from live feeds and keeps out duplicates' },
@@ -99,7 +99,7 @@ async function finishRun(ctx: RecordCtx, id: string, stats: Record<string, unkno
 /* ───────────────────────── bookkeeper: understanding a bank line ───────────────────────── */
 
 const STOP = new Set(
-  'UPI NEFT IMPS RTGS TRF TRANSFER TO FROM BY INB MB MOB NET BANKING ACH NACH ECS CR DR TXN REF PAYMENT PAY PAID RECEIVED REC FUNDS FT IFT INFT CHQ CHEQUE CLG DEP WDL ATW POS ECOM INR RS AND THE FOR OF A C AC ACCOUNT BANK LTD LIMITED PVT PRIVATE LLP INDIA SBIN HDFC ICIC UTIB KKBK YESB PUNB BARB CNRB IDIB UBIN IOBA MAHB PYTM OKAXIS OKICICI OKHDFCBANK OKSBI YBL IBL AXL APL PAYOUT VPA NA'.split(' '),
+  'UPI NEFT IMPS RTGS TRF TRANSFER TO FROM BY ADVANCE ADV INVOICE INV PART FULL BAL INB MB MOB NET BANKING ACH NACH ECS CR DR TXN REF PAYMENT PAY PAID RECEIVED REC FUNDS FT IFT INFT CHQ CHEQUE CLG DEP WDL ATW POS ECOM INR RS AND THE FOR OF A C AC ACCOUNT BANK LTD LIMITED PVT PRIVATE LLP INDIA SBIN HDFC ICIC UTIB KKBK YESB PUNB BARB CNRB IDIB UBIN IOBA MAHB PYTM OKAXIS OKICICI OKHDFCBANK OKSBI YBL IBL AXL APL PAYOUT VPA NA'.split(' '),
 );
 /** A stable key for who the money went to or came from: the words of the description without numbers, refs and banking noise. */
 export function payeeKey(description: string, counterparty?: string | null): string {
@@ -161,6 +161,8 @@ interface Book {
   bills: { id: string; bill_number: string | null; vendor_ref: string | null; vendor_id: string; vendor: string; bill_date: string; balance_due: number; taxable_total: number }[];
   history: { key: string; inflow: boolean; account_id: string; party_type: 'customer' | 'vendor' | null; party_id: string | null }[];
   settlements: { id: string; settlement_id: string; amount: number; fees: number; tax: number; utr: string | null; settled_on: string }[];
+  customers: { id: string; name: string }[];
+  vendors: { id: string; name: string }[];
   rejected: Map<string, Set<string>>;
 }
 
@@ -213,7 +215,9 @@ async function loadBook(ctx: RecordCtx): Promise<Book> {
       order by s.settled_at limit 1000`,
     [ctx.tenantId],
   );
-  return { accounts, rules, invoices, bills, history, rejected, settlements };
+  const customers = await ctx.tx.query<{ id: string; name: string }>(`select id, name from accounts where tenant_id = $1 and deleted_at is null limit 5000`, [ctx.tenantId]);
+  const vendors = await ctx.tx.query<{ id: string; name: string }>(`select id, name from vendors where tenant_id = $1 and deleted_at is null limit 5000`, [ctx.tenantId]);
+  return { accounts, rules, invoices, bills, history, rejected, settlements, customers, vendors };
 }
 
 const money = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -394,8 +398,90 @@ async function candidates(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>
       });
   }
 
+  // 6. nothing in the books explains it: the party may be missing. Money in → a customer receipt kept as
+  // an advance (allocated when the invoice is raised); money out → a vendor payment kept as an advance.
+  if (!out.length && key) {
+    const words = key.split(' ').filter((w) => !GENERIC.has(w));
+    if (words.length) {
+      const list = inflow ? book.customers : book.vendors;
+      const known = list.find((x) => {
+        const n = nameWords(x.name);
+        return n.length > 0 && n.every((w) => desc.includes(w) || (t.counterparty ?? '').toUpperCase().includes(w));
+      });
+      const name = known?.name ?? partyName(t.counterparty ?? key);
+      if (known || inflow || t.counterparty || amt >= 2000)
+        out.push({
+          txnId: t.id,
+          kind: 'new_party',
+          title: inflow ? `${known ? 'Advance from' : 'New customer'} ${name}: receipt kept as an advance` : `${known ? 'Advance to' : 'New vendor'} ${name}: payment kept as an advance`,
+          reason: known
+            ? `${name} is ${inflow ? 'a customer' : 'a vendor'} but has no open ${inflow ? 'invoice' : 'bill'} for ${money(amt)}; it is applied when one is ${inflow ? 'raised' : 'entered'}`
+            : `No ${inflow ? 'customer, invoice' : 'vendor, bill'} or rule fits; ${inflow ? 'a customer' : 'a vendor'} “${name}” is created from the narration. Change it if it is something else (e.g. capital, a loan, an expense)`,
+          payload: { partyType: inflow ? 'customer' : 'vendor', partyId: known?.id ?? null, name },
+          confidence: known ? 0.6 : 0.4,
+          source: 'missing',
+        });
+    }
+  }
+
   const no = book.rejected.get(t.id);
   return out.filter((p) => !no?.has(sig(p.kind, p.payload))).sort((a, b) => b.confidence - a.confidence);
+}
+
+/** "SHARMA HOMES" → "Sharma Homes" */
+const partyName = (s: string) =>
+  s
+    .trim()
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (c) => c.toUpperCase())
+    .slice(0, 120);
+
+/**
+ * Records a bank line as money from a customer / to a vendor with nothing to apply it to yet (an
+ * advance), creating the customer or vendor when it doesn't exist. It is applied to the invoice or bill
+ * later (Payments → allocate, or automatically when the document is created).
+ */
+async function recordAdvance(ctx: RecordCtx, txnId: string, party: { partyType: 'customer' | 'vendor'; partyId?: string | null; name?: string | null }) {
+  const t = await ctx.tx.one<{ status: string; amount: string; txn_date: Date; description: string; reference: string | null; bank_account_id: string }>(
+    `select status, amount, txn_date, description, reference, bank_account_id from bank_transactions where tenant_id = $1 and id = $2`,
+    [ctx.tenantId, txnId],
+  );
+  if (!t) throw notFound('The bank line no longer exists');
+  if (t.status !== 'unmatched') throw conflict('The bank line was already handled');
+  const inflow = Number(t.amount) > 0;
+  if ((party.partyType === 'customer') !== inflow) throw badRequest(inflow ? 'Money in is from a customer' : 'Money out is to a vendor');
+  const gl = (await ctx.tx.one<{ gl_account_id: string }>(`select gl_account_id from bank_accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, t.bank_account_id]))!.gl_account_id;
+  const events: RecordEvent[] = [];
+  let partyId = party.partyId ?? null;
+  let created = false;
+  if (!partyId) {
+    const name = (party.name ?? '').trim();
+    if (name.length < 2) throw badRequest('Name the customer or vendor');
+    const existing = await ctx.tx.one<{ id: string }>(`select id from ${inflow ? 'accounts' : 'vendors'} where tenant_id = $1 and deleted_at is null and lower(name) = lower($2) limit 1`, [ctx.tenantId, name]);
+    if (existing) partyId = existing.id;
+    else {
+      const r = await createRecord(ctx, inflow ? 'account' : 'vendor', inflow ? { name } : { name, notes: 'Created by the accounts desk from a bank line' });
+      events.push(...r.events);
+      partyId = String(r.record.id);
+      created = true;
+    }
+  }
+  const amt = Math.abs(Number(t.amount));
+  const date = d10(t.txn_date);
+  const ref = (t.reference ?? t.description).slice(0, 60);
+  const note = `Recorded by the accounts desk from the bank line of ${date}: ${t.description.slice(0, 200)}`;
+  const r = inflow
+    ? await recordPayment(ctx, { accountId: partyId, amount: amt, date, mode: 'bank_transfer', reference: ref, notes: note, depositAccountId: gl })
+    : await recordVendorPayment(ctx, { vendorId: partyId, amount: amt, date, mode: 'bank_transfer', paidThroughId: gl, reference: ref, notes: note });
+  events.push(...r.events);
+  const l = await ctx.tx.one<{ id: string }>(
+    `select l.id from journal_lines l join journals j on j.tenant_id = l.tenant_id and j.id = l.journal_id
+      where l.tenant_id = $1 and j.source_type = $2 and j.source_id = $3 and l.account_id = $4 and l.posted and l.bank_txn_id is null limit 1`,
+    [ctx.tenantId, inflow ? 'payment' : 'vendor_payment', r.id, gl],
+  );
+  if (!l) throw badRequest('The advance was recorded but not posted to this bank account');
+  await matchTxn(ctx, txnId, l.id);
+  return { result: { [inflow ? 'paymentId' : 'vendorPaymentId']: r.id, paymentNumber: r.number, partyId, partyCreated: created }, events };
 }
 
 /* ───────────────────────── bookkeeper: AI for the rest ───────────────────────── */
@@ -535,6 +621,8 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
     case 'exclude':
       await excludeTxn(ctx, p.bank_txn_id);
       return { result: {}, events: [] };
+    case 'new_party':
+      return recordAdvance(ctx, p.bank_txn_id, { partyType: pl.partyType, partyId: pl.partyId, name: pl.name });
     case 'settlement': {
       const st = await ctx.tx.one<{ amount: number; fees: number; tax: number; settlement_id: string; utr: string | null; bank_txn_id: string | null }>(
         `select amount::float8 as amount, fees::float8 as fees, tax::float8 as tax, settlement_id, utr, bank_txn_id from gateway_settlements where tenant_id = $1 and id = $2 for update`,
@@ -751,7 +839,9 @@ export const decideSchema = z.object({
   /** a person's correction: what to do instead */
   change: z
     .object({
-      kind: z.enum(['categorize', 'receipt', 'vendor_payment', 'match', 'exclude']),
+      kind: z.enum(['categorize', 'receipt', 'vendor_payment', 'match', 'exclude', 'new_party']),
+      /** new_party: the customer / vendor (existing id, or a name to create) */
+      partyName: z.string().trim().min(2).max(120).nullish(),
       accountId: z.string().uuid().nullish(),
       partyType: z.enum(['customer', 'vendor']).nullish(),
       partyId: z.string().uuid().nullish(),
@@ -787,11 +877,14 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
             ? { billId: c.billId }
             : c.kind === 'match'
               ? { lineId: c.lineId }
-              : {};
+              : c.kind === 'new_party'
+                ? { partyType: c.partyType ?? null, partyId: c.partyId ?? null, name: c.partyName ?? null }
+                : {};
     if (c.kind === 'categorize' && !c.accountId) throw badRequest('Choose the account');
     if (c.kind === 'receipt' && !c.invoiceId) throw badRequest('Choose the invoice');
     if (c.kind === 'vendor_payment' && !c.billId) throw badRequest('Choose the bill');
     if (c.kind === 'match' && !c.lineId) throw badRequest('Choose the entry');
+    if (c.kind === 'new_party' && (!c.partyType || (!c.partyId && !c.partyName))) throw badRequest('Choose the customer or vendor, or name a new one');
     // the person's version replaces the agent's; the agent's stays on record as rejected
     await ctx.tx.query(`update acct_proposals set status = 'rejected', decided_at = now(), decided_by = app.current_user_id() where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
     row = (await ctx.tx.one<Row>(
@@ -846,20 +939,192 @@ interface NewFinding {
   link?: string | null;
   period?: string | null;
   amount?: number | null;
+  /** set when the agent already knows exactly how to resolve it */
+  resolution?: Resolution | null;
 }
+
+/** How to resolve a finding: plain steps, and what the screen can do about it right there. */
+export interface Resolution {
+  steps: string[];
+  actions: { key: string; label: string; kind: 'fix' | 'tab' | 'link' | 'ui'; target?: string; confirm?: string; primary?: boolean }[];
+}
+const mmyyyy = (ym: string) => `${ym.slice(5, 7)}${ym.slice(0, 4)}`;
+
+/** Works out the resolution for a finding from the books as they are now. */
+async function resolutionFor(ctx: RecordCtx, f: NewFinding): Promise<Resolution | null> {
+  const ym = f.period && /^\d{4}-\d{2}$/.test(f.period) ? f.period : null;
+  switch (f.kind) {
+    case 'gstr2b_unmatched': {
+      if (!ym) return null;
+      const c = await ctx.tx.one<{ invoices: number; notes: number; noitc: number; tax: number }>(
+        `select count(*) filter (where coalesce(l.doc_type, 'invoice') not in ('credit_note','debit_note') and l.taxable >= 0 and l.bill_id is null)::int as invoices,
+                count(*) filter (where l.doc_type in ('credit_note','debit_note') or l.taxable < 0)::int as notes,
+                count(*) filter (where not l.itc_available)::int as noitc,
+                coalesce(sum(l.igst + l.cgst + l.sgst) filter (where l.itc_available), 0)::float8 as tax
+           from gstr2b_imports i join gstr2b_lines l on l.tenant_id = i.tenant_id and l.import_id = i.id
+          where i.tenant_id = $1 and i.period = $2 and l.match_status = 'unmatched'`,
+        [ctx.tenantId, mmyyyy(ym)],
+      );
+      const n = c?.invoices ?? 0;
+      return {
+        steps: [
+          'If you have entered bills for this month since GSTR-2B was fetched, press "Match with books again" first (free) — some may match now.',
+          n ? `${n} supplier invoice(s) have no bill in Synapse. If they are genuine business purchases, "Enter them as bills" creates one bill each (supplier added from its GSTIN, booked to Purchases, posted), so the ITC of ${money(c?.tax ?? 0)} can be claimed in GSTR-3B.` : 'Every remaining document is a credit or debit note.',
+          'If you entered a bill under a different invoice number, open the month and use "Link to a bill" on that line instead, so it is not entered twice.',
+          ...(c?.notes ? [`${c.notes} credit / debit note(s): enter them as vendor credits on the original bill (open the bill → Vendor credit).`] : []),
+          ...(c?.noitc ? [`${c.noitc} line(s) are marked ITC not available by the portal; enter them as bills too, but don't claim their tax.`] : []),
+          'Purchases that are not the business’s (personal, or a supplier quoting your GSTIN by mistake): leave them out and don’t claim the ITC; ask the supplier to amend if it is an error.',
+        ],
+        actions: [
+          { key: 'gstr2b_rematch', label: 'Match with books again', kind: 'fix' },
+          ...(n ? [{ key: 'gstr2b_add_all', label: `Enter ${n} as bills`, kind: 'fix' as const, primary: true, confirm: `Create and post ${n} bill(s) for ${monthLabel(ym)} from GSTR-2B, booked to Purchases (new suppliers are added from their GSTIN)? Check first that they are all business purchases.` }] : []),
+          { key: 'open', label: 'Review line by line', kind: 'link', target: '/billing' },
+        ],
+      };
+    }
+    case 'gstr2b_mismatch':
+      return {
+        steps: [
+          'Open the month in GST portal → GSTR-2B and filter "Differences": each line shows the taxable value and tax in your bill and in the supplier’s return.',
+          'If your bill is wrong (typo, wrong rate, missed freight): correct it — edit the draft, or void and re-enter a posted bill — then press "Match with books again".',
+          'If the supplier reported it wrong: ask them to amend it in their next GSTR-1; the corrected line comes in a later GSTR-2B. Claim ITC only up to what the supplier reported.',
+        ],
+        actions: [
+          ...(ym ? [{ key: 'gstr2b_rematch', label: 'Match with books again', kind: 'fix' as const }] : []),
+          { key: 'open', label: 'Open GSTR-2B', kind: 'link', target: '/billing' },
+        ],
+      };
+    case 'tds_deposit': {
+      const today = new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10);
+      const rep = await tdsReport(ctx, fyStartOf(today), today);
+      const bySec = new Map<string, number>();
+      for (const r of (rep as any).payable as { section: string; tds: number; deposit_due: string }[]) if (r.deposit_due <= new Date(Date.parse(today) + 7 * 86_400_000).toISOString().slice(0, 10)) bySec.set(r.section, (bySec.get(r.section) ?? 0) + Number(r.tds));
+      const lines = [...bySec.entries()].map(([sec, v]) => `section ${sec}: ${money(v)}`).join(', ');
+      return {
+        steps: [
+          `Pay it on the Income-tax portal → e-Pay Tax → challan ITNS-281 (TDS/TCS), with your TAN, assessment year and "TDS payable by taxpayer" (200)${lines ? `; due by section: ${lines}` : ''}. One challan per section.`,
+          'If the 7th has passed, add interest of 1.5% a month (or part of a month) from the date of deduction; the portal works it out on the challan.',
+          'When the payment shows in your bank statement, the bookkeeper books it to TDS payable (approve it in the review queue) and this clears.',
+          'File the quarterly TDS return (26Q) by the end of the month after the quarter (31 May for Jan–Mar), and issue Form 16A to the vendors.',
+        ],
+        actions: [
+          { key: 'portal', label: 'Open Income-tax e-Pay', kind: 'link', target: 'https://eportal.incometax.gov.in/iec/foservices/#/e-pay-tax-prelogin/user-details' },
+          { key: 'tds', label: 'TDS report', kind: 'tab', target: 'gst' },
+        ],
+      };
+    }
+    case 'gst_return': {
+      const late = f.severity === 'risk';
+      const r3b = /GSTR-?3B/i.test(f.title);
+      return {
+        steps: r3b
+          ? [
+              'GST portal → Overview → Prepare: GSTR-3B is built from your invoices, bills and expenses for the month (match GSTR-2B first so the ITC is right).',
+              'Save it to the portal, then Offset: the screen proposes how much tax is paid from ITC and how much in cash. If cash is short, create a challan (PMT-06) and pay it before offsetting.',
+              'File with EVC (OTP to the authorised signatory). The ARN comes back and the return is marked filed.',
+              ...(late ? ['Late: a late fee of ₹50 a day (₹20 for nil returns) and 18% interest on tax paid late apply; they are added on the portal.'] : []),
+              'If it was already filed on the portal, use "Update filed returns from the portal" on the Overview and this clears.',
+            ]
+          : [
+              'GST portal → Overview → Prepare: the return is built from your issued invoices (check the warnings, e.g. missing HSN or GSTIN).',
+              'Save it to the portal, check the summary, then file with EVC.',
+              ...(late ? ['Late: ₹50 a day late fee (₹20 for nil returns) accrues until it is filed; buyers can’t see the invoices in their GSTR-2B until you file.'] : []),
+              'If it was already filed on the portal, use "Update filed returns from the portal" and this clears.',
+            ],
+        actions: [{ key: 'open', label: 'Open GST portal', kind: 'link', target: '/billing', primary: true }],
+      };
+    }
+    case 'bank_unhandled':
+    case 'close_bank': {
+      const c = await ctx.tx.one<{ waiting: number; unplaced: number }>(
+        `select count(*) filter (where exists (select 1 from acct_proposals p where p.tenant_id = t.tenant_id and p.bank_txn_id = t.id and p.status = 'pending'))::int as waiting,
+                count(*) filter (where not exists (select 1 from acct_proposals p where p.tenant_id = t.tenant_id and p.bank_txn_id = t.id and p.status = 'pending'))::int as unplaced
+           from bank_transactions t where t.tenant_id = $1 and t.status = 'unmatched'`,
+        [ctx.tenantId],
+      );
+      const ai = await ctx.tx.one(`select 1 from tenant_ai_providers where tenant_id = $1 limit 1`, [ctx.tenantId]).catch(() => null);
+      return {
+        steps: [
+          ...(c?.waiting ? [`${c.waiting} line(s) already have a suggestion: approve them in the review queue (tick the header box to select all, or search e.g. "CHRGS" first).`] : []),
+          ...(c?.unplaced
+            ? [
+                `${c.unplaced} line(s) have no suggestion. "Book by payee" groups them by who was paid or who paid you, so a whole group (all Zomato, all rent, all one customer) is booked to one account in one go — tick "always" to turn it into a rule for next time.`,
+                'Money in from customers whose invoices are not in Synapse yet: raise the invoice first (or book it to the customer as an advance), then run the bookkeeper again.',
+              ]
+            : []),
+          ...(ai ? [] : ['Add an AI model in Settings → AI models: the bookkeeper then suggests the lines the rules can’t place (they still wait for your approval).']),
+        ],
+        actions: [
+          ...(c?.waiting ? [{ key: 'queue', label: `Review ${c.waiting} suggestion(s)`, kind: 'tab' as const, target: 'queue', primary: true }] : []),
+          ...(c?.unplaced ? [{ key: 'group', label: 'Book by payee', kind: 'ui' as const, primary: !c?.waiting }] : []),
+          { key: 'bookkeeper', label: 'Run the bookkeeper again', kind: 'fix' },
+          ...(ai ? [] : [{ key: 'ai', label: 'Set up AI', kind: 'link' as const, target: '/settings#ai' }]),
+        ],
+      };
+    }
+    case 'close_statement':
+      return { steps: ['Download the statement up to the month end from net banking (PDF, Excel or CSV) and upload it under Bank feeds & statements; lines already imported are skipped.'], actions: [{ key: 'sources', label: 'Upload statements', kind: 'tab', target: 'sources', primary: true }] };
+    case 'close_reconcile':
+      return {
+        steps: [
+          'Books → Banking → open the account → Reconcile: enter the month-end date and the closing balance printed on the statement.',
+          'Tick the entries that appear on the statement; the difference must come to zero. A difference usually means a bank line not booked yet, or an entry booked twice.',
+        ],
+        actions: [{ key: 'banking', label: 'Open Banking', kind: 'tab', target: 'banking', primary: true }],
+      };
+    case 'close_drafts':
+      return {
+        steps: ['Open each draft: issue the invoices, post the bills, approve and record the expenses — or delete the ones that should not exist.', 'Documents left as drafts are not in the month’s P&L, GST or receivables/payables.'],
+        actions: [
+          { key: 'invoices', label: 'Draft invoices', kind: 'link', target: '/o/invoice' },
+          { key: 'bills', label: 'Draft bills', kind: 'link', target: '/o/bill' },
+          { key: 'expenses', label: 'Expenses', kind: 'link', target: '/o/expense' },
+        ],
+      };
+    case 'close_uncategorised':
+      return {
+        steps: ['Reports → General ledger → "Uncategorised expense" lists what is in it.', 'For bank lines: in Banking, undo the line and book it to the right account (or re-book through the review queue). For other entries: a journal moving the amount to the right expense account.'],
+        actions: [{ key: 'reports', label: 'Open Reports', kind: 'tab', target: 'reports', primary: true }],
+      };
+    case 'close_depreciation': {
+      const end = ym ? lastDay(ym) : null;
+      return {
+        steps: ['Depreciation for fixed assets is worked out per asset (SLM or WDV, as set on the asset) and posted as one journal per asset.', 'Monthly depreciation keeps monthly profit right; at least run it at the year end.'],
+        actions: end ? [{ key: 'depreciate', label: `Run depreciation up to ${end}`, kind: 'fix', primary: true, confirm: `Post depreciation for all active fixed assets up to ${end}?` }] : [{ key: 'assets', label: 'Fixed assets', kind: 'tab', target: 'assets' }],
+      };
+    }
+    case 'close_tb':
+      return { steps: ['This should never happen: every entry is balanced when it is posted. Note the month and contact support; don’t post adjusting journals to force it.'], actions: [] };
+    case 'close_receivables':
+      return {
+        steps: ['Billing → Receivables: send a statement or payment link to each customer with old dues; call the large ones.', 'For dues that will not come, write the invoice off (bad debt) so the receivables and profit are honest; for doubtful ones, a provision journal at the year end.'],
+        actions: [{ key: 'open', label: 'Open receivables', kind: 'link', target: '/billing', primary: true }],
+      };
+    case 'close_gateway':
+      return {
+        steps: ['Razorpay pays online collections out as net settlements. Make sure Razorpay is connected (Settings → Integrations) so the bank clerk fetches settlements, and that the bank statement with the payout lines is uploaded.', 'Then run the desk: each payout is booked as net to bank, fee to bank charges and GST to input GST, clearing this balance.'],
+        actions: [
+          { key: 'run', label: 'Run the desk now', kind: 'fix', primary: true },
+          { key: 'integrations', label: 'Razorpay connection', kind: 'link', target: '/settings#integrations' },
+        ],
+      };
+  }
+  return null;
+}
+
 async function saveFindings(ctx: RecordCtx, agent: Agent, runId: string, list: NewFinding[], scopePrefix: string) {
   for (const f of list) {
     const upd = await ctx.tx.one(
-      `update acct_findings set severity = $3, title = $4, body = $5, link = $6, amount = $7, run_id = $8, seen_at = now() where tenant_id = $1 and key = $2 and status = 'open' returning id`,
-      [ctx.tenantId, f.key, f.severity, f.title.slice(0, 300), f.body?.slice(0, 4000) ?? null, f.link ?? null, f.amount ?? null, runId],
+      `update acct_findings set severity = $3, title = $4, body = $5, link = $6, amount = $7, run_id = $8, resolution = $9, seen_at = now() where tenant_id = $1 and key = $2 and status = 'open' returning id`,
+      [ctx.tenantId, f.key, f.severity, f.title.slice(0, 300), f.body?.slice(0, 4000) ?? null, f.link ?? null, f.amount ?? null, runId, JSON.stringify(f.resolution ?? (await resolutionFor(ctx, f)))],
     );
     if (!upd) {
       // dismissed earlier and still the same: stay dismissed
       const dismissed = await ctx.tx.one(`select 1 from acct_findings where tenant_id = $1 and key = $2 and status = 'dismissed' and resolved_at > now() - interval '30 days'`, [ctx.tenantId, f.key]);
       if (dismissed) continue;
       await ctx.tx.query(
-        `insert into acct_findings (tenant_id, run_id, agent, key, kind, severity, title, body, link, period, amount) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-        [ctx.tenantId, runId, agent, f.key, f.kind, f.severity, f.title.slice(0, 300), f.body?.slice(0, 4000) ?? null, f.link ?? null, f.period ?? null, f.amount ?? null],
+        `insert into acct_findings (tenant_id, run_id, agent, key, kind, severity, title, body, link, period, amount, resolution) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [ctx.tenantId, runId, agent, f.key, f.kind, f.severity, f.title.slice(0, 300), f.body?.slice(0, 4000) ?? null, f.link ?? null, f.period ?? null, f.amount ?? null, JSON.stringify(f.resolution ?? (await resolutionFor(ctx, f)))],
       );
     }
   }
@@ -872,11 +1137,14 @@ async function saveFindings(ctx: RecordCtx, agent: Agent, runId: string, list: N
 
 export async function listFindings(ctx: RecordCtx, status = 'open') {
   await assertBooksAdmin(ctx);
-  return ctx.tx.query(
-    `select id, agent, key, kind, severity, title, body, link, period, amount::float8 as amount, status, seen_at, created_at, resolved_at from acct_findings
+  const rows = await ctx.tx.query<Record<string, any>>(
+    `select id, agent, key, kind, severity, title, body, link, period, amount::float8 as amount, status, resolution, seen_at, created_at, resolved_at from acct_findings
       where tenant_id = $1 and ($2 = 'all' or status = $2) order by case severity when 'risk' then 0 when 'warn' then 1 else 2 end, created_at desc limit 300`,
     [ctx.tenantId, status],
   );
+  // findings raised before resolutions existed get one now
+  for (const r of rows) if (!r.resolution && r.status === 'open') r.resolution = await resolutionFor(ctx, r as NewFinding);
+  return rows;
 }
 export async function resolveFinding(ctx: RecordCtx, id: string, status: 'done' | 'dismissed' | 'open') {
   await assertBooksAdmin(ctx);
@@ -886,6 +1154,177 @@ export async function resolveFinding(ctx: RecordCtx, id: string, status: 'done' 
   );
   if (!r) throw notFound('Finding not found');
   return { ok: true };
+}
+
+/** Does a finding's "fix" action, then lets the agent that raised it look again (so it clears when fixed). */
+export async function fixFinding(deps: DeskDeps, id: string, action: string) {
+  const f = await deps.run(async (ctx) => {
+    await assertBooksAdmin(ctx);
+    const r = await ctx.tx.one<{ id: string; agent: Agent; key: string; kind: string; period: string | null; status: string; severity: 'info' | 'warn' | 'risk'; title: string; resolution: Resolution | null }>(
+      `select id, agent, key, kind, period, status, severity, title, resolution from acct_findings where tenant_id = $1 and id = $2`,
+      [ctx.tenantId, id],
+    );
+    if (!r) throw notFound('Finding not found');
+    const res = r.resolution ?? (await resolutionFor(ctx, r));
+    if (!res?.actions.some((a) => a.key === action && a.kind === 'fix')) throw badRequest('That action is not offered for this finding');
+    return r;
+  });
+  const ym = f.period && /^\d{4}-\d{2}$/.test(f.period) ? f.period : null;
+  let message = 'Done';
+  let events: RecordEvent[] = [];
+  if (action === 'gstr2b_rematch' && ym) {
+    const r = await deps.run(async (ctx) => (await import('./gstr2b')).rematchGstr2b(ctx, mmyyyy(ym)));
+    message = `Matched again: ${r.matched} matched, ${r.mismatch} with differences, ${r.unmatched} not in your books`;
+  } else if (action === 'gstr2b_add_all' && ym) {
+    const r = await deps.run(async (ctx) => {
+      const ids = await ctx.tx.query<{ id: string }>(
+        `select l.id from gstr2b_imports i join gstr2b_lines l on l.tenant_id = i.tenant_id and l.import_id = i.id
+          where i.tenant_id = $1 and i.period = $2 and l.match_status = 'unmatched' and l.bill_id is null and coalesce(l.doc_type, 'invoice') not in ('credit_note','debit_note') and l.taxable >= 0`,
+        [ctx.tenantId, mmyyyy(ym)],
+      );
+      if (!ids.length) throw badRequest('Nothing left to enter for that month');
+      return (await import('./gstr2b')).addGstr2bToBooks(ctx, { lineIds: ids.map((x) => x.id), post: true });
+    });
+    events = r.events;
+    const failed = r.results.filter((x) => !x.ok);
+    message = `${r.added} bill(s) entered, ${r.posted} posted${r.vendorsCreated ? `, ${r.vendorsCreated} new supplier(s)` : ''}${failed.length ? `; ${failed.length} not entered: ${failed[0]!.error}` : ''}`;
+  } else if (action === 'bookkeeper' || action === 'run') {
+    const r = action === 'run' ? await runDesk(deps, { agents: ['bank_clerk', 'bookkeeper'] }) : await runBookkeeper(deps, { trigger: 'manual' });
+    events = (r as any).events ?? [];
+    message = action === 'run' ? 'The desk ran' : (r as any).summary;
+  } else if (action === 'opening' || action === 'reconcile') {
+    const target = (await deps.run(async (ctx) => {
+      const r = await ctx.tx.one<{ resolution: Resolution | null }>(`select resolution from acct_findings where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
+      return r?.resolution?.actions.find((a) => a.key === action)?.target ?? null;
+    }))!;
+    message = await deps.run(async (ctx) => {
+      const b = await ctx.tx.one<{ id: string; gl: string; name: string }>(
+        `select b.id, b.gl_account_id as gl, a.name from bank_accounts b join gl_accounts a on a.tenant_id = b.tenant_id and a.id = b.gl_account_id where b.tenant_id = $1 and b.id = $2`,
+        [ctx.tenantId, target],
+      );
+      if (!b) throw notFound('Bank account not found');
+      const check = await bankCheck(ctx, b, '2100-12-31');
+      if (!check) throw badRequest('There are no statement balances for this account');
+      if (action === 'opening') {
+        if (Math.abs(check.openingDiff) < 0.01) return 'The opening balance already agrees with the statement';
+        const ob = await sys(ctx.tx, ctx.tenantId, 'opening_equity');
+        const d = new Date(Date.parse(`${check.firstDate}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+        const amt = Math.abs(check.openingDiff);
+        await postJournal(ctx.tx, ctx.tenantId, {
+          date: d,
+          sourceType: 'manual',
+          reference: 'Bank balance brought forward',
+          narration: `${b.name}: balance brought forward from the statement (${money(check.opening)} on ${check.firstDate})`,
+          lines: check.openingDiff > 0 ? [{ accountId: b.gl, debit: amt }, { accountId: ob, credit: amt }] : [{ accountId: ob, debit: amt }, { accountId: b.gl, credit: amt }],
+        });
+        return `${money(check.openingDiff)} brought forward into ${b.name} on ${d}`;
+      }
+      const again = await bankCheck(ctx, b, '2100-12-31');
+      if (Math.abs(again!.diff) > 0.009) throw badRequest(`The books still differ from the statement by ${money(again!.diff)}`);
+      await autoReconcile(ctx, b, again!.date, again!.statement);
+      return `${b.name} reconciled to ${again!.date}`;
+    });
+  } else if (action === 'depreciate' && ym) {
+    await deps.run(async (ctx) => (await import('./setup')).runDepreciation(ctx, lastDay(ym)));
+    message = `Depreciation posted up to ${lastDay(ym)}`;
+  } else throw badRequest('Unknown action');
+  // look again
+  if (f.agent === 'compliance') await runCompliance(deps, { trigger: 'manual' });
+  else if (f.agent === 'controller' && ym) await runController(deps, { trigger: 'manual', period: ym });
+  const now = await deps.run((ctx) => ctx.tx.one<{ status: string }>(`select status from acct_findings where tenant_id = $1 and id = $2`, [ctx.tenantId, id]));
+  return { message, cleared: now?.status !== 'open', events };
+}
+
+const GENERIC = new Set('BIL ONL PAYMENTS PAYMENT SERVICES SERVICE ALERT CASH BRANCH DEP DEPOSIT QTR CHGS CHRGS CHARGES CHRG ANNUAL CARD DEBIT CREDIT FEE FEES SMS INTERNET MOBILE ONLINE PURCHASE BILL BILLPAY RECHARGE'.split(' '));
+
+/** Bank lines nobody has placed, grouped by who was paid / who paid: book a whole group in one go. */
+export async function unbookedGroups(ctx: RecordCtx) {
+  await assertBooksAdmin(ctx);
+  const rows = await ctx.tx.query<{ id: string; txn_date: string; description: string; counterparty: string | null; amount: number; bank_account: string; suggested: string | null }>(
+    `select t.id, to_char(t.txn_date, 'YYYY-MM-DD') as txn_date, t.description, t.counterparty, t.amount::float8 as amount, a.name as bank_account,
+            (select p.payload->>'accountId' from acct_proposals p where p.tenant_id = t.tenant_id and p.bank_txn_id = t.id and p.status = 'pending' and p.kind = 'categorize' limit 1) as suggested
+       from bank_transactions t join bank_accounts b on b.tenant_id = t.tenant_id and b.id = t.bank_account_id join gl_accounts a on a.tenant_id = b.tenant_id and a.id = b.gl_account_id
+      where t.tenant_id = $1 and t.status = 'unmatched'
+        and not exists (select 1 from acct_proposals p where p.tenant_id = t.tenant_id and p.bank_txn_id = t.id and p.status = 'pending' and p.kind <> 'categorize')
+      order by t.txn_date limit 3000`,
+    [ctx.tenantId],
+  );
+  const groups = new Map<string, { key: string; inflow: boolean; txnIds: string[]; total: number; from: string; to: string; samples: string[]; suggested: Map<string, number>; descs: string[] }>();
+  for (const r of rows) {
+    const key = payeeKey(r.description, r.counterparty) || '(no name in the narration)';
+    const inflow = r.amount > 0;
+    const k = `${inflow ? 'in' : 'out'}|${key}`;
+    if (!groups.has(k)) groups.set(k, { key, inflow, txnIds: [], total: 0, from: r.txn_date, to: r.txn_date, samples: [], suggested: new Map(), descs: [] });
+    const g = groups.get(k)!;
+    g.txnIds.push(r.id);
+    g.total = r2(g.total + Math.abs(r.amount));
+    g.to = r.txn_date;
+    if (g.samples.length < 3) g.samples.push(r.description);
+    g.descs.push(r.description.toUpperCase());
+    if (r.suggested) g.suggested.set(r.suggested, (g.suggested.get(r.suggested) ?? 0) + 1);
+  }
+  return [...groups.values()]
+    .map((g) => {
+      // what a bank rule can look for: the first two-word, else one-word, piece of the payee that every
+      // narration of the group contains and that says more than "payments" or "branch"
+      const ws = g.key.split(' ');
+      const pieces = [...ws.slice(0, -1).map((w, i) => `${w} ${ws[i + 1]}`), ...ws];
+      const words = pieces.filter((x) => x.length >= 3 && !x.split(' ').every((w) => GENERIC.has(w)) && g.descs.every((d) => d.includes(x)));
+      const sug = [...g.suggested.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+      return { key: g.key, inflow: g.inflow, count: g.txnIds.length, total: g.total, from: g.from, to: g.to, samples: g.samples, txnIds: g.txnIds, ruleText: words[0] ?? null, suggestedAccountId: sug };
+    })
+    .sort((a, b) => b.count - a.count || b.total - a.total);
+}
+
+export const bookGroupSchema = z.object({
+  txnIds: z.array(z.string().uuid()).min(1).max(2000),
+  /** book to an account … */
+  accountId: z.string().uuid().nullish(),
+  /** … or as advances from / to a customer or vendor (created when only a name is given) */
+  advance: z.object({ partyType: z.enum(['customer', 'vendor']), partyId: z.string().uuid().nullish(), name: z.string().trim().min(2).max(120).nullish() }).nullish(),
+  partyType: z.enum(['customer', 'vendor']).nullish(),
+  partyId: z.string().uuid().nullish(),
+  rule: z.object({ contains: z.string().trim().min(2).max(120), direction: z.enum(['in', 'out']) }).nullish(),
+});
+/** Books every line of a group to one account (each on its own); optionally keeps it as a bank rule. */
+export async function bookGroup(ctx: RecordCtx, input: z.infer<typeof bookGroupSchema>) {
+  await assertBooksAdmin(ctx);
+  if (!input.accountId && !input.advance) throw badRequest('Choose the account, or a customer / vendor');
+  let booked = 0;
+  const errors: string[] = [];
+  const events: RecordEvent[] = [];
+  let advance = input.advance ?? null;
+  for (const id of input.txnIds) {
+    await ctx.tx.query('savepoint desk_group');
+    try {
+      if (advance) {
+        const r = await recordAdvance(ctx, id, advance);
+        events.push(...r.events);
+        // the party created for the first line serves the rest
+        advance = { ...advance, partyId: String(r.result.partyId) };
+      } else await categorize(ctx, id, { accountId: input.accountId!, partyType: input.partyId ? (input.partyType ?? 'customer') : null, partyId: input.partyId ?? null });
+      await ctx.tx.query(`update acct_proposals set status = 'stale' where tenant_id = $1 and bank_txn_id = $2 and status = 'pending'`, [ctx.tenantId, id]);
+      await ctx.tx.query('release savepoint desk_group');
+      booked++;
+    } catch (e) {
+      await ctx.tx.query('rollback to savepoint desk_group');
+      if (errors.length < 3) errors.push((e as Error).message);
+    }
+  }
+  let rule = false;
+  if (input.rule && booked && input.accountId) {
+    const acc = await ctx.tx.one<{ name: string }>(`select name from gl_accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, input.accountId]);
+    await saveRule(ctx, null, {
+      name: `${input.rule.contains} → ${acc?.name ?? 'account'}`.slice(0, 120),
+      direction: input.rule.direction,
+      contains: input.rule.contains,
+      accountId: input.accountId,
+      partyType: input.partyId ? (input.partyType ?? 'customer') : null,
+      partyId: input.partyId ?? null,
+    });
+    rule = true;
+  }
+  return { booked, failed: input.txnIds.length - booked, errors, rule, events };
 }
 
 /* ───────────────────────── compliance clerk ───────────────────────── */
@@ -997,6 +1436,48 @@ export async function runCompliance(deps: DeskDeps, opts: { trigger?: string; to
 
 /* ───────────────────────── controller: month-end close ───────────────────────── */
 
+/** The bank account against its statement up to a date: what the books say, what the statement says, and why they differ. */
+async function bankCheck(ctx: RecordCtx, b: { id: string; gl: string }, upTo: string) {
+  const last = await ctx.tx.one<{ txn_date: string; balance: number }>(
+    `select to_char(txn_date, 'YYYY-MM-DD') as txn_date, balance::float8 as balance from bank_transactions where tenant_id = $1 and bank_account_id = $2 and txn_date <= $3::date and balance is not null
+      order by txn_date desc, created_at desc, id desc limit 1`,
+    [ctx.tenantId, b.id, upTo],
+  );
+  if (!last) return null;
+  const first = await ctx.tx.one<{ txn_date: string; balance: number; amount: number }>(
+    `select to_char(txn_date, 'YYYY-MM-DD') as txn_date, balance::float8 as balance, amount::float8 as amount from bank_transactions where tenant_id = $1 and bank_account_id = $2 and balance is not null
+      order by txn_date, created_at, id limit 1`,
+    [ctx.tenantId, b.id],
+  );
+  const bal = async (op: '<=' | '<', d: string) =>
+    (await ctx.tx.one<{ v: number }>(`select coalesce(sum(debit - credit), 0)::float8 as v from journal_lines where tenant_id = $1 and account_id = $2 and posted and entry_date ${op} $3::date`, [ctx.tenantId, b.gl, d]))!.v;
+  const book = r2(await bal('<=', last.txn_date));
+  const unbooked = (await ctx.tx.one<{ n: number; net: number }>(
+    `select count(*)::int as n, coalesce(sum(amount), 0)::float8 as net from bank_transactions where tenant_id = $1 and bank_account_id = $2 and status = 'unmatched' and txn_date <= $3::date`,
+    [ctx.tenantId, b.id, last.txn_date],
+  ))!;
+  const opening = first ? r2(first.balance - first.amount) : 0;
+  const bookBefore = first ? r2(await bal('<', first.txn_date)) : 0;
+  return { date: last.txn_date, statement: r2(last.balance), book, diff: r2(last.balance - book), unbooked: { n: unbooked.n, net: r2(unbooked.net) }, opening, firstDate: first?.txn_date ?? last.txn_date, bookBefore, openingDiff: r2(opening - bookBefore) };
+}
+
+/** Reconciles a bank account to a statement date when every entry up to it agrees with the statement balance. */
+async function autoReconcile(ctx: RecordCtx, b: { id: string; gl: string }, date: string, closing: number) {
+  const lines = await ctx.tx.query<{ id: string }>(
+    `select id from journal_lines where tenant_id = $1 and account_id = $2 and posted and reconciliation_id is null and entry_date <= $3::date`,
+    [ctx.tenantId, b.gl, date],
+  );
+  await ctx.tx.query('savepoint desk_reconcile');
+  try {
+    const r = await reconcile(ctx, b.id, { statementDate: date, closingBalance: closing, lineIds: lines.map((l) => l.id) });
+    await ctx.tx.query('release savepoint desk_reconcile');
+    return r;
+  } catch (e) {
+    await ctx.tx.query('rollback to savepoint desk_reconcile');
+    throw e;
+  }
+}
+
 const lastDay = (ym: string) => new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)), 0)).toISOString().slice(0, 10);
 const prevMonth = (ym: string) => new Date(Date.UTC(Number(ym.slice(0, 4)), Number(ym.slice(5, 7)) - 2, 1)).toISOString().slice(0, 7);
 
@@ -1021,8 +1502,8 @@ export async function runController(deps: DeskDeps, opts: { trigger?: string; pe
     );
     if (unhandled?.n) list.push({ key: k('bank-unhandled'), kind: 'close_bank', severity: 'warn', title: `${unhandled.n} bank line(s) up to ${to} are not booked`, body: `Worth ${money(unhandled.amt)}. The month's figures are incomplete until they are.`, link: '/books#desk', period, amount: unhandled.amt });
 
-    const banks = await ctx.tx.query<{ name: string; reconciled_to: string | null; last_statement_date: string | null }>(
-      `select a.name, to_char((select max(r.statement_date) from bank_reconciliations r where r.tenant_id = b.tenant_id and r.bank_account_id = b.id and r.status = 'completed'), 'YYYY-MM-DD') as reconciled_to,
+    const banks = await ctx.tx.query<{ id: string; gl: string; name: string; reconciled_to: string | null; last_statement_date: string | null }>(
+      `select b.id, b.gl_account_id as gl, a.name, to_char((select max(r.statement_date) from bank_reconciliations r where r.tenant_id = b.tenant_id and r.bank_account_id = b.id and r.status = 'completed'), 'YYYY-MM-DD') as reconciled_to,
               to_char(b.last_statement_date, 'YYYY-MM-DD') as last_statement_date
          from bank_accounts b join gl_accounts a on a.tenant_id = b.tenant_id and a.id = b.gl_account_id where b.tenant_id = $1 and b.is_active and b.kind = 'bank'`,
       [ctx.tenantId],
@@ -1030,7 +1511,49 @@ export async function runController(deps: DeskDeps, opts: { trigger?: string; pe
     for (const b of banks) {
       if (!b.last_statement_date) continue;
       if (b.last_statement_date < to) list.push({ key: k(`statement:${b.name}`), kind: 'close_statement', severity: 'info', title: `${b.name}: no bank lines after ${b.last_statement_date}`, body: `Import the statement up to ${to} (or connect a live feed) so the month can be reconciled.`, link: '/books#banking', period });
-      else if (!b.reconciled_to || b.reconciled_to < to) list.push({ key: k(`reconcile:${b.name}`), kind: 'close_reconcile', severity: 'warn', title: `${b.name} is not reconciled to ${to}`, body: `Reconciled up to ${b.reconciled_to ?? 'never'}. Reconcile with the statement's closing balance in Banking.`, link: '/books#banking', period });
+      const check = await bankCheck(ctx, b, to);
+      if (!check) continue;
+      if (Math.abs(check.diff) > 0.009) {
+        const steps: string[] = [];
+        if (check.unbooked.n) steps.push(`${check.unbooked.n} bank line(s) up to ${check.date} are not booked yet (net ${money(check.unbooked.net)}). Book them first — approve the suggestions, or "Book by payee" for the rest; the bookkeeper also proposes new customers and vendors for money nobody in the books explains.`);
+        if (Math.abs(check.openingDiff) > 0.009)
+          steps.push(`The statement starts with a balance of ${money(check.opening)} on ${check.firstDate}, but the books show ${money(check.bookBefore)} for ${b.name} before that date. That difference (${money(check.openingDiff)}) is the balance brought forward from before the books start: "Bring the opening balance from the statement" posts it against "Opening balance adjustments" (change it to capital, a loan or a receivable later if you know what it was).`);
+        const rest = r2(check.diff - check.unbooked.net - check.openingDiff);
+        if (Math.abs(rest) > 0.009) steps.push(`${money(rest)} remains after that: an entry posted to ${b.name} that is not on the statement (a receipt or payment recorded twice, or entered with the wrong bank) — check Banking → ${b.name} → unmatched ledger entries.`);
+        steps.push('When the books and the statement agree, the controller reconciles the account by itself.');
+        list.push({
+          key: k(`balance:${b.name}`),
+          kind: 'close_bank_balance',
+          severity: 'warn',
+          title: `${b.name}: the books show ${money(check.book)} on ${check.date}, the statement ${money(check.statement)}`,
+          body: `Difference ${money(check.diff)}${check.statement - check.book < 0 ? ' (books higher)' : ' (statement higher)'}.`,
+          link: '/books#banking',
+          period,
+          amount: check.diff,
+          resolution: {
+            steps,
+            actions: [
+              ...(Math.abs(check.openingDiff) > 0.009 ? [{ key: 'opening', label: 'Bring the opening balance from the statement', kind: 'fix' as const, target: b.id, primary: !check.unbooked.n, confirm: `Post ${money(check.openingDiff)} as ${b.name}'s balance brought forward on ${check.firstDate} (against Opening balance adjustments)?` }] : []),
+              ...(check.unbooked.n ? [{ key: 'queue', label: 'Review suggestions', kind: 'tab' as const, target: 'queue', primary: true }, { key: 'group', label: 'Book by payee', kind: 'ui' as const }] : []),
+              { key: 'banking', label: 'Open Banking', kind: 'tab', target: 'banking' },
+            ],
+          },
+        });
+      } else if (!b.reconciled_to || b.reconciled_to < check.date) {
+        // books agree with the statement: reconcile straight away
+        const done = await autoReconcile(ctx, b, check.date, check.statement).catch(() => null);
+        if (!done)
+          list.push({
+            key: k(`reconcile:${b.name}`),
+            kind: 'close_reconcile',
+            severity: 'warn',
+            title: `${b.name} is not reconciled to ${check.date}`,
+            body: `The books agree with the statement (${money(check.statement)}) but the reconciliation could not be completed automatically.`,
+            link: '/books#banking',
+            period,
+            resolution: { steps: ['Books → Banking → the account → Reconcile, with the statement date and closing balance.'], actions: [{ key: 'reconcile', label: 'Reconcile now', kind: 'fix', target: b.id, primary: true }, { key: 'banking', label: 'Open Banking', kind: 'tab', target: 'banking' }] },
+          });
+      }
     }
 
     const drafts = await ctx.tx.one<{ inv: number; bills: number; exp: number }>(

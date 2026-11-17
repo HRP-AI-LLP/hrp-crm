@@ -239,6 +239,87 @@ describe('the compliance clerk and the controller', () => {
   });
 });
 
+describe('resolving what the agents find', () => {
+  it('says how to fix each finding and fixes it from there', async () => {
+    // a GSTR-2B month with a supplier invoice that is not in the books
+    const ym = today.slice(0, 7);
+    const period = `${ym.slice(5, 7)}${ym.slice(0, 4)}`;
+    const imp = await api('POST', '/api/v1/books/gstr-2b', { period, rows: [{ supplierGstin: gstin('09AAGCS1111B1Z'), supplierName: 'Steel Traders', docNumber: 'ST/77', docDate: daysAgo(3), taxable: 5000, cgst: 450, sgst: 450 }] });
+    expect(imp.status, JSON.stringify(imp.json)).toBe(200);
+    await api('POST', '/api/v1/books/desk/run', { agents: ['compliance'] });
+    let f = ((await api('GET', '/api/v1/books/desk/findings')).json as any[]).find((x) => x.key === `gst:2b-unmatched:${period}`);
+    expect(f.resolution.steps.join(' ')).toMatch(/Enter them as bills|Add to books|bills/);
+    expect(f.resolution.actions.map((a: any) => a.key)).toEqual(expect.arrayContaining(['gstr2b_rematch', 'gstr2b_add_all']));
+    expect((await api('POST', `/api/v1/books/desk/findings/${f.id}/fix`, { action: 'nope' })).status).toBe(400);
+    const fix = await api('POST', `/api/v1/books/desk/findings/${f.id}/fix`, { action: 'gstr2b_add_all' });
+    expect(fix.status, JSON.stringify(fix.json)).toBe(200);
+    expect(fix.json).toMatchObject({ cleared: true });
+    expect(fix.json.message).toMatch(/1 bill\(s\) entered, 1 posted, 1 new supplier/);
+
+    // unplaced bank lines: book a whole payee group at once and keep it as a rule
+    await statement([
+      { date: daysAgo(2), description: 'UPI/1111/ZOMATO LTD/zomato@hdfc', amount: -350 },
+      { date: daysAgo(1), description: 'UPI/2222/ZOMATO LTD/zomato@hdfc', amount: -420 },
+    ]);
+    const stale = ((await api('GET', '/api/v1/books/desk/findings')).json as any[]).find((x) => x.kind === 'bank_unhandled');
+    if (stale) expect(stale.resolution.actions.map((a: any) => a.key)).toContain('bookkeeper');
+    const groups = (await api('GET', '/api/v1/books/desk/unbooked')).json as any[];
+    const z = groups.find((g) => g.key.startsWith('ZOMATO'));
+    expect(z).toMatchObject({ count: 2, total: 770, inflow: false, ruleText: 'ZOMATO' });
+    const b = await api('POST', '/api/v1/books/desk/unbooked/book', { txnIds: z.txnIds, accountId: sysAcc.meals, rule: { contains: 'ZOMATO', direction: 'out' } });
+    expect(b.json).toMatchObject({ booked: 2, failed: 0, rule: true });
+    const r = await statement([{ date: today, description: 'UPI/3333/ZOMATO LTD/zomato@hdfc', amount: -199 }]);
+    expect(r.json.bookkeeper).toMatchObject({ applied: 1 });
+  });
+});
+
+describe('creating what is missing and reconciling', () => {
+  it('proposes a new customer for money nobody in the books explains, and records it as an advance', async () => {
+    const r = await statement([{ date: daysAgo(1), description: 'NEFT CR-HDFC0000123-RAVI ENTERPRISES-ADVANCE', amount: 15000 }]);
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    const p = (await queue()).find((x) => x.kind === 'new_party');
+    expect(p).toMatchObject({ source: 'missing', payload: { partyType: 'customer', partyId: null, name: 'Ravi Enterprises' } });
+    // the person edits the name before approving
+    const ok = await api('POST', `/api/v1/books/desk/proposals/${p.id}`, { decision: 'approve', change: { kind: 'new_party', partyType: 'customer', partyName: 'Ravi Enterprises Pvt Ltd' } });
+    expect(ok.status, JSON.stringify(ok.json)).toBe(200);
+    const acc = (await api('GET', '/api/v1/records/account?limit=50')).json.items.find((a: any) => a.name === 'Ravi Enterprises Pvt Ltd');
+    expect(acc).toBeTruthy();
+    const txn = ((await api('GET', `/api/v1/books/bank-accounts/${ids.bank}/transactions?status=all`)).json as any[]).find((t) => t.description.includes('RAVI'));
+    expect(txn.status).toBe('matched');
+    expect((await api('GET', `/api/v1/books/reports/trial-balance?to=${today}`)).json.totals.balanced).toBe(true);
+  });
+
+  it('brings the opening balance from the statement and then reconciles the account by itself', async () => {
+    const nb = await api('POST', '/api/v1/books/bank-accounts', { name: 'Yes Bank Current', kind: 'bank' });
+    expect(nb.status, JSON.stringify(nb.json)).toBe(201);
+    const yes = nb.json.id;
+    const d1 = `${today.slice(0, 7)}-01`;
+    const imp = await api('POST', `/api/v1/books/bank-accounts/${yes}/statement`, {
+      toDesk: true,
+      rows: [
+        { date: d1, description: 'INT.PD SB', amount: 1000, balance: 51000 },
+        { date: d1, description: 'AMB CHRGS FOR OCT', amount: -200, balance: 50800 },
+      ],
+    });
+    expect(imp.json.added).toBe(2);
+    // book both (approve whatever is waiting for this account)
+    const waiting = (await queue()).filter((x) => x.bank_account === 'Yes Bank Current').map((x) => x.id);
+    expect((await api('POST', '/api/v1/books/desk/proposals/approve', { ids: waiting })).json.approved).toBe(2);
+    const run = await api('POST', '/api/v1/books/desk/run', { agents: ['controller'], period: today.slice(0, 7) });
+    expect(run.json.controller.error).toBeUndefined();
+    const f = ((await api('GET', '/api/v1/books/desk/findings')).json as any[]).find((x) => x.kind === 'close_bank_balance' && x.title.startsWith('Yes Bank Current'));
+    expect(f).toBeTruthy();
+    expect(f.resolution.actions.map((a: any) => a.key)).toContain('opening');
+    const fix = await api('POST', `/api/v1/books/desk/findings/${f.id}/fix`, { action: 'opening' });
+    expect(fix.status, JSON.stringify(fix.json)).toBe(200);
+    expect(fix.json.message).toMatch(/50,000\.00 brought forward/);
+    expect(fix.json.cleared).toBe(true);
+    const acct = ((await api('GET', '/api/v1/books/bank-accounts')).json as any[]).find((x) => x.id === yes);
+    expect(acct).toMatchObject({ book_balance: 50800, reconciled_to: expect.stringMatching(/^\d{4}-\d{2}-01/) });
+    expect((await api('GET', `/api/v1/books/reports/trial-balance?to=${today}`)).json.totals.balanced).toBe(true);
+  });
+});
+
 describe('the bank clerk and live feeds', () => {
   it('connects RazorpayX only with working keys and never shows them again', async () => {
     const bad = await api('POST', '/api/v1/books/feeds', { bankAccountId: ids.bank, provider: 'razorpayx', accountRef: '2323230000001111', keyId: RZP_KEY, keySecret: 'wrong-secret-1' });

@@ -640,6 +640,25 @@ export const booksRoutes = new Hono<AppEnv>()
     const st = z.enum(['open', 'done', 'dismissed', 'all']).parse(c.req.query('status') ?? 'open');
     return c.json(await c.var.db.tx(scope(c, true), (tx) => desk.listFindings(rctx(c, tx), st)));
   })
+  .post('/books/desk/findings/:id/fix', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ action: z.string().min(1).max(40) }).parse(await c.req.json());
+    const r = await desk.fixFinding(deskDeps(c), qUuid(c), b.action);
+    await emit(c, r.events);
+    return c.json({ message: r.message, cleared: r.cleared });
+  })
+  .get('/books/desk/unbooked', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => desk.unbookedGroups(rctx(c, tx))));
+  })
+  .post('/books/desk/unbooked/book', async (c) => {
+    requireAdmin(c);
+    const b = desk.bookGroupSchema.parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => desk.bookGroup(rctx(c, tx), b));
+    await emit(c, r.events);
+    const { events: _e, ...rest } = r;
+    return c.json(rest);
+  })
   .post('/books/desk/findings/:id', async (c) => {
     requireAdmin(c);
     const b = z.object({ status: z.enum(['done', 'dismissed', 'open']) }).parse(await c.req.json());
