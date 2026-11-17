@@ -81,10 +81,15 @@ export async function buildGstr1(ctx: RecordCtx, gstin: string, month: string) {
     `select id, invoice_number, invoice_date::text, doc_type, status, nullif(trim(buyer_gstin), '') as buyer_gstin, pos_code, supply_type, reverse_charge,
             grand_total::float8 as grand_total, exchange_rate::float8 as fx, igst_total::float8 as igst_total, tax_total::float8 as tax_total
        from invoices where tenant_id = $1 and deleted_at is null and doc_type in ('tax_invoice', 'credit_note') and status <> 'draft'
-        and invoice_number is not null and invoice_date between $2::date and $3::date
+        and invoice_number is not null and invoice_date between $2::date and $3::date and not imported
       order by invoice_date, invoice_number`,
     [ctx.tenantId, from, to],
   );
+  // invoices imported from another system were reported from there
+  const importedCount = (await ctx.tx.one<{ n: number }>(
+    `select count(*)::int as n from invoices where tenant_id = $1 and deleted_at is null and imported and status not in ('draft','cancelled') and invoice_date between $2::date and $3::date`,
+    [ctx.tenantId, from, to],
+  ))!.n;
   const live = invs.filter((i) => i.status !== 'cancelled');
   const lines = live.length
     ? await ctx.tx.query<LineRow>(
@@ -256,7 +261,7 @@ export async function buildGstr1(ctx: RecordCtx, gstin: string, month: string) {
     payload,
     counts: { b2b: [...b2b.values()].reduce((n, a) => n + a.length, 0), b2cl: [...b2cl.values()].reduce((n, a) => n + a.length, 0), b2cs: b2csRows.length, cdnr: [...cdnr.values()].reduce((n, a) => n + a.length, 0), exp: exp.WPAY.length + exp.WOPAY.length, cancelled: invs.length - live.length },
     totals: { taxable: r2(totals.taxable), igst: r2(totals.igst), cgst: r2(totals.cgst), sgst: r2(totals.sgst) },
-    warnings: [...new Set(warnings)].slice(0, 200),
+    warnings: [...new Set([...warnings, ...(importedCount ? [`${importedCount} invoice(s) imported from another system are left out: they were reported from there`] : [])])].slice(0, 200),
   };
 }
 

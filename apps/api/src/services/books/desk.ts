@@ -910,6 +910,19 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
   return { ok: true, status: 'applied', result: r.result, events: r.events };
 }
 
+/** Books a bank line as a customer's receipt against an invoice (used by the invoice import), on record as a person's decision. */
+export async function bookReceiptFromBank(ctx: RecordCtx, txnId: string, invoiceId: string, tdsAmount = 0) {
+  await ctx.tx.query(`update acct_proposals set status = 'stale' where tenant_id = $1 and bank_txn_id = $2 and status = 'pending'`, [ctx.tenantId, txnId]);
+  const row = (await ctx.tx.one<Row>(
+    `insert into acct_proposals (tenant_id, agent, bank_txn_id, kind, title, reason, payload, confidence, source) values ($1,'bookkeeper',$2,'receipt','Receipt against an imported invoice','Chosen when the invoice was imported',$3,1,'person')
+     returning id, bank_txn_id, kind, payload, status, title`,
+    [ctx.tenantId, txnId, JSON.stringify({ invoiceId, tdsAmount })],
+  ))!;
+  const r = await applySafely(ctx, row, 'person');
+  if (!r.ok) throw badRequest(`The receipt could not be booked against the bank line: ${r.error}`);
+  return { result: r.result, events: r.events };
+}
+
 /** Approves many at once (each on its own; failures are reported, not fatal). */
 export async function approveMany(ctx: RecordCtx, ids: string[]) {
   await assertBooksAdmin(ctx);

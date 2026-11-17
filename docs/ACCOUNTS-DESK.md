@@ -42,6 +42,16 @@ In the review queue: **Approve**, **Change** (say what it really is — a receip
 - **ICICI / HDFC / Axis / Kotak APIs**: these need the bank to approve API access for your current account (and usually a fixed server IP). Once approved, a connector plugs into the same feed interface (`services/books/feeds.ts`).
 - **Account Aggregator** (Decentro, Setu, Finvu…): only for entities regulated by RBI, SEBI, IRDAI or PFRDA, so not available to an ordinary business.
 
+## Importing invoices raised elsewhere
+
+Accounts desk → **Import invoices**: choose any number of files at once — PDFs from Zoho, Tally or any software, Excel / CSV registers or exports (one row per invoice, or one row per line), and scans or photos of printed or handwritten bills. A file may hold several invoices; it is split where the invoice number changes.
+
+- **Reading**: text PDFs and sheets are read by rules (invoice no., date, bill to, GSTIN, items with HSN, taxable value, CGST / SGST / IGST, total, payment made, balance due). When the rules aren't sure, the workspace's AI model reads the text; scans, photos and handwriting are read by the AI model's vision (OpenAI, Anthropic or Gemini in Settings → AI models). Password-protected PDFs ask for the password.
+- **Staged, not created**: every invoice shows what approving it would create — the customer (found by GSTIN, then name, else new), the contact person, a project, the invoice under **its own number**, and how it was paid: a matching receipt in the bank lines (amount, or amount short by TDS; the customer or invoice number in the narration), a receipt recorded without a bank line (cash, or before the statements start), or not paid yet. Duplicates and doubtful figures are flagged.
+- **Review & edit** any field — customer, lines, tax, totals, project, payment — or *Read again with AI*; then **Approve** (or select many and approve together), or **Reject**. Approval stops for that invoice if Synapse's total differs from the document by more than ₹1, or the GSTIN fails its check digit; it shows under *Need fixing* with the reason.
+- **Imported invoices** are issued with their original number and marked imported: they are never sent to GSTR-1 or e-invoicing from Synapse (they were reported where they were raised). After approval the bookkeeper runs, so remaining receipts match their invoices.
+- Timesheets are not inferred from invoices; hours billed stay as invoice lines.
+
 ## The daily round
 
 Every day (03:17 UTC) for workspaces that use the desk: bank clerk → bookkeeper → compliance clerk; in the first week of a month the controller closes the previous month once. *Run the desk now* does the same on demand; *Close this month* runs the controller for any month.
@@ -58,3 +68,4 @@ All under `/api/v1/books`, books admins only.
 | Book by payee | `GET /desk/unbooked`, `POST /desk/unbooked/book` (`txnIds` with `accountId` + optional `rule`, or `advance`: customer / vendor, existing or new) |
 | Feeds | `GET /feeds`, `POST /feeds`, `PATCH /feeds/:id`, `DELETE /feeds/:id`, `POST /feeds/:id/sync` |
 | Statements | `POST /bank-accounts/:id/statement` with `toDesk: true` hands the new lines to the bookkeeper |
+| Invoice import | `POST /imports`, `POST /imports/:id/files` (`pages` text, `rows`, or `images`), `GET /imports`, `GET /imports/:id`, `PATCH /imports/items/:id` (`data`, `choices`), `POST /imports/items/:id/ai`, `POST /imports/items/:id/reject`, `POST /imports/items/approve` (`ids`) |

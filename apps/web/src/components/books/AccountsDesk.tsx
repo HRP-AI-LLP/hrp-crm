@@ -10,10 +10,11 @@ import { del, get, patch, post, put } from '../../lib/api';
 import { date, money2 } from '../../lib/format';
 import { combineStatements, PdfPasswordError, readStatementFile, type StatementLine } from '../../lib/statement';
 import { SelectAll } from '../SelectAll';
+import { InvoiceImport } from './InvoiceImport';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 
 type Json = Record<string, any>;
-type View = 'queue' | 'findings' | 'close' | 'sources' | 'activity';
+type View = 'queue' | 'findings' | 'close' | 'sources' | 'invoices' | 'activity';
 
 const AUTONOMY: [string, string, string][] = [
   ['auto_sure', 'Book the sure ones, ask about the rest', 'Your bank rules, exact matches to invoices, bills and entries, and payees always booked the same way are posted by the agents. Everything else waits for you.'],
@@ -153,6 +154,7 @@ export function AccountsDesk({ go }: { go?: (tab: string) => void }) {
             ['findings', `Findings${c.findings ? ` (${c.findings})` : ''}`],
             ['close', 'Month-end close'],
             ['sources', 'Bank feeds & statements'],
+            ['invoices', 'Import invoices'],
             ['activity', 'Activity'],
           ] as [View, string][]
         ).map(([k, l]) => (
@@ -165,6 +167,7 @@ export function AccountsDesk({ go }: { go?: (tab: string) => void }) {
       {view === 'findings' && <Findings go={go} setView={setView} />}
       {view === 'close' && <Close last={data.lastClose} go={go} />}
       {view === 'sources' && <Sources />}
+      {view === 'invoices' && <InvoiceImport />}
       {view === 'activity' && <Activity />}
       {settings && <SettingsModal current={s} onClose={() => setSettings(false)} onSaved={refresh} />}
     </div>
@@ -613,7 +616,7 @@ function Findings({ go, setView }: { go?: (tab: string) => void; setView: (v: Vi
   const navigate = useNavigate();
   const doAction = async (f: Json, a: Json) => {
     if (a.kind === 'tab') {
-      if (['queue', 'findings', 'close', 'sources', 'activity'].includes(a.target)) setView(a.target as View);
+      if (['queue', 'findings', 'close', 'sources', 'invoices', 'activity'].includes(a.target)) setView(a.target as View);
       else go?.(a.target);
       return;
     }

@@ -50,6 +50,7 @@ async function invoiceAndConn(ctx: RecordCtx, invoiceId: string) {
     [ctx.tenantId, invoiceId],
   );
   if (!inv) throw notFound();
+  if (inv.imported) throw badRequest("This invoice was imported from another system; generate its IRN / e-way bill there");
   if (!inv.seller_gstin) throw badRequest("This invoice has no seller GSTIN");
   const conn = await ctx.tx.one<Conn>(
     `select * from gst_connections where tenant_id = $1 and gstin = $2`,

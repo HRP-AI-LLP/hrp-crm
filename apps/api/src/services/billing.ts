@@ -10,7 +10,7 @@
  * document (only payment state, e-invoice details and cancellation may change).
  */
 import { repost } from './books/posting';
-import { hasAdmin, objectPerm, splitTax, stateCode, stateName, supplyType, validGstin } from '@synapse/shared';
+import { financialYear, hasAdmin, objectPerm, splitTax, stateCode, stateName, supplyType, validGstin } from '@synapse/shared';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
 import { assertSameCurrency } from './books/ledger';
 import { releaseInvoice } from './project-links';
@@ -160,7 +160,7 @@ export async function getInvoice(ctx: RecordCtx, id: string) {
   const account = row.account_id ? await ctx.tx.one<Record<string, unknown>>(`select id, name, gstin, address, city, state, pincode from accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, row.account_id]) : null;
   const settings = await billingSettings(ctx);
   return {
-    invoice: { ...toDto(obj, row, ctx.principal.permissions), buyer_name: row.buyer_name, buyer_address: row.buyer_address, buyer_state: row.buyer_state, buyer_pincode: row.buyer_pincode, seller_gstin: row.seller_gstin, seller_state: row.seller_state, pos_code: row.pos_code, round_off: Number(row.round_off), ack_no: row.ack_no, ack_date: row.ack_date, irn_qr: row.irn_cancelled_at ? null : row.irn_qr, irn_cancelled_at: row.irn_cancelled_at, ewb_no: row.ewb_cancelled_at ? null : row.ewb_no, ewb_date: row.ewb_date, ewb_valid_until: row.ewb_valid_until, financial_year: row.financial_year, subtotal: Number(row.subtotal), discount_total: Number(row.discount_total), tax_total: Number(row.tax_total) },
+    invoice: { ...toDto(obj, row, ctx.principal.permissions), buyer_name: row.buyer_name, buyer_address: row.buyer_address, buyer_state: row.buyer_state, buyer_pincode: row.buyer_pincode, seller_gstin: row.seller_gstin, seller_state: row.seller_state, pos_code: row.pos_code, round_off: Number(row.round_off), ack_no: row.ack_no, ack_date: row.ack_date, irn_qr: row.irn_cancelled_at ? null : row.irn_qr, irn_cancelled_at: row.irn_cancelled_at, ewb_no: row.ewb_cancelled_at ? null : row.ewb_no, ewb_date: row.ewb_date, ewb_valid_until: row.ewb_valid_until, financial_year: row.financial_year, imported: !!row.imported, import_source: row.import_source ?? null, subtotal: Number(row.subtotal), discount_total: Number(row.discount_total), tax_total: Number(row.tax_total) },
     lines: await invoiceLines(ctx, id),
     payments,
     credits,
@@ -269,7 +269,11 @@ export async function invoiceFromOrder(ctx: RecordCtx, orderId: string, opts: { 
 }
 
 /** Assigns the GST number, snapshots the parties and locks the document. */
-export async function issueInvoice(ctx: RecordCtx, id: string): Promise<RecordEvent[]> {
+/**
+ * Issues a draft. `imported`: an invoice raised and reported elsewhere (Zoho, Tally…) keeps its own number
+ * and is marked imported, so Synapse never reports it to GSTR-1 or e-invoicing again.
+ */
+export async function issueInvoice(ctx: RecordCtx, id: string, imported: { number: string; source?: string | null } | null = null): Promise<RecordEvent[]> {
   const { row } = await loadRow(ctx, 'invoice', id, 'update', true);
   if (row.status !== 'draft') throw badRequest('This invoice was already issued');
   const lines = await invoiceLines(ctx, id);
@@ -293,24 +297,28 @@ export async function issueInvoice(ctx: RecordCtx, id: string): Promise<RecordEv
   const settings = await billingSettings(ctx);
   const date = row.invoice_date instanceof Date ? (row.invoice_date as Date).toISOString().slice(0, 10) : String(row.invoice_date).slice(0, 10);
   const series = row.doc_type === 'credit_note' ? 'credit_note' : row.doc_type === 'proforma' ? 'proforma' : 'invoice';
-  const n = await nextFyNumber(ctx, series, date, series === 'credit_note' ? settings.creditNotePrefix : series === 'proforma' ? 'PI' : settings.invoicePrefix);
+  const n = imported
+    ? { number: imported.number.trim().slice(0, 60), fy: financialYear(date) }
+    : await nextFyNumber(ctx, series, date, series === 'credit_note' ? settings.creditNotePrefix : series === 'proforma' ? 'PI' : settings.invoicePrefix);
+  if (imported && (await ctx.tx.one(`select 1 from invoices where tenant_id = $1 and doc_type = $2 and invoice_number = $3 and id <> $4`, [ctx.tenantId, row.doc_type, n.number, id])))
+    throw badRequest(`Invoice ${n.number} is already in Synapse`);
   const due = row.due_date ?? new Date(new Date(`${date}T00:00:00Z`).getTime() + settings.dueDays * 86_400_000).toISOString().slice(0, 10);
   await ctx.tx.query(
     `update invoices set status = 'issued', invoice_number = $3, financial_year = $4, issued_at = now(), due_date = $5,
             buyer_name = $6, buyer_gstin = $7, buyer_address = $8, buyer_state = $9, buyer_pincode = $10,
-            seller_gstin = $11, seller_state = $12, place_of_supply = coalesce(place_of_supply, $13)
+            seller_gstin = $11, seller_state = $12, place_of_supply = coalesce(place_of_supply, $13), imported = $14, import_source = $15
       where tenant_id = $1 and id = $2`,
     [
       ctx.tenantId, id, n.number, n.fy, due,
       acc.name, acc.gstin, [acc.address, acc.city].filter(Boolean).join(', ') || null, acc.state, acc.pincode,
-      tc.company.gstin || null, tc.company.state || null, stateName(tc.pos),
+      tc.company.gstin || null, tc.company.state || null, stateName(tc.pos), !!imported, imported?.source?.slice(0, 200) ?? null,
     ],
   );
   // order lines are now (partly) invoiced; a milestone invoice covers its share of each line
   for (const l of lines) if (l.orderLineId) await ctx.tx.query(invoicedSql(!!row.milestone_id, 1), [ctx.tenantId, l.orderLineId, row.milestone_id ? l.lineSubtotal : l.quantity]);
   const events: RecordEvent[] = [{ objectKey: 'invoice', recordId: id, kind: 'updated', changes: { status: ['draft', 'issued'] } }];
   if (row.doc_type === 'credit_note' && row.original_invoice_id) events.push(...(await applyCredit(ctx, String(row.original_invoice_id))));
-  await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'invoice',$3)`, [ctx.tenantId, `Issued as ${n.number}`, id]);
+  await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'invoice',$3)`, [ctx.tenantId, imported ? `Imported as ${n.number}${imported.source ? ` from ${imported.source}` : ''}` : `Issued as ${n.number}`, id]);
   await repost(ctx.tx, ctx.tenantId, 'invoice', id);
   if (row.sales_order_id) await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'sales_order',$3)`, [ctx.tenantId, `${series === 'credit_note' ? 'Credit note' : 'Invoice'} ${n.number} issued`, row.sales_order_id]);
   return events;

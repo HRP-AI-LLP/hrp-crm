@@ -15,7 +15,7 @@
  */
 import type { Env } from '../../env';
 
-export type AiTask = 'lead_score' | 'sentiment' | 'summary' | 'email_draft' | 'next_best_action' | 'rag_answer' | 'provider_test' | 'agent';
+export type AiTask = 'lead_score' | 'sentiment' | 'summary' | 'email_draft' | 'next_best_action' | 'rag_answer' | 'provider_test' | 'agent' | 'document';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -29,6 +29,10 @@ export interface ChatRequest {
   json?: boolean;
   maxTokens?: number;
   temperature?: number;
+  /** pictures sent with the last user message (scanned or photographed documents); only vision models get them */
+  images?: { mime: 'image/png' | 'image/jpeg' | 'image/webp'; data: string }[];
+  /** longer than the default 20 s (reading documents) */
+  timeoutMs?: number;
 }
 
 export interface ChatResult {
@@ -98,6 +102,26 @@ async function httpError(res: Response): Promise<Error> {
   return new Error(`HTTP ${res.status}${hint ? ` (${hint})` : ''}${safe ? `: ${safe}` : ''}`);
 }
 
+/** The last user message carries the images (OpenAI-style content parts). */
+function withImagesOpenAi(req: ChatRequest) {
+  if (!req.images?.length) return req.messages;
+  const last = req.messages.map((m) => m.role).lastIndexOf('user');
+  return req.messages.map((m, i) =>
+    i === last ? { role: m.role, content: [...req.images!.map((im) => ({ type: 'image_url', image_url: { url: `data:${im.mime};base64,${im.data}` } })), { type: 'text', text: m.content }] } : m,
+  );
+}
+function withImagesAnthropic(req: ChatRequest) {
+  const msgs = req.messages.filter((m) => m.role !== 'system');
+  const last = msgs.map((m) => m.role).lastIndexOf('user');
+  return msgs.map((m, i) =>
+    i === last && req.images?.length
+      ? { role: m.role, content: [...req.images.map((im) => ({ type: 'image', source: { type: 'base64', media_type: im.mime, data: im.data } })), { type: 'text', text: m.content }] }
+      : { role: m.role, content: m.content },
+  );
+}
+/** Providers that read pictures: the platform's Workers AI / Groq text models don't. */
+const VISION_KINDS = new Set(['openai', 'anthropic', 'gemini', 'openrouter', 'openai_compatible']);
+
 function openAiCompatible(baseUrl: string, apiKey: string, model: string, extraHeaders: Record<string, string> = {}) {
   return async (req: ChatRequest, signal: AbortSignal): Promise<CallResult> => {
     const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
@@ -106,7 +130,7 @@ function openAiCompatible(baseUrl: string, apiKey: string, model: string, extraH
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json', ...extraHeaders },
       body: JSON.stringify({
         model,
-        messages: req.messages,
+        messages: withImagesOpenAi(req),
         max_tokens: req.maxTokens ?? 700,
         temperature: req.temperature ?? 0.2,
         ...(req.json ? { response_format: { type: 'json_object' } } : {}),
@@ -130,7 +154,7 @@ function anthropic(apiKey: string, model: string) {
         max_tokens: req.maxTokens ?? 700,
         temperature: req.temperature ?? 0.2,
         ...(system ? { system: req.json ? `${system}\nRespond with a single JSON object only.` : system } : {}),
-        messages: req.messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role, content: m.content })),
+        messages: withImagesAnthropic(req),
       }),
     });
     if (!res.ok) throw await httpError(res);
@@ -143,7 +167,12 @@ function anthropic(apiKey: string, model: string) {
 function gemini(apiKey: string, model: string) {
   return async (req: ChatRequest, signal: AbortSignal): Promise<CallResult> => {
     const system = req.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
-    const contents = req.messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] }));
+    const msgs = req.messages.filter((m) => m.role !== 'system');
+    const lastUser = msgs.map((m) => m.role).lastIndexOf('user');
+    const contents = msgs.map((m, i) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [...(i === lastUser ? (req.images ?? []).map((im) => ({ inlineData: { mimeType: im.mime, data: im.data } })) : []), { text: m.content }],
+    }));
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
       signal,
@@ -253,9 +282,13 @@ export async function chatWith(providerList: Provider[], req: ChatRequest, onAtt
   for (const p of providerList) {
     if (!p.available) continue;
     if (req.containsPii && !p.allowPii) continue;
+    if (req.images?.length && !VISION_KINDS.has(p.kind)) {
+      attempts.push({ provider: p.tenantOwned ? `${p.kind} (your key)` : p.name, error: 'cannot read images' });
+      continue;
+    }
     const started = Date.now();
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => ctrl.abort(), req.timeoutMs ?? TIMEOUT_MS);
     try {
       const r = await Promise.race([p.call(req, ctrl.signal), new Promise<never>((_, rej) => ctrl.signal.addEventListener('abort', () => rej(new Error('timeout'))))]);
       if (!r.text.trim()) throw new Error('empty response');

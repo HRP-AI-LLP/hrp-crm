@@ -31,6 +31,7 @@ import {
 import { expenseAction, expenseBooks, setExpenseAccounts } from '../services/books/expenses';
 import * as rep from '../services/books/reports';
 import * as desk from '../services/books/desk';
+import * as docs from '../services/books/doc-import';
 import * as feeds from '../services/books/feeds';
 import * as g2b from '../services/books/gstr2b';
 import * as setup from '../services/books/setup';
@@ -663,6 +664,50 @@ export const booksRoutes = new Hono<AppEnv>()
     requireAdmin(c);
     const b = z.object({ status: z.enum(['done', 'dismissed', 'open']) }).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => desk.resolveFinding(rctx(c, tx), qUuid(c), b.status)));
+  })
+  // ── importing invoices raised elsewhere (approved one by one, nothing created before that) ──
+  .get('/books/imports', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => docs.listBatches(rctx(c, tx))));
+  })
+  .post('/books/imports', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ name: z.string().trim().max(200).nullish() }).parse(await c.req.json().catch(() => ({})));
+    return c.json(await c.var.db.tx(scope(c), (tx) => docs.createBatch(rctx(c, tx), b.name ?? null)), 201);
+  })
+  .get('/books/imports/:id', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => docs.batchItems(rctx(c, tx), qUuid(c))));
+  })
+  .post('/books/imports/:id/files', async (c) => {
+    requireAdmin(c);
+    const b = docs.fileSchema.parse(await c.req.json());
+    const d = deskDeps(c);
+    return c.json(await docs.stageFile({ run: (fn) => d.run(fn), ai: d.ai }, qUuid(c), b));
+  })
+  .patch('/books/imports/items/:id', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ data: docs.invoiceDataSchema.optional(), choices: docs.choicesSchema.optional() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => docs.updateItem(rctx(c, tx), qUuid(c), b)));
+  })
+  .post('/books/imports/items/:id/ai', async (c) => {
+    requireAdmin(c);
+    const d = deskDeps(c);
+    return c.json(await docs.rereadWithAi({ run: (fn) => d.run(fn), ai: d.ai }, qUuid(c)));
+  })
+  .post('/books/imports/items/:id/reject', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => docs.rejectItem(rctx(c, tx), qUuid(c))));
+  })
+  .post('/books/imports/items/approve', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ ids: z.array(uuid).min(1).max(500) }).parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => docs.approveMany(rctx(c, tx), b.ids));
+    await emit(c, r.events);
+    // receipts not tied to a bank line yet, and everything else in the bank, go to the bookkeeper
+    const k = r.approved ? await desk.runBookkeeper(deskDeps(c), { trigger: 'import' }).catch(() => null) : null;
+    if (k) await emit(c, k.events);
+    return c.json({ results: r.results, approved: r.approved, bookkeeper: k ? { applied: k.applied, waiting: k.waiting, summary: k.summary } : null });
   })
   // live bank feeds (the bank clerk's sources)
   .get('/books/feeds', async (c) => {
