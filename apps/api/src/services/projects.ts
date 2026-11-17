@@ -132,6 +132,8 @@ export async function getProject(ctx: RecordCtx, id: string) {
   const dto: Record<string, unknown> = { ...toDto(obj, project, ctx.principal.permissions), manager: owner?.full_name ?? null };
   // rates, fees and money budgets are for the people who run the project
   if (level !== 'manage') for (const k of ['project_rate', 'fixed_fee', 'budget_amount']) dto[k] = null;
+  // the client portal link is shared by the people who run the project
+  if (level === 'manage') dto.portal_token = project.portal_token ?? null;
   return {
     project: dto,
     level,
@@ -310,7 +312,8 @@ export interface TaskInput {
 }
 
 const TASK_COLS = `t.id, t.project_id, t.list_id, t.milestone_id, t.parent_id, t.task_number, t.name, t.description, t.status, t.priority, t.assignees, t.start_date, t.due_date,
-  t.estimate_hours::float8 as estimate_hours, t.progress, t.billable, t.rate::float8 as rate, t.tags, t.position, t.completed_at, t.created_by, t.created_at, t.updated_at`;
+  t.estimate_hours::float8 as estimate_hours, t.progress, t.billable, t.rate::float8 as rate, t.tags, t.position, t.completed_at, t.created_by, t.created_at, t.updated_at,
+  t.work_type, t.story_points::float8 as story_points, t.sprint_id, t.release_id, t.epic_id, t.backlog_rank`;
 
 export async function listTasks(ctx: RecordCtx, projectId: string, q: { assignee?: string | null; status?: string | null; listId?: string | null } = {}) {
   const { level } = await projectAccess(ctx, projectId);

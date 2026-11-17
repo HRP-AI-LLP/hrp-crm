@@ -8,6 +8,7 @@ import { date, money2 } from '../../lib/format';
 import { useUsers } from '../../lib/hooks';
 import { BarChart } from '../charts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
+import { AgileTab, ChangesTab, ReleasesTab } from './Agile';
 
 type Json = Record<string, any>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -34,7 +35,7 @@ function useAct(keys: unknown[][]) {
   };
 }
 
-type Tab = 'overview' | 'tasks' | 'gantt' | 'milestones' | 'issues' | 'time' | 'billing' | 'team';
+type Tab = 'overview' | 'tasks' | 'agile' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'issues' | 'time' | 'billing' | 'team';
 
 export function ProjectWorkspace({ id }: { id: string }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`) });
@@ -44,7 +45,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
   const manage = data.level === 'manage';
   const member = manage || data.level === 'member';
   const tabs: [Tab, string][] = [
-    ['overview', 'Overview'], ['tasks', 'Tasks'], ['gantt', 'Gantt'], ['milestones', 'Milestones'], ['issues', 'Issues'], ['time', 'Time'],
+    ['overview', 'Overview'], ['tasks', 'Tasks'], ['agile', 'Sprints'], ['releases', 'Releases'], ['changes', 'Changes & portal'], ['gantt', 'Gantt'], ['milestones', 'Milestones'], ['issues', 'Issues'], ['time', 'Time'],
     ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'],
   ];
   return (
@@ -59,6 +60,9 @@ export function ProjectWorkspace({ id }: { id: string }) {
       <div className="panel-body">
         {tab === 'overview' && <Overview id={id} data={data} />}
         {tab === 'tasks' && <Tasks id={id} data={data} member={member} manage={manage} />}
+        {tab === 'agile' && <AgileTab id={id} manage={manage} member={member} />}
+        {tab === 'releases' && <ReleasesTab id={id} manage={manage} />}
+        {tab === 'changes' && <ChangesTab id={id} data={data} manage={manage} member={member} />}
         {tab === 'gantt' && <Gantt id={id} data={data} member={member} />}
         {tab === 'milestones' && <Milestones id={id} data={data} manage={manage} />}
         {tab === 'issues' && <Issues id={id} data={data} member={member} />}

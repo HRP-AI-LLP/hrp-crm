@@ -17,6 +17,7 @@ import { reminderSweep } from './services/reminders';
 import { privacyDailySweep } from './services/privacy';
 import { systemCtxFor } from './services/system';
 import { booksDailySweep } from './services/books/sweep';
+import { itDailySweep } from './services/it/sweep';
 import { processJob } from './services/worker';
 
 const app = createApp();
@@ -66,6 +67,8 @@ export default {
         );
         // books: recurring invoices, bills, expenses and journals that are due
         await booksDailySweep(env, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'books-sweep', tenant: t.tenant_id, msg: (e as Error).message })));
+        // IT: contract billing and renewals, subscription renewals and invoices
+        await itDailySweep(env, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'it-sweep', tenant: t.tenant_id, msg: (e as Error).message })));
       }
       // workspaces with automatic backups enabled get one a day (kept: newest 7)
       await dailyBackups(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'daily-backups', msg: (e as Error).message })));

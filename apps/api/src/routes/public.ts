@@ -2,6 +2,8 @@ import { hashPassword, passwordPolicyError } from '@synapse/shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { z } from 'zod';
+import { takeToken } from '../lib/ratelimit';
+import { portalDecide, portalView, publicRequest, publicRoadmap } from '../services/it/product';
 import type { AppEnv } from '../env';
 import { ApiError, badRequest, conflict, notFound } from '../lib/errors';
 import type { ChannelAccount } from '../services/channels';
@@ -238,6 +240,38 @@ export const publicRoutes = new Hono<AppEnv>()
     await enqueue(c.env, safeCtx(c), eventJobs(route.tenant_id, null, events));
     return c.json({ ok: true });
   })
+  // ---------------------------------------------------------------------------------------------
+  // Client project portal and public product roadmap
+  // ---------------------------------------------------------------------------------------------
+  .get('/portal/:token', async (c) => {
+    const route = await resolveRoute(c, 'portal', c.req.param('token'));
+    const out = await c.var.db.tx({ tenantId: route.tenant_id, readOnly: true }, (tx) => portalView(tx, route.tenant_id, route.target_id));
+    c.header('cache-control', 'no-store');
+    c.header('x-robots-tag', 'noindex');
+    return c.json(out);
+  })
+  .post('/portal/:token/change-requests/:cid', async (c) => {
+    const route = await resolveRoute(c, 'portal', c.req.param('token'));
+    if (!takeToken(`portal:${route.target_id}:${c.req.header('cf-connecting-ip') ?? ''}`, 10).ok) throw new ApiError(429, 'rate_limited', 'Too many requests; try again in a minute');
+    const cid = z.string().uuid().parse(c.req.param('cid'));
+    const b = z.object({ decision: z.enum(['approve', 'reject']), name: z.string().trim().min(2).max(120), note: z.string().trim().max(2000).nullish() }).parse(await c.req.json());
+    const r = await c.var.db.tx({ tenantId: route.tenant_id }, (tx) => portalDecide(tx, route.tenant_id, route.target_id, cid, b));
+    return c.json(r);
+  })
+  .get('/roadmap/:token', async (c) => {
+    const route = await resolveRoute(c, 'roadmap', c.req.param('token'));
+    const out = await c.var.db.tx({ tenantId: route.tenant_id, readOnly: true }, (tx) => publicRoadmap(tx, route.tenant_id, route.target_id));
+    c.header('cache-control', 'no-store');
+    return c.json(out);
+  })
+  .post('/roadmap/:token/requests', async (c) => {
+    const route = await resolveRoute(c, 'roadmap', c.req.param('token'));
+    // a few requests a minute per link and address is plenty for a person
+    if (!takeToken(`roadmap:${route.target_id}:${c.req.header('cf-connecting-ip') ?? ''}`, 5).ok) throw new ApiError(429, 'rate_limited', 'Too many requests; try again in a minute');
+    const b = z.object({ title: z.string().trim().min(3).max(300), description: z.string().trim().max(5000).nullish(), name: z.string().trim().min(2).max(120), email: z.string().trim().email().max(200).nullish() }).parse(await c.req.json());
+    await c.var.db.tx({ tenantId: route.tenant_id }, (tx) => publicRequest(tx, route.tenant_id, route.target_id, b));
+    return c.json({ ok: true }, 201);
+  })
   .get('/tickets/:token', async (c) => {
     const route = await resolveRoute(c, 'ticket', c.req.param('token'));
     const out = await c.var.db.tx({ tenantId: route.tenant_id, readOnly: true }, async (tx) => publicTicket(await systemCtx(c, tx, route.tenant_id), route.target_id));
@@ -287,7 +321,7 @@ export const publicRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   });
 
-export async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form' | 'channel' | 'quote' | 'shipment' | 'installation' | 'ticket' | 'integration' | 'meta_page' | 'privacy' | 'privacy_request' | 'campaign' | 'dashboard', key: string) {
+export async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form' | 'channel' | 'quote' | 'shipment' | 'installation' | 'ticket' | 'integration' | 'meta_page' | 'privacy' | 'privacy_request' | 'campaign' | 'dashboard' | 'portal' | 'roadmap', key: string) {
   if (!/^[A-Za-z0-9_-]{16,80}$/.test(key)) throw notFound();
   const rows = await c.var.db.platform<{ tenant_id: string; target_id: string; tenant_status: string }>(`select * from app.resolve_public_route($1, $2)`, [kind, key]);
   const r = rows[0];

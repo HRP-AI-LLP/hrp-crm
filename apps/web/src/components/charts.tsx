@@ -152,7 +152,8 @@ export function LineChart({ data, fmt = defaultFmt, height = 240 }: { data: Char
   const H = height;
   const pad = { l: 48, r: 12, t: 12, b: 40 };
   const n = data.categories.length;
-  const max = niceMax(Math.max(0, ...data.series.flatMap((s) => s.values)));
+  // a value that is not a number (NaN) is a gap: the line stops there (e.g. days still to come)
+  const max = niceMax(Math.max(0, ...data.series.flatMap((s) => s.values).filter(Number.isFinite)));
   const x = (i: number) => pad.l + (n <= 1 ? (W - pad.l - pad.r) / 2 : (i * (W - pad.l - pad.r)) / (n - 1));
   const y = (v: number) => pad.t + (H - pad.t - pad.b) * (1 - v / max);
   const ticks = [0, 0.5, 1].map((t) => t * max);
@@ -175,12 +176,12 @@ export function LineChart({ data, fmt = defaultFmt, height = 240 }: { data: Char
           </g>
         ))}
         {data.series.map((s, si) => {
-          const pts = s.values.map((v, i) => `${x(i)},${y(v)}`).join(' ');
+          const pts = s.values.map((v, i) => (Number.isFinite(v) ? `${x(i)},${y(v)}` : null)).filter(Boolean).join(' ');
           return (
             <g key={s.label}>
               {si === 0 && n > 1 && <polygon points={`${x(0)},${y(0)} ${pts} ${x(n - 1)},${y(0)}`} fill={`url(#${gid})`} />}
               <polyline points={pts} fill="none" stroke={PALETTE[si % PALETTE.length]} strokeWidth={2.5} strokeLinejoin="round" />
-              {s.values.map((v, i) => (
+              {s.values.map((v, i) => Number.isFinite(v) && (
                 <circle key={i} cx={x(i)} cy={y(v)} r={3.5} fill="#fff" stroke={PALETTE[si % PALETTE.length]} strokeWidth={2}>
                   <title>{`${data.categories[i]}: ${fmt(v)}`}</title>
                 </circle>

@@ -38,6 +38,9 @@ const ProjectsPage = page(() => import('./pages/Projects'), 'ProjectsPage');
 const ProjectPage = page(() => import('./pages/Projects'), 'ProjectPage');
 const JobConfirmPage = page(() => import('./pages/CustomerPages'), 'JobConfirmPage');
 const TicketStatusPage = page(() => import('./pages/CustomerPages'), 'TicketStatusPage');
+const ProjectPortalPage = page(() => import('./pages/CustomerPages'), 'ProjectPortalPage');
+const PublicRoadmapPage = page(() => import('./pages/CustomerPages'), 'PublicRoadmapPage');
+const ItSuitePage = page(() => import('./pages/ItSuite'), 'ItSuitePage');
 const PaidPage = page(() => import('./pages/CustomerPages'), 'PaidPage');
 const FieldSchedulePage = page(() => import('./pages/FieldSchedule'), 'FieldSchedulePage');
 const FieldPage = page(() => import('./pages/Field'), 'FieldPage');
@@ -84,6 +87,8 @@ export function App() {
       <Route path="/d/:token" element={<JobConfirmPage kind="shipment" />} />
       <Route path="/i/:token" element={<JobConfirmPage kind="installation" />} />
       <Route path="/t/:token" element={<TicketStatusPage />} />
+      <Route path="/portal/:token" element={<ProjectPortalPage />} />
+      <Route path="/roadmap/:token" element={<PublicRoadmapPage />} />
       <Route path="/paid" element={<PaidPage />} />
       <Route path="/privacy/verify/:token" element={<PrivacyVerifyPage />} />
       <Route path="/privacy/status/:token" element={<PrivacyStatusPage />} />
@@ -142,6 +147,8 @@ export function App() {
         <Route path="manufacturing" element={<ManufacturingPage />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:id" element={<ProjectPage />} />
+        <Route path="it" element={<Navigate to="/it/subscriptions" replace />} />
+        <Route path="it/:section" element={<ItSuitePage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="organisation" element={<OrganisationPage />} />
         <Route path="inbox" element={<InboxPage />} />

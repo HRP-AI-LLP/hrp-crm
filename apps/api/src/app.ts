@@ -17,6 +17,7 @@ import { organisationRoutes, verifyPublicRoutes } from './routes/organisation';
 import { dealBillingRoutes } from './routes/deal-billing';
 import { booksRoutes } from './routes/books';
 import { projectRoutes } from './routes/projects';
+import { itRoutes } from './routes/it';
 import { manufacturingRoutes } from './routes/manufacturing';
 import { depositRoutes } from './routes/deposits';
 import { gstRoutes } from './routes/gst';
@@ -82,6 +83,7 @@ export function createApp() {
   app.route('/api/v1', dealBillingRoutes);
   app.route('/api/v1', booksRoutes);
   app.route('/api/v1', projectRoutes);
+  app.route('/api/v1', itRoutes);
   app.route('/api/v1', manufacturingRoutes);
   app.route('/api/v1', depositRoutes);
   app.route('/api/v1', gstRoutes);

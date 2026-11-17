@@ -288,7 +288,7 @@ function toLocalInput(iso: string) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function LookupPicker({ id, objectKey, value, onChange }: { id: string; objectKey: string; value: string; onChange: (v: unknown) => void }) {
+export function LookupPicker({ id, objectKey, value, onChange }: { id: string; objectKey: string; value: string; onChange: (v: unknown) => void }) {
   const [q, setQ] = useState('');
   const { data } = useQuery({
     queryKey: ['lookup', objectKey, q],

@@ -329,3 +329,292 @@ export function PaidPage() {
     </div>
   );
 }
+
+/* ───────────── client project portal ───────────── */
+
+const CR_LABEL: Record<string, string> = {
+  submitted: 'Waiting for your approval',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  implemented: 'Done',
+};
+
+/** What a customer sees of their project: progress, milestones, the running sprint, releases, change requests. */
+export function ProjectPortalPage() {
+  const { token = '' } = useParams();
+  const [p, setP] = useState<Json | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [name, setName] = useState('');
+  const [note, setNote] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const load = () =>
+    call<Json>(`/api/public/portal/${encodeURIComponent(token)}`)
+      .then((j) => {
+        setP(j);
+        document.title = `${j.project.name} — ${j.company}`;
+      })
+      .catch(() => setErr('This link is not valid any more.'));
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+  const decide = async (id: string, decision: 'approve' | 'reject') => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await call(`/api/public/portal/${encodeURIComponent(token)}/change-requests/${id}`, { decision, name, note: note[id] || null });
+      await load();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (err && !p)
+    return (
+      <div className="public-wrap">
+        <p>{err}</p>
+      </div>
+    );
+  if (!p)
+    return (
+      <div className="public-wrap">
+        <Spinner />
+      </div>
+    );
+  const pr = p.project;
+  const pct = Math.round(Number(pr.progress ?? 0));
+  const pending = (p.changeRequests as Json[]).filter((c) => c.status === 'submitted');
+  return (
+    <div className="public-wrap customer-page">
+      <header className="cp-head">
+        <b>{p.company}</b>
+        <span className="muted small">Project status · {date(p.asOf)}</span>
+      </header>
+      <h1>{pr.name}</h1>
+      <p className="muted small">
+        {pr.account_name && <>For {pr.account_name} · </>}
+        {pr.manager && <>Project manager: {pr.manager} · </>}
+        {pr.start_date && date(pr.start_date)} – {pr.end_date ? date(pr.end_date) : 'ongoing'}
+      </p>
+      <section className="panel cp-card">
+        <h2>Progress</h2>
+        <div style={{ height: 12, borderRadius: 6, background: '#e5e7eb' }}>
+          <div
+            style={{
+              width: `${pct}%`,
+              height: 12,
+              borderRadius: 6,
+              background: '#0f8dde',
+            }}
+          />
+        </div>
+        <p className="small">
+          {pct}% complete · {p.tasks?.done ?? 0} of {p.tasks?.total ?? 0} work items done
+        </p>
+      </section>
+      {p.sprint && (
+        <section className="panel cp-card">
+          <h2>Current sprint: {p.sprint.name}</h2>
+          {p.sprint.goal && <p>{p.sprint.goal}</p>}
+          <p className="small muted">
+            {date(p.sprint.start_date)} – {date(p.sprint.end_date)} · {p.sprint.done_items} of {p.sprint.items} items done ({p.sprint.done} of {p.sprint.committed} points)
+          </p>
+        </section>
+      )}
+      {p.milestones.length > 0 && (
+        <section className="panel cp-card">
+          <h2>Milestones</h2>
+          <ul className="cp-updates">
+            {p.milestones.map((m: Json, i: number) => (
+              <li key={i}>
+                {m.status === 'done' ? '✅' : '⏳'} <b>{m.name}</b> <span className="muted small">{m.due_date ? `due ${date(m.due_date)}` : ''}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {p.changeRequests.length > 0 && (
+        <section className="panel cp-card">
+          <h2>Change requests</h2>
+          {pending.length > 0 && (
+            <label className="field">
+              Your name (for approvals)
+              <input value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+          )}
+          {p.changeRequests.map((c: Json) => (
+            <div key={c.id} style={{ borderTop: '1px solid #e5e7eb', padding: '10px 0' }}>
+              <b>
+                CR-{c.cr_number}: {c.title}
+              </b>{' '}
+              <span className={`chip ${c.status === 'approved' || c.status === 'implemented' ? 'good' : c.status === 'rejected' ? 'bad' : 'warn'}`}>{CR_LABEL[c.status] ?? c.status}</span>
+              {c.description && <p style={{ whiteSpace: 'pre-wrap', margin: '6px 0' }}>{c.description}</p>}
+              <p className="small muted" style={{ margin: '4px 0' }}>
+                Impact: {c.impact_hours} hours · ₹{Number(c.impact_amount).toLocaleString('en-IN')} + GST · {c.impact_days} days to the schedule
+                {c.decided_by && ` · ${c.status} by ${c.decided_by}`}
+              </p>
+              {c.status === 'submitted' && (
+                <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                  <input placeholder="Comment (needed to reject)" value={note[c.id] ?? ''} onChange={(e) => setNote({ ...note, [c.id]: e.target.value })} style={{ flex: 1 }} />
+                  <button className="btn primary" disabled={busy || name.trim().length < 2} onClick={() => decide(c.id, 'approve')}>
+                    Approve
+                  </button>
+                  <button className="btn" disabled={busy || name.trim().length < 2 || !(note[c.id] ?? '').trim()} onClick={() => decide(c.id, 'reject')}>
+                    Reject
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+          {err && <p className="field-error">{err}</p>}
+        </section>
+      )}
+      {p.releases.length > 0 && (
+        <section className="panel cp-card">
+          <h2>Releases</h2>
+          {p.releases.map((r: Json, i: number) => (
+            <details key={i} open={i === 0 && r.status === 'released'}>
+              <summary>
+                <b>{r.name}</b> {r.version} · {r.status === 'released' ? `released ${date(r.released_at)}` : r.target_date ? `planned for ${date(r.target_date)}` : r.status.replace('_', ' ')}
+              </summary>
+              {r.notes && <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{r.notes}</pre>}
+            </details>
+          ))}
+        </section>
+      )}
+      <p className="muted small" style={{ textAlign: 'center', margin: '24px 0' }}>
+        Sent with HRP Synapse
+      </p>
+    </div>
+  );
+}
+
+/* ───────────── public product roadmap ───────────── */
+
+const RM_LABEL: Record<string, string> = {
+  in_progress: 'Building now',
+  planned: 'Planned',
+  under_review: 'Considering',
+  released: 'Released',
+};
+
+export function PublicRoadmapPage() {
+  const { token = '' } = useParams();
+  const [r, setR] = useState<Json | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [f, setF] = useState({
+    title: '',
+    description: '',
+    name: '',
+    email: '',
+  });
+  const [sent, setSent] = useState(false);
+  useEffect(() => {
+    call<Json>(`/api/public/roadmap/${encodeURIComponent(token)}`)
+      .then((j) => {
+        setR(j);
+        document.title = `${j.product.name} roadmap — ${j.company}`;
+      })
+      .catch(() => setErr('This roadmap is not shared any more.'));
+  }, [token]);
+  if (err && !r)
+    return (
+      <div className="public-wrap">
+        <p>{err}</p>
+      </div>
+    );
+  if (!r)
+    return (
+      <div className="public-wrap">
+        <Spinner />
+      </div>
+    );
+  const groups = ['in_progress', 'planned', 'under_review', 'released'].map((s) => [s, (r.items as Json[]).filter((i) => i.status === s)] as const).filter(([, xs]) => xs.length);
+  return (
+    <div className="public-wrap customer-page">
+      <header className="cp-head">
+        <b>{r.company}</b>
+        <span className="muted small">Product roadmap</span>
+      </header>
+      <h1>{r.product.name}</h1>
+      {r.product.vision && <p>{r.product.vision}</p>}
+      {groups.map(([s, xs]) => (
+        <section key={s} className="panel cp-card">
+          <h2>{RM_LABEL[s]}</h2>
+          {xs.map((i: Json, k: number) => (
+            <div
+              key={k}
+              style={{
+                borderTop: k ? '1px solid #e5e7eb' : undefined,
+                padding: '8px 0',
+              }}
+            >
+              <b>{i.title}</b> {i.quarter && <span className="chip">{i.quarter}</span>} {i.votes > 0 && <span className="chip">👍 {i.votes}</span>}
+              {i.release_name && (
+                <span className="chip good">
+                  {i.release_name}
+                  {i.release_version ? ` ${i.release_version}` : ''}
+                </span>
+              )}
+              {i.description && (
+                <p className="small" style={{ margin: '4px 0', whiteSpace: 'pre-wrap' }}>
+                  {i.description}
+                </p>
+              )}
+            </div>
+          ))}
+        </section>
+      ))}
+      <section className="panel cp-card">
+        <h2>Ask for a feature</h2>
+        {sent ? (
+          <p>Thank you — the product team will look at it.</p>
+        ) : (
+          <>
+            <label className="field">
+              What would help you?
+              <input value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} maxLength={300} />
+            </label>
+            <label className="field">
+              Tell us more (optional)
+              <textarea value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} maxLength={5000} />
+            </label>
+            <label className="field">
+              Your name
+              <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} maxLength={120} />
+            </label>
+            <label className="field">
+              Email (optional)
+              <input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} maxLength={200} />
+            </label>
+            {err && <p className="field-error">{err}</p>}
+            <button
+              className="btn primary"
+              disabled={f.title.trim().length < 3 || f.name.trim().length < 2}
+              onClick={async () => {
+                setErr(null);
+                try {
+                  await call(`/api/public/roadmap/${encodeURIComponent(token)}/requests`, {
+                    title: f.title.trim(),
+                    description: f.description.trim() || null,
+                    name: f.name.trim(),
+                    email: f.email.trim() || null,
+                  });
+                  setSent(true);
+                } catch (e) {
+                  setErr((e as Error).message);
+                }
+              }}
+            >
+              Send
+            </button>
+          </>
+        )}
+      </section>
+      <p className="muted small" style={{ textAlign: 'center', margin: '24px 0' }}>
+        Sent with HRP Synapse
+      </p>
+    </div>
+  );
+}
