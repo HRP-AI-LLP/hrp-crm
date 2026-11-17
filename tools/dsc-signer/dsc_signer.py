@@ -40,7 +40,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "2.0.0"
+VERSION = "2.0.1"
 
 CONFIG = Path(os.environ.get("SYNAPSE_DSC_CONFIG", Path.home() / ".synapse-dsc-signer.json"))
 DEFAULT_PORT = 47321
@@ -84,6 +84,15 @@ def find_lib(cfg: dict, override: str | None, required: bool = True) -> str | No
     if required:
         raise SystemExit(NO_LIB)
     return None
+
+
+def all_libs(cfg: dict, override: str | None) -> list[str]:
+    """Every installed token driver, the chosen one first."""
+    out: list[str] = []
+    for cand in [override, cfg.get("lib"), *KNOWN_LIBS]:
+        if cand and Path(cand).exists() and cand not in out:
+            out.append(cand)
+    return out
 
 
 def origins_of(pairing: dict) -> set[str]:
@@ -162,15 +171,25 @@ class TokenError(RuntimeError):
     pass
 
 
+class PinError(TokenError):
+    """Wrong, expired or locked PIN: the answer for this token, not a reason to try other drivers."""
+
+
+PIN_ERRORS = {0xA0, 0xA1, 0xA2, 0xA4}
+
+
 # positions in CK_FUNCTION_LIST (after the 2-byte version)
-_FN = {"C_Initialize": 0, "C_GetSlotList": 4, "C_OpenSession": 12, "C_CloseSession": 13, "C_Login": 18,
+_FN = {"C_Initialize": 0, "C_GetInfo": 2, "C_GetSlotList": 4, "C_GetSlotInfo": 5, "C_GetTokenInfo": 6, "C_OpenSession": 12, "C_CloseSession": 13, "C_Login": 18,
        "C_GetAttributeValue": 24, "C_FindObjectsInit": 26, "C_FindObjects": 27, "C_FindObjectsFinal": 28,
        "C_SignInit": 42, "C_Sign": 43}
 _P = ctypes.POINTER
 _U = CK_ULONG
 _SIGS = {
     "C_Initialize": [ctypes.c_void_p],
+    "C_GetInfo": [ctypes.c_void_p],
     "C_GetSlotList": [ctypes.c_ubyte, _P(_U), _P(_U)],
+    "C_GetSlotInfo": [_U, ctypes.c_void_p],
+    "C_GetTokenInfo": [_U, ctypes.c_void_p],
     "C_OpenSession": [_U, _U, ctypes.c_void_p, ctypes.c_void_p, _P(_U)],
     "C_CloseSession": [_U],
     "C_Login": [_U, _U, ctypes.c_char_p, _U],
@@ -212,19 +231,54 @@ class P11:
     @staticmethod
     def _ok(rv: int, what: str) -> None:
         if rv != CKR_OK:
-            raise TokenError(CK_ERRORS.get(rv, f"The token said {what} failed (0x{rv:x})"))
+            raise (PinError if rv in PIN_ERRORS else TokenError)(CK_ERRORS.get(rv, f"The token said {what} failed (0x{rv:x})"))
 
     def call(self, name: str, *args) -> None:
         self._ok(self.fn[name](*args), name)
 
-    def slots(self) -> list[int]:
+    def slot_list(self, token_present: bool) -> list[int]:
         n = _U(0)
-        self.call("C_GetSlotList", 1, None, ctypes.byref(n))
+        self.call("C_GetSlotList", 1 if token_present else 0, None, ctypes.byref(n))
         if not n.value:
-            raise TokenError("No token is plugged in")
+            return []
         arr = (_U * n.value)()
-        self.call("C_GetSlotList", 1, arr, ctypes.byref(n))
+        self.call("C_GetSlotList", 1 if token_present else 0, arr, ctypes.byref(n))
         return list(arr[: n.value])
+
+    def slots(self) -> list[int]:
+        # slots with a token; some drivers flag none as "present", so then every slot is tried
+        found = self.slot_list(True) or self.slot_list(False)
+        if not found:
+            raise TokenError("No token is plugged in")
+        return found
+
+    @staticmethod
+    def _text(raw: bytes) -> str:
+        return raw.split(b"\0")[0].decode("utf-8", "replace").strip()
+
+    def describe(self) -> str:
+        buf = ctypes.create_string_buffer(512)
+        if self.fn["C_GetInfo"](buf) != CKR_OK:
+            return "?"
+        flags_at = 34 if _WIN else 40  # after the version and the 32-byte maker's name
+        at = flags_at + ctypes.sizeof(CK_ULONG)
+        return f"{self._text(buf.raw[2:34])} {self._text(buf.raw[at:at + 32])}".strip()
+
+    def slot_text(self, slot: int) -> tuple[str, int]:
+        buf = ctypes.create_string_buffer(512)
+        rv = self.fn["C_GetSlotInfo"](slot, buf)
+        if rv != CKR_OK:
+            return f"(slot info failed 0x{rv:x})", 0
+        flags = CK_ULONG.from_buffer_copy(buf.raw[96:96 + ctypes.sizeof(CK_ULONG)]).value
+        return self._text(buf.raw[:64]), flags
+
+    def token_text(self, slot: int) -> str:
+        buf = ctypes.create_string_buffer(1024)
+        rv = self.fn["C_GetTokenInfo"](slot, buf)
+        if rv != CKR_OK:
+            return CK_ERRORS.get(rv, f"token info failed (0x{rv:x})")
+        flags = CK_ULONG.from_buffer_copy(buf.raw[96:96 + ctypes.sizeof(CK_ULONG)]).value
+        return f"label={self._text(buf.raw[:32])!r} maker={self._text(buf.raw[32:64])!r} model={self._text(buf.raw[64:80])!r} initialised={bool(flags & 0x400)} login_required={bool(flags & 0x4)}"
 
     def open(self, slot: int, pin: str | None) -> int:
         h = _U(0)
@@ -317,7 +371,30 @@ def _login(p: P11, h: int, pin: str) -> None:
         p._ok(rv, "C_Login")
 
 
-def token_certs(lib: str, pin: str | None):
+def _over_libs(libs: list[str], fn):
+    """Runs fn(lib) with each driver until one finds the token; says what each driver saw if none did."""
+    seen = []
+    for lib in libs:
+        try:
+            return fn(lib)
+        except PinError:
+            raise
+        except (TokenError, OSError) as e:
+            seen.append(f"{Path(lib).name}: {e}")
+    raise TokenError("The token was not found. " + "; ".join(seen) + ". Check it shows in the token maker's tool, or run: pnpm dsc diag")
+
+
+def token_certs(libs: list[str], pin: str | None):
+    """The certificates on the plugged-in token(s), from the first driver that finds one."""
+    def one(lib: str):
+        certs = _token_certs(lib, pin)
+        if not certs:
+            raise TokenError("no certificate on the token")
+        return certs
+    return _over_libs(libs, one)
+
+
+def _token_certs(lib: str, pin: str | None):
     """The certificates on the plugged-in token(s); the PIN is used only if a token shows none without it."""
     p = P11(lib)
     out = []
@@ -334,7 +411,16 @@ def token_certs(lib: str, pin: str | None):
     return out
 
 
-def sign_digest(lib: str, pin: str, payload: dict) -> bytes:
+def sign_digest(libs: list[str], pin: str, payload: dict) -> bytes:
+    def one(lib: str):
+        try:
+            return _sign_digest(lib, pin, payload)
+        except PermissionError as e:  # the certificate is not behind this driver: try the next
+            raise TokenError(str(e))
+    return _over_libs(libs, one)
+
+
+def _sign_digest(lib: str, pin: str, payload: dict) -> bytes:
     """Signs the ticket's SHA-256 digest (as a PKCS#1 DigestInfo) with the key of the ticket's certificate."""
     p = P11(lib)
     digest_info = SHA256_DIGEST_INFO + bytes.fromhex(payload["d"])
@@ -410,6 +496,12 @@ class Handler(BaseHTTPRequestHandler):
             raise LookupError(NO_LIB)
         return lib
 
+    def _libs(self, cfg: dict) -> list[str]:
+        libs = all_libs(cfg, getattr(self.server, "lib_override", None))
+        if not libs:
+            raise LookupError(NO_LIB)
+        return libs
+
     def _body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
         if n > 40 * 1024 * 1024:
@@ -424,13 +516,13 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             if self.path == "/v1/certificates":
                 with lock:
-                    return self._send(200, {"certificates": token_certs(self._lib(cfg), body.get("pin"))})
+                    return self._send(200, {"certificates": token_certs(self._libs(cfg), body.get("pin"))})
             if self.path == "/v1/sign":
                 payload = check_ticket(cfg, body["ticket"])
                 if not body.get("pin"):
                     return self._send(400, {"error": "Enter the token PIN"})
                 with lock:
-                    sig = sign_digest(self._lib(cfg), body["pin"], payload)
+                    sig = sign_digest(self._libs(cfg), body["pin"], payload)
                 return self._send(200, {"signature": base64.b64encode(sig).decode()})
             self._send(404, {"error": "not found"})
         except PermissionError as e:
@@ -446,6 +538,51 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("%s %s\n" % (self.log_date_time_string(), fmt % args))
 
 
+def diag(cfg: dict) -> None:
+    """Prints what each token driver sees, without a PIN (nothing secret is shown)."""
+    import glob
+    import platform
+    import struct
+
+    print(f"Synapse DSC signer {VERSION}; Python {platform.python_version()} {struct.calcsize('P') * 8}-bit on {platform.platform()}")
+    cands = all_libs(cfg, None)
+    if _WIN:
+        for pat in ("*pkcs11*.dll", "*p11*.dll", "*csp11*.dll"):
+            for f in glob.glob(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", pat)):
+                if f not in cands:
+                    cands.append(f)
+    if not cands:
+        print("No token driver found. " + NO_LIB)
+        return
+    for lib in cands:
+        print(f"\nDriver {lib}")
+        try:
+            p = P11(lib)
+        except Exception as e:  # noqa: BLE001
+            print(f"  cannot load it: {type(e).__name__}: {e}")
+            continue
+        print(f"  library: {p.describe()}")
+        try:
+            present, every = p.slot_list(True), p.slot_list(False)
+        except TokenError as e:
+            print(f"  slot list failed: {e}")
+            continue
+        print(f"  slots: {len(every)} in all, {len(present)} with a token")
+        for slot in every:
+            text, flags = p.slot_text(slot)
+            print(f"  - slot {slot}: {text!r} token_present={bool(flags & 1)} removable={bool(flags & 2)}")
+            print(f"      {p.token_text(slot)}")
+            try:
+                h = p.open(slot, None)
+                try:
+                    n = len(p.find(h, CKO_CERTIFICATE))
+                    print(f"      certificates visible without PIN: {n}")
+                finally:
+                    p.close(h)
+            except TokenError as e:
+                print(f"      open session: {e}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="HRP Synapse DSC signer (USB token)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -455,6 +592,7 @@ def main() -> None:
     s = sub.add_parser("serve", help="run the signer")
     s.add_argument("--lib", help="the token's PKCS#11 library (.dll / .so)")
     s.add_argument("--port", type=int, default=None)
+    sub.add_parser("diag", help="show what each token driver on this computer sees (to paste to support)")
     c = sub.add_parser("certs", help="list the certificates on the token")
     c.add_argument("--lib")
     c.add_argument("--pin")
@@ -476,8 +614,10 @@ def main() -> None:
         save_config(cfg)
         print(f"Paired with {', '.join(origins)}. A running signer picks this up at once; otherwise start it (pnpm local starts it for you).")
     elif a.cmd == "certs":
-        for x in token_certs(find_lib(cfg, a.lib), a.pin):
+        for x in token_certs(all_libs(cfg, a.lib), a.pin):
             print(f"{x['label']}  sha1={x['thumbprint']}")
+    elif a.cmd == "diag":
+        diag(cfg)
     elif a.cmd == "serve":
         if a.lib:
             if not Path(a.lib).exists():
