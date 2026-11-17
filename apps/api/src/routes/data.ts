@@ -224,7 +224,7 @@ export const dataRoutes = new Hono<AppEnv>()
   .get('/export/:object', async (c) => {
     const object = c.req.param('object');
     const q = z
-      .object({ q: z.string().max(200).optional(), filters: z.string().optional(), sort: z.string().max(60).optional(), dir: z.enum(['asc', 'desc']).optional(), columns: z.string().optional(), ids: z.string().optional() })
+      .object({ q: z.string().max(200).optional(), filters: z.string().optional(), sort: z.string().max(60).optional(), dir: z.enum(['asc', 'desc']).optional(), columns: z.string().optional(), ids: z.string().optional(), format: z.enum(['csv', 'display']).optional() })
       .parse(c.req.query());
     let filters;
     try {
@@ -234,7 +234,7 @@ export const dataRoutes = new Hono<AppEnv>()
     }
     const ids = q.ids ? z.array(uuid).max(5000).parse(q.ids.split(',')) : undefined;
     const r = await c.var.db.tx(scope(c), (tx) =>
-      exportCsv(rctx(c, tx), object, { q: q.q, filters, sort: q.sort, dir: q.dir, ids }, q.columns ? q.columns.split(',') : undefined),
+      exportCsv(rctx(c, tx), object, { q: q.q, filters, sort: q.sort, dir: q.dir, ids }, q.columns ? q.columns.split(',') : undefined, { display: q.format === 'display' }),
     );
     const name = `${object}-${new Date().toISOString().slice(0, 10)}.csv`;
     return new Response(r.csv, {

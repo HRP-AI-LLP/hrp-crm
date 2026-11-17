@@ -118,6 +118,17 @@ export async function download(path: string, fallbackName: string, retry = true)
   return res.headers;
 }
 
+/** An authenticated text download kept in memory (e.g. a CSV to turn into a PDF report). */
+export async function getText(path: string, retry = true): Promise<{ text: string; headers: Headers }> {
+  const res = await fetch(path, { headers: headers(), credentials: 'same-origin' });
+  if (res.status === 401 && retry && (await refreshSession())) return getText(path, false);
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new ApiError(res.status, j?.error?.code ?? 'error', j?.error?.message ?? `Download failed (${res.status})`);
+  }
+  return { text: await res.text(), headers: res.headers };
+}
+
 /** Raw binary upload (files): the body is sent as-is, metadata goes in the query string. */
 export async function upload<T = unknown>(path: string, file: Blob, retry = true): Promise<T> {
   const h = headers({ 'content-type': 'application/octet-stream' });

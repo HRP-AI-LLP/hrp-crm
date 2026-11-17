@@ -157,3 +157,18 @@ under Organisation → Documents (partners and team members each get a group wit
 - UAN must be 12 digits; the PF number is normalised to `MH/BAN/0012345/000/0001234`.
 - Who sees them: admins who manage users and the organisation profile's managers (team members), the
   profile's managers (partners). People do not see one another's.
+
+## PDF reports from any table
+
+Every data table in Synapse has an **Export PDF** button above it (added automatically, so new screens get it
+too): Organisation, Billing & GST, Books, Inventory, Projects, report results, the figures behind charts, and
+the rest. The PDF carries the company's name and GSTIN, the report's title (from the page, tab and panel),
+who generated it and when (IST), page numbers, right-aligned ₹ amounts and repeated column headings on every
+page; wide tables print landscape. It holds the rows shown on screen.
+
+Record lists (Leads, Accounts, Deals, Invoices…) have **Export ▾ → PDF report** instead: every record matching
+the search, filters, stage and sort (up to 5,000), in the list's column order and as people read them
+(names instead of IDs, picklist labels, ₹ amounts, Indian dates), with the filters printed under the title.
+Selected rows can be exported the same way. CSV export stays for Excel and now includes the name column.
+
+A table can opt out with `data-export="off"` or name its report with `data-export-title="…"`.

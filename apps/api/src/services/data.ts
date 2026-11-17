@@ -391,31 +391,86 @@ function csvCell(v: unknown): string {
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export async function exportCsv(ctx: RecordCtx, objectKey: string, query: Parameters<typeof listRecords>[2], columns?: string[]) {
+/** How a value reads to a person: names, labels, Indian money and dates. */
+function displayValue(f: FieldDef, v: unknown, names: Map<string, string>): unknown {
+  if (v === null || v === undefined || v === '') return '';
+  const t = f.type === 'formula' ? (f.options?.returnType ?? 'text') : f.type;
+  const choice = (x: unknown) => f.options?.choices?.find((c) => c.value === x)?.label ?? x;
+  switch (t) {
+    case 'picklist':
+      return choice(v);
+    case 'multipicklist':
+      return (Array.isArray(v) ? v : [v]).map(choice).join(', ');
+    case 'lookup':
+    case 'user':
+      return names.get(String(v)) ?? '';
+    case 'boolean':
+      return v === true || v === 'true' ? 'Yes' : 'No';
+    case 'currency':
+      return `₹${Number(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    case 'percent':
+      return `${Number(v).toLocaleString('en-IN', { maximumFractionDigits: 2 })}%`;
+    case 'number':
+    case 'rollup':
+      return typeof v === 'number' || /^-?\d+(\.\d+)?$/.test(String(v)) ? Number(v).toLocaleString('en-IN', { maximumFractionDigits: 4 }) : v;
+    case 'date':
+      return new Date(`${String(v).slice(0, 10)}T00:00:00Z`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' });
+    case 'datetime':
+      return new Date(String(v)).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' });
+    default:
+      return v;
+  }
+}
+
+/**
+ * Records as CSV: every match of the list's search, filters and sort (up to 5,000). `display` gives the
+ * text a person reads (for PDF reports): no IDs, names for lookups and people, labels for choices, ₹ and
+ * Indian dates. Otherwise raw values that import back.
+ */
+export async function exportCsv(ctx: RecordCtx, objectKey: string, query: Parameters<typeof listRecords>[2], columns?: string[], opts: { display?: boolean } = {}) {
   const obj = getObject(ctx.meta, objectKey);
   const visible = obj.fields.filter((f) => fieldAccess(ctx.principal.permissions, objectKey, f.key) !== 'hidden');
-  const cols = columns?.length ? visible.filter((f) => columns.includes(f.key)) : visible;
+  const titleCol = storageFor(objectKey).titleColumn;
+  const titleField = obj.fields.find((f) => f.key === titleCol);
+  // the list asks for its name column as "title"
+  const wantTitle = !columns?.length || columns.includes('title') || columns.includes(titleCol);
+  // in the order the list shows them
+  const cols = (columns?.length ? columns.map((k) => visible.find((f) => f.key === k)).filter((f): f is FieldDef => !!f) : visible).filter((f) => f.key !== titleCol);
   const users = new Map((await ctx.tx.query<{ id: string; full_name: string }>(`select id, full_name from users where tenant_id = $1`, [ctx.tenantId])).map((u) => [u.id, u.full_name]));
   const stages = new Map(ctx.meta.pipelines.flatMap((p) => p.stages).map((s) => [s.id, s.label]));
   const pipes = new Map(ctx.meta.pipelines.map((p) => [p.id, p.name]));
-  const lines = [['ID', ...cols.map((c) => c.label), 'Created', 'Updated'].map(csvCell).join(',')];
+  const display = !!opts.display;
+  const head = [...(display ? [] : ['ID']), ...(wantTitle ? [titleField?.label ?? 'Name'] : []), ...cols.map((c) => c.label), 'Created', 'Updated'];
+  const lines = [head.map(csvCell).join(',')];
+  const when = (v: unknown) => (display ? new Date(String(v)).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }) : v);
   let cursor: string | null = null;
   let n = 0;
   do {
     const page: Awaited<ReturnType<typeof listRecords>> = await listRecords(ctx, objectKey, { ...query, limit: 200, cursor });
+    // names of the records that lookups on this page point at
+    const names = new Map<string, string>([...users, ...stages, ...pipes]);
+    if (display) {
+      for (const c of cols.filter((f) => f.type === 'lookup' && f.options?.lookupObject)) {
+        const ids = [...new Set(page.items.map((r) => r[c.key]).filter((x): x is string => typeof x === 'string' && !!x))];
+        if (!ids.length) continue;
+        const ts = storageFor(c.options!.lookupObject!);
+        for (const r of await ctx.tx.query<{ id: string; t: string }>(`select id, "${ts.titleColumn}" as t from "${ts.table}" where tenant_id = $1 and id::text = any($2::text[])`, [ctx.tenantId, ids])) names.set(r.id, r.t);
+      }
+    }
     for (const r of page.items) {
       const cells = cols.map((c) => {
         const v = r[c.key];
-        if (c.type === 'user') return users.get(String(v)) ?? v;
         if (c.key === 'stage_id') return stages.get(String(v)) ?? v;
         if (c.key === 'pipeline_id') return pipes.get(String(v)) ?? v;
+        if (display) return displayValue(c, v, names);
+        if (c.type === 'user') return users.get(String(v)) ?? v;
         return v;
       });
-      lines.push([r.id, ...cells, r.created_at, r.updated_at].map(csvCell).join(','));
+      lines.push([...(display ? [] : [r.id]), ...(wantTitle ? [r.title] : []), ...cells, when(r.created_at), when(r.updated_at)].map(csvCell).join(','));
       if (++n >= EXPORT_LIMIT) break;
     }
     cursor = n >= EXPORT_LIMIT ? null : page.nextCursor;
   } while (cursor);
-  await ctx.tx.query(`insert into audit_logs (tenant_id, action, object_key, changes) values ($1, 'export', $2, $3)`, [ctx.tenantId, objectKey, JSON.stringify({ rows: n, columns: cols.map((c) => c.key) })]);
-  return { csv: '﻿' + lines.join('\r\n'), rows: n, truncated: n >= EXPORT_LIMIT };
+  await ctx.tx.query(`insert into audit_logs (tenant_id, action, object_key, changes) values ($1, 'export', $2, $3)`, [ctx.tenantId, objectKey, JSON.stringify({ rows: n, columns: cols.map((c) => c.key), format: display ? 'report' : 'csv' })]);
+  return { csv: '\uFEFF' + lines.join('\r\n'), rows: n, truncated: n >= EXPORT_LIMIT };
 }

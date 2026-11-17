@@ -1034,3 +1034,9 @@ a.cite:hover { background: var(--brand-100); }
   .cp-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cp-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* "Export PDF" above every data table (lib/table-pdf-buttons.ts) */
+.tbl-export { display: flex; justify-content: flex-end; padding: 2px 4px 4px; position: sticky; left: 0; }
+.tbl-export .btn { font-size: 12px; opacity: 0.75; }
+.tbl-export .btn:hover, .tbl-export .btn:focus-visible { opacity: 1; }
+@media print { .tbl-export, .export-menu { display: none !important; } }

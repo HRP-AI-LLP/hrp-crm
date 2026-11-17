@@ -4,6 +4,8 @@ import { Suspense, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { get, post } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { setPdfContext } from '../lib/table-pdf';
+import { startTablePdfButtons } from '../lib/table-pdf-buttons';
 import { initials, relative } from '../lib/format';
 import { useMeta } from '../lib/hooks';
 import { Icon, Spinner } from './ui';
@@ -167,6 +169,11 @@ function Notifications() {
 
 export function Shell() {
   const { me, logout, can } = useAuth();
+  // every data table gets an "Export PDF" button; reports say who made them, for which company
+  useEffect(() => {
+    if (me) setPdfContext({ user: me.user.fullName, workspace: me.tenant.name });
+    startTablePdfButtons();
+  }, [me]);
   const { data: meta } = useMeta();
   const [navOpen, setNavOpen] = useState(false);
   const loc = useLocation();

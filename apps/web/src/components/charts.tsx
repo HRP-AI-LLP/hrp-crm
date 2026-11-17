@@ -29,7 +29,7 @@ function niceMax(v: number) {
 
 function SrTable({ data, fmt }: { data: ChartData; fmt: Fmt }) {
   return (
-    <table className="sr-only">
+    <table className="sr-only data" data-export-note="Figures behind the chart">
       <thead>
         <tr>
           <th>Category</th>

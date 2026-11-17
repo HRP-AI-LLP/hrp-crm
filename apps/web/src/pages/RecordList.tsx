@@ -6,7 +6,9 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { FieldValue, RecordFormModal } from '../components/fields';
 import { BulkEditModal, ColumnPicker, describeFilter, type Filter, FilterBuilder, ImportWizard } from '../components/ListTools';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
-import { ApiError, del, download, get, post, put } from '../lib/api';
+import { ApiError, del, download, get, getText, post, put } from '../lib/api';
+import { parseCsv } from '../lib/csv';
+import { exportReportPdf } from '../lib/table-pdf';
 import { useAuth } from '../lib/auth';
 import { relative } from '../lib/format';
 import { useObject, usePipelines, useRecords } from '../lib/hooks';
@@ -45,6 +47,13 @@ export function RecordListPage() {
   const [dirty, setDirty] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dialog, setDialog] = useState<null | 'create' | 'filter' | 'columns' | 'bulk' | 'import' | 'save' | 'delete'>(null);
+  const [exportMenu, setExportMenu] = useState(false);
+  useEffect(() => {
+    if (!exportMenu) return;
+    const close = (e: MouseEvent) => !(e.target as Element).closest?.('.export-menu') && setExportMenu(false);
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [exportMenu]);
 
   const views = useQuery({ queryKey: ['views', object], queryFn: () => get<{ items: SavedView[] }>(`/api/v1/views/${object}`), enabled: !!object });
 
@@ -133,7 +142,7 @@ export function RecordListPage() {
     }
   };
 
-  const exportNow = async (ids?: string[]) => {
+  const exportQuery = (ids?: string[]) => {
     const p = new URLSearchParams();
     if (debounced) p.set('q', debounced);
     const f = [...effectiveFilters, ...(stage ? [{ field: 'stage_id', op: 'eq', value: stage }] : [])];
@@ -144,10 +153,40 @@ export function RecordListPage() {
     }
     p.set('columns', ['title', ...columns.map((c) => c.key)].join(','));
     if (ids?.length) p.set('ids', ids.join(','));
+    return p;
+  };
+  const exportNow = async (ids?: string[]) => {
+    setExportMenu(false);
+    const p = exportQuery(ids);
     try {
       const h = await download(`/api/v1/export/${object}?${p}`, `${object}.csv`);
       if (h.get('x-export-truncated') === 'true') toast(`Exported the first ${h.get('x-export-rows')} rows. Narrow the filters to export the rest.`, true);
       else toast(`Exported ${h.get('x-export-rows') ?? ''} rows`);
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
+
+  /** The same rows as the CSV (every match, not just this page), as a PDF report for management. */
+  const exportPdf = async (ids?: string[]) => {
+    setExportMenu(false);
+    try {
+      const q = exportQuery(ids);
+      q.set('format', 'display');
+      const { text, headers } = await getText(`/api/v1/export/${object}?${q}`);
+      const rows = parseCsv(text);
+      const [head = [], ...body] = rows;
+      const notes = [
+        ids?.length ? `${ids.length} selected` : null,
+        view === 'mine' ? 'My records' : null,
+        debounced ? `Search: “${debounced}”` : null,
+        ...filters.map((f) => describeFilter(obj, f)),
+        stage ? `Stage: ${pipelines.flatMap((p) => p.stages).find((s) => s.id === stage)?.label ?? stage}` : null,
+        sort.field ? `Sorted by ${obj.fields.find((f) => f.key === sort.field)?.label ?? sort.field} (${sort.dir === 'desc' ? 'high to low' : 'low to high'})` : null,
+        headers.get('x-export-truncated') === 'true' ? `First ${headers.get('x-export-rows')} rows only: narrow the filters for the rest` : null,
+      ].filter(Boolean);
+      const name = await exportReportPdf({ title: obj.plural, subtitle: notes.length ? notes.join('  ·  ') : 'All records', head, body: body.filter((r) => r.some((c) => c.trim())) });
+      toast(`Saved ${name}`);
     } catch (e) {
       toast((e as Error).message, true);
     }
@@ -198,9 +237,21 @@ export function RecordListPage() {
               Import
             </button>
           )}
-          <button className="btn" onClick={() => exportNow()}>
-            Export
-          </button>
+          <div className="export-menu" style={{ position: 'relative' }}>
+            <button className="btn" aria-haspopup="menu" aria-expanded={exportMenu} onClick={() => setExportMenu(!exportMenu)}>
+              Export ▾
+            </button>
+            {exportMenu && (
+              <div className="menu" role="menu" style={{ position: 'absolute', right: 0, top: '100%', zIndex: 30, minWidth: 220 }}>
+                <button role="menuitem" onClick={() => exportPdf()}>
+                  PDF report (for sharing)
+                </button>
+                <button role="menuitem" onClick={() => exportNow()}>
+                  CSV (for Excel)
+                </button>
+              </div>
+            )}
+          </div>
           {canCreate && (
             <button className="btn primary" onClick={() => setDialog('create')}>
               New {obj.label.toLowerCase()}
@@ -252,7 +303,10 @@ export function RecordListPage() {
               </button>
             )}
             <button className="btn sm" onClick={() => exportNow([...selected])}>
-              Export selected
+              Export selected (CSV)
+            </button>
+            <button className="btn sm" onClick={() => exportPdf([...selected])}>
+              Selected as PDF
             </button>
             {canDelete && (
               <button
@@ -309,7 +363,7 @@ export function RecordListPage() {
           </div>
         ) : items.length ? (
           <div className="table-wrap">
-            <table className="data">
+            <table className="data" data-export="off">
               <thead>
                 <tr>
                   <th className="check">

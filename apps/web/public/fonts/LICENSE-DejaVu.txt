@@ -1,0 +1,3 @@
+pdf-sans.ttf and pdf-sans-bold.ttf are subsets of DejaVu Sans (https://dejavu-fonts.github.io/),
+used for the text of exported PDF reports. DejaVu fonts are free software: Bitstream Vera Fonts
+Copyright (c) 2003 Bitstream, Inc. (Bitstream Vera license); DejaVu changes are in the public domain.
