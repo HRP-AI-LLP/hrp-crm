@@ -10,6 +10,7 @@ import { Db } from './lib/db';
 import type { Job } from './services/jobs';
 import { dailyBackups } from './services/backup';
 import { mailSweep } from './services/mail';
+import { intakeSweep } from './services/intake/intake';
 import { campaignSweep } from './services/campaigns';
 import { digestSweep } from './services/digests';
 import { intelSweep } from './services/intel/sweep';
@@ -46,6 +47,8 @@ export default {
         await reminderSweep(env, db);
         // connected Gmail / Outlook mailboxes (each at most every ~15 minutes)
         await mailSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'mail-sweep', msg: (e as Error).message })));
+        // mailboxes read for GeM alerts, bills and invoices (each at most every ~15 minutes)
+        await intakeSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'intake-sweep', msg: (e as Error).message })));
         // campaigns send in batches while one is running (a KV flag keeps idle workspaces asleep)
         await campaignSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'campaign-sweep', msg: (e as Error).message })));
         await digestSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'digest-sweep', msg: (e as Error).message })));

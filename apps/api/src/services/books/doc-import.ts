@@ -81,7 +81,8 @@ export function isoDate(v: unknown): string | null {
   if (!mon || mon > 12 || !d || d > 31 || y < 2000 || y > 2100) return null;
   return `${y}-${String(mon).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
-const AMT = /[-(]?(?:₹|rs\.?|inr)?\s*\d{1,3}(?:,\d{2,3})*(?:\.\d{1,2})?\)?|\d+\.\d{1,2}/gi;
+// an amount: grouped (1,18,000.00) or plain (11800.00, 11800) — plain digits are never cut at three
+const AMT = /[-(]?(?:₹|rs\.?|inr)?\s*(?:\d{1,3}(?:,\d{2,3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\)?/gi;
 export function num(s: unknown): number {
   if (typeof s === 'number') return Number.isFinite(s) ? s : 0;
   const t = String(s ?? '').trim();

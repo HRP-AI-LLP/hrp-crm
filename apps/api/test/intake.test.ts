@@ -1,0 +1,321 @@
+/**
+ * Mail intake: reading a mailbox over IMAP (a local test server), GeM alerts and corrigenda into GeM
+ * bids, mailed invoices into draft bills, and a GeM bid checked against the organisation with its
+ * documents put together in one PDF.
+ */
+import net from 'node:net';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { parseMail } from '../src/lib/mime';
+import { classify, parseBidDocument, parseCorrigendum, parseNewBids } from '../src/services/intake/parse';
+import { fakeR2, makeHarness } from './harness';
+
+let h: Awaited<ReturnType<typeof makeHarness>>;
+let api: ReturnType<typeof h.as>;
+let token = '';
+const ids: Record<string, string> = {};
+const OWN_GSTIN = '09AASFH6805J1ZT';
+const VENDOR_GSTIN = '09ABCDE1234F1Z5';
+
+/* ───────────── test mail ───────────── */
+
+const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/.{76}/g, '$&\r\n');
+let invoicePdf: Uint8Array = new Uint8Array();
+
+function mail(o: { id: string; from: string; subject: string; html?: string; text?: string; pdf?: { name: string; bytes: Uint8Array }; date?: string }) {
+  const head = [`Message-ID: <${o.id}>`, `Date: ${o.date ?? 'Tue, 17 Nov 2026 15:51:20 +0530'}`, `From: ${o.from}`, 'To: harsha.rani@hrpai.in', `Subject: ${o.subject}`, 'MIME-Version: 1.0'];
+  if (!o.pdf) return [...head, 'Content-Type: text/html; charset=utf-8', 'Content-Transfer-Encoding: quoted-printable', '', (o.html ?? '').replace(/=/g, '=3D'), ''].join('\r\n');
+  return [
+    ...head,
+    'Content-Type: multipart/mixed; boundary="XYZ"',
+    '',
+    '--XYZ',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    o.text ?? 'Please find the invoice attached.',
+    '--XYZ',
+    `Content-Type: application/pdf; name="${o.pdf.name}"`,
+    'Content-Transfer-Encoding: base64',
+    `Content-Disposition: attachment; filename="${o.pdf.name}"`,
+    '',
+    b64(o.pdf.bytes),
+    '--XYZ--',
+    '',
+  ].join('\r\n');
+}
+
+const NEW_BIDS_HTML = `<p>Dear Seller/Service provider,</p><p>New bid(s) matching your offered categories have been published on GeM portal.</p>
+<table><tr><th>Bid Number</th><th>Items</th><th>Quantity</th><th>Bid Start Date</th><th>Bid End Date</th></tr>
+<tr><td>GEM/2026/B/8301001</td><td>Custom Bid for Services - Website Development and Maintenance</td><td>1</td><td>17-11-2026 10:00:00</td><td>28-11-2026 15:00:00</td></tr>
+<tr><td>GEM/2026/B/8301002</td><td>Software Development Service - AI chatbot</td><td>1</td><td>17-11-2026 11:30:00</td><td>01-12-2026 18:00:00</td></tr>
+</table><p>Regards, Team GeM</p>`;
+const CORR_HTML = `<p>Dear Sir/Madam,</p><p>A corrigendum dated 2026-11-17 15:51:20 has been issued for Bid number GEM/2026/B/8166366 dated 21-October-2026.</p><p>Please login to the GeM portal to view more details.</p>`;
+
+let messages: { uid: number; raw: string }[] = [];
+
+/* ───────────── a tiny IMAP server ───────────── */
+
+let server: net.Server;
+let port = 0;
+let logins: string[] = [];
+
+function startImap() {
+  server = net.createServer((s) => {
+    s.write('* OK test IMAP ready\r\n');
+    let buf = '';
+    s.on('data', (d) => {
+      buf += d.toString('latin1');
+      let i: number;
+      while ((i = buf.indexOf('\r\n')) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        const [tag, ...rest] = line.split(' ');
+        const cmd = rest.join(' ');
+        const send = (x: string) => s.write(Buffer.from(x, 'latin1'));
+        if (/^LOGIN/i.test(cmd)) {
+          logins.push(cmd);
+          if (cmd.includes('"wrong"')) send(`${tag} NO [AUTHENTICATIONFAILED] Invalid credentials\r\n`);
+          else send(`${tag} OK LOGIN completed\r\n`);
+        } else if (/^EXAMINE/i.test(cmd)) send(`* ${messages.length} EXISTS\r\n* OK [UIDVALIDITY 42] UIDs valid\r\n* OK [UIDNEXT ${messages.length + 1}] next\r\n${tag} OK [READ-ONLY] EXAMINE completed\r\n`);
+        else if (/^UID SEARCH/i.test(cmd)) {
+          const m = /UID (\d+):\*/i.exec(cmd);
+          const from = m ? Number(m[1]) : 1;
+          const hits = messages.filter((x) => x.uid >= from).map((x) => x.uid);
+          if (m && !hits.length && messages.length) hits.push(messages[messages.length - 1]!.uid); // n:* quirk
+          send(`* SEARCH ${hits.join(' ')}\r\n${tag} OK SEARCH completed\r\n`);
+        } else if (/^UID FETCH/i.test(cmd)) {
+          const set = /UID FETCH (\S+)/i.exec(cmd)![1]!.split(',').map(Number);
+          const full = /BODY\.PEEK\[\]/i.test(cmd);
+          let n = 0;
+          for (const m of messages.filter((x) => set.includes(x.uid))) {
+            n++;
+            const headerEnd = m.raw.indexOf('\r\n\r\n');
+            const part = full ? m.raw : m.raw.slice(0, headerEnd + 4);
+            send(`* ${n} FETCH (UID ${m.uid} RFC822.SIZE ${m.raw.length} ${full ? 'BODY[]' : 'BODY[HEADER.FIELDS (FROM SUBJECT)]'} {${part.length}}\r\n${part})\r\n`);
+          }
+          send(`${tag} OK FETCH completed\r\n`);
+        } else if (/^LOGOUT/i.test(cmd)) {
+          send(`* BYE\r\n${tag} OK LOGOUT completed\r\n`);
+          s.end();
+        } else send(`${tag} BAD unknown\r\n`);
+      }
+    });
+    s.on('error', () => undefined);
+  });
+  return new Promise<void>((r) => server.listen(0, '127.0.0.1', () => ((port = (server.address() as net.AddressInfo).port), r())));
+}
+
+async function pdfWith(lines: string[]) {
+  const d = await PDFDocument.create();
+  const p = d.addPage([595, 842]);
+  const f = await d.embedFont(StandardFonts.Helvetica);
+  lines.forEach((l, i) => p.drawText(l, { x: 50, y: 790 - i * 18, size: 11, font: f }));
+  return d.save();
+}
+
+async function upload(path: string, bytes: Uint8Array, name: string) {
+  const res = await h.app.request(`http://synapse.test${path}?name=${encodeURIComponent(name)}`, {
+    method: 'POST', headers: { 'x-tenant': 'acme', authorization: `Bearer ${token}`, 'content-type': 'application/octet-stream' }, body: bytes,
+  }, h.env);
+  expect(res.status, await res.clone().text()).toBe(200);
+}
+
+beforeAll(async () => {
+  invoicePdf = await pdfWith(['TAX INVOICE', 'Cloud Nine Hosting', `GSTIN: ${VENDOR_GSTIN}`]);
+  await startImap();
+  h = await makeHarness('synapse_test_intake');
+  h.env.FILES = fakeR2() as unknown as R2Bucket;
+  await h.signup('acme', 'owner@acme.test');
+  token = (await h.login('acme', 'owner@acme.test')).token;
+  api = h.as('acme', token);
+  for (const a of ['orders', 'billing', 'purchasing', 'books']) expect((await api('POST', `/api/admin/apps/${a}/enable`)).status).toBe(200);
+  await api('PATCH', '/api/admin/tenant', { settings: { company: { legalName: 'HRP AI LLP', gstin: OWN_GSTIN, state: 'Uttar Pradesh' } } });
+  messages = [
+    { uid: 1, raw: mail({ id: 'gem-new-1@gem.gov.in', from: 'noreply <noreply@gem.gov.in>', subject: 'New bid(s) published on GeM portal.', html: NEW_BIDS_HTML }) },
+    { uid: 2, raw: mail({ id: 'gem-corr-1@gem.gov.in', from: 'noreply <noreply@gem.gov.in>', subject: 'Bid # GEM/2026/B/8166366: Corrigendum issued on GeM', html: CORR_HTML }) },
+    { uid: 3, raw: mail({ id: 'personal-1@example.com', from: 'Friend <friend@example.com>', subject: 'Dinner on Sunday?', html: '<p>See you!</p>' }) },
+    { uid: 4, raw: mail({ id: 'inv-1@cloudnine.in', from: 'Cloud Nine Billing <billing@cloudnine.in>', subject: 'Tax Invoice CN/26-27/0457 for November', pdf: { name: 'CN-26-27-0457.pdf', bytes: invoicePdf } }) },
+  ];
+}, 120_000);
+
+afterAll(() => server?.close());
+
+describe('reading mail', () => {
+  it('parses MIME: encoded subject, quoted-printable HTML, base64 attachment', () => {
+    const m = parseMail(messages[3]!.raw);
+    expect(m).toMatchObject({ messageId: 'inv-1@cloudnine.in', from: { name: 'Cloud Nine Billing', address: 'billing@cloudnine.in' }, subject: 'Tax Invoice CN/26-27/0457 for November' });
+    expect(m.attachments[0]).toMatchObject({ filename: 'CN-26-27-0457.pdf', contentType: 'application/pdf' });
+    expect(m.attachments[0]!.bytes.length).toBe(invoicePdf.length);
+    const e = parseMail('Subject: =?UTF-8?B?4oK5IDUwLDAwMCBpbnZvaWNl?=\r\nFrom: =?utf-8?Q?R=C3=A9mi?= <a@b.in>\r\n\r\nhi');
+    expect(e.subject).toBe('₹ 50,000 invoice');
+    expect(e.from).toEqual({ name: 'Rémi', address: 'a@b.in' });
+  });
+
+  it('knows which mail matters from the headers', () => {
+    const r = { gem: true, bills: true };
+    expect(classify({ from: 'noreply@gem.gov.in', subject: 'New bid(s) published on GeM portal.', contentType: 'text/html' }, r)).toBe('gem_new_bids');
+    expect(classify({ from: 'noreply@gem.gov.in', subject: 'Bid # GEM/2026/B/8166366: Corrigendum issued on GeM', contentType: 'text/html' }, r)).toBe('gem_corrigendum');
+    expect(classify({ from: 'billing@aws.com', subject: 'Your invoice is available', contentType: 'multipart/mixed' }, r)).toBe('bill');
+    expect(classify({ from: 'billing@aws.com', subject: 'Your invoice is available', contentType: 'text/html' }, r)).toBeNull();
+    expect(classify({ from: 'a@bank.in', subject: 'OTP for your invoice payment', contentType: 'multipart/mixed' }, r)).toBeNull();
+    expect(classify({ from: 'friend@example.com', subject: 'Dinner', contentType: 'multipart/mixed' }, r)).toBeNull();
+    expect(classify({ from: 'noreply@gem.gov.in', subject: 'New bid(s) published on GeM portal.', contentType: 'text/html' }, { gem: false, bills: true })).toBeNull();
+  });
+
+  it('reads the bids, corrigenda and bid documents of GeM', () => {
+    const text = parseMail(messages[0]!.raw).text;
+    const bids = parseNewBids(text);
+    expect(bids.map((b) => b.bidNumber)).toEqual(['GEM/2026/B/8301001', 'GEM/2026/B/8301002']);
+    expect(bids[0]).toMatchObject({ title: 'Custom Bid for Services - Website Development and Maintenance', endAt: '2026-11-28T09:30:00.000Z' });
+    expect(parseCorrigendum('Bid # GEM/2026/B/8166366: Corrigendum issued on GeM', 'A corrigendum dated 2026-11-17 15:51:20 has been issued for Bid number GEM/2026/B/8166366 dated 21-October-2026.')).toEqual({
+      bidNumber: 'GEM/2026/B/8166366', corrigendumAt: '2026-11-17T10:21:20.000Z', bidDate: '2026-10-21',
+    });
+  });
+});
+
+describe('a mailbox over IMAP', () => {
+  it('refuses plain IMAP to another host, and reports a wrong password', async () => {
+    expect((await api('POST', '/api/v1/intake/mailboxes', { label: 'x', email: 'a@hrpai.in', host: 'imap.example.com', port: 143, tls: false, password: 'x' })).status).toBe(400);
+    const bad = await api('POST', '/api/v1/intake/mailboxes', { label: 'Bad', email: 'bad@hrpai.in', host: '127.0.0.1', port, tls: false, password: 'wrong' });
+    const s = await api('POST', `/api/v1/intake/mailboxes/${bad.json.id}/sync`);
+    expect(s.status).toBe(400);
+    expect(s.json.error.message).toMatch(/Sign-in failed/);
+    expect((await api('GET', '/api/v1/intake/mailboxes')).json.mailboxes.find((m: any) => m.id === bad.json.id)).toMatchObject({ status: 'error', has_password: true });
+    await api('DELETE', `/api/v1/intake/mailboxes/${bad.json.id}`);
+  });
+
+  it('takes in the GeM alerts and the invoice, and nothing else; reads only what is new next time', async () => {
+    const mb = await api('POST', '/api/v1/intake/mailboxes', { label: "Harsha's mail", email: 'harsha.rani@hrpai.in', host: '127.0.0.1', port, tls: false, password: 's3cret', firstDays: 30 });
+    expect(mb.status, JSON.stringify(mb.json)).toBe(201);
+    ids.mb = mb.json.id;
+    const s = await api('POST', `/api/v1/intake/mailboxes/${ids.mb}/sync`);
+    expect(s.json, JSON.stringify(s.json)).toEqual({ seen: 4, taken: 3, newBids: 2 });
+    expect(logins.at(-1)).toBe('LOGIN "harsha.rani@hrpai.in" "s3cret"');
+    const items = (await api('GET', '/api/v1/intake/items')).json as any[];
+    expect(items.map((i) => i.kind).sort()).toEqual(['bill', 'gem_corrigendum', 'gem_new_bids']);
+    expect(items.some((i) => /Dinner/.test(i.subject))).toBe(false);
+    const bids = (await api('GET', '/api/v1/intake/gem')).json as any[];
+    expect(bids.map((b) => b.bid_number).sort()).toEqual(['GEM/2026/B/8166366', 'GEM/2026/B/8301001', 'GEM/2026/B/8301002']);
+    expect(bids.find((b) => b.bid_number === 'GEM/2026/B/8166366')).toMatchObject({ corrigenda: 1, bid_date: '2026-10-21' });
+    // nothing new: nothing taken
+    expect((await api('POST', `/api/v1/intake/mailboxes/${ids.mb}/sync`)).json).toMatchObject({ taken: 0 });
+    // a second corrigendum arrives
+    messages.push({ uid: 5, raw: mail({ id: 'gem-corr-2@gem.gov.in', from: 'noreply@gem.gov.in', subject: 'Bid # GEM/2026/B/8166366: Corrigendum issued on GeM', html: CORR_HTML.replace('15:51:20', '18:02:00') }) });
+    expect((await api('POST', `/api/v1/intake/mailboxes/${ids.mb}/sync`)).json).toMatchObject({ seen: 1, taken: 1, newBids: 0 });
+    expect(((await api('GET', '/api/v1/intake/gem')).json as any[]).find((b) => b.bid_number === 'GEM/2026/B/8166366').corrigenda).toBe(2);
+  });
+
+  it('a mailed invoice becomes a draft bill with the vendor found or added and the PDF attached', async () => {
+    const item = ((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[])[0];
+    expect(item.attachments[0]).toMatchObject({ name: 'CN-26-27-0457.pdf', contentType: 'application/pdf' });
+    const text = [
+      'TAX INVOICE', 'Cloud Nine Hosting Pvt Ltd', `GSTIN: ${VENDOR_GSTIN}`, 'Invoice No: CN/26-27/0457', 'Invoice Date: 05-11-2026',
+      'Bill To: HRP AI LLP', `GSTIN: ${OWN_GSTIN}`, 'Description HSN Qty Rate Amount', 'Cloud server hosting 998315 1 10000.00 10000.00',
+      'Taxable Value 10000.00', 'CGST @ 9% 900.00', 'SGST @ 9% 900.00', 'Total 11800.00',
+    ].join('\n');
+    const r = await api('POST', `/api/v1/intake/items/${item.id}/read`, { fileId: item.attachments[0].fileId, pages: [text] });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json).toMatchObject({ party: { gstin: VENDOR_GSTIN }, ours: true, data: { number: 'CN/26-27/0457', date: '2026-11-05', taxable: 10000 } });
+    const b = await api('POST', `/api/v1/intake/items/${item.id}/bill`, { fileId: item.attachments[0].fileId, vendorName: 'Cloud Nine Hosting Pvt Ltd' });
+    expect(b.status, JSON.stringify(b.json)).toBe(201);
+    const bill = (await api('GET', `/api/v1/records/bill/${b.json.billId}`)).json;
+    expect(bill).toMatchObject({ vendor_ref: 'CN/26-27/0457', status: 'draft' });
+    expect(Number(bill.grand_total)).toBe(11800);
+    const v = (await api('GET', `/api/v1/records/vendor/${b.json.vendorId}`)).json;
+    expect(v).toMatchObject({ name: 'Cloud Nine Hosting Pvt Ltd', gstin: VENDOR_GSTIN });
+    const files = (await api('GET', `/api/v1/files?object=bill&id=${b.json.billId}`)).json;
+    expect(JSON.stringify(files)).toContain('CN-26-27-0457.pdf');
+    expect(((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[])[0]).toMatchObject({ status: 'done', link_object: 'bill' });
+    // the same invoice again is refused
+    expect((await api('POST', `/api/v1/intake/items/${item.id}/bill`, { fileId: item.attachments[0].fileId })).status).toBe(400);
+  });
+});
+
+describe('a personal mailbox', () => {
+  it('takes in only the bills and payments that name the business (GSTIN, name or a partner)', async () => {
+    await api('POST', '/api/v1/books/desk/own/persons', { name: 'Harsha Rani', identifiers: [] });
+    const airtel = await pdfWith(['Airtel Postpaid bill', 'Customer: Prashant Srivastava', 'Amount due Rs 599']);
+    const amazon = await pdfWith(['Tax Invoice', 'Amazon Seller Services', `Buyer GSTIN: ${OWN_GSTIN}`, 'Logitech keyboard 2,499.00']);
+    messages.push(
+      { uid: 6, raw: mail({ id: 'airtel-1@airtel.in', from: 'Airtel <bills@airtel.in>', subject: 'Your Airtel bill for November', pdf: { name: 'airtel-bill.pdf', bytes: airtel } }) },
+      { uid: 7, raw: mail({ id: 'amazon-1@amazon.in', from: 'Amazon <auto-confirm@amazon.in>', subject: 'Invoice for your order 404-123', pdf: { name: 'invoice.pdf', bytes: amazon } }) },
+      { uid: 8, raw: mail({ id: 'upi-1@bank.in', from: 'Bank <alerts@bank.in>', subject: 'Payment received: Rs 25,000', html: '<p>Rs 25,000 received from Harsha Rani by UPI.</p>' }) },
+      { uid: 9, raw: mail({ id: 'upi-2@bank.in', from: 'Bank <alerts@bank.in>', subject: 'Payment received: Rs 300', html: '<p>Rs 300 received from Ramesh by UPI.</p>' }) },
+    );
+    const mb = await api('POST', '/api/v1/intake/mailboxes', { label: 'Personal Gmail', email: 'prashant@gmail.com', host: '127.0.0.1', port, tls: false, password: 'p', businessOnly: true, firstDays: 30 });
+    expect(mb.status, JSON.stringify(mb.json)).toBe(201);
+    const s = await api('POST', `/api/v1/intake/mailboxes/${mb.json.id}/sync`);
+    expect(s.json, JSON.stringify(s.json)).toMatchObject({ taken: 2 });
+    const items = (await api('GET', '/api/v1/intake/items?kind=docs&status=new')).json as any[];
+    const mine = items.filter((i) => i.mailbox === 'prashant@gmail.com');
+    expect(mine.map((i) => [i.kind, i.matched_on]).sort()).toEqual([['bill', OWN_GSTIN], ['payment', 'harsha rani']]);
+    expect(items.some((i) => /Airtel|Rs 300/.test(i.subject))).toBe(false);
+  });
+});
+
+describe('a GeM bid: eligibility, documents, the bid pack', () => {
+  const BID_TEXT = `Bid Details/बिड विवरण
+बिड संख्या/Bid Number: GEM/2026/B/8301001
+दिनांक/Dated: 17-11-2026
+बिड बंद होने की तारीख/समय /Bid End Date/Time 28-11-2026 15:00:00
+बिड खुलने की तारीख/समय /Bid Opening Date/Time 28-11-2026 15:30:00
+मंत्रालय/राज्य का नाम/Ministry/State Name Ministry of Electronics and Information Technology
+विभाग का नाम/Department Name Department of Electronics and Information Technology
+संगठन का नाम/Organisation Name National Informatics Centre
+कुल मात्रा/Total Quantity 1
+वस्तु श्रेणी /Item Category Custom Bid for Services - Website Development and Maintenance
+Minimum Average Annual Turnover of the bidder (For 3 Years) 50 Lakh (s)
+Years of Past Experience Required for same/similar service 3 Year (s)
+MSE Exemption for Years Of Experience and Turnover Yes
+Startup Exemption for Years Of Experience and Turnover Yes
+विक्रेता से मांगे गए दस्तावेज़/Document required from seller Experience Criteria,Bidder Turnover,Certificate (Requested in ATC)
+*In case any bidder is seeking exemption from Experience / Turnover Criteria, the supporting documents to prove his eligibility for exemption must be uploaded for evaluation by the buyer
+बिड का प्रकार/Type of Bid Two Packet Bid
+EMD Detail
+ePBG Percentage(%) 5.00`;
+
+  it('reads the bid document', () => {
+    const d = parseBidDocument(BID_TEXT);
+    expect(d).toMatchObject({
+      bidNumber: 'GEM/2026/B/8301001', bidDate: '2026-11-17', endAt: '2026-11-28T09:30:00.000Z', organisation: 'National Informatics Centre', quantity: 1,
+      category: 'Custom Bid for Services - Website Development and Maintenance', minTurnover: 5000000, experienceYears: 3, mseExempt: true, startupExempt: true,
+      documentsRequired: ['Experience Criteria', 'Bidder Turnover', 'Certificate (Requested in ATC)'], epbgPercent: 5, bidType: 'Two Packet Bid',
+    });
+  });
+
+  it('checks the fit and makes the bid pack from the documents on file', async () => {
+    const bid = ((await api('GET', '/api/v1/intake/gem')).json as any[]).find((b) => b.bid_number === 'GEM/2026/B/8301001');
+    ids.bid = bid.id;
+    const pdf = await pdfWith(['GEM/2026/B/8301001']);
+    const up = await api('POST', `/api/v1/intake/gem/${ids.bid}/document`, { name: 'GeM-Bidding-8301001.pdf', data: btoa(String.fromCharCode(...pdf)), pages: [BID_TEXT] });
+    expect(up.status, JSON.stringify(up.json)).toBe(200);
+    // a document of another bid is refused
+    expect((await api('POST', `/api/v1/intake/gem/${ids.bid}/document`, { pages: [BID_TEXT.replace('8301001', '9999999')] })).status).toBe(400);
+    // the organisation: a startup with Udyam, PAN, GST and a turnover certificate on file
+    const base = (await api('GET', '/api/v1/organisation')).json.profile;
+    expect((await api('PUT', '/api/v1/organisation', { ...base, legalName: 'HRP AI LLP', udyam: 'UDYAM-UP-28-0012345', dpiitNumber: 'DIPP154321', incorporatedOn: '2024-06-01' })).status).toBe(200);
+    for (const [kind, lines] of [['pan', ['PAN AASFH6805J']], ['gst', ['GST REG-06']], ['udyam', ['Udyam certificate']], ['turnover_certificate', ['CA certificate of turnover']]] as const) {
+      const d = await api('POST', '/api/v1/organisation/documents', { kind, number: kind === 'pan' ? 'AASFH6805J' : null });
+      expect(d.status, JSON.stringify(d.json)).toBe(201);
+      await upload(`/api/v1/organisation/documents/${d.json.id}/file`, await pdfWith([...lines]), `${kind}.pdf`);
+    }
+    const c = await api('GET', `/api/v1/intake/gem/${ids.bid}/check`);
+    expect(c.status, JSON.stringify(c.json)).toBe(200);
+    expect(c.json.bid).toMatchObject({ status: 'reviewing', min_turnover: 5000000, organisation: 'National Informatics Centre' });
+    // no turnover in the books yet, 2 years old — but MSE / Startup exempt
+    expect(c.json.checks.find((x: any) => x.what === 'Average annual turnover')).toMatchObject({ ok: true });
+    expect(c.json.checks.find((x: any) => x.what === 'Years of experience').detail).toMatch(/exempt by MSE/);
+    const docs = Object.fromEntries(c.json.documents.map((d: any) => [d.asked, d.status]));
+    expect(docs).toMatchObject({ PAN: 'ready', 'GST registration': 'ready', 'Experience Criteria': 'missing', 'Bidder Turnover': 'ready', 'Certificate (Requested in ATC)': 'manual', 'MSE exemption': 'ready', 'Startup exemption': 'missing' });
+    const pack = await h.app.request(`http://synapse.test/api/v1/intake/gem/${ids.bid}/pack`, { headers: { 'x-tenant': 'acme', authorization: `Bearer ${token}` } }, h.env);
+    expect(pack.status).toBe(200);
+    const out = await PDFDocument.load(new Uint8Array(await pack.arrayBuffer()));
+    // contents page + PAN + GST + turnover + Udyam
+    expect(out.getPageCount()).toBe(5);
+    // the bid as a deal with the buyer as a government account
+    const deal = await api('POST', `/api/v1/intake/gem/${ids.bid}/deal`);
+    expect(deal.status, JSON.stringify(deal.json)).toBe(201);
+    expect((await api('GET', `/api/v1/records/deal/${deal.json.dealId}`)).json.name).toMatch(/^GEM\/2026\/B\/8301001/);
+    expect(((await api('GET', '/api/v1/intake/gem')).json as any[]).find((b) => b.id === ids.bid).status).toBe('preparing');
+  });
+});

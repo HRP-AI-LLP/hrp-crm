@@ -33,6 +33,15 @@ export const COMPANY_DOCS: [string, string, string][] = [
   ['trademark', 'Trademark registration', ''],
   ['address_proof', 'Office address proof / rent agreement', ''],
   ['bank_letter', 'Cancelled cheque / bank letter', ''],
+  // asked for in tenders (GeM and others)
+  ['turnover_certificate', 'CA certificate of turnover', ''],
+  ['audited_financials', 'Audited balance sheet and P&L', ''],
+  ['itr', 'Income tax returns (ITR-V)', ''],
+  ['experience_certificate', 'Work orders / completion certificates', ''],
+  ['oem_authorization', 'OEM authorisation certificate', ''],
+  ['iso', 'ISO / quality certificates', ''],
+  ['epf_esic', 'EPF / ESIC registration', ''],
+  ['gem_registration', 'GeM seller registration', ''],
   ['other', 'Other', ''],
 ];
 export const PERSON_DOCS: [string, string][] = [

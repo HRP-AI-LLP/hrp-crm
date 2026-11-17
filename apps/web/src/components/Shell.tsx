@@ -262,6 +262,8 @@ export function Shell() {
             Inbox{inbox.data?.counts?.unread ? <span className="nav-badge">{inbox.data.counts.unread}</span> : null}
           </NavLink>
           {can('campaigns') && <NavLink to="/campaigns">Campaigns</NavLink>}
+          <NavLink to="/intake/gem">GeM bids</NavLink>
+          <NavLink to="/intake/documents">Bills from mail</NavLink>
         </div>
         <div className="nav-group">
           <div>Plan</div>

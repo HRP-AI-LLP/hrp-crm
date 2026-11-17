@@ -4,7 +4,7 @@
  */
 import { hasAdmin } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { BarChart } from '../components/charts';
 import { useAct, VendorPaymentModal } from '../components/books/BookPanels';
@@ -49,7 +49,17 @@ export function BooksPage() {
   const { me } = useAuth();
   const apps = useApps();
   const metaReady = useMetaReady();
-  const [tab, setTab] = useState<Tab>(() => (TABS.find(([k]) => `#${k}` === window.location.hash)?.[0] ?? 'overview'));
+  const [tab, setTab] = useState<Tab>(() => {
+    // "#gst:2026-06" opens GST & TDS on that month
+    const [h, arg] = window.location.hash.slice(1).split(':');
+    if (h === 'gst' && arg)
+      try {
+        sessionStorage.setItem('books.gstMonth', arg);
+      } catch {
+        /* storage unavailable */
+      }
+    return TABS.find(([k]) => k === h)?.[0] ?? 'overview';
+  });
   if (!me) return null;
   if (!apps.has('books')) return metaReady ? <Navigate to="/" replace /> : <Spinner />;
   if (!hasAdmin(me.permissions, 'books')) {
@@ -2399,8 +2409,24 @@ function DisposeForm({ asset, onClose }: { asset: Json; onClose: () => void }) {
 
 /* ───────────────────────── GST & TDS ───────────────────────── */
 
+/** The month a link asked for (once), e.g. from the accounts desk's "Review line by line". */
+function askedMonth() {
+  try {
+    const m = sessionStorage.getItem('books.gstMonth');
+    sessionStorage.removeItem('books.gstMonth');
+    return m && /^\d{4}-\d{2}$/.test(m) ? m : null;
+  } catch {
+    return null;
+  }
+}
+
 function GstTds() {
-  const [month, setMonth] = useState(today().slice(0, 7));
+  const [asked] = useState(askedMonth);
+  const [month, setMonth] = useState(asked ?? today().slice(0, 7));
+  const b2Ref = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (asked) setTimeout(() => b2Ref.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+  }, [asked]);
   const g = useQuery({ queryKey: ['books', 'gstr3b', month], queryFn: () => get<Json>(`/api/v1/books/reports/gstr-3b?month=${month}`) });
   const tds = useQuery({ queryKey: ['books', 'tds'], queryFn: () => get<Json>(`/api/v1/books/reports/tds?from=${fyStart()}&to=${today()}`) });
   const period = `${month.slice(5, 7)}${month.slice(0, 4)}`;
@@ -2487,7 +2513,7 @@ function GstTds() {
           </tbody>
         </table>
       )}
-      <h3 style={{ margin: 0 }}>GSTR-2B reconciliation</h3>
+      <h3 ref={b2Ref} style={{ margin: 0 }}>GSTR-2B reconciliation</h3>
       {!b2.data ? (
         <p className="muted small">Download GSTR-2B (JSON) for {month} from the GST portal and import it to match your suppliers' filings against your bills.</p>
       ) : (

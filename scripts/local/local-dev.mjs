@@ -226,6 +226,11 @@ const procs = [
   }),
   spawn(`pnpm exec vite --port 5173 --strictPort`, { cwd: join(ROOT, 'apps', 'web'), stdio: quiet, shell: true }),
 ];
+// the cloud runs the 5-minute sweep on a schedule; locally this does it (reminders, mailboxes, GeM alerts)
+const sweep = setInterval(() => {
+  fetch('http://127.0.0.1:8787/__scheduled?cron=*/5+*+*+*+*').catch(() => undefined);
+}, 5 * 60_000);
+sweep.unref?.();
 // the USB-token DSC signer, in the background (never holds up the app)
 const signer = startDscSigner({ skip: args.has('--no-signer') });
 setTimeout(() => {

@@ -700,8 +700,19 @@ function Findings({ go, setView }: { go?: (tab: string) => void; setView: (v: Vi
       return;
     }
     if (a.kind === 'link') {
+      // findings made before the GSTR-2B review moved to Books → GST & TDS
+      if (a.target === '/billing' && String(f.kind ?? '').startsWith('gstr2b') && go) a = { ...a, target: `/books#gst${f.period ? `:${f.period}` : ''}` };
       if (/^https?:/.test(a.target)) window.open(a.target, '_blank', 'noopener');
-      else if (a.target.startsWith('/books#') && go) go(a.target.slice(7));
+      else if (a.target.startsWith('/books#') && go) {
+        // "/books#gst:2026-06": the Books tab, and the month to open there
+        const [tab, month] = a.target.slice(7).split(':');
+        try {
+          if (month) sessionStorage.setItem('books.gstMonth', month);
+        } catch {
+          /* storage unavailable */
+        }
+        go(tab!);
+      }
       else navigate(a.target);
       return;
     }

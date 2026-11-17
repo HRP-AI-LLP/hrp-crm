@@ -41,6 +41,7 @@ const TicketStatusPage = page(() => import('./pages/CustomerPages'), 'TicketStat
 const ProjectPortalPage = page(() => import('./pages/CustomerPages'), 'ProjectPortalPage');
 const PublicRoadmapPage = page(() => import('./pages/CustomerPages'), 'PublicRoadmapPage');
 const ItSuitePage = page(() => import('./pages/ItSuite'), 'ItSuitePage');
+const IntakePage = page(() => import('./pages/Intake'), 'IntakePage');
 const PaidPage = page(() => import('./pages/CustomerPages'), 'PaidPage');
 const FieldSchedulePage = page(() => import('./pages/FieldSchedule'), 'FieldSchedulePage');
 const FieldPage = page(() => import('./pages/Field'), 'FieldPage');
@@ -149,6 +150,8 @@ export function App() {
         <Route path="projects/:id" element={<ProjectPage />} />
         <Route path="it" element={<Navigate to="/it/subscriptions" replace />} />
         <Route path="it/:section" element={<ItSuitePage />} />
+        <Route path="intake" element={<Navigate to="/intake/gem" replace />} />
+        <Route path="intake/:section" element={<IntakePage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="organisation" element={<OrganisationPage />} />
         <Route path="inbox" element={<InboxPage />} />

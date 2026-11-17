@@ -1519,7 +1519,7 @@ async function resolutionFor(ctx: RecordCtx, f: NewFinding): Promise<Resolution 
         actions: [
           { key: 'gstr2b_rematch', label: 'Match with books again', kind: 'fix' },
           ...(n ? [{ key: 'gstr2b_add_all', label: `Enter ${n} as bills`, kind: 'fix' as const, primary: true, confirm: `Create and post ${n} bill(s) for ${monthLabel(ym)} from GSTR-2B, booked to Purchases (new suppliers are added from their GSTIN)? Check first that they are all business purchases.` }] : []),
-          { key: 'open', label: 'Review line by line', kind: 'link', target: '/billing' },
+          { key: 'open', label: 'Review line by line', kind: 'link', target: `/books#gst:${ym}` },
         ],
       };
     }
@@ -1532,7 +1532,7 @@ async function resolutionFor(ctx: RecordCtx, f: NewFinding): Promise<Resolution 
         ],
         actions: [
           ...(ym ? [{ key: 'gstr2b_rematch', label: 'Match with books again', kind: 'fix' as const }] : []),
-          { key: 'open', label: 'Open GSTR-2B', kind: 'link', target: '/billing' },
+          { key: 'open', label: 'Open GSTR-2B', kind: 'link', target: ym ? `/books#gst:${ym}` : '/books#gst' },
         ],
       };
     case 'tds_deposit': {
