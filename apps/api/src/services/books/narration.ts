@@ -71,6 +71,14 @@ function nameOrNull(raw: string | undefined | null, own: string[]): string | nul
   return tidyName(s);
 }
 
+/** Merchants whose card name is cut short or prefixed by the payment gateway. */
+const ALIASES: [RegExp, string][] = [
+  [/^(PAY)?(MICROSB|MICROSO|MSFT)/, 'Microsoft'],
+  [/^(PAY)?BOOKMYS/, 'BookMyShow'],
+  [/^(PAY)?(AMAZONWEB|AWS)/, 'Amazon Web Services'],
+  [/^(PAY)?GOOGLE/, 'Google'],
+];
+
 /** "PERFECTION CONSULTING DELHI IND01-OCT-25 15:19:01" → "Perfection Consulting" (city, country and time dropped). */
 function merchantName(raw: string): string | null {
   let s = raw.split(/\\/)[0]!;
@@ -80,6 +88,10 @@ function merchantName(raw: string): string | null {
   // MICROSOFTBUS → Microsoft (well-known merchants glued to a suffix)
   const known = /^(MICROSOFT|GOOGLE|AMAZON|APPLE|ADOBE|OPENAI|ANTHROPIC|ZOOM|CANVA|GODADDY|HOSTINGER|NETFLIX|SPOTIFY|LINKEDIN|FACEBOOK|META|ATLASSIAN|GITHUB|NOTION|SLACK|FIGMA|CLOUDFLARE|DIGITALOCEAN|ZOHO|AWS)/i.exec(s.replace(/\s/g, ''));
   if (known) return tidyName(known[1]!);
+  // card networks cut names short: MICROSBUSEVE, PAY*BOOKMYSHOW COM, BOOK MY SHOW SMART GAT
+  const flat = s.replace(/\s/g, '').toUpperCase();
+  for (const [re, name] of ALIASES) if (re.test(flat)) return name;
+  s = s.replace(/^(PAY|PYU|RAZ|RAZORPAY|CCAVENUE|PAYU|SP|SQ)\s+/i, '').replace(/\s+(COM|IN|CO|PVT|LTD)$/i, '').trim();
   return s.length >= 3 ? tidyName(s) : null;
 }
 

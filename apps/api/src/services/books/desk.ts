@@ -27,7 +27,7 @@ import { createRecord, type RecordCtx, type RecordEvent } from '../records';
 import { categorize, excludeTxn, matchTxn, reconcile, saveRule, suggestions } from './banking';
 import { recordVendorPayment } from './bills';
 import { syncAllFeeds, syncGatewaySettlements } from './feeds';
-import { assertBooksAdmin, d10, postJournal, r2, sys } from './ledger';
+import { assertBooksAdmin, d10, postJournal, postingOn, r2, sys } from './ledger';
 import { findOwn, identConfidence, loadOwn, type Own, savePerson } from './own-accounts';
 import { isVerificationCredit, type Parsed, parseNarration, sameName, tail4 } from './narration';
 import { stateCode } from '@synapse/shared';
@@ -122,7 +122,7 @@ const nameWords = (s: string) =>
     .filter((w) => w.length >= 4 && !STOP.has(w));
 
 const KEYWORDS: { re: RegExp; dir: 'in' | 'out'; key: string; conf: number; label: string }[] = [
-  { re: /\b(CA ?FEES?|CHARTERED|PENTAGON ?CA|CA|GST ?(FEES?|CONSULT\w*|FILING|RETURNS?|REGISTRATION)|ITR ?FILING|AUDIT ?FEES?|AUDIT|LEGAL|ADVOCATE|LAWYER|CONSULTANCY ?FEES?|PROFESSIONAL ?FEES?|COMPLIANCE ?FEES?|ROC ?FILING)\b/, dir: 'out', key: 'professional_fees', conf: 0.72, label: 'professional fees' },
+  { re: /\b(CA ?FEES?|CHARTERED|PENTAGON ?CA|CA|GST ?(FEES?|CONSULT\w*|FILING|RETURNS?|REGISTRATION)|ITR ?FILING|AUDIT ?FEES?|AUDIT|LEGAL|ADVOCATE|LAWYER|CONSULTANCY ?FEES?|CONSULTING|CONSULTANTS?|PROFESSIONAL ?FEES?|COMPLIANCE ?FEES?|ROC ?FILING)\b/, dir: 'out', key: 'professional_fees', conf: 0.72, label: 'professional fees' },
   { re: /\b(CHARGES?|CHGS?|CHRG|SMS ?ALERT|MAINT(ENANCE)? ?CH|COMMISSION|PROCESSING FEE|GST ON CH|DEBIT CARD FEE|ANNUAL FEE|MIN(IMUM)? ?BAL)/, dir: 'out', key: 'bank_charges', conf: 0.82, label: 'bank charges' },
   { re: /\b(INT\.? ?PD|INTEREST|INT ?CR|SB ?INT|FD ?INT|INT\.CREDIT)/, dir: 'in', key: 'interest_income', conf: 0.82, label: 'interest' },
   { re: /\b(TDS|CBDT|OLTAS|ITNS ?281|INCOME ?TAX)/, dir: 'out', key: 'tds_payable', conf: 0.7, label: 'TDS / income-tax deposit' },
@@ -130,9 +130,9 @@ const KEYWORDS: { re: RegExp; dir: 'in' | 'out'; key: string; conf: number; labe
   { re: /\bRENT\b/, dir: 'out', key: 'rent', conf: 0.66, label: 'rent' },
   { re: /\b(ELECTRICITY|BESCOM|MSEDCL|MSEB|TATA ?POWER|UPPCL|BSES|TNEB|PSPCL|CESC|ADANI ?ELEC|TORRENT ?POWER|PVVNL|DGVCL)/, dir: 'out', key: 'utilities', conf: 0.72, label: 'electricity' },
   { re: /\b(AIRTEL|JIO|VODAFONE|\bVI\b|BSNL|ACT ?FIBERNET|BROADBAND|HATHWAY|EXCITEL)/, dir: 'out', key: 'telephone', conf: 0.72, label: 'telephone and internet' },
-  { re: /\b(AWS|AMAZON ?WEB|GOOGLE ?(CLOUD|WORKSPACE|GSUITE)|MICROSOFT|AZURE|ADOBE|GITHUB|ZOOM|NOTION|OPENAI|ANTHROPIC|ATLASSIAN|DIGITALOCEAN|CLOUDFLARE|SLACK|FIGMA|CANVA|HOSTINGER|GODADDY|VERCEL|NETLIFY|ZOHO)/, dir: 'out', key: 'software', conf: 0.72, label: 'software' },
+  { re: /\b(AWS|AMAZON ?WEB|GOOGLE ?(CLOUD|WORKSPACE|GSUITE)|MICROSOFT|MICROSB|MICROSO|MSFT|AZURE|ADOBE|GITHUB|ZOOM|NOTION|OPENAI|ANTHROPIC|ATLASSIAN|DIGITALOCEAN|CLOUDFLARE|SLACK|FIGMA|CANVA|HOSTINGER|GODADDY|VERCEL|NETLIFY|ZOHO)/, dir: 'out', key: 'software', conf: 0.72, label: 'software' },
   { re: /\b(UBER|OLA ?CABS|RAPIDO|IRCTC|INDIGO|AIR ?INDIA|VISTARA|AKASA|SPICEJET|MAKEMYTRIP|GOIBIBO|CLEARTRIP|REDBUS|FASTAG)/, dir: 'out', key: 'travel', conf: 0.66, label: 'travel' },
-  { re: /\b(SWIGGY|ZOMATO|EATSURE|DOMINOS|STARBUCKS)/, dir: 'out', key: 'meals', conf: 0.6, label: 'meals' },
+  { re: /\b(SWIGGY|ZOMATO|EATSURE|DOMINOS|STARBUCKS|BOOK ?MY ?SHOW|BOOKMYS|PVR|INOX|CINEPOLIS|DISTRICT ?MOVIES|PAYTM ?INSIDER)/, dir: 'out', key: 'meals', conf: 0.6, label: 'meals and entertainment' },
   { re: /\b(PETROL|FUEL|HPCL|BPCL|IOCL|INDIAN ?OIL|SHELL)/, dir: 'out', key: 'fuel', conf: 0.66, label: 'fuel' },
   { re: /\b(LIC|INSURANCE|LOMBARD|HDFC ?ERGO|BAJAJ ?ALLIANZ|STAR ?HEALTH|NIVA ?BUPA|ACKO|DIGIT ?INS)/, dir: 'out', key: 'insurance', conf: 0.62, label: 'insurance' },
   { re: /\b(GOOGLE ?ADS|FACEBK|FACEBOOK|META ?PLATFORMS|LINKEDIN|INDIAMART|JUSTDIAL)/, dir: 'out', key: 'marketing', conf: 0.66, label: 'marketing' },
@@ -640,6 +640,22 @@ async function candidates(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>
     }
   }
 
+  // 5b. a card purchase is paid on the spot: an expense with the merchant as vendor, never an advance
+  if (!out.length && !inflow && parsed.special === 'card') {
+    const id = await sys(ctx.tx, ctx.tenantId, 'uncategorised');
+    const vendor = party?.type === 'vendor' ? party : null;
+    const name = vendor?.name ?? parsed.merchant;
+    out.push({
+      txnId: t.id,
+      kind: 'categorize',
+      title: `Card purchase → ${acc(id)?.name ?? 'Uncategorised expense'}${name ? ` · ${name}${vendor ? '' : ' (new vendor)'}` : ''}`,
+      reason: `A debit-card purchase${name ? ` at ${name}` : ''} is paid when it is made, so it is an expense, not an advance. Choose “Change” to pick the right expense account (or a fixed asset) before approving`,
+      payload: { accountId: id, ...(vendor ? { partyType: 'vendor', partyId: vendor.id } : name ? { newParty: { type: 'vendor', name } } : {}) },
+      confidence: 0.45,
+      source: 'keyword',
+    });
+  }
+
   // 6. no invoice, bill, rule or habit explains it: who is it, and what to create
   // only when nothing else fits (a rejected suggestion is not replaced by a guess)
   if (!out.length) {
@@ -729,6 +745,17 @@ async function partyByName(ctx: RecordCtx, type: 'customer' | 'vendor', name: st
 }
 
 /**
+ * Why a payment dated `date` would not reach the ledger: the books are off or kept in Tally, or the date
+ * is before the books start (documents before then belong to the opening balances and are not posted).
+ */
+async function notPosted(ctx: RecordCtx, date: string): Promise<string | null> {
+  const cfg = await postingOn(ctx.tx, ctx.tenantId);
+  if (!cfg) return 'Books posting is off (Books → Settings), so payments are not posted to the bank account';
+  if (date < cfg.start_date) return `The bank line is dated ${date}, before the books start on ${cfg.start_date}`;
+  return null;
+}
+
+/**
  * Records a bank line as money from a customer / to a vendor with nothing to apply it to yet (an
  * advance), creating the customer or vendor when it doesn't exist. It is applied to the invoice or bill
  * later (Payments → allocate, or automatically when the document is created).
@@ -767,6 +794,16 @@ async function recordAdvance(
   }
   const amt = Math.abs(Number(t.amount));
   const date = d10(t.txn_date);
+  // a line the books would not post (before the books start, or posting off): the bank line itself is
+  // booked to customer / vendor advances against the party, so the bank balance and the advance agree
+  const skip = await notPosted(ctx, date);
+  if (skip) {
+    const adv = await sys(ctx.tx, ctx.tenantId, inflow ? 'customer_advances' : 'vendor_advances');
+    const who = party.contactName ? ` (paid by ${party.contactName})` : '';
+    const c = await categorize(ctx, txnId, { accountId: adv, partyType: party.partyType, partyId, description: `Advance ${inflow ? 'from' : 'to'} ${party.name ?? 'party'}${who}: ${t.description}`.slice(0, 500) });
+    if (party.projectId && c.journalId) await ctx.tx.query(`update journal_lines set project_id = $3 where tenant_id = $1 and journal_id = $2`, [ctx.tenantId, c.journalId, party.projectId]);
+    return { result: { journalId: c.journalId, partyId, partyCreated: created, contactId, bookedAs: inflow ? 'customer_advances' : 'vendor_advances', note: skip }, events };
+  }
   const ref = (t.reference ?? t.description).slice(0, 60);
   const note = `Recorded by the accounts desk from the bank line of ${date}: ${t.description.slice(0, 200)}`;
   const r = inflow
@@ -778,7 +815,7 @@ async function recordAdvance(
       where l.tenant_id = $1 and j.source_type = $2 and j.source_id = $3 and l.account_id = $4 and l.posted and l.bank_txn_id is null limit 1`,
     [ctx.tenantId, inflow ? 'payment' : 'vendor_payment', r.id, gl],
   );
-  if (!l) throw badRequest('The advance was recorded but not posted to this bank account');
+  if (!l) throw badRequest('The advance was recorded but its bank entry differs from the statement line; match it in Banking');
   await matchTxn(ctx, txnId, l.id);
   // what the money is for: the customer's project or deal
   if (inflow && (party.dealId || party.projectId))
@@ -909,7 +946,10 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
           and (case when $5::numeric > 0 then l.debit else l.credit end) = $6::numeric limit 1`,
       [ctx.tenantId, sourceType, sourceId, gl, Number(t.amount), amt],
     );
-    if (!l) throw badRequest('The entry was recorded but its bank amount differs from the statement line; match it in Banking');
+    if (!l) {
+      const why = await notPosted(ctx, date);
+      throw badRequest(why ? `${why}. Move the books start date back to include it (Books → Settings), or choose “Change” and book it to an account` : 'The entry was recorded but its bank amount differs from the statement line; match it in Banking');
+    }
     await matchTxn(ctx, p.bank_txn_id!, l.id);
   };
   switch (p.kind) {

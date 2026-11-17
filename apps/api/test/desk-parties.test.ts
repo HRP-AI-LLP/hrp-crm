@@ -39,7 +39,16 @@ const L = {
   upiSettle: '115063600001082/763175492 UPI Collection Settlement/HRP AI LLP/CBS PAYABLE ACC',
   refund: 'REFUND:250927:MICROSOFTBUS\\10TH FLOOR 10',
   stranger: 'IMPS/Ramesh Gupta/XXX1111/RRN:600000000001/',
+  // before the books start
+  fciOld: 'NEFT Cr-SBIN0004266-FOOD CORPORATION OF INDIA-HRP AI LLP-SBIN326314400001',
+  // debit-card purchases
+  msft: 'PCA:2640:MICROSBUSEVE:MICROSBUSEVE MUMBAI IND27-SEP-25 12:07:13',
+  perfection: 'PCA:2640:PERFPERFE108890:PERFECTION CONSULTING DELHI IND01-OCT-25 15:19:01',
+  bms1: 'PCA:2640:BOOKMYS12665290:BOOK MY SHOW SMART GAT MUMBAI IND13-DEC-25 15:01:48',
+  bms2: 'PCA:2640:BOOKMYSHOW10580:PAY*BOOKMYSHOW COM GURGAON IND13-DEC-25 14:58:28',
+  shop: 'PCA:2640:KRISHNA00123:KRISHNA HARDWARE NOIDA IND02-JAN-26 11:00:00',
 };
+const beforeStart = (n: number) => new Date(Date.parse(fyStart) - n * 86_400_000).toISOString().slice(0, 10);
 
 const proposals = async () => (await api('GET', '/api/v1/books/desk/proposals')).json as any[];
 const forLine = async (d: string) => (await proposals()).find((p) => p.description === d);
@@ -87,6 +96,12 @@ beforeAll(async () => {
       { date: daysAgo(5), description: L.upiSettle, amount: 50000 },
       { date: daysAgo(4), description: L.refund, amount: 2 },
       { date: daysAgo(4), description: L.stranger, amount: 7777 },
+      { date: beforeStart(40), description: L.fciOld, amount: 25000 },
+      { date: beforeStart(30), description: L.msft, amount: -359.31 },
+      { date: daysAgo(3), description: L.perfection, amount: -2999 },
+      { date: daysAgo(3), description: L.bms1, amount: -51.74 },
+      { date: daysAgo(3), description: L.bms2, amount: -455.46 },
+      { date: daysAgo(2), description: L.shop, amount: -1250 },
     ],
   });
   expect(r.status, JSON.stringify(r.json)).toBe(200);
@@ -160,5 +175,46 @@ describe('lines that are not customers or vendors', () => {
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     const own = (await api('GET', '/api/v1/books/desk/own')).json.persons as any[];
     expect(own.map((x) => x.name)).toEqual(expect.arrayContaining(['Harsha Rani', 'Ramesh Gupta']));
+  });
+});
+
+describe('card purchases and lines before the books start', () => {
+  it('card purchases are expenses with the merchant as vendor, never advances', async () => {
+    const want: [string, string, string][] = [
+      [L.msft, 'software', 'Microsoft'],
+      [L.perfection, 'professional_fees', 'Perfection Consulting'],
+      [L.bms1, 'meals', 'BookMyShow'],
+      [L.bms2, 'meals', 'BookMyShow'],
+      [L.shop, 'uncategorised', 'Krishna Hardware'],
+    ];
+    for (const [d, key, name] of want) {
+      const p = await forLine(d);
+      expect(p, d).toMatchObject({ kind: 'categorize' });
+      expect(p.payload, d).toMatchObject({ accountId: sysAcc[key] ?? expect.any(String), newParty: { type: 'vendor', name } });
+    }
+  });
+
+  it('a card purchase before the books start is approved (vendor created)', async () => {
+    const p = await forLine(L.msft);
+    const r = await api('POST', `/api/v1/books/desk/proposals/${p.id}`, { decision: 'approve' });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    const vendors = (await api('GET', '/api/v1/records/vendor?limit=50')).json.items as any[];
+    expect(vendors.map((v) => v.title)).toContain('Microsoft');
+  });
+
+  it("a customer's advance before the books start is booked to customer advances and the line is resolved", async () => {
+    const p = await forLine(L.fciOld);
+    expect(p).toMatchObject({ kind: 'new_party' });
+    expect(p.payload).toMatchObject({ partyId: ids.fci });
+    const r = await api('POST', `/api/v1/books/desk/proposals/${p.id}`, { decision: 'approve' });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(await forLine(L.fciOld)).toBeFalsy();
+    const txns = (await api('GET', `/api/v1/books/bank-accounts/${ids.yes}/transactions?status=all`)).json as any[];
+    const t = (Array.isArray(txns) ? txns : (txns as any).items).find((x: any) => x.description === L.fciOld);
+    expect(t.status).toBe('categorized');
+    const j = (await api('GET', `/api/v1/books/journals/${t.journal_id}`)).json;
+    const adv = (j.lines as any[]).find((l) => l.account_id === sysAcc.customer_advances);
+    expect(Number(adv.credit)).toBe(25000);
+    expect(adv.party_id).toBe(ids.fci);
   });
 });
