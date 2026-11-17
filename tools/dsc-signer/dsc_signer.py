@@ -40,7 +40,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 
 CONFIG = Path(os.environ.get("SYNAPSE_DSC_CONFIG", Path.home() / ".synapse-dsc-signer.json"))
 DEFAULT_PORT = 47321
@@ -86,11 +86,17 @@ def find_lib(cfg: dict, override: str | None, required: bool = True) -> str | No
     return None
 
 
+_GOOD: list[str] = []  # the driver that last found the token, tried first next time
+
+
 def all_libs(cfg: dict, override: str | None) -> list[str]:
-    """Every installed token driver, the chosen one first."""
+    """Every installed token driver: the chosen one, then the one that worked last, then the rest."""
     out: list[str] = []
-    for cand in [override, cfg.get("lib"), *KNOWN_LIBS]:
-        if cand and Path(cand).exists() and cand not in out:
+    seen: set[str] = set()
+    for cand in [override, *_GOOD, cfg.get("found_lib"), cfg.get("lib"), *KNOWN_LIBS]:
+        key = os.path.normcase(os.path.abspath(cand)) if cand else ""
+        if cand and key not in seen and Path(cand).exists():
+            seen.add(key)
             out.append(cand)
     return out
 
@@ -376,7 +382,17 @@ def _over_libs(libs: list[str], fn):
     seen = []
     for lib in libs:
         try:
-            return fn(lib)
+            result = fn(lib)
+            if _GOOD[:1] != [lib]:
+                _GOOD[:] = [lib]
+                try:  # remembered for the next start too
+                    cfg = load_config()
+                    if cfg.get("found_lib") != lib:
+                        cfg["found_lib"] = lib
+                        save_config(cfg)
+                except Exception:  # noqa: BLE001
+                    pass
+            return result
         except PinError:
             raise
         except (TokenError, OSError) as e:
@@ -549,7 +565,7 @@ def diag(cfg: dict) -> None:
     if _WIN:
         for pat in ("*pkcs11*.dll", "*p11*.dll", "*csp11*.dll"):
             for f in glob.glob(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", pat)):
-                if f not in cands:
+                if os.path.normcase(f) not in {os.path.normcase(c) for c in cands}:
                     cands.append(f)
     if not cands:
         print("No token driver found. " + NO_LIB)
@@ -633,7 +649,8 @@ def main() -> None:
         srv.lib_override = a.lib  # type: ignore[attr-defined]
         origins = sorted(set().union(*(origins_of(p) for p in cfg["pairings"]))) if cfg["pairings"] else []
         print(f"Synapse DSC signer {VERSION} on http://127.0.0.1:{port}")
-        print(f"  token driver: {lib or 'not found yet (install the token driver, or pass --lib)'}")
+        libs = all_libs(cfg, a.lib)
+        print(f"  token drivers: {', '.join(Path(x).name for x in libs) if libs else 'none found yet (install the token driver, or pass --lib)'}")
         print(f"  answering:    {', '.join(origins) if origins else 'nobody yet: pair it from Organisation > Digital signatures'}")
         srv.serve_forever()
 
