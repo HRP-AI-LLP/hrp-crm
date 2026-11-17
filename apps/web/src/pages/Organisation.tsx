@@ -1040,7 +1040,7 @@ function CertEditModal({ d, sigs, cert, onClose, onSaved }: { d: Json; sigs: Jso
 function PairedModal({ code, onClose }: { code: string; onClose: () => void }) {
   const toast = useToast();
   const localDev = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
-  const origins = localDev ? [...new Set([location.origin, 'http://localhost:5173', 'http://localhost:8787'])] : [location.origin];
+  const origins = localDev ? [...new Set([location.origin, 'http://localhost:5173', 'http://localhost:8787', 'http://127.0.0.1:5173', 'http://127.0.0.1:8787'])] : [location.origin];
   const flags = origins.map((o) => `--origin ${o}`).join(' ');
   const cmds = localDev ? [`pnpm dsc pair ${code} ${flags}`] : [`python dsc_signer.py pair ${code} ${flags}`];
   const copy = (t: string) => navigator.clipboard?.writeText(t).then(() => toast('Copied'));

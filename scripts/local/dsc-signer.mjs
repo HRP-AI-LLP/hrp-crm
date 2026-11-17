@@ -109,8 +109,8 @@ export function startDscSigner({ skip = false } = {}) {
 const self = fileURLToPath(import.meta.url);
 if (process.argv[1] && (win ? self.toLowerCase() === process.argv[1].toLowerCase() : self === process.argv[1])) {
   const [sub, ...rest] = process.argv.slice(2);
-  // on the development computer the app runs at these two addresses: pair with both unless told otherwise
-  if (sub === 'pair' && !rest.includes('--origin')) rest.push('--origin', 'http://localhost:5173', '--origin', 'http://localhost:8787');
+  // on the development computer the app runs at these addresses: pair with all of them unless told otherwise
+  if (sub === 'pair' && !rest.includes('--origin')) for (const o of ['http://localhost:5173', 'http://localhost:8787', 'http://127.0.0.1:5173', 'http://127.0.0.1:8787']) rest.push('--origin', o);
   const py = findPython();
   if (!py) {
     console.error(HINT_PY);
