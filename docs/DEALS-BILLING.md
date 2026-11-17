@@ -114,15 +114,46 @@ Two ways to hold the certificate — both sign only from Synapse:
 
 - **.pfx / .p12 file** — upload it with its password. Both are encrypted (AES-GCM, workspace-bound) and can
   never be downloaded again; removing the certificate deletes them. Choose who may sign with it.
-- **USB token (ePass, ProxKey, mToken, WatchData…)** — the key never leaves the token. Run the small signer in
-  `tools/dsc-signer` on the computer with the token (Python 3.10+, `pip install -r requirements.txt`):
-  1. Organisation → Digital signatures → **Pair a signer**; run the shown `python dsc_signer.py pair …` once.
-  2. Start it with `start-signer.bat` (or `python dsc_signer.py serve --lib <driver .dll>`), plug in the token.
-  3. **Add the token's certificate** reads it from the token (PIN if the token needs it) and registers it.
-  4. On a document, "Sign with DSC (token)" asks for the PIN; the PIN goes only to the signer on this computer.
+- **USB token (ePass, ProxKey, mToken, WatchData…)** — the key never leaves the token. The small signer in
+  `tools/dsc-signer` runs on the computer with the token. `pnpm local` / `pnpm local:cloud` install its
+  Python packages (into `tools/dsc-signer/.deps`, with `python -m pip`, never `pip.exe`) and start it in the
+  background; elsewhere `start-signer.bat` does the same. Python 3.10+ is the only prerequisite.
+  1. Organisation → Digital signatures → **Pair a signer**; run the shown command once
+     (`pnpm dsc pair <code> --origin …` on the development computer).
+  2. Plug in the token; **Add the token's certificate** reads it from the token (PIN if the token needs it).
+  3. On a document, "Sign with DSC (token)" asks for the PIN; the PIN goes only to the signer on this computer.
   The signer listens on `127.0.0.1` only, answers only the paired Synapse address, and signs only with a
   ticket Synapse issued for that exact PDF (hash and length), certificate and user, valid 10 minutes. Synapse
   checks the returned file: original bytes untouched, signature valid, same certificate, whole file covered.
 
 Limits: the signed PDF is a picture of the document (text is not selectable); the PDF to sign can be up to
 about 15 MB; a timestamp from a TSA is not added yet (the signing time is the signer's clock).
+
+## Organisation documents and Startup India
+
+Organisation → **Documents** keeps the registration papers of the organisation (PAN, TAN, GST, certificate of
+incorporation, LLP agreement / partnership deed, MoA–AoA, Udyam, Startup India (DPIIT), 80-IAC and section 56
+exemptions, IEC, shops and establishment, professional tax, trademark, address proof, bank letter, others)
+and of each partner or director (PAN, Aadhaar, DIN, passport, address proof, photograph, bank letter) with
+number, issue date, validity (expired / renew-within-30-days flags) and the uploaded copy (image, PDF or
+Office file up to 25 MB; replacing a copy deletes the old one). Numbers with a fixed shape are checked;
+the number is pre-filled from the profile. Only the profile's managers see them; copies are served by
+15-minute signed links, never through the generic file routes. Deleting a partner deletes their documents.
+
+The profile has a **Startup India** section: DPIIT recognition number (DIPP…) and date, sector, industry,
+80-IAC certificate and first year claimed, and the section 56 (angel tax) exemption.
+
+## People onboarded: PAN, Aadhaar, UAN, PF
+
+Wherever a person is onboarded — a partner or director (Organisation → Partners & directors) or a team
+member (Settings → Users: the invite form, and "ID and statutory details" on each user) — the form has an
+**ID and statutory details** section: PAN, Aadhaar, UAN (EPFO) and the PF member number, each with an
+upload for its copy (PAN card, Aadhaar, UAN card / EPFO letter, PF nomination). The same copies are listed
+under Organisation → Documents (partners and team members each get a group with a checklist).
+
+- Aadhaar is checked (12 digits, Verhoeff check digit), stored encrypted and shown as `XXXX XXXX 1234`;
+  "Show" reveals it and writes an audit-log entry. A document entry for an Aadhaar copy keeps only the last
+  four digits as its number.
+- UAN must be 12 digits; the PF number is normalised to `MH/BAN/0012345/000/0001234`.
+- Who sees them: admins who manage users and the organisation profile's managers (team members), the
+  profile's managers (partners). People do not see one another's.

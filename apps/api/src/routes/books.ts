@@ -623,7 +623,8 @@ export const booksRoutes = new Hono<AppEnv>()
   })
   .delete('/books/desk/own/persons/:id', async (c) => {
     requireAdmin(c);
-    await c.var.db.tx(scope(c), (tx) => ownAcc.deletePerson(rctx(c, tx), qUuid(c)));
+    const r = await c.var.db.tx(scope(c), (tx) => ownAcc.deletePerson(rctx(c, tx), qUuid(c)));
+    if (c.env.FILES) await Promise.all(r.storageKeys.map((k) => c.env.FILES!.delete(k).catch(() => undefined)));
     return c.json({ ok: true });
   })
   .put('/books/desk/own/banks/:id', async (c) => {

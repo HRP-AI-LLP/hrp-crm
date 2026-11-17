@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { createApiClient } from '@neondatabase/api-client';
 import { loadDotEnv, WHITEBOOKS_KEYS } from './dotenv.mjs';
 import { freePorts } from './ports.mjs';
+import { startDscSigner } from './dsc-signer.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 // optional settings from the repo-root .env (git-ignored); only the names are shown
@@ -147,6 +148,8 @@ const procs = [
   spawn(`pnpm exec wrangler dev --port 8787 --ip 127.0.0.1 --test-scheduled --show-interactive-dev-session=false`, { cwd: join(ROOT, 'apps', 'api'), stdio: quiet, shell: true }),
   spawn(`pnpm exec vite --port 5173 --strictPort`, { cwd: join(ROOT, 'apps', 'web'), stdio: quiet, shell: true }),
 ];
+// the USB-token DSC signer, in the background (never holds up the app)
+const signer = startDscSigner({ skip: args.has('--no-signer') });
 setTimeout(() => {
   console.log(`
 \x1b[32m✓ HRP Synapse is running against the cloud DEV database\x1b[0m
@@ -166,6 +169,7 @@ const stop = () => {
   if (stopping) return;
   stopping = true;
   console.log('\nStopping…');
+  signer.stop();
   for (const p of procs) {
     if (win && p.pid) spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore' });
     else p.kill('SIGINT');

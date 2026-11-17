@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { del, get, post, put } from '../../lib/api';
 import { date, money2 } from '../../lib/format';
 import { SelectAll } from '../SelectAll';
+import { blankIdentity, IdentitySection, persistIdentity, type IdentityValues } from '../IdentitySection';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 
 type Json = Record<string, any>;
@@ -78,6 +79,7 @@ export function PersonModal({ person, defaultRole, onClose, onSaved, paths = DES
     joinedOn: person?.joined_on ?? '',
     userId: person?.user_id ?? '',
   });
+  const [idv, setIdv] = useState<IdentityValues>(blankIdentity());
   const [busy, setBusy] = useState(false);
   const ledgers = (accounts.data ?? []).filter((a) => ['equity', 'liability'].includes(a.type) && !['accounts_payable', 'credit_card', 'tax_payable'].includes(a.subtype) && a.is_active !== false);
   const save = async () => {
@@ -93,6 +95,17 @@ export function PersonModal({ person, defaultRole, onClose, onSaved, paths = DES
           : {}),
       };
       const r = person ? await put<Json>(`${paths.person}/${person.id}`, body) : await post<Json>(paths.person, body);
+      const pid = person?.id ?? r?.id ?? r?.person?.id;
+      if (details && pid) {
+        try {
+          await persistIdentity('partner', pid, idv, { includePan: false });
+        } catch (e) {
+          // the person is saved; say what is left
+          toast(`Saved ${f.name}, but not the ID details: ${(e as Error).message}`, true);
+          onSaved(r);
+          return;
+        }
+      }
       onSaved(r);
       onClose();
     } catch (e) {
@@ -164,6 +177,7 @@ export function PersonModal({ person, defaultRole, onClose, onSaved, paths = DES
             </label>
           </div>
         )}
+        {details && <IdentitySection subject="partner" id={person?.id ?? null} value={idv} onChange={setIdv} showPan={false} />}
         <div className="field">
           Role in the business
           <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>

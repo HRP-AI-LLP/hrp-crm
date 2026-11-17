@@ -13,6 +13,8 @@ import { ensureBooks } from '../services/books/ledger';
 import * as org from '../services/organisation';
 import * as dsc from '../services/dsc';
 import * as tpl from '../services/doc-templates';
+import * as odocs from '../services/org-documents';
+import * as ident from '../services/person-identity';
 import type { RecordCtx } from '../services/records';
 import { loadMeta } from '../services/tenancy';
 import { systemPrincipal } from '../services/worker';
@@ -61,8 +63,47 @@ export const organisationRoutes = new Hono<AppEnv>()
     const b = own.personSchema.parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => own.savePerson(rctx(c, tx), id(c), b)));
   })
+  // identity and statutory numbers of a partner or a team member (PAN, Aadhaar, UAN, PF)
+  .get('/identity/:subject/:id', async (c) => {
+    const subject = z.enum(['partner', 'user']).parse(c.req.param('subject'));
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => ident.getIdentity(rctx(c, tx), c.env, subject, id(c))));
+  })
+  .put('/identity/:subject/:id', async (c) => {
+    const subject = z.enum(['partner', 'user']).parse(c.req.param('subject'));
+    const b = ident.identitySchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => ident.saveIdentity(rctx(c, tx), c.env, subject, id(c), b)));
+  })
+  .post('/identity/:subject/:id/reveal-aadhaar', async (c) => {
+    const subject = z.enum(['partner', 'user']).parse(c.req.param('subject'));
+    return c.json(await c.var.db.tx(scope(c), (tx) => ident.revealAadhaar(rctx(c, tx), c.env, subject, id(c))));
+  })
+  // registration documents of the organisation and its partners
+  .get('/organisation/documents', async (c) => {
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => odocs.listDocuments(rctx(c, tx), c.env)));
+  })
+  .post('/organisation/documents', async (c) => {
+    const b = odocs.docSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => odocs.createDocument(rctx(c, tx), c.env, b)), 201);
+  })
+  .put('/organisation/documents/:id', async (c) => {
+    const b = odocs.docUpdateSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => odocs.updateDocument(rctx(c, tx), c.env, id(c), b)));
+  })
+  .delete('/organisation/documents/:id', async (c) => {
+    return c.json(await c.var.db.tx(scope(c), (tx) => odocs.deleteDocument(rctx(c, tx), c.env, id(c))));
+  })
+  .post('/organisation/documents/:id/file', async (c) => {
+    const name = z.string().trim().min(1).max(200).catch('document').parse(c.req.query('name'));
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    return c.json(await c.var.db.tx(scope(c), (tx) => odocs.attachFile(rctx(c, tx), c.env, id(c), name, bytes)));
+  })
+  .delete('/organisation/documents/:id/file', async (c) => {
+    return c.json(await c.var.db.tx(scope(c), (tx) => odocs.removeFile(rctx(c, tx), c.env, id(c))));
+  })
   .delete('/organisation/people/:id', async (c) => {
-    await c.var.db.tx(scope(c), (tx) => own.deletePerson(rctx(c, tx), id(c)));
+    const r = await c.var.db.tx(scope(c), (tx) => own.deletePerson(rctx(c, tx), id(c)));
+    // their documents' copies leave storage once the deletion is committed
+    if (c.env.FILES) await Promise.all(r.storageKeys.map((k) => c.env.FILES!.delete(k).catch(() => undefined)));
     return c.json({ ok: true });
   })
   .post('/organisation/bank-accounts', async (c) => {

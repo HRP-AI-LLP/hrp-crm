@@ -7,13 +7,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { BankModal, ORG_PATHS, PersonModal, ROLES } from '../components/books/OwnAccounts';
 import { DocTemplatesTab } from '../components/admin/DocTemplates';
+import { OrgDocuments } from '../components/OrgDocuments';
 import { local, setSignerPort, signerPort } from '../lib/dsc';
 import { date as fmtDate } from '../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
 import { del, get, post, put } from '../lib/api';
 
 type Json = Record<string, any>;
-type Tab = 'profile' | 'contacts' | 'people' | 'banks' | 'signatures' | 'dsc' | 'templates';
+type Tab = 'profile' | 'contacts' | 'people' | 'banks' | 'documents' | 'signatures' | 'dsc' | 'templates';
 
 const CONSTITUTIONS: [string, string][] = [
   ['llp', 'Limited liability partnership (LLP)'],
@@ -61,6 +62,7 @@ export function OrganisationTab() {
             ['contacts', 'Phones, emails & contacts'],
             ['people', 'Partners & directors'],
             ['banks', 'Bank accounts'],
+            ['documents', 'Documents'],
             ['signatures', 'Signatures'],
             ['dsc', 'Digital signatures (DSC)'],
             ['templates', 'Document templates'],
@@ -75,6 +77,7 @@ export function OrganisationTab() {
       {tab === 'contacts' && <Contacts d={d} />}
       {tab === 'people' && <People d={d} />}
       {tab === 'banks' && <Banks d={d} />}
+      {tab === 'documents' && <OrgDocuments d={d} />}
       {tab === 'signatures' && <Signatures d={d} />}
       {tab === 'dsc' && <Dsc d={d} />}
       {tab === 'templates' && <DocTemplatesTab />}
@@ -142,6 +145,26 @@ function Profile({ d }: { d: Json }) {
         {field('Main phone (printed on documents)', <input value={p.phone} disabled={ro} onChange={set('phone')} />)}
         {field('Main email (printed on documents)', <input type="email" value={p.email} disabled={ro} onChange={set('email')} />)}
       </div>
+      <fieldset className="panel" style={{ padding: 14, margin: 0 }}>
+        <legend className="small" style={{ fontWeight: 600, padding: '0 6px' }}>
+          Startup India (DPIIT recognition)
+        </legend>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+          {field('DPIIT recognition no.', <input className="mono" value={p.dpiitNumber ?? ''} disabled={ro} placeholder="DIPP123456" onChange={(e) => setP({ ...p, dpiitNumber: e.target.value.toUpperCase().replace(/\s/g, '') })} />)}
+          {field('Recognised on', <input type="date" value={p.dpiitRecognisedOn ?? ''} disabled={ro} onChange={set('dpiitRecognisedOn')} />)}
+          {field('Sector', <input value={p.startupSector ?? ''} disabled={ro} onChange={set('startupSector')} placeholder="e.g. Artificial Intelligence" />)}
+          {field('Industry', <input value={p.startupIndustry ?? ''} disabled={ro} onChange={set('startupIndustry')} placeholder="e.g. IT Services" />)}
+          {field('Sec 80-IAC certificate no.', <input value={p.section80IacCertNo ?? ''} disabled={ro} onChange={set('section80IacCertNo')} placeholder="if the tax exemption was granted" />)}
+          {field('80-IAC claimed from (financial year)', <input value={p.section80IacFrom ?? ''} disabled={ro} onChange={set('section80IacFrom')} placeholder="2026-27" />)}
+          <label className="row small" style={{ gap: 6, alignSelf: 'end', paddingBottom: 10 }}>
+            <input type="checkbox" checked={!!p.section56Exempt} disabled={ro} onChange={(e) => setP({ ...p, section56Exempt: e.target.checked })} />
+            Exempt under section 56(2)(viib) (angel tax)
+          </label>
+        </div>
+        <p className="muted small" style={{ margin: '8px 0 0' }}>
+          Keep the recognition certificate and exemption letters under Documents.
+        </p>
+      </fieldset>
       {d.isAdmin && (
         <div className="field">
           Who else manages this profile (besides admins)
@@ -774,24 +797,7 @@ function Dsc({ d }: { d: Json }) {
           }}
         />
       )}
-      {paired && (
-        <Modal title="Signer paired" onClose={() => setPaired(null)} footer={<button className="btn primary" onClick={() => setPaired(null)}>Done</button>}>
-          <div className="modal-body stack">
-            <p className="small" style={{ margin: 0 }}>
-              On the computer with the USB token (see <span className="mono">tools/dsc-signer/README.md</span>), run this once — the code is shown only now:
-            </p>
-            <pre className="mono small" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f1f5f9', padding: 10, borderRadius: 8 }}>
-              python dsc_signer.py pair {paired.pairingCode} --origin {location.origin}
-            </pre>
-            <button className="btn sm" onClick={() => navigator.clipboard?.writeText(`python dsc_signer.py pair ${paired.pairingCode} --origin ${location.origin}`).then(() => toast('Copied'))}>
-              Copy
-            </button>
-            <p className="small muted" style={{ margin: 0 }}>
-              Then start it (start-signer.bat), plug in the token and use “Add the token's certificate”.
-            </p>
-          </div>
-        </Modal>
-      )}
+      {paired && <PairedModal code={paired.pairingCode} onClose={() => setPaired(null)} />}
       {modal === 'token' && <TokenCertModal d={d} sigs={sigs.data ?? []} signers={signers} onClose={() => setModal(null)} onSaved={refresh} />}
       {edit && <CertEditModal d={d} sigs={sigs.data ?? []} cert={edit} onClose={() => setEdit(null)} onSaved={refresh} />}
     </div>
@@ -1024,6 +1030,40 @@ function CertEditModal({ d, sigs, cert, onClose, onSaved }: { d: Json; sigs: Jso
         <SigPick sigs={sigs} value={f.signatureId} onChange={(signatureId) => setF({ ...f, signatureId })} />
         <p className="muted small mono" style={{ margin: 0, wordBreak: 'break-all' }}>
           {cert.subject} · serial {cert.serial} · SHA-1 {cert.thumbprint}
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+/** The one-time pairing command, for the computer with the USB token. */
+function PairedModal({ code, onClose }: { code: string; onClose: () => void }) {
+  const toast = useToast();
+  const localDev = /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  const origins = localDev ? [...new Set([location.origin, 'http://localhost:5173', 'http://localhost:8787'])] : [location.origin];
+  const flags = origins.map((o) => `--origin ${o}`).join(' ');
+  const cmds = localDev ? [`pnpm dsc pair ${code} ${flags}`] : [`python dsc_signer.py pair ${code} ${flags}`];
+  const copy = (t: string) => navigator.clipboard?.writeText(t).then(() => toast('Copied'));
+  return (
+    <Modal title="Signer paired" onClose={onClose} footer={<button className="btn primary" onClick={onClose}>Done</button>}>
+      <div className="modal-body stack">
+        <p className="small" style={{ margin: 0 }}>
+          {localDev ? 'In a terminal in the project folder on this computer (the one with the USB token), run this once' : 'On the computer with the USB token, in the tools/dsc-signer folder, run this once'} — the code is shown only now:
+        </p>
+        {cmds.map((c) => (
+          <div key={c} className="stack" style={{ gap: 6 }}>
+            <pre className="mono small" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f1f5f9', padding: 10, borderRadius: 8, margin: 0 }}>
+              {c}
+            </pre>
+            <button className="btn sm" onClick={() => copy(c)}>
+              Copy
+            </button>
+          </div>
+        ))}
+        <p className="small muted" style={{ margin: 0 }}>
+          {localDev
+            ? 'pnpm local installs and starts the signer for you; it picks up the pairing at once. Then plug in the token and use “Add the token’s certificate”.'
+            : 'Then start the signer (start-signer.bat), plug in the token and use “Add the token’s certificate”.'}
         </p>
       </div>
     </Modal>

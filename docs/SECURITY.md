@@ -284,3 +284,8 @@ An independent review of the fifth round found no cross-tenant leaks; these were
 - **HTML templates** render through Mustache (escaped by default) and DOMPurify, without scripts, event
   handlers or external fetches, inside a shadow root. Letterheads are stored as data URLs (≤ 6 MB).
 - New tables (`doc_templates`, `dsc_certificates`, `dsc_signers`) are FORCE RLS with the tenant policy.
+- **Identity numbers** (`person_identity`): Aadhaar is AES-GCM encrypted under `DATA_ENCRYPTION_KEY` with the
+  workspace as associated data; only the last four digits are stored in clear. Revealing it is a separate
+  POST that writes `audit_logs` (`reveal`, `person_identity`). Identity papers (`org_documents`) are stored
+  under the `organisation` object key, which the generic file routes refuse, and are served by 15-minute
+  signed links to the profile's managers (and, for team members, admins with the users area).

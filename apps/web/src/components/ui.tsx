@@ -32,18 +32,31 @@ export const useToast = () => useContext(ToastCtx);
 // ------------------------------------------------------------------ modal
 export function Modal({ title, onClose, children, footer, wide }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
+  // the latest onClose, so the effect below runs once per opening: callers pass a new function on
+  // every render, and re-running it on each keystroke moved the focus away from the field being typed in
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLElement>('input,select,textarea,button')?.focus();
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const root = ref.current;
+    // first field the dialog asked for, else its first field, else its first button (not the ✕)
+    if (root && !root.contains(document.activeElement)) {
+      const first =
+        root.querySelector<HTMLElement>('[autofocus],[data-autofocus]') ??
+        root.querySelector<HTMLElement>('.modal-body input:not([type=hidden]):not([disabled]),.modal-body select,.modal-body textarea') ??
+        root.querySelector<HTMLElement>('input:not([type=hidden]),select,textarea') ??
+        root.querySelector<HTMLElement>('.modal-foot button, button');
+      first?.focus();
+    }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close.current();
     window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('keydown', onKey);
-      prev?.focus();
+      if (prev && document.contains(prev)) prev.focus();
     };
-  }, [onClose]);
+  }, []);
   return (
-    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && close.current()}>
       <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={ref} style={wide ? { width: 'min(860px, 100%)' } : undefined}>
         <div className="modal-head">
           <h2>{title}</h2>

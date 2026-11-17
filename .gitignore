@@ -24,3 +24,6 @@ mobile/twa/*.keystore
 mobile/twa/*.jks
 mobile/twa/*.apk
 mobile/twa/*.aab
+
+# the DSC signer's Python packages (pnpm dsc install)
+tools/dsc-signer/.deps/

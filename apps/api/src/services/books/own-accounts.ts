@@ -315,8 +315,14 @@ export async function savePerson(ctx: RecordCtx, id: string | null, input: z.inf
 
 export async function deletePerson(ctx: RecordCtx, id: string) {
   await assertOwnAccess(ctx);
+  // their uploaded documents go with them (the rows cascade; the copies are marked deleted here)
+  const files = await ctx.tx.query<{ storage_key: string }>(
+    `update files set deleted_at = now() where tenant_id = $1 and deleted_at is null and id in (select file_id from org_documents where tenant_id = $1 and person_id = $2) returning storage_key`,
+    [ctx.tenantId, id],
+  );
   const r = await ctx.tx.one(`delete from acct_persons where tenant_id = $1 and id = $2 returning id`, [ctx.tenantId, id]);
   if (!r) throw notFound();
+  return { storageKeys: files.map((f) => f.storage_key).filter(Boolean) };
 }
 
 export async function saveBankIdents(ctx: RecordCtx, bankAccountId: string, input: z.infer<typeof bankIdentsSchema>) {

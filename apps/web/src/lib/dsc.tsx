@@ -64,7 +64,7 @@ export async function local<T>(path: string, body?: unknown): Promise<T> {
   try {
     r = await fetch(`http://127.0.0.1:${signerPort()}${path}`, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   } catch {
-    throw new Error('The DSC signer is not running on this computer (start it with start-signer.bat), or the browser blocked it');
+    throw new Error('The DSC signer is not running on this computer (pnpm local starts it; or run tools/dsc-signer/start-signer.bat), or the browser blocked it');
   }
   const j = (await r.json().catch(() => ({}))) as Json;
   if (!r.ok) throw new Error(j.error ?? `The signer answered ${r.status}`);

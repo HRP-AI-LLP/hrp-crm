@@ -8,13 +8,23 @@ made with the pairing secret; the signer checks the ticket (made by your workspa
 this certificate, not expired), asks for nothing else, and returns the signed PDF. Requests from other
 websites are refused, and requests without a valid ticket are refused.
 
-    python dsc_signer.py pair <pairing code> --origin https://yourco.synapse.example
-    python dsc_signer.py serve --lib "C:\\Windows\\System32\\eps2003csp11v2.dll"
+    python dsc_signer.py pair <pairing code> --origin https://yourco.synapse.example [--origin …]
+    python dsc_signer.py serve [--lib "C:\\Windows\\System32\\eps2003csp11v2.dll"]
     python dsc_signer.py certs --lib ... --pin ...        (lists the certificates on the token)
 
-Needs Python 3.10+ and:  pip install "pyhanko[pkcs11]==0.25.3"
+Needs Python 3.10+ and the packages in requirements.txt. They can live in the .deps folder beside this
+file (`python -m pip install --target .deps -r requirements.txt`, which `pnpm local` does for you), so
+no pip.exe or other new program has to run.
 """
 from __future__ import annotations
+
+import sys as _sys
+from pathlib import Path as _Path
+
+# packages installed beside the signer (python -m pip install --target .deps …) come first
+_DEPS = _Path(__file__).resolve().parent / ".deps"
+if _DEPS.is_dir() and str(_DEPS) not in _sys.path:
+    _sys.path.insert(0, str(_DEPS))
 
 import argparse
 import base64
@@ -29,7 +39,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # pyHanko reads the computer's time zone; some settings (e.g. "Asia/Calcutta" as TZ) can't be read
 # that way. Fall back to UTC for the signing time then (the time in the PDF signature is absolute).
@@ -78,11 +88,20 @@ def save_config(cfg: dict) -> None:
         pass
 
 
-def find_lib(cfg: dict, override: str | None) -> str:
+NO_LIB = "No driver (PKCS#11 library) for the token was found. Install the token's driver, or start the signer with --lib and its .dll path."
+
+
+def find_lib(cfg: dict, override: str | None, required: bool = True) -> str | None:
     for cand in [override, cfg.get("lib"), *KNOWN_LIBS]:
         if cand and Path(cand).exists():
             return cand
-    raise SystemExit("No PKCS#11 library found for the token. Install the token's driver, then pass --lib with its .dll path.")
+    if required:
+        raise SystemExit(NO_LIB)
+    return None
+
+
+def origins_of(pairing: dict) -> set[str]:
+    return {o.rstrip("/") for o in [pairing.get("origin"), *pairing.get("origins", [])] if o}
 
 
 def b64url_decode(s: str) -> bytes:
@@ -178,7 +197,7 @@ class Handler(BaseHTTPRequestHandler):
     def _origin_ok(self) -> str | None:
         origin = self.headers.get("Origin")
         cfg = load_config()
-        allowed = {p["origin"].rstrip("/") for p in cfg["pairings"]}
+        allowed = set().union(*(origins_of(p) for p in cfg["pairings"])) if cfg["pairings"] else set()
         return origin if origin and origin.rstrip("/") in allowed else None
 
     def _send(self, code: int, body: dict) -> None:
@@ -209,8 +228,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "This signer only answers your paired Synapse"})
         if self.path == "/v1/status":
             cfg = load_config()
-            return self._send(200, {"ok": True, "version": VERSION, "signers": [{"tenant": p["tenant"], "signer": p["signer"]} for p in cfg["pairings"]]})
+            return self._send(200, {"ok": True, "version": VERSION, "driver": bool(self._lib(cfg, False)), "signers": [{"tenant": p["tenant"], "signer": p["signer"]} for p in cfg["pairings"]]})
         self._send(404, {"error": "not found"})
+
+    def _lib(self, cfg: dict, required: bool = True) -> str | None:
+        # looked up on each request: the driver may be installed while the signer runs
+        lib = find_lib(cfg, getattr(self.server, "lib_override", None), required=False)
+        if not lib and required:
+            raise LookupError(NO_LIB)
+        return lib
 
     def _body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
@@ -226,18 +252,20 @@ class Handler(BaseHTTPRequestHandler):
             body = self._body()
             if self.path == "/v1/certificates":
                 with lock:
-                    return self._send(200, {"certificates": token_certs(self.server.lib, body.get("pin"))})
+                    return self._send(200, {"certificates": token_certs(self._lib(cfg), body.get("pin"))})
             if self.path == "/v1/sign":
                 pdf = base64.b64decode(body["pdf"])
                 payload = check_ticket(cfg, body["ticket"], pdf)
                 if not body.get("pin"):
                     return self._send(400, {"error": "Enter the token PIN"})
                 with lock:
-                    signed = sign_pdf(self.server.lib, body["pin"], pdf, payload)
+                    signed = sign_pdf(self._lib(cfg), body["pin"], pdf, payload)
                 return self._send(200, {"pdf": base64.b64encode(signed).decode()})
             self._send(404, {"error": "not found"})
         except PermissionError as e:
             self._send(403, {"error": str(e)})
+        except LookupError as e:
+            self._send(503, {"error": str(e)})
         except Exception as e:  # token errors: wrong PIN, locked token, unplugged …
             msg = type(e).__name__
             if "PinIncorrect" in msg:
@@ -259,7 +287,7 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("pair", help="pair with a Synapse workspace (code from Settings → Organisation → Digital signatures)")
     p.add_argument("code")
-    p.add_argument("--origin", required=True, help="your Synapse address, e.g. https://acme.synapse.example or http://localhost:8787")
+    p.add_argument("--origin", required=True, action="append", help="your Synapse address, e.g. https://acme.synapse.example or http://localhost:8787 (repeat for several)")
     s = sub.add_parser("serve", help="run the signer")
     s.add_argument("--lib", help="the token's PKCS#11 library (.dll / .so)")
     s.add_argument("--port", type=int, default=None)
@@ -271,23 +299,30 @@ def main() -> None:
     if a.cmd == "pair":
         tenant, signer, secret = a.code.split(".", 2)
         cfg["pairings"] = [x for x in cfg["pairings"] if not (x["tenant"] == tenant and x["signer"] == signer)]
-        cfg["pairings"].append({"tenant": tenant, "signer": signer, "secret": secret, "origin": a.origin.rstrip("/")})
+        origins = sorted({o.rstrip("/") for o in a.origin})
+        cfg["pairings"].append({"tenant": tenant, "signer": signer, "secret": secret, "origin": origins[0], "origins": origins})
         save_config(cfg)
-        print(f"Paired with {a.origin}. Start the signer with: python dsc_signer.py serve")
+        print(f"Paired with {', '.join(origins)}. A running signer picks this up at once; otherwise start it (pnpm local starts it for you).")
     elif a.cmd == "certs":
         for x in token_certs(find_lib(cfg, a.lib), a.pin):
             print(f"{x['label']}  sha1={x['thumbprint']}")
     elif a.cmd == "serve":
-        if not cfg["pairings"]:
-            raise SystemExit("Pair the signer with your Synapse first (python dsc_signer.py pair …)")
-        lib = find_lib(cfg, a.lib)
         if a.lib:
+            if not Path(a.lib).exists():
+                raise SystemExit(f"{a.lib} does not exist")
             cfg["lib"] = a.lib
             save_config(cfg)
+        lib = find_lib(cfg, a.lib, required=False)
         port = a.port or cfg.get("port") or DEFAULT_PORT
-        srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-        srv.lib = lib  # type: ignore[attr-defined]
-        print(f"Synapse DSC signer {VERSION} on http://127.0.0.1:{port} using {lib}; answering {', '.join(p['origin'] for p in cfg['pairings'])}")
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        except OSError:
+            raise SystemExit(f"Port {port} is in use: the signer is probably already running.")
+        srv.lib_override = a.lib  # type: ignore[attr-defined]
+        origins = sorted(set().union(*(origins_of(p) for p in cfg["pairings"]))) if cfg["pairings"] else []
+        print(f"Synapse DSC signer {VERSION} on http://127.0.0.1:{port}")
+        print(f"  token driver: {lib or 'not found yet (install the token driver, or pass --lib)'}")
+        print(f"  answering:    {', '.join(origins) if origins else 'nobody yet: pair it from Organisation → Digital signatures'}")
         srv.serve_forever()
 
 

@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { get, patch, post } from '../../lib/api';
 import { relative } from '../../lib/format';
+import { blankIdentity, IdentitySection, persistIdentity, type IdentityValues } from '../IdentitySection';
 import { Modal, Spinner, useToast } from '../ui';
 
 type Json = Record<string, any>;
@@ -40,6 +41,8 @@ export function PeopleTab() {
   const { data: sec } = useQuery({ queryKey: ['admin-security'], queryFn: () => get<{ mailer: boolean }>('/api/admin/security') });
   const [inv, setInv] = useState<{ email: string; fullName: string; role: string; teamIds: string[] } | null>(null);
   const [link, setLink] = useState<{ title: string; intro: string; url: string } | null>(null);
+  const [idv, setIdv] = useState<IdentityValues>(blankIdentity());
+  const [idFor, setIdFor] = useState<Json | null>(null);
   const [menu, setMenuState] = useState<{ id: string; top: number; right: number } | null>(null);
   const setMenu = (_: null) => setMenuState(null);
   // close the floating menu on outside click / scroll
@@ -160,6 +163,15 @@ export function PeopleTab() {
                           Reset two-factor
                         </button>
                       )}
+                      <button
+                        role="menuitem"
+                        onClick={() => {
+                          setMenu(null);
+                          setIdFor(u);
+                        }}
+                      >
+                        ID and statutory details
+                      </button>
                       <button role="menuitem" onClick={() => act(() => post(`/api/admin/users/${u.id}/sign-out`), 'Signed out everywhere')}>
                         Sign out everywhere
                       </button>
@@ -204,14 +216,21 @@ export function PeopleTab() {
       {inv && (
         <Modal
           title="Invite people"
-          onClose={() => setInv(null)}
+          wide
+          onClose={() => {
+            setInv(null);
+            setIdv(blankIdentity());
+          }}
           footer={
             <button
               className="btn primary"
               disabled={!/@/.test(inv.email) || !inv.fullName.trim()}
               onClick={async () => {
-                const r = (await act(() => post<{ inviteUrl: string; emailed: boolean }>('/api/admin/users/invite', { email: inv.email, fullName: inv.fullName, roles: [inv.role], teamIds: inv.teamIds }), 'Invitation created')) as { inviteUrl: string; emailed: boolean } | null;
+                const r = (await act(() => post<{ id: string; inviteUrl: string; emailed: boolean }>('/api/admin/users/invite', { email: inv.email, fullName: inv.fullName, roles: [inv.role], teamIds: inv.teamIds }), 'Invitation created')) as { id: string; inviteUrl: string; emailed: boolean } | null;
                 if (!r) return;
+                const filled = idv.pan || idv.aadhaar || idv.uan || idv.pfNumber || Object.values(idv.files).some(Boolean);
+                if (filled && r.id) await persistIdentity('user', r.id, idv, { includePan: true }).catch((e) => toast(`Invited ${inv.fullName}, but the ID details were not saved: ${(e as Error).message}`, true));
+                setIdv(blankIdentity());
                 qc.invalidateQueries({ queryKey: ['users'] });
                 qc.invalidateQueries({ queryKey: ['admin-teams'] });
                 setInv(null);
@@ -255,10 +274,53 @@ export function PeopleTab() {
                 </div>
               </div>
             )}
+            <IdentitySection subject="user" id={null} value={idv} onChange={setIdv} />
           </div>
         </Modal>
       )}
+      {idFor && <UserIdentityModal user={idFor} onClose={() => setIdFor(null)} />}
       {link && <LinkModal {...link} onClose={() => setLink(null)} />}
     </div>
+  );
+}
+
+/** A team member's PAN, Aadhaar, UAN and PF number, with copies. */
+function UserIdentityModal({ user, onClose }: { user: Json; onClose: () => void }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [v, setV] = useState<IdentityValues>(blankIdentity());
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal
+      title={`${user.full_name}: ID and statutory details`}
+      wide
+      onClose={onClose}
+      footer={
+        <button
+          className="btn primary"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await persistIdentity('user', user.id, v, { includePan: true });
+              qc.invalidateQueries({ queryKey: ['identity', 'user', user.id] });
+              qc.invalidateQueries({ queryKey: ['organisation', 'documents'] });
+              toast('Saved');
+              onClose();
+            } catch (e) {
+              toast((e as Error).message, true);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+      }
+    >
+      <div className="modal-body">
+        <IdentitySection subject="user" id={user.id} value={v} onChange={setV} />
+      </div>
+    </Modal>
   );
 }
