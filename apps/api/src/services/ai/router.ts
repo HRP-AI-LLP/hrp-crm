@@ -122,20 +122,34 @@ function withImagesAnthropic(req: ChatRequest) {
 /** Providers that read pictures: the platform's Workers AI / Groq text models don't. */
 const VISION_KINDS = new Set(['openai', 'anthropic', 'gemini', 'openrouter', 'openai_compatible']);
 
+/**
+ * Some models (newer Claude models, OpenAI reasoning models) refuse a `temperature` setting with a 400.
+ * Try with it, and when the refusal names temperature, send the same request again without it.
+ */
+async function withoutTemperatureIfRefused(send: (withTemp: boolean) => Promise<Response>): Promise<Response> {
+  const res = await send(true);
+  if (res.status !== 400) return res;
+  const body = await res.clone().text().catch(() => '');
+  if (!/temperature/i.test(body)) return res;
+  return send(false);
+}
+
 function openAiCompatible(baseUrl: string, apiKey: string, model: string, extraHeaders: Record<string, string> = {}) {
   return async (req: ChatRequest, signal: AbortSignal): Promise<CallResult> => {
-    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST',
-      signal,
-      headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json', ...extraHeaders },
-      body: JSON.stringify({
-        model,
-        messages: withImagesOpenAi(req),
-        max_tokens: req.maxTokens ?? 700,
-        temperature: req.temperature ?? 0.2,
-        ...(req.json ? { response_format: { type: 'json_object' } } : {}),
-      }),
-    });
+    const send = (withTemp: boolean) =>
+      fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        signal,
+        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json', ...extraHeaders },
+        body: JSON.stringify({
+          model,
+          messages: withImagesOpenAi(req),
+          max_tokens: req.maxTokens ?? 700,
+          ...(withTemp ? { temperature: req.temperature ?? 0.2 } : {}),
+          ...(req.json ? { response_format: { type: 'json_object' } } : {}),
+        }),
+      });
+    const res = await withoutTemperatureIfRefused(send);
     if (!res.ok) throw await httpError(res);
     const j = (await res.json()) as { choices?: { message?: { content?: string } }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } };
     return { text: j.choices?.[0]?.message?.content ?? '', inputTokens: j.usage?.prompt_tokens, outputTokens: j.usage?.completion_tokens };
@@ -145,18 +159,21 @@ function openAiCompatible(baseUrl: string, apiKey: string, model: string, extraH
 function anthropic(apiKey: string, model: string) {
   return async (req: ChatRequest, signal: AbortSignal): Promise<CallResult> => {
     const system = req.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      signal,
-      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        max_tokens: req.maxTokens ?? 700,
-        temperature: req.temperature ?? 0.2,
-        ...(system ? { system: req.json ? `${system}\nRespond with a single JSON object only.` : system } : {}),
-        messages: withImagesAnthropic(req),
-      }),
-    });
+    // Newer Claude models refuse `temperature`; send it only when asked for, and drop it if refused.
+    const send = (withTemp: boolean) =>
+      fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        signal,
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          max_tokens: req.maxTokens ?? 700,
+          ...(withTemp && req.temperature !== undefined ? { temperature: req.temperature } : {}),
+          ...(system ? { system: req.json ? `${system}\nRespond with a single JSON object only.` : system } : {}),
+          messages: withImagesAnthropic(req),
+        }),
+      });
+    const res = await withoutTemperatureIfRefused(send);
     if (!res.ok) throw await httpError(res);
     const j = (await res.json()) as { content?: { type: string; text?: string }[]; usage?: { input_tokens?: number; output_tokens?: number } };
     const text = (j.content ?? []).filter((b) => b.type === 'text').map((b) => b.text ?? '').join('');

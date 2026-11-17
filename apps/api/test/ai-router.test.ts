@@ -75,3 +75,39 @@ describe('custom endpoint validation', () => {
     }
   });
 });
+
+describe('models that refuse temperature', () => {
+  it('Anthropic: no temperature by default, and a refused one is dropped on retry', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    mockFetch((_u, init) => {
+      const b = JSON.parse(String(init.body));
+      bodies.push(b);
+      if ('temperature' in b) return { status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: '`temperature` is deprecated for this model.' } } };
+      return { body: { content: [{ type: 'text', text: 'ok' }], usage: { input_tokens: 1, output_tokens: 1 } } };
+    });
+    const p = tenantProvider({ id: 't1', provider: 'anthropic', model: 'claude-sonnet-5-5', baseUrl: null, apiKey: 'k', allowPii: true });
+    expect((await chatWith([p], { ...msg, containsPii: false })).text).toBe('ok');
+    expect(bodies).toHaveLength(1);
+    expect('temperature' in bodies[0]!).toBe(false);
+    bodies.length = 0;
+    expect((await chatWith([p], { ...msg, containsPii: false, temperature: 0.5 })).text).toBe('ok');
+    expect(bodies.map((b) => 'temperature' in b)).toEqual([true, false]);
+  });
+
+  it('OpenAI-style: a temperature refusal is retried without it; other 400s are not', async () => {
+    let n = 0;
+    mockFetch((_u, init) => {
+      n++;
+      const b = JSON.parse(String(init.body));
+      if ('temperature' in b) return { status: 400, body: { error: { message: "Unsupported parameter: 'temperature'" } } };
+      return { body: { choices: [{ message: { content: 'ok' } }] } };
+    });
+    const p = tenantProvider({ id: 't2', provider: 'openai', model: 'o4-mini', baseUrl: null, apiKey: 'k', allowPii: true });
+    expect((await chatWith([p], { ...msg, containsPii: false })).text).toBe('ok');
+    expect(n).toBe(2);
+    n = 0;
+    mockFetch(() => { n++; return { status: 400, body: { error: { message: 'bad model' } } }; });
+    await expect(chatWith([p], { ...msg, containsPii: false })).rejects.toThrow();
+    expect(n).toBe(1);
+  });
+});
