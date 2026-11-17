@@ -2706,7 +2706,7 @@ function Settings() {
         <label className="field">
           Books start on
           <input type="date" value={c.start_date ?? ''} onChange={(e) => setF({ ...c, start_date: e.target.value })} />
-          <span className="small muted">Documents from this date are posted; enter earlier balances as opening balances.</span>
+          <span className="small muted">The books are kept by financial year: when a bank line or document from an earlier year comes in, the start moves back to 1 April of that year by itself (unless opening balances are entered). Balances from before the start are entered as opening balances.</span>
         </label>
         <label className="field">
           Lock the books up to

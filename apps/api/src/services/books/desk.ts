@@ -24,10 +24,12 @@ import { type AiCtx, guardedChat } from '../ai/features';
 import { extractJson } from '../ai/router';
 import { recordPayment } from '../billing';
 import { createRecord, type RecordCtx, type RecordEvent } from '../records';
-import { categorize, excludeTxn, matchTxn, reconcile, saveRule, suggestions } from './banking';
+import { categorize, excludeTxn, matchTxn, reconcile, saveRule, suggestions, undoTxn } from './banking';
+import { expenseAction, setExpenseAccounts } from './expenses';
 import { recordVendorPayment } from './bills';
 import { syncAllFeeds, syncGatewaySettlements } from './feeds';
-import { assertBooksAdmin, d10, postJournal, postingOn, r2, sys } from './ledger';
+import { assertBooksAdmin, d10, postJournal, r2, sys } from './ledger';
+import { coverDate } from './posting';
 import { findOwn, identConfidence, loadOwn, type Own, savePerson } from './own-accounts';
 import { isVerificationCredit, type Parsed, parseNarration, sameName, tail4 } from './narration';
 import { stateCode } from '@synapse/shared';
@@ -204,11 +206,21 @@ async function loadBook(ctx: RecordCtx): Promise<Book> {
   );
   // how lines were booked before: the other side of each categorised line
   const hist = await ctx.tx.query<{ description: string; counterparty: string | null; amount: string; account_id: string; party_type: 'customer' | 'vendor' | null; party_id: string | null }>(
-    `select t.description, t.counterparty, t.amount, l.account_id, l.party_type, l.party_id
-       from bank_transactions t
-       join bank_accounts b on b.tenant_id = t.tenant_id and b.id = t.bank_account_id
-       join journal_lines l on l.tenant_id = t.tenant_id and l.journal_id = t.journal_id and l.account_id <> b.gl_account_id
-      where t.tenant_id = $1 and t.status = 'categorized' order by t.txn_date desc limit 3000`,
+    `select description, counterparty, amount, account_id, party_type, party_id from (
+       select t.txn_date, t.description, t.counterparty, t.amount, l.account_id, l.party_type, l.party_id
+         from bank_transactions t
+         join bank_accounts b on b.tenant_id = t.tenant_id and b.id = t.bank_account_id
+         join journal_lines l on l.tenant_id = t.tenant_id and l.journal_id = t.journal_id and l.account_id <> b.gl_account_id
+        where t.tenant_id = $1 and t.status = 'categorized'
+       union all
+       -- lines booked as Expense records
+       select t.txn_date, t.description, t.counterparty, t.amount, e.account_id, case when e.vendor_id is null then null else 'vendor' end, e.vendor_id
+         from bank_transactions t
+         join journal_lines bl on bl.tenant_id = t.tenant_id and bl.bank_txn_id = t.id
+         join journals j on j.tenant_id = bl.tenant_id and j.id = bl.journal_id and j.source_type = 'expense' and j.status = 'posted'
+         join expenses e on e.tenant_id = j.tenant_id and e.id = j.source_id and e.account_id is not null
+        where t.tenant_id = $1 and t.status = 'matched'
+     ) h order by txn_date desc limit 3000`,
     [ctx.tenantId],
   );
   const history = hist.map((h) => ({ key: payeeKey(h.description, h.counterparty), inflow: Number(h.amount) > 0, account_id: h.account_id, party_type: h.party_type, party_id: h.party_id })).filter((h) => h.key);
@@ -749,10 +761,8 @@ async function partyByName(ctx: RecordCtx, type: 'customer' | 'vendor', name: st
  * is before the books start (documents before then belong to the opening balances and are not posted).
  */
 async function notPosted(ctx: RecordCtx, date: string): Promise<string | null> {
-  const cfg = await postingOn(ctx.tx, ctx.tenantId);
-  if (!cfg) return 'Books posting is off (Books → Settings), so payments are not posted to the bank account';
-  if (date < cfg.start_date) return `The bank line is dated ${date}, before the books start on ${cfg.start_date}`;
-  return null;
+  // books are kept by financial year: an earlier line brings the start back to its 1 April
+  return coverDate(ctx.tx, ctx.tenantId, date);
 }
 
 /**
@@ -922,6 +932,97 @@ async function aiProposals(ai: AiCtx, txns: Txn[], book: Book, vendors: { id: st
   return { proposals: out, model: res.model };
 }
 
+/* ───────────────────────── expenses from bank lines ───────────────────────── */
+
+/** Expense accounts a bank line becomes an Expense record for (not bank charges, salaries or book entries). */
+const NOT_AN_EXPENSE_RECORD = new Set(['bank_charges', 'round_off', 'depreciation', 'salaries', 'interest_expense', 'bad_debts', 'gst_expense', 'liquidated_damages', 'fx_gain_loss']);
+
+async function expenseAccount(ctx: RecordCtx, accountId: string) {
+  const a = await ctx.tx.one<{ name: string; type: string; subtype: string; system_key: string | null }>(`select name, type, subtype, system_key from gl_accounts where tenant_id = $1 and id = $2 and is_active`, [ctx.tenantId, accountId]);
+  return a && a.type === 'expense' && ['expense', 'other_expense'].includes(a.subtype) && !NOT_AN_EXPENSE_RECORD.has(a.system_key ?? '') ? a : null;
+}
+
+/**
+ * Books money out as an Expense record (paid from this bank account, the vendor on it) and matches the bank
+ * line to it, so it shows under Expenses as well as in the books. Null when the line is not one (money in,
+ * not an expense account, or a date the books cannot post): the caller books the line directly instead.
+ */
+async function bookAsExpense(ctx: RecordCtx, txnId: string, input: { accountId: string; vendorId?: string | null; note?: string | null }): Promise<{ expenseId: string; number: string | null; events: RecordEvent[] } | null> {
+  const t = await ctx.tx.one<{ amount: string; txn_date: Date; description: string; reference: string | null; bank_account_id: string; status: string }>(
+    `select amount, txn_date, description, reference, bank_account_id, status from bank_transactions where tenant_id = $1 and id = $2`,
+    [ctx.tenantId, txnId],
+  );
+  if (!t || t.status !== 'unmatched' || Number(t.amount) >= 0) return null;
+  const acc = await expenseAccount(ctx, input.accountId);
+  if (!acc) return null;
+  const date = d10(t.txn_date);
+  if (await coverDate(ctx.tx, ctx.tenantId, date)) return null;
+  const gl = (await ctx.tx.one<{ gl_account_id: string }>(`select gl_account_id from bank_accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, t.bank_account_id]))!.gl_account_id;
+  const vendor = input.vendorId ? await ctx.tx.one<{ name: string }>(`select name from vendors where tenant_id = $1 and id = $2`, [ctx.tenantId, input.vendorId]) : null;
+  const amt = Math.abs(Number(t.amount));
+  const r = await createRecord(ctx, 'expense', {
+    name: `${acc.name}${vendor ? ` · ${vendor.name}` : ''}`.slice(0, 200),
+    expense_date: date,
+    amount: amt,
+    amount_is_inclusive: true,
+    tax_rate: 0,
+    itc_eligible: false,
+    is_claim: false,
+    vendor_id: input.vendorId ?? null,
+    vendor_name: vendor?.name ?? null,
+    reference: (t.reference ?? '').slice(0, 100) || null,
+    notes: `${input.note ?? 'Recorded by the accounts desk'} from the bank line of ${date}: ${t.description.slice(0, 300)}`,
+  });
+  const id = String(r.record.id);
+  await setExpenseAccounts(ctx, id, input.accountId, gl);
+  const events = [...r.events, ...(await expenseAction(ctx, id, 'record'))];
+  const l = await ctx.tx.one<{ id: string }>(
+    `select l.id from journal_lines l join journals j on j.tenant_id = l.tenant_id and j.id = l.journal_id
+      where l.tenant_id = $1 and j.source_type = 'expense' and j.source_id = $2 and j.status = 'posted' and l.account_id = $3 and l.credit = $4::numeric and l.bank_txn_id is null limit 1`,
+    [ctx.tenantId, id, gl, amt],
+  );
+  if (!l) throw badRequest('The expense was recorded but its bank entry differs from the statement line; match it in Banking');
+  await matchTxn(ctx, txnId, l.id);
+  const n = await ctx.tx.one<{ expense_number: string | null }>(`select expense_number from expenses where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
+  return { expenseId: id, number: n?.expense_number ?? null, events };
+}
+
+/**
+ * Lines booked straight to an expense account earlier (a bank entry) become Expense records, so every
+ * business expense is listed under Expenses. Reconciled lines are left alone.
+ */
+export async function expensesFromBankEntries(ctx: RecordCtx, limit = 500) {
+  const rows = await ctx.tx.query<{ txn_id: string; journal_id: string; account_id: string; party_type: string | null; party_id: string | null }>(
+    `select t.id as txn_id, j.id as journal_id, d.account_id, d.party_type, d.party_id
+       from bank_transactions t
+       join journals j on j.tenant_id = t.tenant_id and j.id = t.journal_id and j.source_type = 'bank' and j.status = 'posted'
+       join lateral (select l.account_id, l.party_type, l.party_id from journal_lines l where l.tenant_id = j.tenant_id and l.journal_id = j.id and l.debit > 0) d on true
+      where t.tenant_id = $1 and t.status = 'categorized' and t.amount < 0
+        and (select count(*) from journal_lines l where l.tenant_id = j.tenant_id and l.journal_id = j.id) = 2
+        and not exists (select 1 from journal_lines l where l.tenant_id = j.tenant_id and l.journal_id = j.id and l.reconciliation_id is not null)
+      order by t.txn_date limit $2`,
+    [ctx.tenantId, limit],
+  );
+  let made = 0;
+  for (const r of rows) {
+    if (!(await expenseAccount(ctx, r.account_id))) continue;
+    await ctx.tx.query('savepoint exp_from_bank');
+    try {
+      await undoTxn(ctx, r.txn_id);
+      const e = await bookAsExpense(ctx, r.txn_id, { accountId: r.account_id, vendorId: r.party_type === 'vendor' ? r.party_id : null, note: 'Moved from a bank entry by the accounts desk' });
+      if (!e) {
+        await ctx.tx.query('rollback to savepoint exp_from_bank');
+        continue;
+      }
+      await ctx.tx.query('release savepoint exp_from_bank');
+      made++;
+    } catch {
+      await ctx.tx.query('rollback to savepoint exp_from_bank');
+    }
+  }
+  return { made };
+}
+
 /* ───────────────────────── applying a proposal ───────────────────────── */
 
 type Row = { id: string; bank_txn_id: string | null; kind: Kind; payload: Record<string, any>; status: string; title: string };
@@ -939,6 +1040,8 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
   const amt = Math.abs(Number(t.amount));
   const date = d10(t.txn_date);
   const pl = p.payload;
+  // a line from an earlier financial year brings the books back to that year, so what it records is posted
+  await notPosted(ctx, date);
   const matchPosted = async (sourceType: string, sourceId: string) => {
     const l = await ctx.tx.one<{ id: string }>(
       `select l.id from journal_lines l join journals j on j.tenant_id = l.tenant_id and j.id = l.journal_id
@@ -967,6 +1070,9 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
         events.push(...r.events);
         [partyType, partyId] = [np.type, r.id];
       }
+      // money spent on the business is an Expense record (listed under Expenses), matched to the line
+      const e = await bookAsExpense(ctx, p.bank_txn_id, { accountId: String(pl.accountId), vendorId: partyType === 'vendor' ? partyId : null });
+      if (e) return { result: { expenseId: e.expenseId, expenseNumber: e.number, partyId }, events: [...events, ...e.events] };
       const r = await categorize(ctx, p.bank_txn_id, { accountId: String(pl.accountId), partyType, partyId, description: pl.narration ?? null });
       return { result: { ...r, partyId }, events };
     }
@@ -1088,6 +1194,8 @@ export async function runBookkeeper(deps: DeskDeps, opts: { trigger?: string; ba
     await assertBooksAdmin(ctx);
     const settings = await getSettings(ctx);
     const runId = await startRun(ctx, 'bookkeeper', opts.trigger ?? 'manual');
+    // expenses booked as bare bank entries earlier become Expense records
+    await expensesFromBankEntries(ctx);
     // proposals for lines someone already handled are no longer current
     await ctx.tx.query(
       `update acct_proposals p set status = 'stale' from bank_transactions t where p.tenant_id = $1 and p.status = 'pending' and t.tenant_id = p.tenant_id and t.id = p.bank_txn_id and t.status <> 'unmatched'`,

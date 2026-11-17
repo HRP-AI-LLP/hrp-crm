@@ -202,19 +202,33 @@ describe('card purchases and lines before the books start', () => {
     expect(vendors.map((v) => v.title)).toContain('Microsoft');
   });
 
-  it("a customer's advance before the books start is booked to customer advances and the line is resolved", async () => {
+  it("a line from an earlier financial year brings the books back to that year; the advance is a payment", async () => {
     const p = await forLine(L.fciOld);
     expect(p).toMatchObject({ kind: 'new_party' });
     expect(p.payload).toMatchObject({ partyId: ids.fci });
     const r = await api('POST', `/api/v1/books/desk/proposals/${p.id}`, { decision: 'approve' });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     expect(await forLine(L.fciOld)).toBeFalsy();
-    const txns = (await api('GET', `/api/v1/books/bank-accounts/${ids.yes}/transactions?status=all`)).json as any[];
-    const t = (Array.isArray(txns) ? txns : (txns as any).items).find((x: any) => x.description === L.fciOld);
-    expect(t.status).toBe('categorized');
-    const j = (await api('GET', `/api/v1/books/journals/${t.journal_id}`)).json;
-    const adv = (j.lines as any[]).find((l) => l.account_id === sysAcc.customer_advances);
-    expect(Number(adv.credit)).toBe(25000);
-    expect(adv.party_id).toBe(ids.fci);
+    const prev = beforeStart(40);
+    const fy = Number(prev.slice(5, 7)) >= 4 ? `${prev.slice(0, 4)}-04-01` : `${Number(prev.slice(0, 4)) - 1}-04-01`;
+    expect((await api('GET', '/api/v1/books/settings')).json.config.start_date).toBe(fy);
+    const pays = (await api('GET', '/api/v1/records/payment?limit=50')).json.items as any[];
+    expect(pays.some((x) => x.title.includes('FOOD CORPORATION') || Number(x.amount) === 25000)).toBe(true);
+  });
+
+  it('expense lines become Expense records; earlier bank entries are moved to Expenses', async () => {
+    const exps = (await api('GET', '/api/v1/records/expense?limit=50')).json.items as any[];
+    // the CA's fees and the Microsoft card line approved above
+    expect(exps.map((e) => e.title)).toEqual(expect.arrayContaining(['Professional fees · Deepanshu Agarwal', 'Software and subscriptions · Microsoft']));
+    // a card line booked by hand in Banking as a bank entry
+    const txns = (await api('GET', `/api/v1/books/bank-accounts/${ids.yes}/transactions?status=unmatched`)).json as any[];
+    const shop = txns.find((x: any) => x.description === L.shop);
+    expect((await api('POST', `/api/v1/books/bank-transactions/${shop.id}/categorize`, { accountId: sysAcc.office })).status).toBe(200);
+    const run = await api('POST', '/api/v1/books/desk/run', { agents: ['bookkeeper'] });
+    expect(run.status, JSON.stringify(run.json)).toBe(200);
+    const after = (await api('GET', '/api/v1/records/expense?limit=50')).json.items as any[];
+    expect(after.map((e) => e.title)).toContain('Office expenses');
+    const all = (await api('GET', `/api/v1/books/bank-accounts/${ids.yes}/transactions?status=all`)).json as any[];
+    expect(all.find((x: any) => x.description === L.shop).status).toBe('matched');
   });
 });

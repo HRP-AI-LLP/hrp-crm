@@ -318,3 +318,24 @@ export async function postHistory(tx: Tx, tenantId: string) {
   await run('reimbursement', `select id from expenses where tenant_id = $1 and expense_date >= $2 and status = 'reimbursed' and is_claim and deleted_at is null`);
   return { posted };
 }
+
+/** 1 April of the financial year a date falls in. */
+export const fyStart = (d: string) => (Number(d.slice(5, 7)) >= 4 ? `${d.slice(0, 4)}-04-01` : `${Number(d.slice(0, 4)) - 1}-04-01`);
+
+/**
+ * The books are kept by financial year: something dated before the books start brings the start back
+ * to 1 April of its year, and every document from then on is posted. Not done once opening balances
+ * are entered (they are balances as at the old start); the reason is returned instead.
+ */
+export async function coverDate(tx: Tx, tenantId: string, date: string): Promise<string | null> {
+  const cfg = await postingOn(tx, tenantId);
+  if (!cfg) return 'Books posting is off (Books → Settings), so documents are not posted';
+  if (date >= cfg.start_date) return null;
+  const opening = await tx.one(`select 1 from journals where tenant_id = $1 and source_type = 'opening' and status = 'posted' limit 1`, [tenantId]);
+  if (opening)
+    return `The entry is dated ${date}, before the books start on ${cfg.start_date}, and opening balances are entered as at that date. To keep the books from ${fyStart(date)}, void the opening balances, change the start date in Books → Settings and enter them as at ${fyStart(date)}`;
+  if (cfg.lock_date && date <= cfg.lock_date) return `The books are locked up to ${cfg.lock_date}`;
+  await tx.query(`update books_config set start_date = $2::date, updated_at = now() where tenant_id = $1`, [tenantId, fyStart(date)]);
+  await postHistory(tx, tenantId);
+  return null;
+}

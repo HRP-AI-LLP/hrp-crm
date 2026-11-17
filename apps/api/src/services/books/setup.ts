@@ -48,9 +48,16 @@ export async function saveSettings(ctx: RecordCtx, input: SettingsInput) {
   await ensureBooks(ctx.tx, ctx.tenantId);
   const before = await postingOn(ctx.tx, ctx.tenantId);
   const cur = (await booksConfig(ctx.tx, ctx.tenantId))!;
+  let earlier = false;
   if (input.startDate && input.startDate !== cur.start_date) {
-    const j = await ctx.tx.one<{ n: number }>(`select count(*)::int as n from journals where tenant_id = $1 and status = 'posted' and source_type <> 'opening'`, [ctx.tenantId]);
-    if (j?.n) throw badRequest('The books start date cannot move once documents are posted');
+    // moving the start back only brings more documents in; moving it forward would orphan posted ones
+    earlier = input.startDate < cur.start_date;
+    const j = await ctx.tx.one<{ n: number; o: number }>(
+      `select count(*) filter (where source_type <> 'opening')::int as n, count(*) filter (where source_type = 'opening')::int as o from journals where tenant_id = $1 and status = 'posted'`,
+      [ctx.tenantId],
+    );
+    if (j?.o) throw badRequest('Opening balances are entered as at the current start date; void them before moving the start date');
+    if (j?.n && !earlier) throw badRequest('The books start date can only move back once documents are posted (to an earlier financial year)');
   }
   await ctx.tx.query(
     `update books_config set enabled = coalesce($2, enabled), books_of_record = coalesce($3, books_of_record), start_date = coalesce($4::date, start_date),
@@ -64,7 +71,7 @@ export async function saveSettings(ctx: RecordCtx, input: SettingsInput) {
     ],
   );
   let posted = 0;
-  if (!before && (await postingOn(ctx.tx, ctx.tenantId))) posted = (await postHistory(ctx.tx, ctx.tenantId)).posted;
+  if ((!before || earlier) && (await postingOn(ctx.tx, ctx.tenantId))) posted = (await postHistory(ctx.tx, ctx.tenantId)).posted;
   return { ...(await getSettings(ctx)), posted };
 }
 

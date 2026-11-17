@@ -300,8 +300,8 @@ describe('manual journals and controls', () => {
     expect(r.status).toBe(400);
     expect(JSON.stringify(r.json)).toMatch(/locked/);
     expect((await api('PUT', '/api/v1/books/settings', { lockDate: null })).status).toBe(200);
-    // the start date cannot move once documents are posted
-    expect((await api('PUT', '/api/v1/books/settings', { startDate: '2020-04-01' })).status).toBe(400);
+    // once documents are posted the start date can only move back (to an earlier financial year)
+    expect((await api('PUT', '/api/v1/books/settings', { startDate: `${Number(today.slice(0, 4)) + 1}-04-01` })).status).toBe(400);
   });
 });
 
