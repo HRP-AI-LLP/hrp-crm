@@ -26,7 +26,7 @@ const KEY = 'gak_test_key';
 
 type Call = { method: string; path: string; query: Record<string, string>; body: any };
 const calls: Call[] = [];
-const state = { connected: false, otpPending: false, saved: new Map<string, any>(), chksum3b: 'CK-SAVE' };
+const state = { testMode: false, connected: false, otpPending: false, saved: new Map<string, any>(), chksum3b: 'CK-SAVE' };
 const count = (path: string) => calls.filter((c) => c.path === path).length;
 
 function api_(method: string, path: string, q: Record<string, string>, body: any): [number, any] {
@@ -47,6 +47,8 @@ function api_(method: string, path: string, q: Record<string, string>, body: any
   }
   if (path === '/v1/gst/filing/connections' && method === 'GET') return [200, { success: true, connections: state.connected ? [{ gstin: SELLER, status: 'active', expires_at: new Date(Date.now() + 24 * 3600_000).toISOString() }] : [] }];
   if (path.startsWith('/v1/gstr') && !state.connected) return fail(409, 'This GSTIN is not connected for filing');
+  if (state.testMode && path === '/v1/gstr1/save') return [200, { success: true, test_mode: true, summary: { gstin: SELLER, ret_period: PERIOD, note: 'synthetic' }, ref_id: 'TEST-REF-0000', awaiting_evc_otp: true }];
+  if (state.testMode && path === '/v1/gstr1/file') return [200, { success: true, test_mode: true, filed: false, ref_id: 'TEST-REF-FILE', note: 'synthetic — nothing was filed' }];
   if (path === '/v1/gstr1/save') {
     expect(body).toMatchObject({ gstin: SELLER, ret_period: PERIOD, pan: 'ABCDE1234F' });
     state.saved.set('r1', body.payload);
@@ -77,7 +79,7 @@ function api_(method: string, path: string, q: Record<string, string>, body: any
   if (path === '/v1/gstr3b/offset') {
     expect(body.payload.pditc).toMatchObject({ i_pdi: 5000 });
     state.chksum3b = 'CK-OFFSET';
-    return [200, { success: true, offset: true, chksum: 'CK-OFFSET', summary: { gstin: SELLER, ret_period: PERIOD, paid: true } }];
+    return [200, { success: true, offset: true, chksum: 'CK-OFFSET' }];
   }
   if (path === '/v1/gstr3b/evc-otp') return [200, { success: true, requested: true }];
   if (path === '/v1/gstr3b/file') {
@@ -183,7 +185,7 @@ describe('GST through gstinapi.in', () => {
     expect(prop.json.shortfall).toBeNull(); // no ledger API: the cash ledger is checked on the portal
     expect(prop.json.note).toMatch(/credit ledger may hold more/);
     const off = await api('POST', `/api/v1/gst/filings/${ids.r3b}/offset`, prop.json.offset);
-    expect(off.json).toMatchObject({ status: 'offset', summary: { chksum: 'CK-OFFSET' } });
+    expect(off.json).toMatchObject({ status: 'offset', summary: { chksum: 'CK-OFFSET', ret_period: PERIOD } });
     expect((await api('POST', `/api/v1/gst/filings/${ids.r3b}/evc-otp`, {})).status).toBe(200);
     const filed = await api('POST', `/api/v1/gst/filings/${ids.r3b}/file`, { mode: 'evc', otp: '654321', declaration: true });
     expect(filed.status, JSON.stringify(filed.json)).toBe(200);
@@ -230,6 +232,21 @@ describe('GST through gstinapi.in', () => {
     expect(rows.find((r) => r.action === 'irp.generate.call')!.data.SignedQRCode).toBe('eyJ.QR.GI');
     expect(JSON.stringify(rows)).not.toContain('irp-secret');
     expect(cache.find((c) => c.kind === 'taxpayer')!.hits).toBe(1);
+  });
+
+  it('in test mode, nothing is marked filed and the return can be prepared again', async () => {
+    const db = new Db(h.env.DATABASE_URL!);
+    const tenant = (await api('GET', '/api/auth/me')).json.tenant.id;
+    await db.tx({ tenantId: tenant }, (tx) => tx.query(`update gst_filings set status = 'prepared', arn = null, filed_at = null where return_type = 'GSTR1'`));
+    await db.close();
+    state.testMode = true;
+    const saved = await api('POST', `/api/v1/gst/filings/${ids.r1}/save`);
+    expect(saved.json).toMatchObject({ status: 'submitted', portalStatus: 'TEST' });
+    const filed = await api('POST', `/api/v1/gst/filings/${ids.r1}/file`, { mode: 'evc', otp: '654321', declaration: true });
+    expect(filed.json).toMatchObject({ status: 'submitted', testMode: true });
+    expect(filed.json.note).toMatch(/nothing was filed/);
+    expect((await api('POST', `/api/v1/gst/connections/${ids.conn}/filings`, { returnType: 'GSTR1', period: PERIOD })).status).toBe(201);
+    state.testMode = false;
   });
 
   it('marks the connection expired when gstinapi.in says it is not connected', async () => {

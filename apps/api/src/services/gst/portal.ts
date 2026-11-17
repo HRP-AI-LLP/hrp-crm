@@ -782,7 +782,7 @@ export async function prepareFiling(deps: GstDeps, connectionId: string, input: 
       input.period,
     ]);
     if (old?.status === 'filed') throw conflict(`${FORMS[input.returnType]!.label} for ${input.period} has already been filed`);
-    if (old && ['submitted', 'offset'].includes(old.status)) throw conflict('This return has already been submitted on the portal; its figures can no longer be changed');
+    if (old && ['submitted', 'offset'].includes(old.status) && old.portal_status !== 'TEST') throw conflict('This return has already been submitted on the portal; its figures can no longer be changed');
     const row = old
       ? (await ctx.tx.one<FilingRow>(
           `update gst_filings set payload = $3, payload_source = $4, status = 'prepared', ref_id = null, portal_status = null, error_report = null, summary = null where tenant_id = $1 and id = $2 returning *`,
@@ -883,7 +883,8 @@ export async function saveFiling(deps: GstDeps, id: string) {
     return updateFiling(deps, id, {
       status: r.data.proceeded ? 'submitted' : 'saved',
       ref_id: ref ? String(ref) : null,
-      portal_status: 'P',
+      // a test-mode run: nothing reached the portal, so it can be prepared again later
+      portal_status: r.data.test ? 'TEST' : 'P',
       error_report: null,
       summary: summary ?? null,
     });
@@ -1024,8 +1025,10 @@ export async function offsetFiling(deps: GstDeps, id: string, body: { pdcash: un
   if (!Array.isArray(body.pdcash)) throw badRequest('pdcash is required');
   const r = await portalOp(deps, c.id, { op: 'offset', period: f.period, body }, { action: 'offset', filingId: id });
   // a fresh summary (and checksum) after paying, when the provider returns one
-  const summary = r.data && typeof r.data === 'object' && r.data.summary ? r.data.summary : null;
-  return updateFiling(deps, id, summary ? { status: 'offset', summary } : { status: 'offset' });
+  let summary = r.data && typeof r.data === 'object' && r.data.summary ? r.data.summary : null;
+  // only a fresh checksum came back: keep the reviewed summary with the new checksum
+  if (!summary && r.data?.chksum && f.summary && typeof f.summary === 'object') summary = { ...f.summary, chksum: r.data.chksum };
+  return updateFiling(deps, id, { status: 'offset', ...(summary ? { summary } : {}), ...(r.data?.test ? { portal_status: 'TEST' } : {}) });
 }
 
 /* filing */
@@ -1052,6 +1055,11 @@ export async function fileFiling(deps: GstDeps, id: string, input: { mode: 'evc'
   if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan)) throw badRequest("Enter the authorised signatory's PAN");
   if (input.mode === 'evc' && !/^\d{6}$/.test(input.otp ?? '')) throw badRequest('Enter the 6-digit EVC OTP');
   const r = await portalOp(deps, c.id, { op: 'file', form: f.return_type, period: f.period, mode: input.mode, pan, otp: input.otp ?? null, summary: f.summary }, { action: `file.${input.mode}`, filingId: id });
+  if (r.data?.test) {
+    // test mode: the call went through, but nothing was filed — keep the return open
+    const dto = await updateFiling(deps, id, { portal_status: 'TEST' });
+    return { ...dto, testMode: true, note: `Test mode: nothing was filed (${r.data.note ?? 'synthetic answer'}). Remove GSTINAPI_TEST_MODE and restart to file for real.` };
+  }
   const arn = pick(r, 'ack_num', 'arn', 'ackNum', 'ack_no', 'ARN');
   return deps.run(async (ctx) => {
     const row = (await ctx.tx.one<FilingRow>(

@@ -152,17 +152,18 @@ export function gstinapiProvider(env: Env): GspProvider | null {
           if (op.form === 'GSTR1') {
             if (!op.pan) throw new ApiError(400, 'bad_request', "Enter the authorised signatory's PAN under Registration first: saving GSTR-1 sends the filing OTP to them");
             const r = await send(cfg, 'POST', '/v1/gstr1/save', { ...g, ret_period: op.period, pan: op.pan, payload: op.body, ...t });
-            return r.ok ? ok({ reference_id: r.data?.ref_id ?? null, summary: summaryOf(r.data), proceeded: true, otpSent: !!r.data?.awaiting_evc_otp }, r.raw) : r;
+            return r.ok ? ok({ reference_id: r.data?.ref_id ?? null, summary: summaryOf(r.data), proceeded: true, otpSent: !!r.data?.awaiting_evc_otp, test: !!r.data?.test_mode }, r.raw) : r;
           }
           if (op.form === 'GSTR3B') {
             const r = await send(cfg, 'POST', '/v1/gstr3b/save', { ...g, ret_period: op.period, payload: op.body, ...t });
-            return r.ok ? ok({ summary: summaryOf(r.data), autoLiability: r.data?.auto_liability ?? null, interest: r.data?.system_interest ?? null }, r.raw) : r;
+            return r.ok ? ok({ summary: summaryOf(r.data), autoLiability: r.data?.auto_liability ?? null, interest: r.data?.system_interest ?? null, test: !!r.data?.test_mode }, r.raw) : r;
           }
           throw new ApiError(400, 'bad_request', `${op.form} can't be sent through gstinapi.in; download the JSON and upload it on the GST portal`);
         }
         case 'offset': {
           const r = await send(cfg, 'POST', '/v1/gstr3b/offset', { ...g, ret_period: op.period, payload: op.body, ...t });
-          return r.ok ? ok({ summary: summaryOf(r.data), offset: r.data?.offset ?? null }, r.raw) : r;
+          // the offset can come back with only a fresh checksum (no summary)
+          return r.ok ? ok({ summary: summaryOf(r.data), chksum: r.data?.chksum ?? null, offset: r.data?.offset ?? null, test: !!r.data?.test_mode }, r.raw) : r;
         }
         case 'evcOtp': {
           if (op.form === 'GSTR1') throw new ApiError(400, 'bad_request', 'For GSTR-1 the OTP is sent when you save it. Save it again to get a new OTP.');
@@ -178,6 +179,8 @@ export function gstinapiProvider(env: Env): GspProvider | null {
           const r = await send(cfg, 'POST', op.form === 'GSTR1' ? '/v1/gstr1/file' : '/v1/gstr3b/file', body);
           if (!r.ok) return r;
           const up = r.data?.upstream ?? {};
+          // test mode answers filed: false — nothing was filed
+          if (r.data?.test_mode || r.data?.filed === false) return ok({ test: true, filed: false, note: r.data?.note ?? 'Nothing was filed' }, r.raw);
           return ok({ ack_num: up.ack_num ?? up.arn ?? r.data?.arn ?? r.data?.ref_id ?? null, filed: r.data?.filed, credits: r.data?.credits_remaining }, r.raw);
         }
         case 'status':

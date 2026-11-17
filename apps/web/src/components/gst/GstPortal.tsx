@@ -949,6 +949,7 @@ function FilingWizard({
             </span>
           )}
           {f.arn && <b>ARN {f.arn}</b>}
+          {f.portalStatus === "TEST" && <span className="chip warn">Test mode run — nothing reached the portal</span>}
           {f.filedAt && (
             <span className="muted small">
               filed {dateTime(f.filedAt)} by {f.filingMode?.toUpperCase()}
@@ -1319,12 +1320,16 @@ function FilingWizard({
                     window.confirm(
                       `File ${f.label} for ${periodLabel(f.period)}? A filed return cannot be changed.`,
                     ) &&
-                    call("file", "Filed", {
-                      mode: file.mode,
-                      pan: file.pan || null,
-                      otp: file.otp || null,
-                      declaration: true,
-                    })
+                    call(
+                      "file",
+                      gsp.sandbox ? "Test run done (nothing filed)" : "Filed",
+                      {
+                        mode: file.mode,
+                        pan: file.pan || null,
+                        otp: file.otp || null,
+                        declaration: true,
+                      },
+                    ).then((r) => r?.testMode && window.alert(r.note))
                   }
                 >
                   File {f.label}
