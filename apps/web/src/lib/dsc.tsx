@@ -64,7 +64,16 @@ export async function local<T>(path: string, body?: unknown): Promise<T> {
   try {
     r = await fetch(`http://127.0.0.1:${signerPort()}${path}`, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   } catch {
-    throw new Error('The DSC signer is not running on this computer (pnpm local starts it; or run tools/dsc-signer/start-signer.bat), or the browser blocked it');
+    // the browser hides why: an opaque request tells "not running" apart from "running, but not paired with this address"
+    const running = await fetch(`http://127.0.0.1:${signerPort()}/v1/status`, { mode: 'no-cors' }).then(
+      () => true,
+      () => false,
+    );
+    throw new Error(
+      running
+        ? `The DSC signer is running but is not paired with this address (${location.origin}). Pair it: Organisation → Digital signatures → Pair a signer, then run the command it shows in the project folder.`
+        : `The DSC signer is not running on this computer (port ${signerPort()}). Restart pnpm local and look for the [dsc] lines, or run tools/dsc-signer/start-signer.bat.`,
+    );
   }
   const j = (await r.json().catch(() => ({}))) as Json;
   if (!r.ok) throw new Error(j.error ?? `The signer answered ${r.status}`);
