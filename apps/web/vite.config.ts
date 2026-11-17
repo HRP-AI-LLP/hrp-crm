@@ -14,6 +14,8 @@ function serviceWorker(): Plugin {
     generateBundle(_opts, bundle) {
       const assets = Object.keys(bundle)
         .filter((f) => /\.(js|css|woff2?|svg|png)$/.test(f) && f.startsWith('assets/'))
+        // statement readers (Excel, PDF) load on demand only; not worth every device downloading them up front
+        .filter((f) => !/^assets\/(xlsx|pdf|pdf\.worker[^/]*)-[^/]+$/.test(f))
         .map((f) => `/${f}`);
       const precache = ['/', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png', ...assets].sort();
       const version = createHash('sha256').update(precache.join('\n')).digest('hex').slice(0, 12);

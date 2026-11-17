@@ -78,6 +78,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.104.2
         version: 5.104.2(react@19.3.0)
+      pdfjs-dist:
+        specifier: 4.10.38
+        version: 4.10.38
       qrcode-generator:
         specifier: 1.4.4
         version: 1.4.4
@@ -517,6 +520,76 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.9':
     resolution: {integrity: sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ==}
+
+  '@napi-rs/canvas-android-arm64@0.1.100':
+    resolution: {integrity: sha512-hjhCKhntPv9+t4ckHymdx0phYNcVW+GKQR6Lzw2zE+pOVjOplSmtx9nNNknTjbEDLcuLZqA1y8ufKg1XfgftzQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [android]
+
+  '@napi-rs/canvas-darwin-arm64@0.1.100':
+    resolution: {integrity: sha512-2PcswRaC7Ly645DGt88///zuFDhJxJYdKAs1uU3mfk1atYkXufgcgLfBpk6Tm12nCQBaNt1wpybuPZ4qOhTo8A==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@napi-rs/canvas-darwin-x64@0.1.100':
+    resolution: {integrity: sha512-ePNZtj7pNIva/siZMg+HmbeozkIjqUIYdoymH8HaA3qK7LfzFN4WMBM8G6HQ9ZC+H3+Dnn5pqtiXpgLykaPOhw==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.100':
+    resolution: {integrity: sha512-d5cDB48oWFGU8/XPhUOFAlySgb/VAu7D+s8fi55K1Pcfg8aPplHWqMgibhVLU8ky7Pyg/fuiVLz4Nf3JrSTuUA==}
+    engines: {node: '>= 10'}
+    cpu: [arm]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-arm64-gnu@0.1.100':
+    resolution: {integrity: sha512-rDxgxRu69RvDlX/bh9o22DxLsGr8EqsNgotL9+RwQE1S0b0cqeatqsw6aW45mukm0B42DIAaAacKaYQ8cqS1nw==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-arm64-musl@0.1.100':
+    resolution: {integrity: sha512-K3mDW66N+xT2/V439u1alFANiBUjdEx2gLiNYnCmUsva5jZMxWTjafBYwTzYK+EMFMHrUoabuU+T1BIP5CgbYQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-riscv64-gnu@0.1.100':
+    resolution: {integrity: sha512-mooqUBTIsccZpnoQC4NgrC1v6C1vof39etLNMnBwCY+p0gajWJvAHLGQ6g/gGyS5YrpDW+GefSN4+Cvcr08UWw==}
+    engines: {node: '>= 10'}
+    cpu: [riscv64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-x64-gnu@0.1.100':
+    resolution: {integrity: sha512-1eCvkDCazm7FFhsT7DfGOdSaHgZVK3bt/dSBl5EWHOWmnz+I7j8tPseJqqD81NF+MH21jKUK4wQSDjN0mdhnTg==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+
+  '@napi-rs/canvas-linux-x64-musl@0.1.100':
+    resolution: {integrity: sha512-20arT6lnI19S68qNlii73TSEDbECNgzMz2EpldC1V3mZFuRkeujXkcebRk0LRJe9SEUAooYiLokfMViY8IX7yA==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+
+  '@napi-rs/canvas-win32-arm64-msvc@0.1.100':
+    resolution: {integrity: sha512-DZFFT1wIAg37LJw37yhMRFfjATd3vTQzjZ1Yki8u2vhO6Hi5VE6BVaGQ1aaDu7xb4iMErz+9EOwjpS7xcxFeBw==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@napi-rs/canvas-win32-x64-msvc@0.1.100':
+    resolution: {integrity: sha512-MyT1j3mHC2+Lu4pBi9mKyMJhtP6U7k7EldY7sj/uS5gJA65gTXt8MefJQXLJo5d/vZbuWmfxzkEUNc/urV3pHA==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [win32]
+
+  '@napi-rs/canvas@0.1.100':
+    resolution: {integrity: sha512-xglYA6q3XO5P3BNJYxVZ1IV7DLVjp1Py6nwag88YntrS+3vKHyYcMqXVS4ZztJmwz2uGvz1FWhI/4LgbR5uQDA==}
+    engines: {node: '>= 10'}
 
   '@neondatabase/api-client@2.7.3':
     resolution: {integrity: sha512-hqJmcd8qeCNjcsSNlz77peGIwB9SLj8NC6kK6AjPRyb4bUvXB+TCmffx5893/0oRHYjqpua0nBLa5ql8z6acmw==}
@@ -995,6 +1068,10 @@ packages:
   pathe@2.0.3:
     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
 
+  pdfjs-dist@4.10.38:
+    resolution: {integrity: sha512-/Y3fcFrXEAsMjJXeL9J8+ZG9U01LbuWaYypvDW2ycW1jL269L3js3DVBjDJ0Up9Np1uqDXsDrRihHANhZOlwdQ==}
+    engines: {node: '>=20'}
+
   pg-cloudflare@1.4.1:
     resolution: {integrity: sha512-6PQbsFWZcp9EmJEwy5cGQ2La+AMWpP46lgbb8X+U/XsHIUweYDNCpeuKck5RxL2MdVFi7krbbEi5nX4Zh7JhrQ==}
 
@@ -1285,7 +1362,7 @@ packages:
         optional: true
 
   xlsx@https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz:
-    resolution: {integrity: sha512-oLDq3jw7AcLqKWH2AhCpVTZl8mf6X2YReP+Neh0SJUzV/BdZYjth94tG5toiMB1PPrYtxOCfaoUCkvtuH+3AJA==, tarball: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz}
+    resolution: {tarball: https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz}
     version: 0.20.3
     engines: {node: '>=0.8'}
     hasBin: true
@@ -1536,6 +1613,54 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  '@napi-rs/canvas-android-arm64@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas-darwin-arm64@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas-darwin-x64@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas-linux-arm-gnueabihf@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas-linux-arm64-gnu@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas-linux-arm64-musl@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas-linux-riscv64-gnu@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas-linux-x64-gnu@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas-linux-x64-musl@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas-win32-arm64-msvc@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas-win32-x64-msvc@0.1.100':
+    optional: true
+
+  '@napi-rs/canvas@0.1.100':
+    optionalDependencies:
+      '@napi-rs/canvas-android-arm64': 0.1.100
+      '@napi-rs/canvas-darwin-arm64': 0.1.100
+      '@napi-rs/canvas-darwin-x64': 0.1.100
+      '@napi-rs/canvas-linux-arm-gnueabihf': 0.1.100
+      '@napi-rs/canvas-linux-arm64-gnu': 0.1.100
+      '@napi-rs/canvas-linux-arm64-musl': 0.1.100
+      '@napi-rs/canvas-linux-riscv64-gnu': 0.1.100
+      '@napi-rs/canvas-linux-x64-gnu': 0.1.100
+      '@napi-rs/canvas-linux-x64-musl': 0.1.100
+      '@napi-rs/canvas-win32-arm64-msvc': 0.1.100
+      '@napi-rs/canvas-win32-x64-msvc': 0.1.100
+    optional: true
 
   '@neondatabase/api-client@2.7.3':
     dependencies:
@@ -1929,6 +2054,10 @@ snapshots:
   path-to-regexp@6.3.0: {}
 
   pathe@2.0.3: {}
+
+  pdfjs-dist@4.10.38:
+    optionalDependencies:
+      '@napi-rs/canvas': 0.1.100
 
   pg-cloudflare@1.4.1:
     optional: true

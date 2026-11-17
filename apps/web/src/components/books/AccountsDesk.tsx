@@ -8,7 +8,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { del, get, patch, post, put } from '../../lib/api';
 import { date, money2 } from '../../lib/format';
-import { readStatementFile, type StatementLine } from '../../lib/statement';
+import { combineStatements, PdfPasswordError, readStatementFile, type StatementLine } from '../../lib/statement';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 
 type Json = Record<string, any>;
@@ -791,20 +791,54 @@ function Sources() {
   const feeds = useQuery({ queryKey: ['books', 'feeds'], queryFn: () => get<Json>('/api/v1/books/feeds') });
   const bankList = useMemo(() => (banks.data ?? []).filter((b) => b.kind === 'bank' || b.kind === 'credit_card'), [banks.data]);
   const [bankId, setBankId] = useState('');
-  const [preview, setPreview] = useState<{ name: string; lines: StatementLine[] } | null>(null);
+  // every chosen file: read, waiting for its PDF password, or failed
+  const [files, setFiles] = useState<StatementFile[]>([]);
+  const ok = files.filter((f) => f.lines);
+  const combined = useMemo(() => combineStatements(ok.map((f) => ({ name: f.file.name, lines: f.lines! }))), [files]);
   const [busy, setBusy] = useState(false);
   const [connect, setConnect] = useState(false);
   const target = bankId || bankList[0]?.id || '';
   const refresh = () => qc.invalidateQueries({ queryKey: ['books'] });
 
+  const read = async (file: File, password?: string): Promise<StatementFile> => {
+    try {
+      const lines = await readStatementFile(file, { password });
+      return lines.length ? { file, lines } : { file, error: 'No transactions found (no header row with Date, Narration and Debit / Credit or Amount)' };
+    } catch (e) {
+      if (e instanceof PdfPasswordError) return { file, locked: true, error: e.wrong ? 'Wrong password, try again' : undefined };
+      return { file, error: (e as Error).message };
+    }
+  };
+  const choose = async (list: FileList | null) => {
+    if (!list?.length) return;
+    setBusy(true);
+    const got: StatementFile[] = [];
+    for (const f of Array.from(list).slice(0, 24)) got.push(await read(f));
+    // choosing more files adds to the ones already chosen
+    setFiles((cur) => [...cur.filter((c) => !got.some((g) => g.file.name === c.file.name)), ...got]);
+    setBusy(false);
+  };
+  const unlock = async (f: StatementFile, password: string) => {
+    const r = await read(f.file, password);
+    setFiles((cur) => cur.map((c) => (c.file === f.file ? r : c)));
+  };
   const upload = async () => {
-    if (!preview || !target) return;
+    if (!combined.lines.length || !target) return;
     setBusy(true);
     try {
-      const r = await post<Json>(`/api/v1/books/bank-accounts/${target}/statement`, { rows: preview.lines.slice(0, 5000), toDesk: true });
-      const k = r.bookkeeper;
-      toast(`${r.added} new line(s), ${r.skipped} already there${k ? `; the bookkeeper booked ${k.applied} and suggested ${k.waiting} for review` : ''}`);
-      setPreview(null);
+      let added = 0;
+      let skipped = 0;
+      let applied = 0;
+      let waiting = 0;
+      for (let i = 0; i < combined.lines.length; i += 5000) {
+        const r = await post<Json>(`/api/v1/books/bank-accounts/${target}/statement`, { rows: combined.lines.slice(i, i + 5000), toDesk: true });
+        added += r.added;
+        skipped += r.skipped;
+        applied += r.bookkeeper?.applied ?? 0;
+        waiting += r.bookkeeper?.waiting ?? 0;
+      }
+      toast(`${added} new line(s), ${skipped} already there; the bookkeeper booked ${applied} and suggested ${waiting} for review`);
+      setFiles([]);
       refresh();
     } catch (e) {
       toast((e as Error).message, true);
@@ -830,8 +864,10 @@ function Sources() {
       <section className="panel" style={{ padding: 14 }}>
         <div className="spread" style={{ flexWrap: 'wrap', gap: 8 }}>
           <div>
-            <b>Upload a bank statement</b>
-            <div className="muted small">CSV or Excel straight from net banking (ICICI, HDFC, SBI, Axis, Kotak and others): the header row is found on its own. Lines already imported are skipped.</div>
+            <b>Upload bank statements</b>
+            <div className="muted small">
+              PDF, Excel or CSV straight from net banking (Yes Bank, ICICI, HDFC, SBI, Axis, Kotak and others), several at once. Password-protected PDFs are opened with the password you type here (it isn't stored or sent anywhere). Lines already imported are skipped.
+            </div>
           </div>
           <div className="row" style={{ gap: 8 }}>
             <select value={target} onChange={(e) => setBankId(e.target.value)}>
@@ -841,63 +877,108 @@ function Sources() {
                 </option>
               ))}
             </select>
-            <label className="btn sm primary">
-              Choose file
+            <label className={`btn sm primary${busy ? ' disabled' : ''}`}>
+              {busy && !files.length ? 'Reading…' : files.length ? 'Add more files' : 'Choose files'}
               <input
                 type="file"
                 hidden
-                accept=".csv,.tsv,.txt,.xls,.xlsx,text/csv"
+                multiple
+                accept=".pdf,.csv,.tsv,.txt,.xls,.xlsx,application/pdf,text/csv"
                 onChange={async (e) => {
-                  const file = e.target.files?.[0];
+                  const list = e.target.files;
+                  await choose(list);
                   e.target.value = '';
-                  if (!file) return;
-                  try {
-                    const lines = await readStatementFile(file);
-                    if (!lines.length) return toast('No transactions found. Is there a header row with Date, Narration and Debit / Credit (or Amount)? For a PDF statement, download the Excel or CSV version from net banking.', true);
-                    setPreview({ name: file.name, lines });
-                  } catch (err) {
-                    toast(`Could not read the file: ${(err as Error).message}`, true);
-                  }
                 }}
               />
             </label>
           </div>
         </div>
-        {preview && (
+        {files.length > 0 && (
           <div className="stack" style={{ marginTop: 10 }}>
-            <div className="muted small">
-              {preview.name}: {preview.lines.length} line(s) from {date(preview.lines.map((l) => l.date).sort()[0]!)} to {date(preview.lines.map((l) => l.date).sort().slice(-1)[0]!)} · in {money2(preview.lines.filter((l) => l.amount > 0).reduce((s, l) => s + l.amount, 0))} · out {money2(-preview.lines.filter((l) => l.amount < 0).reduce((s, l) => s + l.amount, 0))}
-            </div>
-            <div className="table-wrap" style={{ maxHeight: 260, overflow: 'auto' }}>
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Narration</th>
-                    <th>Ref</th>
-                    <th className="num">Amount</th>
-                    <th className="num">Balance</th>
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Lines</th>
+                  <th>Period</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {files.map((f) => (
+                  <tr key={f.file.name}>
+                    <td className="small" style={{ whiteSpace: 'normal', maxWidth: 320 }}>
+                      {f.file.name}
+                    </td>
+                    {f.lines ? (
+                      <>
+                        <td className="small">{f.lines.length}</td>
+                        <td className="small">
+                          {date(f.lines.map((l) => l.date).sort()[0]!)} – {date(f.lines.map((l) => l.date).sort().slice(-1)[0]!)}
+                        </td>
+                      </>
+                    ) : f.locked ? (
+                      <td colSpan={2}>
+                        <PdfPassword wrong={!!f.error} onUnlock={(pw) => unlock(f, pw)} />
+                      </td>
+                    ) : (
+                      <td colSpan={2} className="small" style={{ color: 'var(--bad)', whiteSpace: 'normal' }}>
+                        {f.error}
+                      </td>
+                    )}
+                    <td>
+                      <button className="btn sm ghost" onClick={() => setFiles((cur) => cur.filter((c) => c !== f))}>
+                        Remove
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {preview.lines.slice(0, 50).map((l, i) => (
-                    <tr key={i}>
-                      <td className="small">{date(l.date)}</td>
-                      <td className="small" style={{ whiteSpace: 'normal', maxWidth: 420 }}>{l.description}</td>
-                      <td className="small">{l.reference ?? ''}</td>
-                      <td className="num" style={{ color: l.amount > 0 ? 'var(--good)' : undefined }}>{money2(l.amount)}</td>
-                      <td className="num">{l.balance == null ? '' : money2(l.balance)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {preview.lines.length > 50 && <div className="muted small">…and {preview.lines.length - 50} more.</div>}
+                ))}
+              </tbody>
+            </table>
+            {combined.lines.length > 0 && (
+              <>
+                <div className="muted small">
+                  {combined.lines.length} line(s) from {date(combined.lines[0]!.date)} to {date(combined.lines[combined.lines.length - 1]!.date)} · in{' '}
+                  {money2(combined.lines.filter((l) => l.amount > 0).reduce((s, l) => s + l.amount, 0))} · out {money2(-combined.lines.filter((l) => l.amount < 0).reduce((s, l) => s + l.amount, 0))}
+                  {combined.duplicates > 0 && ` · ${combined.duplicates} line(s) repeated across files left out`}
+                </div>
+                <div className="table-wrap" style={{ maxHeight: 260, overflow: 'auto' }}>
+                  <table className="data">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Narration</th>
+                        <th>Ref</th>
+                        <th className="num">Amount</th>
+                        <th className="num">Balance</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {combined.lines.slice(0, 50).map((l, i) => (
+                        <tr key={i}>
+                          <td className="small">{date(l.date)}</td>
+                          <td className="small" style={{ whiteSpace: 'normal', maxWidth: 420 }}>
+                            {l.description}
+                          </td>
+                          <td className="small">{l.reference ?? ''}</td>
+                          <td className="num" style={{ color: l.amount > 0 ? 'var(--good)' : undefined }}>
+                            {money2(l.amount)}
+                          </td>
+                          <td className="num">{l.balance == null ? '' : money2(l.balance)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {combined.lines.length > 50 && <div className="muted small">…and {combined.lines.length - 50} more.</div>}
+                <div className="muted small">Check a few lines against the statement before importing (dates, money in vs out). If something is off, send that bank's file format to support.</div>
+              </>
+            )}
             <div className="row" style={{ gap: 8 }}>
-              <button className="btn primary" disabled={busy || !target} onClick={upload}>
-                {busy ? 'Importing and booking…' : `Import ${Math.min(preview.lines.length, 5000)} line(s) and hand them to the bookkeeper`}
+              <button className="btn primary" disabled={busy || !target || !combined.lines.length} onClick={upload}>
+                {busy ? 'Importing and booking…' : `Import ${combined.lines.length} line(s) and hand them to the bookkeeper`}
               </button>
-              <button className="btn ghost" onClick={() => setPreview(null)}>
+              <button className="btn ghost" onClick={() => setFiles([])}>
                 Cancel
               </button>
             </div>
@@ -980,6 +1061,39 @@ function Sources() {
       </section>
       {connect && <ConnectFeed banks={bankList.filter((b) => b.kind === 'bank')} onClose={() => setConnect(false)} onDone={refresh} />}
     </div>
+  );
+}
+
+interface StatementFile {
+  file: File;
+  lines?: StatementLine[];
+  locked?: boolean;
+  error?: string;
+}
+
+function PdfPassword({ wrong, onUnlock }: { wrong: boolean; onUnlock: (pw: string) => Promise<void> }) {
+  const [pw, setPw] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <form
+      className="row"
+      style={{ gap: 6 }}
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (!pw) return;
+        setBusy(true);
+        await onUnlock(pw);
+        setBusy(false);
+      }}
+    >
+      <span className="small" style={{ color: wrong ? 'var(--bad)' : undefined }}>
+        {wrong ? 'Wrong password:' : '🔒 Password-protected:'}
+      </span>
+      <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="Statement password" autoComplete="off" style={{ maxWidth: 180 }} />
+      <button className="btn sm" disabled={busy || !pw}>
+        {busy ? 'Opening…' : 'Open'}
+      </button>
+    </form>
   );
 }
 

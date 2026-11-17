@@ -121,8 +121,16 @@ export function linesFromRows(rows: unknown[][]): StatementLine[] {
   return out;
 }
 
-/** Reads a statement file (CSV, TSV, TXT, XLS or XLSX). */
-export async function readStatementFile(file: File): Promise<StatementLine[]> {
+import { pdfItems, rowsFromItems } from './statement-pdf';
+export { PdfPasswordError } from './statement-pdf';
+
+/** Reads a statement file (CSV, TSV, TXT, XLS, XLSX or PDF; a protected PDF needs its password). */
+export async function readStatementFile(file: File, opts: { password?: string } = {}): Promise<StatementLine[]> {
+  if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
+    const pages = await pdfItems(await file.arrayBuffer(), opts.password);
+    if (!pages.some((p) => p.some((i) => i.str.trim()))) throw new Error('This PDF has no text (a scanned statement); download the PDF, Excel or CSV statement from net banking instead');
+    return linesFromRows(rowsFromItems(pages));
+  }
   if (/\.(xlsx?|xlsm)$/i.test(file.name)) {
     const XLSX = await import('xlsx');
     const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
@@ -134,4 +142,31 @@ export async function readStatementFile(file: File): Promise<StatementLine[]> {
     return [];
   }
   return linesFromRows(csvRows(await file.text()));
+}
+
+/**
+ * Several statement files → one set of lines. Statements that overlap (last month's and a
+ * year-to-date download) repeat lines; a line already in an earlier file is dropped, while the same
+ * line twice within one file (two equal payments on a day) is kept.
+ */
+export function combineStatements(files: { name: string; lines: StatementLine[] }[]) {
+  const seen = new Map<string, number>();
+  const out: StatementLine[] = [];
+  let duplicates = 0;
+  for (const f of files) {
+    const mine = new Map<string, number>();
+    for (const l of f.lines) {
+      const k = `${l.date}|${l.amount.toFixed(2)}|${l.description.trim().toLowerCase()}|${(l.reference ?? '').trim()}|${l.balance ?? ''}`;
+      const before = seen.get(k) ?? 0;
+      const used = mine.get(k) ?? 0;
+      mine.set(k, used + 1);
+      if (used < before) {
+        duplicates++;
+        continue;
+      }
+      out.push(l);
+    }
+    for (const [k, n] of mine) seen.set(k, Math.max(seen.get(k) ?? 0, n));
+  }
+  return { lines: out.sort((a, b) => a.date.localeCompare(b.date)), duplicates };
 }

@@ -15,7 +15,7 @@ import { useAuth } from '../lib/auth';
 import { date, money2, moneyShort } from '../lib/format';
 import { Deposits } from '../components/books/Deposits';
 import { AccountsDesk } from '../components/books/AccountsDesk';
-import { readStatementFile } from '../lib/statement';
+import { combineStatements, PdfPasswordError, readStatementFile, type StatementLine } from '../lib/statement';
 
 type Json = Record<string, any>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -549,20 +549,44 @@ function BankAccountView({ acc, back }: { acc: Json; back: () => void }) {
         </div>
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <label className="btn sm">
-            Import statement (CSV / Excel)
+            Import statements (PDF / Excel / CSV)
             <input
               type="file"
-              accept=".csv,.tsv,.txt,.xls,.xlsx,text/csv"
+              multiple
+              accept=".pdf,.csv,.tsv,.txt,.xls,.xlsx,application/pdf,text/csv"
               hidden
               onChange={async (e) => {
-                const file = e.target.files?.[0];
+                const list = Array.from(e.target.files ?? []);
                 e.target.value = '';
-                if (!file) return;
-                const rows = await readStatementFile(file).catch(() => []);
+                if (!list.length) return;
+                const read: { name: string; lines: StatementLine[] }[] = [];
+                for (const file of list) {
+                  let password: string | undefined;
+                  for (;;) {
+                    try {
+                      read.push({ name: file.name, lines: await readStatementFile(file, { password }) });
+                      break;
+                    } catch (err) {
+                      if (err instanceof PdfPasswordError) {
+                        const pw = window.prompt(`${file.name} is password-protected${err.wrong ? ' (that password was wrong)' : ''}. Statement password:`);
+                        if (pw) {
+                          password = pw;
+                          continue;
+                        }
+                      } else toast(`${file.name}: ${(err as Error).message}`, true);
+                      break;
+                    }
+                  }
+                }
+                const { lines: rows } = combineStatements(read);
                 if (!rows.length) return toast('No lines found. The file needs a header row with Date, Narration / Description and Amount (or Debit / Credit).', true);
                 try {
-                  const r = await post<Json>(`/api/v1/books/bank-accounts/${acc.id}/statement`, { rows: rows.slice(0, 5000) });
-                  toast(`${r.added} line(s) imported, ${r.skipped} already there; ${r.autoMatched} matched and ${r.autoCategorized} categorised automatically`);
+                  let added = 0, skipped = 0, matched = 0, cat = 0;
+                  for (let i = 0; i < rows.length; i += 5000) {
+                    const r = await post<Json>(`/api/v1/books/bank-accounts/${acc.id}/statement`, { rows: rows.slice(i, i + 5000) });
+                    added += r.added; skipped += r.skipped; matched += r.autoMatched; cat += r.autoCategorized;
+                  }
+                  toast(`${added} line(s) imported from ${read.length} file(s), ${skipped} already there; ${matched} matched and ${cat} categorised automatically`);
                   refresh();
                 } catch (err) {
                   toast((err as Error).message, true);
