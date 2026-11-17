@@ -165,6 +165,12 @@ function cellText(cell: Element): string {
     el.before(document.createTextNode('\n'));
     el.after(document.createTextNode('\n'));
   });
+  // a badge beside a name reads as "Name (badge)"; a badge alone in its cell stays as it is
+  c.querySelectorAll('.chip, .badge, .tag').forEach((el) => {
+    const t = el.textContent?.trim();
+    const rest = (c.textContent ?? '').replace(el.textContent ?? '', '').trim();
+    if (t && rest) el.replaceWith(document.createTextNode(` (${t}) `));
+  });
   c.querySelectorAll('span, a, b, strong, em, code, .chip').forEach((el) => el.after(document.createTextNode(' ')));
   return (c.textContent ?? '')
     .split('\n')
@@ -207,6 +213,9 @@ export function readTable(table: HTMLTableElement): Pick<PdfReport, 'head' | 'bo
 export function titleFor(table: HTMLTableElement): string {
   const own = table.getAttribute('data-export-title') || table.caption?.textContent?.trim();
   if (own) return own;
+  // a section can name the reports in it (e.g. Books › Reports: "Profit and loss")
+  const section = table.closest('[data-export-title]')?.getAttribute('data-export-title');
+  if (section) return section;
   const parts: string[] = [];
   const page = document.querySelector('main h1, .page-head h1, h1');
   if (page?.textContent?.trim()) parts.push(page.textContent.trim());

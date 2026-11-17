@@ -32,7 +32,7 @@ function makeBar(t: HTMLTableElement): Bar {
     b.textContent = 'Preparing PDF…';
     try {
       const data = readTable(table);
-      const shown = table.getAttribute('data-export-note');
+      const shown = table.getAttribute('data-export-note') ?? table.closest('[data-export-note]')?.getAttribute('data-export-note') ?? null;
       await exportReportPdf({ title: titleFor(table), subtitle: shown, ...data });
     } catch (e) {
       // the app's toasts live in React; a plain alert would block the page, so report in the button

@@ -1465,8 +1465,13 @@ function Reports() {
   const ready = !(kind === 'account' && !p.accountId) && !((kind === 'customer' || kind === 'vendor') && !p.partyId);
   const { data, isFetching, error } = useQuery({ queryKey: ['books', 'report', r, params.toString()], queryFn: () => get<any>(`/api/v1/books/reports/${r}?${params}`), enabled: ready });
   const parties = useQuery({ queryKey: ['books', 'parties', kind], queryFn: () => get<{ items: Json[] }>(`/api/v1/records/${kind === 'vendor' ? 'vendor' : 'account'}?limit=200&sort=name&dir=asc`), enabled: kind === 'customer' || kind === 'vendor' });
+  // what a PDF of this report is called, and the period it covers
+  const dmy = (d: string) => (d ? new Date(`${d}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '');
+  const party = (kind === 'customer' || kind === 'vendor') && p.partyId ? parties.data?.items.find((x) => x.id === p.partyId)?.title : null;
+  const reportName = [REPORTS.find((x) => x[0] === r)![1], party].filter(Boolean).join(': ');
+  const period = kind === 'asof' ? `As of ${dmy(p.to)}` : `${dmy(p.from)} to ${dmy(p.to)}${r === 'profit-and-loss' && p.compare ? ', compared with the year before' : ''}`;
   return (
-    <div className="stack">
+    <div className="stack" data-export-title={reportName} data-export-note={period}>
       <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <label className="field">
           Report
