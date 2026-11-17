@@ -562,15 +562,7 @@ export async function overview(deps: GstDeps, id: string, today = new Date()) {
       [ctx.tenantId, id],
     );
     const track = await ctx.tx.query<{ key: string; data: any; fetched_at: string }>(`select key, data, fetched_at from gst_portal_cache where tenant_id = $1 and connection_id = $2 and kind = 'return_track'`, [ctx.tenantId, id]);
-    const portalFiled = new Map<string, { arn: string | null; date: string | null; status: string | null }>();
-    for (const t of track) {
-      const list: any[] = t.data?.EFiledlist ?? t.data?.efiledlist ?? (Array.isArray(t.data) ? t.data : []);
-      for (const x of list) {
-        const rt = String(x.rtntype ?? x.rtn_typ ?? '').replace(/-/g, '').toUpperCase();
-        const per = String(x.ret_prd ?? x.retprd ?? '');
-        if (rt && per) portalFiled.set(`${rt}|${per}`, { arn: x.arn ?? null, date: x.dof ?? null, status: x.status ?? null });
-      }
-    }
+    const portalFiled = portalRecords(track);
     const todayStr = today.toISOString().slice(0, 10);
     const items = due.map((d) => {
       const f = filings.find((x) => x.return_type === d.returnType && x.period === d.period);
@@ -583,6 +575,7 @@ export async function overview(deps: GstDeps, id: string, today = new Date()) {
         arn: f?.arn ?? p?.arn ?? null,
         filedOn: f?.filed_at ?? p?.date ?? null,
         source: f?.status === 'filed' ? 'synapse' : p ? 'portal' : null,
+        portal: p ?? null,
       };
     });
     const cache = await ctx.tx.query<{ kind: string; key: string; data: any; fetched_at: string }>(
@@ -602,6 +595,75 @@ export async function overview(deps: GstDeps, id: string, today = new Date()) {
       notices: latest('notices'),
       challans: latest('challans'),
       returnTrackFetchedAt: track[0]?.fetched_at ?? null,
+    };
+  });
+}
+
+type PortalRecord = { arn: string | null; date: string | null; status: string | null; mode: string | null; valid: string | null; raw: Record<string, unknown>; fetchedAt: string };
+/** The portal's filed-returns list (return_track cache), keyed `RETURNTYPE|MMYYYY`. */
+function portalRecords(track: { data: any; fetched_at: string }[]) {
+  const out = new Map<string, PortalRecord>();
+  for (const t of track) {
+    const list: any[] = t.data?.EFiledlist ?? t.data?.efiledlist ?? (Array.isArray(t.data) ? t.data : []);
+    for (const x of list) {
+      const rt = String(x.rtntype ?? x.rtn_typ ?? '').replace(/-/g, '').toUpperCase();
+      const per = String(x.ret_prd ?? x.retprd ?? '');
+      if (rt && per)
+        out.set(`${rt}|${per}`, { arn: x.arn ?? null, date: x.dof ?? null, status: x.status ?? null, mode: x.mof ?? null, valid: x.valid ?? null, raw: x, fetchedAt: t.fetched_at });
+    }
+  }
+  return out;
+}
+
+/**
+ * One return for one period, as the calendar shows it: the portal's record of it (from the stored
+ * filed-returns list, no provider call), Synapse's filing if there is one, and what the books show for
+ * that period (worked out here, free) so a return filed on the portal can be checked against the books.
+ */
+export async function returnDetail(deps: GstDeps, id: string, returnType: string, period: string) {
+  if (!FORMS[returnType as FormCode]) throw badRequest('Unknown return type');
+  const month = fromRetPeriod(period);
+  const gp = getProvider(deps.env);
+  return deps.run(async (ctx) => {
+    assertGstAdmin(ctx);
+    const c = await loadConn(ctx, id);
+    const track = await ctx.tx.query<{ data: any; fetched_at: string }>(`select data, fetched_at from gst_portal_cache where tenant_id = $1 and connection_id = $2 and kind = 'return_track' order by fetched_at`, [ctx.tenantId, id]);
+    const portal = portalRecords(track).get(`${returnType}|${period}`) ?? null;
+    const f = await ctx.tx.one<FilingRow>(`select * from gst_filings where tenant_id = $1 and connection_id = $2 and return_type = $3 and period = $4`, [ctx.tenantId, id, returnType, period]);
+    let books: Record<string, unknown> | null = null;
+    if (returnType === 'GSTR1') {
+      const b = await buildGstr1(ctx, c.gstin, month);
+      books = { kind: 'GSTR1', counts: b.counts, totals: b.totals, warnings: b.warnings };
+    } else if (returnType === 'GSTR3B') {
+      const g = (await buildGstr3b(ctx, c.gstin, month)).working as any;
+      books = {
+        kind: 'GSTR3B',
+        outward: g.outward,
+        zeroRated: g.zeroRated,
+        nilExempt: g.nilExempt,
+        inwardReverseCharge: g.inwardReverseCharge,
+        itc: g.itc?.total,
+        liability: g.liability,
+        payableInCash: g.payableInCash,
+        creditCarriedForward: g.creditCarriedForward,
+      };
+    }
+    const summaryView = returnType === 'GSTR1' ? 'gstr1_summary' : returnType === 'GSTR3B' ? 'gstr3b_summary' : null;
+    const portalSummary =
+      summaryView && (!gp || gp.views.includes(summaryView))
+        ? await ctx.tx.one<{ data: any; fetched_at: string }>(`select data, fetched_at from gst_portal_cache where tenant_id = $1 and connection_id = $2 and kind = $3 and key = $4`, [ctx.tenantId, id, summaryView, period])
+        : null;
+    return {
+      returnType,
+      label: FORMS[returnType as FormCode]!.label,
+      period,
+      gstin: c.gstin,
+      portal,
+      filing: f ? filingDto(f, gp, true) : null,
+      books,
+      // the portal's own figures, only where the provider can fetch them (a paid call, so on request)
+      portalSummaryView: summaryView && gp?.views.includes(summaryView) ? summaryView : null,
+      portalSummary: portalSummary ? { data: portalSummary.data, fetchedAt: portalSummary.fetched_at } : null,
     };
   });
 }

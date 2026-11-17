@@ -208,7 +208,18 @@ describe('GST through gstinapi.in', () => {
     await api('POST', `/api/v1/gst/connections/${ids.conn}/sync-returns`, { fyStart: fy, refresh: false });
     expect(count(`/v1/gstin/${SELLER}/returns`)).toBe(1);
     const ov = await api('GET', `/api/v1/gst/connections/${ids.conn}/overview`);
-    expect(ov.json.calendar.find((x: any) => x.returnType === 'GSTR3B' && x.period === PERIOD)).toMatchObject({ status: 'filed' });
+    expect(ov.json.calendar.find((x: any) => x.returnType === 'GSTR3B' && x.period === PERIOD)).toMatchObject({ status: 'filed', portal: { arn: 'AA090GI00001' } });
+
+    // a filed return opens from the calendar: portal record + the books' figures, without a provider call
+    const before = calls.length;
+    const d = await api('GET', `/api/v1/gst/connections/${ids.conn}/returns/GSTR3B/${PERIOD}`);
+    expect(d.status, JSON.stringify(d.json)).toBe(200);
+    expect(d.json).toMatchObject({ returnType: 'GSTR3B', period: PERIOD, portal: { arn: 'AA090GI00001', date: expect.any(String) }, books: { kind: 'GSTR3B' }, portalSummaryView: null });
+    expect(d.json.books.outward).toBeTruthy();
+    const g1 = await api('GET', `/api/v1/gst/connections/${ids.conn}/returns/gstr1/${PERIOD}`);
+    expect(g1.json).toMatchObject({ returnType: 'GSTR1', portal: null, books: { kind: 'GSTR1', totals: expect.any(Object) } });
+    expect(calls.length).toBe(before);
+    expect((await api('GET', `/api/v1/gst/connections/${ids.conn}/returns/NOPE/${PERIOD}`)).status).toBe(400);
   });
 
   it('generates the IRN and the e-way bill from it', async () => {

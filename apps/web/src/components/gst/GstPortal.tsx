@@ -377,6 +377,7 @@ function Overview({ conn }: { conn: Json }) {
   });
   const [show, setShow] = useState<"pending" | "all">("pending");
   const [open, setOpen] = useState<Json | null>(null);
+  const [detail, setDetail] = useState<Json | null>(null);
   if (!data) return <Spinner />;
   const live = conn.status === "active";
   const bal = data.ledgerBalance?.data;
@@ -385,7 +386,10 @@ function Overview({ conn }: { conn: Json }) {
   const view = (kind: string, params: Json, ok: string) =>
     act(
       () =>
-        post(`/api/v1/gst/connections/${conn.id}/views/${kind}?refresh=1`, params),
+        post(
+          `/api/v1/gst/connections/${conn.id}/views/${kind}?refresh=1`,
+          params,
+        ),
       ok,
     );
   const rows = show === "pending" ? data.pending : data.calendar;
@@ -566,7 +570,13 @@ function Overview({ conn }: { conn: Json }) {
             </thead>
             <tbody>
               {rows.map((r: Json) => (
-                <tr key={`${r.returnType}${r.period}`}>
+                <tr
+                  key={`${r.returnType}${r.period}`}
+                  className="clickable"
+                  style={{ cursor: "pointer" }}
+                  title="Open the details"
+                  onClick={() => setDetail(r)}
+                >
                   <td>{r.label}</td>
                   <td>{r.periodLabel}</td>
                   <td>{date(r.dueDate)}</td>
@@ -579,8 +589,12 @@ function Overview({ conn }: { conn: Json }) {
                     )}
                   </td>
                   <td className="small">{r.arn ?? ""}</td>
-                  <td>
-                    {r.status !== "filed" && (
+                  <td onClick={(e) => e.stopPropagation()}>
+                    {r.status === "filed" ? (
+                      <button className="btn sm" onClick={() => setDetail(r)}>
+                        View
+                      </button>
+                    ) : (
                       <button className="btn sm" onClick={() => setOpen(r)}>
                         {r.filingId ? "Continue" : "Prepare"}
                       </button>
@@ -607,6 +621,17 @@ function Overview({ conn }: { conn: Json }) {
           Change monthly / quarterly filing under Registration.
         </div>
       </section>
+      {detail && (
+        <ReturnDetail
+          conn={conn}
+          item={detail}
+          onClose={() => setDetail(null)}
+          onOpenFiling={(r) => {
+            setDetail(null);
+            setOpen(r);
+          }}
+        />
+      )}
       {open &&
         (open.filingId ? (
           <FilingWizard
@@ -622,6 +647,297 @@ function Overview({ conn }: { conn: Json }) {
           />
         ))}
     </div>
+  );
+}
+
+/* ───────────────────────── one return, one period ───────────────────────── */
+
+const n2 = (v: unknown) => money2(Number(v ?? 0));
+
+function TaxRows({ rows }: { rows: [string, Json | null | undefined][] }) {
+  return (
+    <div className="table-wrap">
+      <table className="data">
+        <thead>
+          <tr>
+            <th />
+            <th style={{ textAlign: "right" }}>Taxable</th>
+            <th style={{ textAlign: "right" }}>IGST</th>
+            <th style={{ textAlign: "right" }}>CGST</th>
+            <th style={{ textAlign: "right" }}>SGST</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(([label, v]) => (
+            <tr key={label}>
+              <td>{label}</td>
+              <td style={{ textAlign: "right" }}>
+                {v?.taxable === undefined ? "" : n2(v.taxable)}
+              </td>
+              <td style={{ textAlign: "right" }}>{n2(v?.igst)}</td>
+              <td style={{ textAlign: "right" }}>
+                {v?.cgst === undefined ? "" : n2(v.cgst)}
+              </td>
+              <td style={{ textAlign: "right" }}>
+                {v?.sgst === undefined ? "" : n2(v.sgst)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ReturnDetail({
+  conn,
+  item,
+  onClose,
+  onOpenFiling,
+}: {
+  conn: Json;
+  item: Json;
+  onClose: () => void;
+  onOpenFiling: (r: Json) => void;
+}) {
+  const act = useAct([
+    ["gst", "return", conn.id, item.returnType, item.period],
+  ]);
+  const { data, error } = useQuery({
+    queryKey: ["gst", "return", conn.id, item.returnType, item.period],
+    queryFn: () =>
+      get<Json>(
+        `/api/v1/gst/connections/${conn.id}/returns/${item.returnType}/${item.period}`,
+      ),
+  });
+  const [summary, setSummary] = useState<Json | null>(null);
+  const live = conn.status === "active";
+  const fetchSummary = async (refresh: boolean) => {
+    const r = await act(
+      () =>
+        post<Json>(
+          `/api/v1/gst/connections/${conn.id}/views/${data!.portalSummaryView}${refresh ? "?refresh=1" : ""}`,
+          { period: item.period },
+        ),
+      refresh ? "Fetched from the portal" : "Portal figures loaded",
+    );
+    if (r) setSummary({ data: r.data, fetchedAt: r.fetchedAt });
+  };
+  const p = data?.portal;
+  const f = data?.filing;
+  const b = data?.books;
+  const ps = summary ?? data?.portalSummary;
+  const title = `${item.label} · ${item.periodLabel ?? periodLabel(item.period)}`;
+  return (
+    <Modal
+      title={title}
+      onClose={onClose}
+      wide
+      footer={
+        <>
+          {data && (
+            <button
+              className="btn"
+              onClick={() =>
+                saveJson(
+                  data,
+                  `${item.returnType}-${item.period}-${conn.gstin}.json`,
+                )
+              }
+            >
+              Download JSON
+            </button>
+          )}
+          {item.status !== "filed" && (
+            <button className="btn primary" onClick={() => onOpenFiling(item)}>
+              {item.filingId ? "Continue the return" : "Prepare the return"}
+            </button>
+          )}
+          {item.status === "filed" && f && (
+            <button className="btn primary" onClick={() => onOpenFiling(item)}>
+              Open the filing in Synapse
+            </button>
+          )}
+        </>
+      }
+    >
+      {error ? (
+        <div className="muted">{(error as Error).message}</div>
+      ) : !data ? (
+        <Spinner />
+      ) : (
+        <div className="stack">
+          <div className="kpis" style={{ margin: 0 }}>
+            <div className="panel kpi">
+              <div className="l">Status</div>
+              <div className="v" style={{ fontSize: 18 }}>
+                <span className={`chip ${STATUS[item.status]?.[1] ?? ""}`}>
+                  {STATUS[item.status]?.[0] ?? item.status}
+                </span>
+              </div>
+              <div className="muted small">
+                {item.source === "portal"
+                  ? "Filed on the portal (outside Synapse)"
+                  : item.source === "synapse"
+                    ? "Filed from Synapse"
+                    : `Due ${date(item.dueDate)}`}
+              </div>
+            </div>
+            <div className="panel kpi">
+              <div className="l">Filed on</div>
+              <div className="v" style={{ fontSize: 18 }}>
+                {f?.filedAt ? date(f.filedAt) : (p?.date ?? "—")}
+              </div>
+              <div className="muted small">
+                {p?.mode ? `Mode: ${p.mode}` : ""}
+                {p?.valid ? ` · Valid: ${p.valid}` : ""}
+              </div>
+            </div>
+            <div className="panel kpi">
+              <div className="l">ARN</div>
+              <div
+                className="v"
+                style={{ fontSize: 16, wordBreak: "break-all" }}
+              >
+                {f?.arn ?? p?.arn ?? "—"}
+              </div>
+              <div className="muted small">
+                {p?.fetchedAt
+                  ? `Portal list updated ${dateTime(p.fetchedAt)}`
+                  : "Not in the portal's filed list (update it from the Overview)"}
+              </div>
+            </div>
+          </div>
+
+          {b?.kind === "GSTR1" && (
+            <section>
+              <h3 style={{ margin: "4px 0 8px" }}>
+                What your books show for this month
+              </h3>
+              <TaxRows
+                rows={[["Outward supplies (net of credit notes)", b.totals]]}
+              />
+              <div className="muted small" style={{ marginTop: 6 }}>
+                B2B invoices {b.counts?.b2b ?? 0} · B2C large{" "}
+                {b.counts?.b2cl ?? 0} · B2C small rows {b.counts?.b2cs ?? 0} ·
+                Credit/debit notes {b.counts?.cdnr ?? 0} · Exports{" "}
+                {b.counts?.exp ?? 0} · Cancelled {b.counts?.cancelled ?? 0}
+              </div>
+            </section>
+          )}
+          {b?.kind === "GSTR3B" && (
+            <section>
+              <h3 style={{ margin: "4px 0 8px" }}>
+                What your books show for this month
+              </h3>
+              <TaxRows
+                rows={[
+                  ["3.1(a) Outward taxable supplies", b.outward],
+                  ["3.1(b) Zero-rated (exports, SEZ)", b.zeroRated],
+                  ["3.1(c) Nil-rated / exempt", { taxable: b.nilExempt }],
+                  [
+                    "3.1(d) Inward supplies on reverse charge",
+                    b.inwardReverseCharge,
+                  ],
+                  ["4 Eligible ITC", b.itc],
+                  ["Tax liability", b.liability],
+                  ["Payable in cash", b.payableInCash],
+                  ["Credit carried forward", b.creditCarriedForward],
+                ]}
+              />
+            </section>
+          )}
+          {b && (
+            <div className="muted small">
+              Worked out from your invoices, bills and expenses as they stand
+              today; if something was changed after filing, it will differ from
+              what was filed.
+            </div>
+          )}
+
+          {data.portalSummaryView && (
+            <section>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <h3 style={{ margin: "4px 0 8px" }}>
+                  The portal's figures{" "}
+                  {ps?.fetchedAt && (
+                    <span className="muted small">
+                      · {dateTime(ps.fetchedAt)}
+                    </span>
+                  )}
+                </h3>
+                <div className="row">
+                  {!ps && (
+                    <button
+                      className="btn sm"
+                      disabled={!live}
+                      onClick={() => fetchSummary(false)}
+                    >
+                      Fetch from the portal
+                    </button>
+                  )}
+                  {ps && (
+                    <button
+                      className="btn sm"
+                      disabled={!live}
+                      onClick={() => fetchSummary(true)}
+                    >
+                      Refresh
+                    </button>
+                  )}
+                </div>
+              </div>
+              {ps ? (
+                <JsonBox value={ps.data} />
+              ) : (
+                <div className="muted small">
+                  Not fetched yet. Fetching is a paid call and needs an active
+                  portal session; the answer is kept for next time.
+                </div>
+              )}
+            </section>
+          )}
+          {!data.portalSummaryView && item.source === "portal" && (
+            <div className="muted small">
+              Your GST Suvidha Provider gives the filed list (ARN, date, status)
+              but not the filed return's figures. To see the exact filed
+              figures, open the return on gst.gov.in (Returns Dashboard → View)
+              or download its PDF there.
+            </div>
+          )}
+
+          {f && (
+            <details className="panel" style={{ padding: 12 }}>
+              <summary>
+                What Synapse sent{" "}
+                <span className="muted small">
+                  · {STATUS[f.status]?.[0] ?? f.status}
+                  {f.portalStatus === "TEST" ? " · test mode" : ""}
+                </span>
+              </summary>
+              {f.summary && (
+                <>
+                  <div className="muted small" style={{ margin: "8px 0 4px" }}>
+                    Portal summary
+                  </div>
+                  <JsonBox value={f.summary} />
+                </>
+              )}
+              <div className="muted small" style={{ margin: "8px 0 4px" }}>
+                Return JSON
+              </div>
+              <JsonBox value={f.payload} />
+            </details>
+          )}
+          {p && (
+            <details className="panel" style={{ padding: 12 }}>
+              <summary>The portal's record</summary>
+              <JsonBox value={p.raw} height={160} />
+            </details>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -668,6 +984,7 @@ function Returns({ conn }: { conn: Json }) {
                   key={f.id}
                   className="clickable"
                   onClick={() => setOpen(f.id)}
+                  onDoubleClick={() => setOpen(f.id)}
                   style={{ cursor: "pointer" }}
                 >
                   <td>{f.label}</td>
@@ -949,7 +1266,11 @@ function FilingWizard({
             </span>
           )}
           {f.arn && <b>ARN {f.arn}</b>}
-          {f.portalStatus === "TEST" && <span className="chip warn">Test mode run — nothing reached the portal</span>}
+          {f.portalStatus === "TEST" && (
+            <span className="chip warn">
+              Test mode run — nothing reached the portal
+            </span>
+          )}
           {f.filedAt && (
             <span className="muted small">
               filed {dateTime(f.filedAt)} by {f.filingMode?.toUpperCase()}
@@ -1017,7 +1338,8 @@ function FilingWizard({
             {otpOnSave && f.canSend && (
               <span className="muted small">
                 Saving also proceeds to file, fetches the summary and sends the
-                filing OTP to the signatory ({conn.signatoryPan || "set the PAN under Registration"}).
+                filing OTP to the signatory (
+                {conn.signatoryPan || "set the PAN under Registration"}).
               </span>
             )}
             {steps.status !== false && (
@@ -1101,7 +1423,9 @@ function FilingWizard({
               </button>
             </div>
           ) : (
-            !f.summary && <div className="muted small">It comes back when you save.</div>
+            !f.summary && (
+              <div className="muted small">It comes back when you save.</div>
+            )
           )}
           {f.summary && (
             <details>
@@ -1152,31 +1476,31 @@ function FilingWizard({
                     </tr>
                   </thead>
                   <tbody>
-                    {(
-                      ["cashNeeded", "cashAvailable", "shortfall"] as const
-                    ).filter((k) => offset[k]).map((k) => (
-                      <tr
-                        key={k}
-                        style={
-                          k === "shortfall"
-                            ? { color: "var(--bad)" }
-                            : undefined
-                        }
-                      >
-                        <td>
-                          {k === "cashNeeded"
-                            ? "To pay in cash"
-                            : k === "cashAvailable"
-                              ? "Cash ledger"
-                              : "Short"}
-                        </td>
-                        {["igst", "cgst", "sgst", "cess"].map((h) => (
-                          <td key={h} className="num">
-                            {money2(offset[k][h] ?? 0)}
+                    {(["cashNeeded", "cashAvailable", "shortfall"] as const)
+                      .filter((k) => offset[k])
+                      .map((k) => (
+                        <tr
+                          key={k}
+                          style={
+                            k === "shortfall"
+                              ? { color: "var(--bad)" }
+                              : undefined
+                          }
+                        >
+                          <td>
+                            {k === "cashNeeded"
+                              ? "To pay in cash"
+                              : k === "cashAvailable"
+                                ? "Cash ledger"
+                                : "Short"}
                           </td>
-                        ))}
-                      </tr>
-                    ))}
+                          {["igst", "cgst", "sgst", "cess"].map((h) => (
+                            <td key={h} className="num">
+                              {money2(offset[k][h] ?? 0)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
                 {offset.note && <div className="small">{offset.note}</div>}
@@ -1267,23 +1591,25 @@ function FilingWizard({
                         style={{ width: 110 }}
                       />
                       {otpOnSave && f.returnType === "GSTR1" ? (
-                        <span className="muted small">Sent when you saved; save again for a new one.</span>
+                        <span className="muted small">
+                          Sent when you saved; save again for a new one.
+                        </span>
                       ) : (
-                      <button
-                        className="btn sm"
-                        disabled={
-                          !live ||
-                          !canFile ||
-                          !/^[A-Z]{5}\d{4}[A-Z]$/.test(file.pan)
-                        }
-                        onClick={() =>
-                          call("evc-otp", "OTP sent to the signatory", {
-                            pan: file.pan,
-                          })
-                        }
-                      >
-                        Send OTP
-                      </button>
+                        <button
+                          className="btn sm"
+                          disabled={
+                            !live ||
+                            !canFile ||
+                            !/^[A-Z]{5}\d{4}[A-Z]$/.test(file.pan)
+                          }
+                          onClick={() =>
+                            call("evc-otp", "OTP sent to the signatory", {
+                              pan: file.pan,
+                            })
+                          }
+                        >
+                          Send OTP
+                        </button>
                       )}
                     </div>
                   </label>

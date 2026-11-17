@@ -5,7 +5,7 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
-import { notFound } from '../lib/errors';
+import { badRequest, notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import * as ein from '../services/gst/einvoice';
@@ -86,6 +86,12 @@ export const gstRoutes = new Hono<AppEnv>()
 
   // ------------------------------------------------------------ dashboard
   .get('/gst/connections/:id/overview', async (c) => c.json(await gst.overview(deps(c, true), id(c))))
+  // one return for one period: the portal's record, Synapse's filing and the books' figures (no provider call)
+  .get('/gst/connections/:id/returns/:type/:period', async (c) => {
+    const period = c.req.param('period');
+    if (!/^\d{6}$/.test(period)) throw badRequest('period is MMYYYY');
+    return c.json(await gst.returnDetail(deps(c, true), id(c), c.req.param('type').toUpperCase(), period));
+  })
   .post('/gst/connections/:id/sync-returns', async (c) => {
     const b = z.object({ fyStart: z.number().int().min(2017).max(2100), refresh: z.boolean().default(true) }).parse(await c.req.json());
     return c.json(await gst.syncReturnTrack(deps(c), id(c), b.fyStart, b.refresh));
