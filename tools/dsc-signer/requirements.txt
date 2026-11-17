@@ -1,2 +1,1 @@
-pyhanko[pkcs11]==0.38.1
-python-pkcs11==0.9.5
+# Nothing to install: the signer uses only the Python standard library and the token maker's driver.

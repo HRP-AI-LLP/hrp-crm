@@ -16,16 +16,13 @@ It signs only for the Synapse it is paired with:
 
 1. Install the token's driver from its maker (this installs its PKCS#11 library, e.g.
    `C:\Windows\System32\eps2003csp11v2.dll` for ePass2003).
-2. Have Python 3.10 or newer (3.12–3.14 are fine). Nothing else to install by hand:
-   - **On your development computer, `pnpm local` (or `pnpm local:cloud`) does everything**: the first time
-     it installs the signer's packages into `tools/dsc-signer/.deps` and then starts the signer in the
+2. Have Python 3.10 or newer (3.12–3.14 are fine). **Nothing else to install.** The signer talks to the
+   token through Python's own `ctypes` and the token maker's driver, so there are no packages and no
+   unsigned add-on files for a Windows application-control policy to block.
+   - On your development computer, `pnpm local` (or `pnpm local:cloud`) starts the signer in the
      background with the app (lines marked `[dsc]`). `pnpm local --no-signer` or `DSC_SIGNER=off` skips it.
-   - On another computer that only signs, double-click `start-signer.bat`; it does the same.
-   - To install by hand: `pnpm dsc install` (from the project folder), or in this folder
-     `python -m pip install --target .deps -r requirements.txt`.
-
-   Packages are installed with `python -m pip`, never `pip.exe`, so Windows application-control policies
-   that block `pip.exe` (“An Application Control policy has blocked this file”) don't get in the way.
+   - On another computer that only signs, double-click `start-signer.bat`.
+   - An old `.deps` folder from earlier versions is no longer used and can be deleted.
 3. In Synapse: Organisation → **Digital signatures (DSC)** → **Pair a signer**. It shows a command with a
    one-time code; run it once. On your development computer that is
 
@@ -62,3 +59,16 @@ certificate (from your DSC provider) to Adobe's trusted certificates once.
 - **`[dsc] Port 47321 is in use`**: a signer is already running (for example from `start-signer.bat`);
   that one is used.
 - **“No driver (PKCS#11 library) for the token was found”**: install the token's driver, or pass `--lib`.
+
+## How signing works
+
+1. The browser draws the document as a PDF and sends it to Synapse, which adds the signature field and the
+   visible stamp and works out the 32-byte SHA-256 digest that must be signed (it fixes every byte of the
+   PDF and the signing time).
+2. Synapse returns a **ticket** for that digest, sealed with this signer's pairing secret, naming the
+   certificate and valid for 10 minutes.
+3. The browser hands the ticket and the PIN to the signer on this computer. The signer checks the seal and
+   expiry, finds the certificate on the token, logs in with the PIN and has the token sign the digest
+   (RSA PKCS#1 v1.5). Nothing else is ever signed, and the PIN never leaves this computer.
+4. Synapse puts the signature into the PDF, verifies it against the registered certificate, and keeps the
+   signed PDF with the document.

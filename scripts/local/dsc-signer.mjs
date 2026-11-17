@@ -1,26 +1,22 @@
 /**
  * The USB-token DSC signer (tools/dsc-signer) for local runs.
  *
- * `pnpm local` and `pnpm local:cloud` call startDscSigner(): in the background it installs the signer's
- * Python packages into tools/dsc-signer/.deps with `python -m pip --target` (no pip.exe or other new
- * program runs, which application-control policies often block) and starts `dsc_signer.py serve`. Any
- * failure only prints a hint: the app itself never waits for or depends on the signer.
+ * `pnpm local` and `pnpm local:cloud` call startDscSigner(): it starts `dsc_signer.py serve` in the
+ * background. The signer needs only Python and the token's driver (it reaches the token through Python's
+ * own ctypes), so there is nothing to install and no unsigned add-on file for an application-control
+ * policy to block. Any failure only prints a hint: the app never waits for or depends on the signer.
  *
- * Also a command:  pnpm dsc pair <code> --origin http://localhost:5173 --origin http://localhost:8787
- *                  pnpm dsc certs --pin …     pnpm dsc install     pnpm dsc serve [--lib …]
+ * Also a command:  pnpm dsc pair <code>      pnpm dsc certs --pin …      pnpm dsc serve [--lib …]
  *
  * Set DSC_SIGNER=off (or pass --no-signer to pnpm local) to skip it.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DIR = join(ROOT, 'tools', 'dsc-signer');
-const DEPS = join(DIR, '.deps');
-const STAMP = join(DEPS, '.installed');
 const win = process.platform === 'win32';
 const tag = '\x1b[35m[dsc]\x1b[0m';
 
@@ -36,12 +32,6 @@ export function findPython() {
   return null;
 }
 
-function stampFor(py) {
-  return createHash('sha256').update(readFileSync(join(DIR, 'requirements.txt'))).update(py.version).digest('hex');
-}
-
-const installed = (py) => existsSync(STAMP) && readFileSync(STAMP, 'utf8').trim() === stampFor(py);
-const pipArgs = (py) => [...py.pre, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-warn-script-location', '--upgrade', '--target', DEPS, '-r', join(DIR, 'requirements.txt')];
 
 function prefixed(stream, out) {
   let buf = '';
@@ -100,25 +90,7 @@ export function startDscSigner({ skip = false } = {}) {
     });
   };
   let restarts = 0;
-  if (installed(py)) {
-    serve();
-  } else {
-    console.log(`${tag} installing the USB-token signer's packages into tools/dsc-signer/.deps (once; Python ${py.version}) …`);
-    const pip = spawn(py.cmd, pipArgs(py), { cwd: DIR, stdio: ['ignore', 'pipe', 'pipe'] });
-    let err = '';
-    pip.stderr?.on('data', (d) => (err += d.toString()));
-    pip.on('error', (e) => console.log(`${tag} could not run pip: ${e.message}`));
-    pip.on('exit', (code) => {
-      if (code === 0) {
-        writeFileSync(STAMP, stampFor(py));
-        console.log(`${tag} installed`);
-        serve();
-      } else {
-        const last = err.trim().split(/\r?\n/).slice(-3).join(`\n${tag}   `);
-        console.log(`${tag} installing the signer's packages failed (the app runs; only USB-token signing is off):\n${tag}   ${last}\n${tag} Try it by hand: pnpm dsc install`);
-      }
-    });
-  }
+  serve();
   return { stop };
 }
 
@@ -133,14 +105,9 @@ if (process.argv[1] && (win ? self.toLowerCase() === process.argv[1].toLowerCase
     console.error(HINT_PY);
     process.exit(1);
   }
-  if (!sub || sub === 'install' || !installed(py)) {
-    if (sub !== 'pair') {
-      console.log(`Installing the signer's packages into tools/dsc-signer/.deps (Python ${py.version}) …`);
-      const r = spawnSync(py.cmd, pipArgs(py), { cwd: DIR, stdio: 'inherit' });
-      if (r.status !== 0) process.exit(r.status ?? 1);
-      writeFileSync(STAMP, stampFor(py));
-    }
-    if (!sub || sub === 'install') process.exit(0);
+  if (!sub || sub === 'install') {
+    console.log('The signer needs no packages: only Python and the token driver. Start it with: pnpm dsc serve');
+    process.exit(0);
   }
   const r = spawnSync(py.cmd, [...py.pre, 'dsc_signer.py', sub, ...rest], { cwd: DIR, stdio: 'inherit', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
   process.exit(r.status ?? 1);

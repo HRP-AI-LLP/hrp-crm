@@ -275,12 +275,14 @@ An independent review of the fifth round found no cross-tenant leaks; these were
   in memory for the one request. Removing a certificate nulls both columns. Only users listed on the
   certificate may sign with it; managing certificates needs `canManageOrg`.
 - **USB tokens**: the private key never leaves the token. The local signer binds to `127.0.0.1`, answers CORS
-  and Private Network Access only for the paired origin, and refuses any request without a ticket. A ticket
-  is an HMAC (per-signer pairing secret, stored encrypted server-side) over workspace, signer, user, document,
-  certificate thumbprint, PDF SHA-256 and length, and a 10-minute expiry. The server then checks the signed
-  file is an incremental update of exactly those bytes, verifies the CMS signature, matches the thumbprint and
-  requires the signature to cover the whole file. Unpairing revokes the secret at once. The PIN is sent only
-  to the local signer.
+  and Private Network Access only for paired origins, and refuses any request without a ticket. The server
+  prepares the PDF; a ticket is an HMAC (per-signer pairing secret, stored encrypted server-side) over
+  workspace, signer, user, document, certificate thumbprint, the 32-byte digest of the CMS signed attributes
+  to sign, the prepared PDF's SHA-256, the signing time and a 10-minute expiry. The signer signs only that
+  digest (RSA PKCS#1 v1.5 through the token's PKCS#11 driver via Python's ctypes; no third-party code). The
+  server rebuilds the CMS around the signature, verifies it against the registered certificate, requires it
+  to cover the whole file, and accepts each ticket once. Unpairing revokes the secret at once. The PIN is sent
+  only to the local signer.
 - **HTML templates** render through Mustache (escaped by default) and DOMPurify, without scripts, event
   handlers or external fetches, inside a shadow root. Letterheads are stored as data URLs (≤ 6 MB).
 - New tables (`doc_templates`, `dsc_certificates`, `dsc_signers`) are FORCE RLS with the tenant policy.

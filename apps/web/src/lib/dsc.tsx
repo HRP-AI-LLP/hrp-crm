@@ -8,7 +8,7 @@ import { TemplatedDocument } from '../components/DocTemplateView';
 import type { DocLabels, DocTemplate } from '../components/QuoteDocument';
 import { shape, SOURCES } from '../pages/DocPrint';
 import { get, post } from './api';
-import { bytesToB64, documentToPdf, sha256Hex } from './doc-pdf';
+import { bytesToB64, documentToPdf } from './doc-pdf';
 
 type Json = Record<string, any>;
 
@@ -88,10 +88,15 @@ export async function localSigner(tenantId: string, paired: { id: string }[]) {
   return mine.signer;
 }
 
+/**
+ * USB token: Synapse prepares the PDF and a ticket for its 32-byte digest; the signer on this computer signs
+ * that digest with the token (PIN typed here, sent only to the signer); Synapse puts the signature in and
+ * checks it.
+ */
 export async function signWithToken(kind: string, id: string, certificateId: string, pin: string, me: { tenant: { id: string } }, paired: { id: string }[]) {
   const signerId = await localSigner(me.tenant.id, paired);
   const pdf = await documentPdf(kind, id, me);
-  const t = await post<{ ticket: string }>(`/api/v1/documents/${kind}/${id}/dsc/ticket`, { certificateId, signerId, pdfSha256: await sha256Hex(pdf), pdfLength: pdf.length });
-  const signed = await local<{ pdf: string }>('/v1/sign', { ticket: t.ticket, pdf: bytesToB64(pdf), pin });
-  return post<Json>(`/api/v1/documents/${kind}/${id}/dsc/token`, { ticket: t.ticket, pdf: signed.pdf });
+  const prep = await post<{ ticket: string; prepared: string }>(`/api/v1/documents/${kind}/${id}/dsc/token-prepare`, { certificateId, signerId, pdf: bytesToB64(pdf) });
+  const signed = await local<{ signature: string }>('/v1/sign', { ticket: prep.ticket, pin });
+  return post<Json>(`/api/v1/documents/${kind}/${id}/dsc/token`, { ticket: prep.ticket, prepared: prep.prepared, signature: signed.signature });
 }

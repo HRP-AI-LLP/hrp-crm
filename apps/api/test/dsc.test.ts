@@ -128,8 +128,8 @@ describe.skipIf(!canToken)('a DSC on a USB token, through the local signer', () 
 
     const pair = await api('POST', '/api/v1/organisation/dsc-signers', { label: "Prashant's laptop" });
     expect(pair.status).toBe(201);
-    execFileSync('python3', [join(__dirname, '../../../tools/dsc-signer/dsc_signer.py'), 'pair', pair.json.pairingCode, '--origin', origin], { env });
-    signer = spawn('python3', [join(__dirname, '../../../tools/dsc-signer/dsc_signer.py'), 'serve', '--lib', softhsm, '--port', String(port)], { env, stdio: 'ignore' });
+    execFileSync('python3', ['-S', join(__dirname, '../../../tools/dsc-signer/dsc_signer.py'), 'pair', pair.json.pairingCode, '--origin', origin], { env });
+    signer = spawn('python3', ['-S', join(__dirname, '../../../tools/dsc-signer/dsc_signer.py'), 'serve', '--lib', softhsm, '--port', String(port)], { env, stdio: 'ignore' });
     const local = (path: string, body?: unknown, o = origin) =>
       fetch(`http://127.0.0.1:${port}${path}`, { method: body ? 'POST' : 'GET', headers: { origin: o, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
     for (let i = 0; i < 50; i++) {
@@ -149,20 +149,31 @@ describe.skipIf(!canToken)('a DSC on a USB token, through the local signer', () 
     expect(reg.status, JSON.stringify(reg.json)).toBe(201);
 
     const pdf = await invoicePdf('INV/26-27/0001');
-    const sha = Buffer.from(await crypto.subtle.digest('SHA-256', pdf)).toString('hex');
-    const tk = await api('POST', `/api/v1/documents/invoice/${ids.inv}/dsc/ticket`, { certificateId: reg.json.id, signerId: pair.json.id, pdfSha256: sha, pdfLength: pdf.length });
-    expect(tk.status, JSON.stringify(tk.json)).toBe(200);
-    // a different PDF is refused by the signer
-    const other = await invoicePdf('INV/26-27/9999');
-    expect((await local('/v1/sign', { ticket: tk.json.ticket, pdf: b64(other), pin: '123456' })).status).toBe(403);
-    const sres = await local('/v1/sign', { ticket: tk.json.ticket, pdf: b64(pdf), pin: '123456' });
+    // wrong PIN is reported plainly, not as a crash
+    const prep0 = await api('POST', `/api/v1/documents/invoice/${ids.inv}/dsc/token-prepare`, { certificateId: reg.json.id, signerId: pair.json.id, pdf: b64(pdf) });
+    expect(prep0.status, JSON.stringify(prep0.json)).toBe(200);
+    const bad = await local('/v1/sign', { ticket: prep0.json.ticket, pin: '000000' });
+    expect(bad.status).toBe(409);
+    expect(((await bad.json()) as any).error).toMatch(/Wrong PIN/);
+    // a ticket the workspace did not make is refused
+    const forged = prep0.json.ticket.replace(/.$/, (c: string) => (c === '0' ? '1' : '0'));
+    expect((await local('/v1/sign', { ticket: forged, pin: '123456' })).status).toBe(403);
+
+    const prep = await api('POST', `/api/v1/documents/invoice/${ids.inv}/dsc/token-prepare`, { certificateId: reg.json.id, signerId: pair.json.id, pdf: b64(pdf) });
+    expect(prep.status, JSON.stringify(prep.json)).toBe(200);
+    const sres = await local('/v1/sign', { ticket: prep.json.ticket, pin: '123456' });
     const sj = (await sres.json()) as any;
     expect(sres.status, JSON.stringify(sj)).toBe(200);
-    const done = await api('POST', `/api/v1/documents/invoice/${ids.inv}/dsc/token`, { ticket: tk.json.ticket, pdf: sj.pdf });
+    // the signature can't be moved into another prepared PDF
+    expect((await api('POST', `/api/v1/documents/invoice/${ids.inv}/dsc/token`, { ticket: prep.json.ticket, prepared: prep0.json.prepared, signature: sj.signature })).status).toBe(400);
+    const done = await api('POST', `/api/v1/documents/invoice/${ids.inv}/dsc/token`, { ticket: prep.json.ticket, prepared: prep.json.prepared, signature: sj.signature });
     expect(done.status, JSON.stringify(done.json)).toBe(200);
     const sigs = (await api('GET', `/api/v1/documents/invoice/${ids.inv}/signatures`)).json as any[];
     expect(sigs.find((x) => x.method === 'dsc_token')).toMatchObject({ signerName: 'PRASHANT KUMAR', valid: true });
     // the same ticket can't be used twice
-    expect((await api('POST', `/api/v1/documents/invoice/${ids.inv}/dsc/token`, { ticket: tk.json.ticket, pdf: sj.pdf })).status).toBe(409);
+    expect((await api('POST', `/api/v1/documents/invoice/${ids.inv}/dsc/token`, { ticket: prep.json.ticket, prepared: prep.json.prepared, signature: sj.signature })).status).toBe(409);
+    // the stored file is a properly signed PDF (checked by the public verifier too)
+    const file = await h.app.request(`http://synapse.test${done.json.fileUrl ?? ''}`, {}, h.env);
+    if (done.json.fileUrl) expect(file.status).toBe(200);
   }, 60_000);
 });

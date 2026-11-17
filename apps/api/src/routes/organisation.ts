@@ -210,9 +210,9 @@ export const organisationRoutes = new Hono<AppEnv>()
     const r = await c.var.db.tx(scope(c), (tx) => dsc.signWithPfx(rctx(c, tx), c.env, c.req.param('object'), id(c), b, verifyBase(c)));
     return c.json(r);
   })
-  .post('/documents/:object/:id/dsc/ticket', async (c) => {
-    const b = dsc.ticketSchema.parse(await c.req.json());
-    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.signTicket(rctx(c, tx), c.env, c.req.param('object'), id(c), b, verifyBase(c))));
+  .post('/documents/:object/:id/dsc/token-prepare', async (c) => {
+    const b = dsc.tokenPrepareSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.prepareTokenSign(rctx(c, tx), c.env, c.req.param('object'), id(c), b, verifyBase(c))));
   })
   .post('/documents/:object/:id/dsc/token', async (c) => {
     const b = dsc.tokenCompleteSchema.parse(await c.req.json());

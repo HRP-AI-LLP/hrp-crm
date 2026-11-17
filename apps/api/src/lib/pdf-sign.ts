@@ -173,24 +173,57 @@ export function bin(u: Uint8Array) {
   return s;
 }
 
-/** CMS SignedData (detached, SHA-256, signing time) over `data` with a key and certificate. */
-export function cmsSign(data: Uint8Array, key: forge.pki.rsa.PrivateKey, cert: forge.pki.Certificate, chain: forge.pki.Certificate[] = []) {
+/** Anything that signs like an RSA key: forge hands it the SHA-256 of the signed attributes. */
+type RsaSigner = { sign: (md: forge.md.MessageDigest, scheme?: string) => string };
+
+function cmsWith(data: Uint8Array, key: RsaSigner, cert: forge.pki.Certificate, chain: forge.pki.Certificate[], signingTime: Date) {
   const p7 = forge.pkcs7.createSignedData();
   p7.content = forge.util.createBuffer(bin(data));
   p7.addCertificate(cert);
   for (const c of chain) p7.addCertificate(c);
   p7.addSigner({
-    key,
+    key: key as unknown as forge.pki.rsa.PrivateKey,
     certificate: cert,
     digestAlgorithm: forge.pki.oids.sha256!,
     authenticatedAttributes: [
       { type: forge.pki.oids.contentType!, value: forge.pki.oids.data! },
       { type: forge.pki.oids.messageDigest! },
-      { type: forge.pki.oids.signingTime!, value: new Date() as unknown as string },
+      { type: forge.pki.oids.signingTime!, value: signingTime as unknown as string },
     ],
   });
   p7.sign({ detached: true });
   return forge.util.binary.raw.decode(forge.asn1.toDer(p7.toAsn1()).getBytes());
+}
+
+/** CMS SignedData (detached, SHA-256, signing time) over `data` with a key and certificate. */
+export function cmsSign(data: Uint8Array, key: forge.pki.rsa.PrivateKey, cert: forge.pki.Certificate, chain: forge.pki.Certificate[] = [], signingTime = new Date()) {
+  return cmsWith(data, key as unknown as RsaSigner, cert, chain, signingTime);
+}
+
+/**
+ * Signing with a key held elsewhere (a USB token), in two steps. First the SHA-256 that the key must sign
+ * (of the CMS signed attributes, which fix the PDF's digest and the signing time) …
+ */
+export function cmsDigestToSign(data: Uint8Array, cert: forge.pki.Certificate, signingTime: Date): Uint8Array {
+  let digest = '';
+  cmsWith(data, { sign: (md) => ((digest = md.digest().getBytes()), '\0') }, cert, [], signingTime);
+  return forge.util.binary.raw.decode(digest);
+}
+
+/** … then the CMS around the RSA PKCS#1 v1.5 signature the key made over that digest (same time). */
+export function cmsWithSignature(data: Uint8Array, cert: forge.pki.Certificate, signingTime: Date, signature: Uint8Array) {
+  return cmsWith(data, { sign: () => bin(signature) }, cert, [], signingTime);
+}
+
+/** The PKCS#1 DigestInfo for a SHA-256 digest: what a token's raw RSA (CKM_RSA_PKCS) signs. */
+export function sha256DigestInfo(digest: Uint8Array) {
+  const prefix = [0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00, 0x04, 0x20];
+  return new Uint8Array([...prefix, ...digest]);
+}
+
+/** The placeholders of a PDF from preparePdf() (sent away and back): where the signature goes and what it covers. */
+export function placeholders(prepared: Uint8Array) {
+  return locate(prepared);
 }
 
 export async function signPdf(pdf: Uint8Array, signer: { key: forge.pki.rsa.PrivateKey; cert: forge.pki.Certificate; chain: forge.pki.Certificate[] }, meta: Parameters<typeof preparePdf>[1]) {

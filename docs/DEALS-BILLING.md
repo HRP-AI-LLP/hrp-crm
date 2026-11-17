@@ -115,13 +115,13 @@ Two ways to hold the certificate — both sign only from Synapse:
 - **.pfx / .p12 file** — upload it with its password. Both are encrypted (AES-GCM, workspace-bound) and can
   never be downloaded again; removing the certificate deletes them. Choose who may sign with it.
 - **USB token (ePass, ProxKey, mToken, WatchData…)** — the key never leaves the token. The small signer in
-  `tools/dsc-signer` runs on the computer with the token. `pnpm local` / `pnpm local:cloud` install its
-  Python packages (into `tools/dsc-signer/.deps`, with `python -m pip`, never `pip.exe`) and start it in the
-  background; elsewhere `start-signer.bat` does the same. Python 3.10+ is the only prerequisite.
-  1. Organisation → Digital signatures → **Pair a signer**; run the shown command once
-     (`pnpm dsc pair <code> --origin …` on the development computer).
+  `tools/dsc-signer` runs on the computer with the token and needs only Python 3.10+ and the token
+  driver (it uses Python's own ctypes; nothing to install). `pnpm local` / `pnpm local:cloud` start it in
+  the background; elsewhere `start-signer.bat`.
+  1. Organisation → Digital signatures → **Pair a signer**; run the shown `pnpm dsc pair <code>` once.
   2. Plug in the token; **Add the token's certificate** reads it from the token (PIN if the token needs it).
   3. On a document, "Sign with DSC (token)" asks for the PIN; the PIN goes only to the signer on this computer.
+  Synapse prepares the PDF and the digest to sign; the signer signs only that digest, with a ticket.
   The signer listens on `127.0.0.1` only, answers only the paired Synapse address, and signs only with a
   ticket Synapse issued for that exact PDF (hash and length), certificate and user, valid 10 minutes. Synapse
   checks the returned file: original bytes untouched, signature valid, same certificate, whole file covered.

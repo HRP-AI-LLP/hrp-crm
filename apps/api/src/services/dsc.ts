@@ -17,7 +17,8 @@ import { z } from 'zod';
 import type { Env } from '../env';
 import { decryptSecret, encryptSecret, hmacSha256Hex, randomToken } from '../lib/crypto';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
-import { certFromPem, certInfo, readPfx, sha256Bytes, signPdf, verifyPdf } from '../lib/pdf-sign';
+import type forge from 'node-forge';
+import { certFromPem, certInfo, cmsDigestToSign, cmsWithSignature, embedCms, placeholders, preparePdf, readPfx, sha256Bytes, sha256DigestInfo, signPdf, verifyPdf } from '../lib/pdf-sign';
 import { requireEncryptionKey } from './ai/tenant-providers';
 import { saveFile } from './files';
 import { assertOrgManager, canManageOrg, docHash, SIGNABLE, verifyCode } from './organisation';
@@ -228,44 +229,71 @@ export async function revokeSigner(ctx: RecordCtx, id: string) {
   if (!r) throw notFound();
 }
 
-export const ticketSchema = z.object({ certificateId: z.string().uuid(), signerId: z.string().uuid(), pdfSha256: z.string().regex(/^[0-9a-f]{64}$/), pdfLength: z.number().int().positive() });
+export const tokenPrepareSchema = z.object({ certificateId: z.string().uuid(), signerId: z.string().uuid(), pdf: z.string().min(100).max(20_000_000), location: z.string().max(120).nullish() });
 
-/** A one-off permission for the paired signer to sign exactly this PDF with this certificate. */
-export async function signTicket(ctx: RecordCtx, env: Env, objectKey: string, recordId: string, input: z.infer<typeof ticketSchema>, verifyBase: string | null) {
+const toHex = (u: Uint8Array) => Array.from(u, (b) => b.toString(16).padStart(2, '0')).join('');
+const fromHex = (h: string) => Uint8Array.from(h.match(/../g) ?? [], (x) => parseInt(x, 16));
+
+/**
+ * Signing with a USB token, step 1. Synapse puts the signature field and stamp into the PDF and works out
+ * the 32-byte digest the token must sign (it fixes the PDF's bytes and the signing time). The ticket is a
+ * one-off permission, sealed with the signer's pairing secret, for the signer on this computer to sign
+ * exactly that digest with exactly this certificate within 10 minutes. The token never sees anything else,
+ * and the signer needs nothing but Python and the token's driver.
+ */
+export async function prepareTokenSign(ctx: RecordCtx, env: Env, objectKey: string, recordId: string, input: z.infer<typeof tokenPrepareSchema>, verifyBase: string | null) {
   const doc = await signableDoc(ctx, objectKey, recordId);
   const c = await certFor(ctx, input.certificateId, 'token');
+  if (!c.cert_pem) throw badRequest('This certificate has no copy of its public part: add it again from the token');
+  const cert = certFromPem(c.cert_pem);
+  if (!(cert.publicKey as forge.pki.rsa.PublicKey).n) throw badRequest('Only RSA certificates can sign here');
   const s = await ctx.tx.one<{ secret_enc: string }>(`select secret_enc from dsc_signers where tenant_id = $1 and id = $2 and revoked_at is null`, [ctx.tenantId, input.signerId]);
   if (!s) throw notFound('That signer is not paired with this workspace');
   const secret = await decryptSecret(requireEncryptionKey(env), s.secret_enc, ctx.tenantId);
+  const pdf = b64ToBytes(input.pdf);
+  if (!(pdf[0] === 0x25 && pdf[1] === 0x50 && pdf[2] === 0x44 && pdf[3] === 0x46)) throw badRequest('Not a PDF');
   const code = verifyCode();
+  const reason = `${TITLE[objectKey] ?? 'Document'} ${doc.number}`.trim();
+  const prepared = await preparePdf(pdf, {
+    name: c.subject_cn,
+    reason,
+    location: input.location ?? undefined,
+    stamp: { text: [`Digitally signed by ${c.subject_cn}`, `Date: ${istNow()} IST`, `Reason: ${reason}`, verifyBase ? `Verify: ${verifyBase}/${code}` : `Verification code: ${code}`] },
+  });
+  const signingTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+  const digest = cmsDigestToSign(prepared.toSign, cert, signingTime);
   const payload = {
-    v: 1,
+    v: 2,
     t: ctx.tenantId,
     s: input.signerId,
     u: ctx.principal.user.id,
     o: objectKey,
     r: recordId,
     c: c.thumbprint,
-    h: input.pdfSha256,
-    l: input.pdfLength,
+    d: toHex(digest), // what the token signs (as a SHA-256 DigestInfo)
+    p: await sha256Bytes(prepared.pdf), // the prepared PDF the signature will go into
+    st: signingTime.toISOString(),
     k: code,
     exp: Math.floor(Date.now() / 1000) + 600,
-    reason: `${TITLE[objectKey] ?? 'Document'} ${doc.number}`.trim(),
-    stamp: [`Digitally signed by ${c.subject_cn}`, `Date: ${istNow()} IST`, `Reason: ${TITLE[objectKey] ?? 'Document'} ${doc.number}`.trim(), verifyBase ? `Verify: ${verifyBase}/${code}` : `Verification code: ${code}`],
+    reason,
   };
   const body = btoa(JSON.stringify(payload)).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
   const mac = await hmacSha256Hex(secret, body);
   await ctx.tx.query(`update dsc_signers set last_used_at = now() where tenant_id = $1 and id = $2`, [ctx.tenantId, input.signerId]);
-  return { ticket: `${body}.${mac}`, verifyCode: code };
+  return { ticket: `${body}.${mac}`, prepared: bytesToB64(prepared.pdf), verifyCode: code };
 }
 
-export const tokenCompleteSchema = z.object({ ticket: z.string().max(4000), pdf: z.string().min(100).max(25_000_000) });
+export const tokenCompleteSchema = z.object({ ticket: z.string().max(4000), prepared: z.string().min(100).max(25_000_000), signature: z.string().min(40).max(4000) });
 
-/** The signed PDF back from the signer: checked against the ticket and the registered certificate. */
+/**
+ * Step 2: the token's signature comes back. Synapse checks the ticket, puts the signature into the prepared
+ * PDF, and verifies it with the registered certificate before keeping it.
+ */
 export async function completeTokenSign(ctx: RecordCtx, env: Env, objectKey: string, recordId: string, input: z.infer<typeof tokenCompleteSchema>) {
   const [body, mac] = input.ticket.split('.');
   if (!body || !mac) throw badRequest('Bad ticket');
   const payload = JSON.parse(atob(body.replace(/-/g, '+').replace(/_/g, '/'))) as Record<string, any>;
+  if (payload.v !== 2) throw badRequest('This signing ticket is from an older version: sign again');
   if (payload.t !== ctx.tenantId || payload.o !== objectKey || payload.r !== recordId || payload.u !== ctx.principal.user.id) throw forbidden('This ticket is for another document');
   if (payload.exp < Date.now() / 1000 - 60) throw badRequest('The signing ticket expired: sign again');
   const s = await ctx.tx.one<{ secret_enc: string }>(`select secret_enc from dsc_signers where tenant_id = $1 and id = $2 and revoked_at is null`, [ctx.tenantId, payload.s]);
@@ -274,15 +302,23 @@ export async function completeTokenSign(ctx: RecordCtx, env: Env, objectKey: str
   if (await ctx.tx.one(`select 1 from document_signatures where tenant_id = $1 and verify_code = $2`, [ctx.tenantId, payload.k])) throw conflict('This ticket was already used');
   const doc = await signableDoc(ctx, objectKey, recordId);
   const c = await ctx.tx.one<CertRow>(`select * from dsc_certificates where tenant_id = $1 and thumbprint = $2 and is_active and kind = 'token'`, [ctx.tenantId, payload.c]);
-  if (!c) throw notFound('The certificate is no longer registered');
-  const signed = b64ToBytes(input.pdf);
-  // the document as sent to the signer is unchanged inside the signed file (signatures are appended)
-  if (signed.length <= payload.l || (await sha256Bytes(signed.subarray(0, payload.l))) !== payload.h) throw badRequest('The signed PDF is not the document that was sent for signing');
+  if (!c?.cert_pem) throw notFound('The certificate is no longer registered');
+  const prepared = b64ToBytes(input.prepared);
+  if ((await sha256Bytes(prepared)) !== payload.p) throw badRequest('This is not the PDF that was prepared for signing');
+  const place = placeholders(prepared);
+  const signature = b64ToBytes(input.signature);
+  const cms = cmsWithSignature(place.toSign, certFromPem(c.cert_pem), new Date(payload.st), signature);
+  const signed = embedCms(place, cms);
   const v = verifyPdf(signed);
-  if (!v.ok) throw badRequest(`The signature is not valid: ${v.reason}`);
-  if (v.cert?.thumbprint !== c.thumbprint) throw forbidden(`Signed with ${v.cert?.subjectCn ?? 'another certificate'}, not ${c.subject_cn}'s registered certificate`);
-  if (!v.coversWholeFile) throw badRequest('Something was added to the PDF after it was signed');
+  if (!v.ok) throw badRequest(`The token's signature does not verify (${v.reason}). Is the right certificate chosen on the token?`);
+  if (v.cert?.thumbprint !== c.thumbprint || !v.coversWholeFile) throw forbidden('The signed PDF does not match the registered certificate');
   return record(ctx, env, { objectKey, recordId, ...doc }, c, 'dsc_token', signed, String(payload.k));
+}
+
+/** The digest the ticket asks the token to sign, as the signer will (for tests and checks). */
+export function ticketDigestInfo(ticket: string) {
+  const payload = JSON.parse(atob(ticket.split('.')[0]!.replace(/-/g, '+').replace(/_/g, '/'))) as { d: string };
+  return sha256DigestInfo(fromHex(payload.d));
 }
 
 /** Anyone can check a PDF: is the signature valid, and is it a document this workspace signed? */

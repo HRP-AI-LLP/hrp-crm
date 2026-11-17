@@ -12,19 +12,13 @@ websites are refused, and requests without a valid ticket are refused.
     python dsc_signer.py serve [--lib "C:\\Windows\\System32\\eps2003csp11v2.dll"]
     python dsc_signer.py certs --lib ... --pin ...        (lists the certificates on the token)
 
-Needs Python 3.10+ and the packages in requirements.txt. They can live in the .deps folder beside this
-file (`python -m pip install --target .deps -r requirements.txt`, which `pnpm local` does for you), so
-no pip.exe or other new program has to run.
+Needs only Python 3.10+ and the token maker's driver: no packages to install. The token is reached
+through Python's own ctypes, so application-control policies that block unsigned add-on files do not
+apply. Synapse prepares the PDF; the signer only signs its 32-byte digest, and only with a ticket.
 """
 from __future__ import annotations
 
 import sys as _sys
-from pathlib import Path as _Path
-
-# packages installed beside the signer (python -m pip install --target .deps …) come first
-_DEPS = _Path(__file__).resolve().parent / ".deps"
-if _DEPS.is_dir() and str(_DEPS) not in _sys.path:
-    _sys.path.insert(0, str(_DEPS))
 
 # Windows consoles and pipes default to a code page (cp1252) that cannot print every character, e.g. a
 # certificate holder's name in Devanagari: print UTF-8, and never crash on a character that won't show
@@ -38,7 +32,6 @@ import argparse
 import base64
 import hashlib
 import hmac
-import io
 import json
 import os
 import sys
@@ -47,23 +40,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "2.0.0"
 
-# pyHanko reads the computer's time zone; some settings (e.g. "Asia/Calcutta" as TZ) can't be read
-# that way. Fall back to UTC for the signing time then (the time in the PDF signature is absolute).
-try:
-    import tzlocal
-
-    tzlocal.get_localzone()
-except Exception:  # noqa: BLE001
-    try:
-        import datetime as _dt
-
-        import tzlocal
-
-        tzlocal.get_localzone = lambda: _dt.timezone.utc  # type: ignore[assignment]
-    except ImportError:
-        pass
 CONFIG = Path(os.environ.get("SYNAPSE_DSC_CONFIG", Path.home() / ".synapse-dsc-signer.json"))
 DEFAULT_PORT = 47321
 # where token makers install their PKCS#11 library (Windows; tried in this order)
@@ -116,8 +94,8 @@ def b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
-def check_ticket(cfg: dict, ticket: str, pdf: bytes) -> dict:
-    """The ticket must come from a paired workspace and name exactly this PDF."""
+def check_ticket(cfg: dict, ticket: str) -> dict:
+    """The ticket must come from a paired workspace, be fresh, and name a 32-byte digest to sign."""
     try:
         body, mac = ticket.split(".")
         payload = json.loads(b64url_decode(body))
@@ -131,25 +109,177 @@ def check_ticket(cfg: dict, ticket: str, pdf: bytes) -> dict:
         raise PermissionError("The ticket was not made by the paired workspace")
     if payload.get("exp", 0) < time.time():
         raise PermissionError("The ticket expired: sign again from Synapse")
-    if hashlib.sha256(pdf).hexdigest() != payload.get("h") or len(pdf) != payload.get("l"):
-        raise PermissionError("The PDF is not the one the ticket is for")
+    if payload.get("v") != 2 or len(bytes.fromhex(payload.get("d", ""))) != 32:
+        raise PermissionError("This ticket is from another version of Synapse: reload the page and sign again")
     return payload
 
 
-def open_session(lib: str, pin: str | None):
-    """A session on the plugged-in token (the first initialised token that holds a certificate)."""
-    import pkcs11
-    from pkcs11 import Attribute, ObjectClass, TokenFlag
+# ───────────────────────── PKCS#11 through ctypes (no packages, no compiled add-ons) ─────────────────────────
+#
+# Only Python's own ctypes and the token maker's driver are loaded, so application-control policies that
+# block unsigned add-on files (.pyd) do not get in the way. Structures follow the PKCS#11 headers: on
+# Windows they are packed to 1 byte and CK_ULONG is 32-bit; elsewhere natural alignment.
 
-    tokens = list(pkcs11.lib(lib).get_tokens(token_flags=TokenFlag.TOKEN_INITIALIZED))
-    if not tokens:
-        raise RuntimeError("No token is plugged in")
-    for token in tokens:
-        session = token.open(user_pin=pin) if pin else token.open()
-        if any(True for _ in session.get_objects({Attribute.CLASS: ObjectClass.CERTIFICATE})):
-            return session
-        session.close()
-    raise RuntimeError("No certificate found on the token")
+import ctypes
+
+_WIN = os.name == "nt"
+CK_ULONG = ctypes.c_ulong
+_PACK = 1 if _WIN else 0
+
+CKF_SERIAL_SESSION = 0x4
+CKU_USER = 1
+CKA_CLASS, CKA_LABEL, CKA_VALUE, CKA_ID = 0x0, 0x3, 0x11, 0x102
+CKO_CERTIFICATE, CKO_PRIVATE_KEY = 1, 3
+CKM_RSA_PKCS = 0x1
+CKR_OK = 0
+CKR_ALREADY_INITIALIZED = 0x191
+CKR_USER_ALREADY_LOGGED_IN = 0x100
+CK_ERRORS = {
+    0x32: "The token was removed",
+    0xA0: "Wrong PIN (too many wrong PINs lock the token)",
+    0xA1: "The PIN has expired: change it with the token maker's tool",
+    0xA2: "That PIN is not the right length",
+    0xA4: "The token is locked: unlock it with the token maker's tool",
+    0xE0: "No token is plugged in",
+    0xE1: "The token is not recognised by this driver",
+    0x101: "Enter the token PIN",
+    0x30: "The token reported a device error: unplug it and plug it in again",
+}
+SHA256_DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
+
+
+class _Attr(ctypes.Structure):
+    _pack_ = _PACK
+    _fields_ = [("type", CK_ULONG), ("pValue", ctypes.c_void_p), ("ulValueLen", CK_ULONG)]
+
+
+class _Mech(ctypes.Structure):
+    _pack_ = _PACK
+    _fields_ = [("mechanism", CK_ULONG), ("pParameter", ctypes.c_void_p), ("ulParameterLen", CK_ULONG)]
+
+
+class TokenError(RuntimeError):
+    pass
+
+
+# positions in CK_FUNCTION_LIST (after the 2-byte version)
+_FN = {"C_Initialize": 0, "C_GetSlotList": 4, "C_OpenSession": 12, "C_CloseSession": 13, "C_Login": 18,
+       "C_GetAttributeValue": 24, "C_FindObjectsInit": 26, "C_FindObjects": 27, "C_FindObjectsFinal": 28,
+       "C_SignInit": 42, "C_Sign": 43}
+_P = ctypes.POINTER
+_U = CK_ULONG
+_SIGS = {
+    "C_Initialize": [ctypes.c_void_p],
+    "C_GetSlotList": [ctypes.c_ubyte, _P(_U), _P(_U)],
+    "C_OpenSession": [_U, _U, ctypes.c_void_p, ctypes.c_void_p, _P(_U)],
+    "C_CloseSession": [_U],
+    "C_Login": [_U, _U, ctypes.c_char_p, _U],
+    "C_GetAttributeValue": [_U, _U, _P(_Attr), _U],
+    "C_FindObjectsInit": [_U, _P(_Attr), _U],
+    "C_FindObjects": [_U, _P(_U), _U, _P(_U)],
+    "C_FindObjectsFinal": [_U],
+    "C_SignInit": [_U, _P(_Mech), _U],
+    "C_Sign": [_U, ctypes.c_char_p, _U, ctypes.c_char_p, _P(_U)],
+}
+_libs: dict = {}
+
+
+class P11:
+    """The few PKCS#11 calls the signer needs, on one driver (loaded and initialised once)."""
+
+    def __init__(self, path: str):
+        if path in _libs:
+            self.fn = _libs[path]
+            return
+        dll = ctypes.WinDLL(path) if _WIN else ctypes.CDLL(path)  # x64: one calling convention
+        get_list = dll.C_GetFunctionList
+        get_list.argtypes = [_P(ctypes.c_void_p)]
+        get_list.restype = _U
+        plist = ctypes.c_void_p()
+        self._ok(get_list(ctypes.byref(plist)), "C_GetFunctionList")
+        ptr = ctypes.sizeof(ctypes.c_void_p)
+        first = 2 if _WIN else ptr  # the 2-byte version, then pointers (packed on Windows)
+        fns = {}
+        for name, i in _FN.items():
+            addr = ctypes.c_void_p.from_address(plist.value + first + i * ptr).value
+            fns[name] = ctypes.CFUNCTYPE(_U, *_SIGS[name])(addr)
+        rv = fns["C_Initialize"](None)
+        if rv not in (CKR_OK, CKR_ALREADY_INITIALIZED):
+            self._ok(rv, "C_Initialize")
+        _libs[path] = fns
+        self.fn = fns
+
+    @staticmethod
+    def _ok(rv: int, what: str) -> None:
+        if rv != CKR_OK:
+            raise TokenError(CK_ERRORS.get(rv, f"The token said {what} failed (0x{rv:x})"))
+
+    def call(self, name: str, *args) -> None:
+        self._ok(self.fn[name](*args), name)
+
+    def slots(self) -> list[int]:
+        n = _U(0)
+        self.call("C_GetSlotList", 1, None, ctypes.byref(n))
+        if not n.value:
+            raise TokenError("No token is plugged in")
+        arr = (_U * n.value)()
+        self.call("C_GetSlotList", 1, arr, ctypes.byref(n))
+        return list(arr[: n.value])
+
+    def open(self, slot: int, pin: str | None) -> int:
+        h = _U(0)
+        self.call("C_OpenSession", slot, CKF_SERIAL_SESSION, None, None, ctypes.byref(h))
+        if pin:
+            raw = pin.encode()
+            rv = self.fn["C_Login"](h, CKU_USER, raw, len(raw))
+            if rv not in (CKR_OK, CKR_USER_ALREADY_LOGGED_IN):
+                self.fn["C_CloseSession"](h)
+                self._ok(rv, "C_Login")
+        return h.value
+
+    def close(self, h: int) -> None:
+        self.fn["C_CloseSession"](h)
+
+    def find(self, h: int, cls: int, obj_id: bytes | None = None) -> list[int]:
+        vals = [CK_ULONG(cls)]
+        attrs = [_Attr(CKA_CLASS, ctypes.addressof(vals[0]), ctypes.sizeof(CK_ULONG))]
+        if obj_id is not None:
+            buf = ctypes.create_string_buffer(obj_id, len(obj_id))
+            vals.append(buf)
+            attrs.append(_Attr(CKA_ID, ctypes.addressof(buf), len(obj_id)))
+        tmpl = (_Attr * len(attrs))(*attrs)
+        self.call("C_FindObjectsInit", h, tmpl, len(attrs))
+        out = []
+        try:
+            batch = (_U * 16)()
+            n = _U(0)
+            while True:
+                self.call("C_FindObjects", h, batch, 16, ctypes.byref(n))
+                if not n.value:
+                    break
+                out += list(batch[: n.value])
+        finally:
+            self.fn["C_FindObjectsFinal"](h)
+        return out
+
+    def attr(self, h: int, obj: int, kind: int) -> bytes:
+        a = (_Attr * 1)(_Attr(kind, None, 0))
+        rv = self.fn["C_GetAttributeValue"](h, obj, a, 1)
+        if rv != CKR_OK or a[0].ulValueLen in (0, CK_ULONG(-1).value):
+            return b""
+        buf = ctypes.create_string_buffer(a[0].ulValueLen)
+        a[0].pValue = ctypes.addressof(buf)
+        self.call("C_GetAttributeValue", h, obj, a, 1)
+        return buf.raw[: a[0].ulValueLen]
+
+    def sign_rsa(self, h: int, key: int, data: bytes) -> bytes:
+        mech = _Mech(CKM_RSA_PKCS, None, 0)
+        self.call("C_SignInit", h, ctypes.byref(mech), key)
+        n = _U(0)
+        self.call("C_Sign", h, data, len(data), None, ctypes.byref(n))
+        out = ctypes.create_string_buffer(n.value)
+        self.call("C_Sign", h, data, len(data), out, ctypes.byref(n))
+        return out.raw[: n.value]
 
 
 def pem_of(der: bytes) -> str:
@@ -157,46 +287,80 @@ def pem_of(der: bytes) -> str:
     return "-----BEGIN CERTIFICATE-----\n" + "\n".join(b[i:i + 64] for i in range(0, len(b), 64)) + "\n-----END CERTIFICATE-----\n"
 
 
-def token_certs(lib: str, pin: str | None):
-    from pkcs11 import Attribute, ObjectClass
+def _certs_in(p: P11, h: int):
+    for obj in p.find(h, CKO_CERTIFICATE):
+        der = p.attr(h, obj, CKA_VALUE)
+        if der:
+            yield {"id": p.attr(h, obj, CKA_ID), "label": p.attr(h, obj, CKA_LABEL).decode("utf-8", "replace"), "der": der}
 
-    session = open_session(lib, pin)
+
+def _sessions(p: P11):
+    """An open (not logged-in) session on each slot that has a usable token; empty or odd slots are skipped."""
+    found = False
+    last: TokenError | None = None
+    for slot in p.slots():
+        try:
+            h = p.open(slot, None)
+        except TokenError as e:  # e.g. an uninitialised slot, or a reader with nothing in it
+            last = e
+            continue
+        found = True
+        yield slot, h
+    if not found:
+        raise last or TokenError("No token is plugged in")
+
+
+def _login(p: P11, h: int, pin: str) -> None:
+    raw = pin.encode()
+    rv = p.fn["C_Login"](h, CKU_USER, raw, len(raw))
+    if rv not in (CKR_OK, CKR_USER_ALREADY_LOGGED_IN):
+        p._ok(rv, "C_Login")
+
+
+def token_certs(lib: str, pin: str | None):
+    """The certificates on the plugged-in token(s); the PIN is used only if a token shows none without it."""
+    p = P11(lib)
     out = []
-    try:
-        for obj in session.get_objects({Attribute.CLASS: ObjectClass.CERTIFICATE}):
-            der = bytes(obj[Attribute.VALUE])
-            out.append({"id": bytes(obj[Attribute.ID]).hex(), "label": obj[Attribute.LABEL], "thumbprint": hashlib.sha1(der).hexdigest(), "pem": pem_of(der)})
-    finally:
-        session.close()
+    for _slot, h in _sessions(p):
+        try:
+            certs = list(_certs_in(p, h))
+            if not certs and pin:
+                _login(p, h, pin)
+                certs = list(_certs_in(p, h))
+            for c in certs:
+                out.append({"id": c["id"].hex(), "label": c["label"] or "Certificate", "thumbprint": hashlib.sha1(c["der"]).hexdigest(), "pem": pem_of(c["der"])})
+        finally:
+            p.close(h)
     return out
 
 
-def sign_pdf(lib: str, pin: str, pdf: bytes, payload: dict) -> bytes:
-    from pkcs11 import Attribute, ObjectClass
-    from pyhanko import stamp
-    from pyhanko.pdf_utils.incremental_writer import IncrementalPdfFileWriter
-    from pyhanko.sign import fields, signers
-    from pyhanko.sign.pkcs11 import PKCS11Signer
-
-    session = open_session(lib, pin)
-    try:
-        cert_id = None
-        for obj in session.get_objects({Attribute.CLASS: ObjectClass.CERTIFICATE}):
-            if hashlib.sha1(bytes(obj[Attribute.VALUE])).hexdigest() == payload["c"]:
-                cert_id = bytes(obj[Attribute.ID])
-        if cert_id is None:
-            raise PermissionError("The certificate Synapse asked for is not on this token")
-        signer = PKCS11Signer(session, cert_id=cert_id, key_id=cert_id)
-        writer = IncrementalPdfFileWriter(io.BytesIO(pdf))
-        meta = signers.PdfSignatureMetadata(field_name=f"Synapse{int(time.time())}", reason=payload.get("reason") or "Signed", md_algorithm="sha256")
-        text = "\n".join(payload.get("stamp") or ["Digitally signed"])
-        style = stamp.TextStampStyle(stamp_text=text.replace("%", "%%"), border_width=1)
-        # bottom right of the last page
-        spec = fields.SigFieldSpec(meta.field_name, on_page=-1, box=(330, 20, 575, 82))
-        out = signers.PdfSigner(meta, signer=signer, stamp_style=style, new_field_spec=spec).sign_pdf(writer)
-        return out.getvalue()
-    finally:
-        session.close()
+def sign_digest(lib: str, pin: str, payload: dict) -> bytes:
+    """Signs the ticket's SHA-256 digest (as a PKCS#1 DigestInfo) with the key of the ticket's certificate."""
+    p = P11(lib)
+    digest_info = SHA256_DIGEST_INFO + bytes.fromhex(payload["d"])
+    for _slot, h in _sessions(p):
+        try:
+            certs = list(_certs_in(p, h))
+            logged_in = False
+            if not any(hashlib.sha1(c["der"]).hexdigest() == payload["c"] for c in certs):
+                # some tokens show their certificates only after the PIN
+                _login(p, h, pin)
+                logged_in = True
+                certs = list(_certs_in(p, h))
+            cert = next((c for c in certs if hashlib.sha1(c["der"]).hexdigest() == payload["c"]), None)
+            if not cert:
+                continue
+            if not logged_in:
+                _login(p, h, pin)
+            keys = p.find(h, CKO_PRIVATE_KEY, cert["id"]) if cert["id"] else []
+            if not keys:
+                keys = p.find(h, CKO_PRIVATE_KEY)
+                if len(keys) != 1:
+                    raise TokenError("Could not tell which key on the token belongs to the certificate")
+            return p.sign_rsa(h, keys[0], digest_info)
+        finally:
+            p.close(h)
+    raise PermissionError("The certificate Synapse asked for is not on the plugged-in token")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -262,29 +426,21 @@ class Handler(BaseHTTPRequestHandler):
                 with lock:
                     return self._send(200, {"certificates": token_certs(self._lib(cfg), body.get("pin"))})
             if self.path == "/v1/sign":
-                pdf = base64.b64decode(body["pdf"])
-                payload = check_ticket(cfg, body["ticket"], pdf)
+                payload = check_ticket(cfg, body["ticket"])
                 if not body.get("pin"):
                     return self._send(400, {"error": "Enter the token PIN"})
                 with lock:
-                    signed = sign_pdf(self._lib(cfg), body["pin"], pdf, payload)
-                return self._send(200, {"pdf": base64.b64encode(signed).decode()})
+                    sig = sign_digest(self._lib(cfg), body["pin"], payload)
+                return self._send(200, {"signature": base64.b64encode(sig).decode()})
             self._send(404, {"error": "not found"})
         except PermissionError as e:
             self._send(403, {"error": str(e)})
         except LookupError as e:
             self._send(503, {"error": str(e)})
-        except Exception as e:  # token errors: wrong PIN, locked token, unplugged …
-            msg = type(e).__name__
-            if "PinIncorrect" in msg:
-                msg = "Wrong PIN (too many wrong PINs lock the token)"
-            elif "PinLocked" in msg:
-                msg = "The token is locked: unlock it with the maker's tool"
-            elif "NoSuchToken" in msg or "TokenNotPresent" in msg:
-                msg = "No token is plugged in"
-            else:
-                msg = f"{msg}: {e}"
-            self._send(500, {"error": msg})
+        except TokenError as e:
+            self._send(409, {"error": str(e)})
+        except Exception as e:  # noqa: BLE001
+            self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
     def log_message(self, fmt, *args):  # quiet; never logs PINs or documents
         sys.stderr.write("%s %s\n" % (self.log_date_time_string(), fmt % args))
