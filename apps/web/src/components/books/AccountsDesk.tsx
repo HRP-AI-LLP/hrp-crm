@@ -24,6 +24,21 @@ const AUTONOMY: [string, string, string][] = [
 ];
 const SOURCE: Record<string, string> = { rule: 'Your rule', ledger: 'Posted entry', invoice: 'Open invoice', bill: 'Open bill', gateway: 'Razorpay settlement', missing: 'Nothing in the books fits', history: 'Booked like this before', keyword: 'Narration', ai: 'AI', person: 'You', own: 'Own account' };
 const KIND: Record<string, string> = { match: 'Match', receipt: 'Receipt', vendor_payment: 'Vendor payment', categorize: 'Categorise', exclude: 'Exclude', settlement: 'Settlement', new_party: 'New party' };
+const ROLE: Record<string, string> = {
+  existing_customer: 'Customer advance',
+  paid_for_customer: 'Paid for a customer',
+  new_customer: 'New customer',
+  existing_vendor: 'Vendor advance',
+  new_vendor: 'New vendor',
+};
+/** What a suggestion is, in a word or two: who the money is from or to, not just how it is booked. */
+function kindLabel(p: Json): string {
+  if (p.kind === 'new_party') return ROLE[p.payload?.role] ?? (p.amount > 0 ? 'New customer' : 'New vendor');
+  if (p.kind === 'categorize' && p.payload?.ownPersonId) return 'Partner / owner';
+  if (p.kind === 'categorize' && p.payload?.newParty) return p.payload.newParty.type === 'vendor' ? 'Expense · new vendor' : 'Income · new customer';
+  if (p.kind === 'receipt' && p.payload?.payerName) return 'Receipt · new contact';
+  return KIND[p.kind] ?? p.kind;
+}
 const SEV: Record<string, [string, string]> = { risk: ['Risk', 'bad'], warn: ['Needs attention', 'warn'], info: ['Note', 'info'] };
 const AGENT_ICON: Record<string, string> = { bank_clerk: '🏦', bookkeeper: '📒', compliance: '🧾', controller: '📊' };
 
@@ -361,7 +376,7 @@ function Queue() {
                   <td style={{ minWidth: 260, maxWidth: 440, whiteSpace: 'normal' }}>
                     <div>
                       <span className="chip" style={{ marginRight: 6 }}>
-                        {KIND[p.kind] ?? p.kind}
+                        {kindLabel(p)}
                       </span>
                       <b className="small">{p.title}</b>
                     </div>
@@ -425,7 +440,8 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
   const docs = useQuery({ queryKey: ['books', 'desk', 'open-documents'], queryFn: () => get<Json>('/api/v1/books/desk/open-documents') });
   const customers = useQuery({ queryKey: ['books', 'parties', 'accounts_receivable'], queryFn: () => get<{ items: Json[] }>('/api/v1/records/account?limit=200&sort=name&dir=asc') });
   const vendors = useQuery({ queryKey: ['books', 'parties', 'accounts_payable'], queryFn: () => get<{ items: Json[] }>('/api/v1/records/vendor?limit=200&sort=name&dir=asc') });
-  const initialKind = ['receipt', 'vendor_payment', 'categorize', 'new_party'].includes(p.kind) ? p.kind : 'categorize';
+  const initialKind = p.kind === 'categorize' && p.payload?.ownPersonId ? 'partner' : ['receipt', 'vendor_payment', 'categorize', 'new_party'].includes(p.kind) ? p.kind : 'categorize';
+  const own = useQuery({ queryKey: ['books', 'desk', 'own'], queryFn: () => get<Json>('/api/v1/books/desk/own'), staleTime: 30_000 });
   const [kind, setKind] = useState<string>(initialKind);
   const [f, setF] = useState<Json>({
     accountId: p.kind === 'categorize' ? (p.payload.accountId ?? '') : '',
@@ -436,6 +452,10 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
     narration: '',
     party: p.kind === 'new_party' ? (p.payload.partyId ?? 'new') : 'new',
     partyName: p.kind === 'new_party' ? (p.payload.name ?? '') : (p.counterparty ?? ''),
+    contactName: p.payload?.contactName ?? '',
+    personId: p.payload?.ownPersonId ?? 'new',
+    personName: p.kind === 'new_party' && !p.payload?.partyId ? (p.payload.name ?? '') : '',
+    personRole: 'partner',
   });
   const [rule, setRule] = useState(false);
   const [ruleText_, setRuleText] = useState(ruleText(p.description, p.counterparty));
@@ -456,8 +476,10 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
             : kind === 'vendor_payment'
               ? { kind, billId: f.billId || null }
               : kind === 'new_party'
-                ? { kind, partyType: inflow ? 'customer' : 'vendor', partyId: f.party !== 'new' ? f.party : null, partyName: f.party === 'new' ? f.partyName : null }
-                : { kind };
+                ? { kind, partyType: inflow ? 'customer' : 'vendor', partyId: f.party !== 'new' ? f.party : null, partyName: f.party === 'new' ? f.partyName : null, contactName: inflow && f.contactName.trim() ? f.contactName.trim() : null }
+                : kind === 'partner'
+                  ? { kind, personId: f.personId !== 'new' ? f.personId : null, personName: f.personId === 'new' ? f.personName : null, personRole: f.personRole }
+                  : { kind };
       await post(`/api/v1/books/desk/proposals/${p.id}`, { decision: 'approve', change, makeRule: rule && kind === 'categorize' && ruleText_.trim().length >= 2 ? { contains: ruleText_.trim() } : null });
       toast(rule ? 'Booked, and the rule will book lines like it from now on' : 'Booked');
       onDone();
@@ -491,9 +513,21 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
           </div>
         </div>
         <div className="seg">
-          {(inflow ? ['receipt', 'new_party', 'categorize', 'exclude'] : ['vendor_payment', 'new_party', 'categorize', 'exclude']).map((k) => (
+          {(inflow ? ['receipt', 'new_party', 'partner', 'categorize', 'exclude'] : ['vendor_payment', 'new_party', 'partner', 'categorize', 'exclude']).map((k) => (
             <button key={k} aria-pressed={kind === k} onClick={() => setKind(k)}>
-              {k === 'receipt' ? 'Against an invoice' : k === 'vendor_payment' ? 'Against a bill' : k === 'new_party' ? (inflow ? 'Customer advance' : 'Vendor advance') : k === 'categorize' ? 'Book to an account' : 'Not business'}
+              {k === 'receipt'
+                ? 'Against an invoice'
+                : k === 'vendor_payment'
+                  ? 'Against a bill'
+                  : k === 'new_party'
+                    ? inflow
+                      ? 'Customer (or paid for one)'
+                      : 'Vendor'
+                    : k === 'partner'
+                      ? 'Partner / owner money'
+                      : k === 'categorize'
+                        ? 'Book to an account'
+                        : 'Not business'}
             </button>
           ))}
         </div>
@@ -594,9 +628,51 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
                 <input value={f.partyName} maxLength={120} onChange={(e) => setF({ ...f, partyName: e.target.value })} />
               </label>
             )}
+            {inflow && (
+              <label className="field">
+                Paid by (optional: a person at this customer, added as their contact)
+                <input value={f.contactName} maxLength={120} placeholder="e.g. Shalini Pathak" onChange={(e) => setF({ ...f, contactName: e.target.value })} />
+              </label>
+            )}
             <div className="muted small">
               The {inflow ? 'receipt' : 'payment'} is recorded against the {inflow ? 'customer' : 'vendor'} as an advance, so the bank line is booked now; it is applied to the {inflow ? 'invoice' : 'bill'} when that is
               {inflow ? ' raised' : ' entered'} (Payments → allocate).
+            </div>
+          </>
+        )}
+        {kind === 'partner' && (
+          <>
+            <label className="field">
+              Partner / owner
+              <select value={f.personId} onChange={(e) => setF({ ...f, personId: e.target.value })}>
+                <option value="new">➕ Add to the partner list…</option>
+                {((own.data?.persons ?? []) as Json[]).map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.name} ({x.role})
+                  </option>
+                ))}
+              </select>
+            </label>
+            {f.personId === 'new' && (
+              <div className="row" style={{ gap: 8 }}>
+                <label className="field" style={{ flex: 2 }}>
+                  Name
+                  <input value={f.personName} maxLength={120} onChange={(e) => setF({ ...f, personName: e.target.value })} />
+                </label>
+                <label className="field" style={{ flex: 1 }}>
+                  Role
+                  <select value={f.personRole} onChange={(e) => setF({ ...f, personRole: e.target.value })}>
+                    <option value="partner">Partner</option>
+                    <option value="director">Director</option>
+                    <option value="proprietor">Proprietor</option>
+                    <option value="other">Other owner</option>
+                  </select>
+                </label>
+              </div>
+            )}
+            <div className="muted small">
+              {inflow ? 'Money brought in by them (capital or a loan)' : 'Money taken out by them (drawings or a repayment)'} is booked to their own account, not as {inflow ? 'a sale' : 'an expense'}. Someone new is added to
+              Organisation → Partners &amp; directors, and their other lines are recognised from now on.
             </div>
           </>
         )}

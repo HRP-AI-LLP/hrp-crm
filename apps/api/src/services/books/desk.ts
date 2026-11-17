@@ -28,7 +28,8 @@ import { categorize, excludeTxn, matchTxn, reconcile, saveRule, suggestions } fr
 import { recordVendorPayment } from './bills';
 import { syncAllFeeds, syncGatewaySettlements } from './feeds';
 import { assertBooksAdmin, d10, postJournal, r2, sys } from './ledger';
-import { findOwn, identConfidence, loadOwn, type Own } from './own-accounts';
+import { findOwn, identConfidence, loadOwn, type Own, savePerson } from './own-accounts';
+import { isVerificationCredit, type Parsed, parseNarration, sameName, tail4 } from './narration';
 import { stateCode } from '@synapse/shared';
 import { balanceSheet, profitAndLoss, tdsReport, trialBalance } from './reports';
 
@@ -104,7 +105,10 @@ const STOP = new Set(
 );
 /** A stable key for who the money went to or came from: the words of the description without numbers, refs and banking noise. */
 export function payeeKey(description: string, counterparty?: string | null): string {
-  const src = (counterparty && counterparty.trim().length >= 3 ? counterparty : description).toUpperCase();
+  // IMPS lines carry codes around the name ("IMPS/NA/XXXX9042/RRN:…/HDFC BANK/Harsha Rani/IFB"): the name the bank printed
+  const parsed = !counterparty && /^IMPS[/-]/i.test(description.trim()) ? parseNarration(description) : null;
+  const named = parsed?.name ?? null;
+  const src = (counterparty && counterparty.trim().length >= 3 ? counterparty : (named ?? description)).toUpperCase();
   const words = src
     .split(/[^A-Z0-9]+/)
     .filter((w) => w.length >= 3 && !/\d/.test(w) && !STOP.has(w));
@@ -118,6 +122,7 @@ const nameWords = (s: string) =>
     .filter((w) => w.length >= 4 && !STOP.has(w));
 
 const KEYWORDS: { re: RegExp; dir: 'in' | 'out'; key: string; conf: number; label: string }[] = [
+  { re: /\b(CA ?FEES?|CHARTERED|PENTAGON ?CA|CA|GST ?(FEES?|CONSULT\w*|FILING|RETURNS?|REGISTRATION)|ITR ?FILING|AUDIT ?FEES?|AUDIT|LEGAL|ADVOCATE|LAWYER|CONSULTANCY ?FEES?|PROFESSIONAL ?FEES?|COMPLIANCE ?FEES?|ROC ?FILING)\b/, dir: 'out', key: 'professional_fees', conf: 0.72, label: 'professional fees' },
   { re: /\b(CHARGES?|CHGS?|CHRG|SMS ?ALERT|MAINT(ENANCE)? ?CH|COMMISSION|PROCESSING FEE|GST ON CH|DEBIT CARD FEE|ANNUAL FEE|MIN(IMUM)? ?BAL)/, dir: 'out', key: 'bank_charges', conf: 0.82, label: 'bank charges' },
   { re: /\b(INT\.? ?PD|INTEREST|INT ?CR|SB ?INT|FD ?INT|INT\.CREDIT)/, dir: 'in', key: 'interest_income', conf: 0.82, label: 'interest' },
   { re: /\b(TDS|CBDT|OLTAS|ITNS ?281|INCOME ?TAX)/, dir: 'out', key: 'tds_payable', conf: 0.7, label: 'TDS / income-tax deposit' },
@@ -162,10 +167,18 @@ interface Book {
   bills: { id: string; bill_number: string | null; vendor_ref: string | null; vendor_id: string; vendor: string; bill_date: string; balance_due: number; taxable_total: number }[];
   history: { key: string; inflow: boolean; account_id: string; party_type: 'customer' | 'vendor' | null; party_id: string | null }[];
   settlements: { id: string; settlement_id: string; amount: number; fees: number; tax: number; utr: string | null; settled_on: string }[];
-  customers: { id: string; name: string }[];
-  vendors: { id: string; name: string }[];
+  customers: { id: string; name: string; phone?: string | null }[];
+  vendors: { id: string; name: string; phone?: string | null }[];
   rejected: Map<string, Set<string>>;
   own: Own;
+  /** the company's own names, left out of narrations */
+  ownNames: string[];
+  /** people at customers and vendors: a payment from one of them is the customer's */
+  contacts: { id: string; name: string; phone: string | null; account_id: string | null; account: string }[];
+  /** what each customer is billed: invoice totals and the deal's charges, to recognise a payer by amount */
+  billed: { account_id: string; customer: string; amount: number; what: string }[];
+  /** a customer's open work: a receipt without an invoice belongs to it */
+  work: { account_id: string; kind: 'project' | 'deal' | 'sales_order'; id: string; name: string; amount: number | null; balance: number | null }[];
 }
 
 async function loadBook(ctx: RecordCtx): Promise<Book> {
@@ -217,10 +230,46 @@ async function loadBook(ctx: RecordCtx): Promise<Book> {
       order by s.settled_at limit 1000`,
     [ctx.tenantId],
   );
-  const customers = await ctx.tx.query<{ id: string; name: string }>(`select id, name from accounts where tenant_id = $1 and deleted_at is null limit 5000`, [ctx.tenantId]);
-  const vendors = await ctx.tx.query<{ id: string; name: string }>(`select id, name from vendors where tenant_id = $1 and deleted_at is null limit 5000`, [ctx.tenantId]);
+  const customers = await ctx.tx.query<{ id: string; name: string; phone: string | null }>(`select id, name, phone from accounts where tenant_id = $1 and deleted_at is null limit 5000`, [ctx.tenantId]);
+  const vendors = await ctx.tx.query<{ id: string; name: string; phone: string | null }>(`select id, name, phone from vendors where tenant_id = $1 and deleted_at is null limit 5000`, [ctx.tenantId]);
   const own = await loadOwn(ctx);
-  return { accounts, rules, invoices, bills, history, rejected, settlements, customers, vendors, own };
+  const t = await ctx.tx.one<{ name: string; legal: string | null; trade: string | null }>(
+    `select name, settings->'company'->>'legalName' as legal, settings->'company'->>'tradeName' as trade from tenants where id = $1`,
+    [ctx.tenantId],
+  );
+  const ownNames = [t?.legal, t?.trade, t?.name].filter((x): x is string => !!x && x.trim().length >= 3);
+  const contacts = await ctx.tx.query<Book['contacts'][number]>(
+    `select c.id, c.full_name as name, c.phone, c.account_id, coalesce(a.name, '') as account
+       from contacts c left join accounts a on a.tenant_id = c.tenant_id and a.id = c.account_id and a.deleted_at is null
+      where c.tenant_id = $1 and c.deleted_at is null and c.account_id is not null limit 10000`,
+    [ctx.tenantId],
+  );
+  const billed = await ctx.tx.query<{ account_id: string; customer: string; amount: number; what: string }>(
+    `select i.account_id, coalesce(a.name, '') as customer, i.grand_total::float8 as amount, 'invoice ' || i.invoice_number as what
+       from invoices i join accounts a on a.tenant_id = i.tenant_id and a.id = i.account_id
+      where i.tenant_id = $1 and i.deleted_at is null and i.doc_type = 'tax_invoice' and i.status <> 'cancelled' and i.invoice_date > current_date - 550 and i.grand_total > 0
+     union all
+     select d.account_id, coalesce(a.name, ''), (c.unit_price * c.quantity * case when c.tax_inclusive then 1 else 1 + coalesce(c.tax_rate, 0) / 100 end)::float8, 'the charge “' || c.name || '” on ' || d.name
+       from deal_charges c join deals d on d.tenant_id = c.tenant_id and d.id = c.deal_id join accounts a on a.tenant_id = d.tenant_id and a.id = d.account_id
+      where c.tenant_id = $1 and d.deleted_at is null and d.account_id is not null
+     union all
+     select d.account_id, coalesce(a.name, ''), (c.unit_price * c.quantity)::float8, 'the charge “' || c.name || '” on ' || d.name || ' (before GST)'
+       from deal_charges c join deals d on d.tenant_id = c.tenant_id and d.id = c.deal_id join accounts a on a.tenant_id = d.tenant_id and a.id = d.account_id
+      where c.tenant_id = $1 and d.deleted_at is null and d.account_id is not null and not c.tax_inclusive and coalesce(c.tax_rate, 0) > 0`,
+    [ctx.tenantId],
+  );
+  const work = await ctx.tx.query<Book['work'][number]>(
+    `select p.account_id, 'project' as kind, p.id, p.name, null::float8 as amount, null::float8 as balance from projects p
+      where p.tenant_id = $1 and p.account_id is not null and p.status in ('planning','active','on_hold') and p.deleted_at is null
+     union all
+     select d.account_id, 'deal', d.id, d.name, d.amount::float8, null from deals d join pipeline_stages s on s.tenant_id = d.tenant_id and s.id = d.stage_id
+      where d.tenant_id = $1 and d.account_id is not null and d.deleted_at is null and s.category <> 'lost' and coalesce(d.closed_at, now()) > now() - interval '400 days'
+     union all
+     select o.account_id, 'sales_order', o.id, o.name, o.grand_total::float8, o.balance_due::float8 from sales_orders o
+      where o.tenant_id = $1 and o.account_id is not null and o.deleted_at is null and o.status not in ('draft','cancelled') and o.balance_due > 0`,
+    [ctx.tenantId],
+  );
+  return { accounts, rules, invoices, bills, history, rejected, settlements, customers, vendors, own, ownNames, contacts, billed, work };
 }
 
 const money = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -233,20 +282,22 @@ const TRANSFER_WORDS = /\b(SELF|OWN|TRANSFER|TRF|TRFR|IFT|FT|SWEEP|FUND TRANSFER
  * transfer, whatever else it looks like. Without an identifier, money leaving one company account and
  * the same amount arriving in another within two days is suggested as a transfer too (not booked alone).
  */
-async function ownCandidate(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>): Promise<Proposal | null> {
+async function ownCandidate(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>, parsed?: Parsed): Promise<Proposal | null> {
   const inflow = t.amount > 0;
   const amt = Math.abs(t.amount);
-  const hit = findOwn(book.own, t);
+  const hit = findOwn(book.own, t, parsed);
   if (hit?.type === 'person') {
     const accountId = inflow ? hit.person.account_in : hit.person.account_out;
     const role = { partner: 'partner', director: 'director', proprietor: 'proprietor', other: 'owner' }[hit.person.role];
     return {
       txnId: t.id,
       kind: 'categorize',
-      title: `${inflow ? `From ${hit.person.name}` : `To ${hit.person.name}`} (own transfer) → ${book.accounts.find((a) => a.id === accountId)?.name ?? 'their account'}`,
-      reason: `The narration has ${hit.ident.value}, listed as ${hit.person.name}'s (${role}) personal account: ${inflow ? 'money brought in' : 'money taken out'}, not ${inflow ? 'a sale' : 'an expense'}`,
-      payload: { accountId, ownPersonId: hit.person.id, ownIdentId: hit.ident.id },
-      confidence: identConfidence(hit.ident.kind),
+      title: `${inflow ? `From ${hit.person.name}` : `To ${hit.person.name}`} (${role}) → ${book.accounts.find((a) => a.id === accountId)?.name ?? 'their account'}`,
+      reason: hit.implied
+        ? `${hit.person.name} is a ${role} in your partner list (Organisation → Partners & directors), named on this line${hit.ident.kind === 'account' ? ` with their account ending ${hit.ident.value.slice(-4)}` : ''}: ${inflow ? 'money brought in (capital or a loan)' : 'money taken out (drawings or repayment)'}, not ${inflow ? 'a sale' : 'an expense'}`
+        : `The narration has ${hit.ident.value}, listed as ${hit.person.name}'s (${role}) personal account: ${inflow ? 'money brought in' : 'money taken out'}, not ${inflow ? 'a sale' : 'an expense'}`,
+      payload: { accountId, ownPersonId: hit.person.id, ownIdentId: hit.ident.id || null },
+      confidence: hit.implied ? (hit.ident.kind === 'account' ? 0.96 : 0.9) : identConfidence(hit.ident.kind),
       source: 'own',
     };
   }
@@ -289,6 +340,106 @@ async function ownCandidate(ctx: RecordCtx, t: Txn, book: Book, taken: Set<strin
   };
 }
 
+interface PartyHit {
+  type: 'customer' | 'vendor';
+  id: string;
+  name: string;
+  /** why: shown to the person reviewing */
+  via: string;
+  conf: number;
+  /** the person who paid, when not the customer itself (added as their contact) */
+  contact?: { id: string | null; name: string } | null;
+}
+
+/** Who a bank line is from or to: a customer or vendor by name, a customer's contact by name, or by phone digits. */
+function resolveParty(t: Txn, parsed: Parsed, book: Book): PartyHit | null {
+  const inflow = t.amount > 0;
+  const name = parsed.name;
+  const list = inflow ? book.customers : book.vendors;
+  if (name) {
+    const direct = list.filter((x) => sameName(name, x.name));
+    if (direct.length === 1) return { type: inflow ? 'customer' : 'vendor', id: direct[0]!.id, name: direct[0]!.name, via: `the narration names ${direct[0]!.name}`, conf: 0.95 };
+    if (inflow) {
+      const people = book.contacts.filter((c) => c.account_id && sameName(name, c.name));
+      const accounts = [...new Set(people.map((c) => c.account_id!))];
+      if (accounts.length === 1) {
+        const c = people[0]!;
+        return { type: 'customer', id: c.account_id!, name: c.account, via: `${c.name} is a contact at ${c.account}`, conf: 0.93, contact: { id: c.id, name: c.name } };
+      }
+    }
+  } else {
+    // no structured name: a customer or vendor whose name is in the text
+    const desc = t.description.toUpperCase();
+    const inText = list.filter((x) => {
+      const n = nameWords(x.name);
+      return n.length > 0 && n.every((w) => desc.includes(w));
+    });
+    if (inText.length === 1) return { type: inflow ? 'customer' : 'vendor', id: inText[0]!.id, name: inText[0]!.name, via: `the narration names ${inText[0]!.name}`, conf: 0.9 };
+  }
+  // masked digits: a UPI id holding a mobile number (XXXXXX7936@ybl), or an account's last digits
+  const digits = parsed.vpaDigits ?? (parsed.channel === 'upi' ? parsed.masked : null);
+  if (digits && inflow) {
+    const byPhone = new Map<string, { name: string; contact?: { id: string; name: string } }>();
+    for (const a of book.customers) if (tail4(a.phone) === digits) byPhone.set(a.id, { name: a.name });
+    for (const c of book.contacts) if (c.account_id && tail4(c.phone) === digits) byPhone.set(c.account_id, { name: c.account, contact: { id: c.id, name: c.name } });
+    if (byPhone.size === 1) {
+      const [id, v] = [...byPhone.entries()][0]!;
+      return { type: 'customer', id, name: v.name, via: `the UPI id ends in ${digits}, the phone of ${v.contact ? `${v.contact.name} at ${v.name}` : v.name}`, conf: 0.85, contact: v.contact ?? null };
+    }
+  }
+  if (digits && !inflow) {
+    const hits = book.vendors.filter((v) => tail4(v.phone) === digits);
+    if (hits.length === 1) return { type: 'vendor', id: hits[0]!.id, name: hits[0]!.name, via: `the UPI id ends in ${digits}, ${hits[0]!.name}'s phone`, conf: 0.8 };
+  }
+  return null;
+}
+
+/** An unknown payer whose amount is exactly what one customer is billed: most likely paying for them. */
+function payerFor(t: Txn, book: Book): PartyHit | null {
+  if (t.amount <= 0) return null;
+  const amt = t.amount;
+  const hits = book.billed.filter((b) => Math.abs(b.amount - amt) <= 1);
+  const accounts = [...new Set(hits.map((h) => h.account_id))];
+  if (accounts.length !== 1) return null;
+  const h = hits[0]!;
+  return { type: 'customer', id: h.account_id, name: h.customer, via: `${money(amt)} is what ${h.customer} is billed (${h.what})`, conf: 0.72 };
+}
+
+/** The open work of a customer that a receipt without an invoice most likely belongs to. */
+function workFor(book: Book, accountId: string, amt: number) {
+  const mine = book.work.filter((w) => w.account_id === accountId);
+  if (!mine.length) return null;
+  // an order whose balance this pays (in full, or less TDS of 1–10% on the value before GST)
+  const so = mine.filter((w) => w.kind === 'sales_order' && w.balance);
+  const fit = so.find((w) => Math.abs(w.balance! - amt) <= 1) ?? so.find((w) => [0.01, 0.02, 0.05, 0.1].some((r) => Math.abs(w.balance! - (w.balance! / 1.18) * r - amt) <= Math.max(2, w.balance! * 0.002)));
+  if (fit) return { ...fit, why: Math.abs(fit.balance! - amt) <= 1 ? `pays the balance of order ${fit.name}` : `pays order ${fit.name} less TDS` };
+  const projects = mine.filter((w) => w.kind === 'project');
+  if (projects.length === 1) return { ...projects[0]!, why: `for the open project ${projects[0]!.name}` };
+  const deals = mine.filter((w) => w.kind === 'deal');
+  if (deals.length === 1) return { ...deals[0]!, why: `for the deal ${deals[0]!.name}` };
+  if (so.length === 1) return { ...so[0]!, why: `for the open order ${so[0]!.name}` };
+  return null;
+}
+
+/** Lines that are neither a customer nor a vendor: fixed deposits, UPI collection settlements, bank account checks, refunds. */
+async function specialCandidate(ctx: RecordCtx, t: Txn, parsed: Parsed, book: Book): Promise<Proposal | null> {
+  const inflow = t.amount > 0;
+  const amt = Math.abs(t.amount);
+  const sysId = async (key: string) => book.accounts.find((a) => a.system_key === key)?.id ?? (await sys(ctx.tx, ctx.tenantId, key));
+  const cat = async (key: string, title: string, reason: string, confidence: number): Promise<Proposal> => ({ txnId: t.id, kind: 'categorize', title, reason, payload: { accountId: await sysId(key) }, confidence, source: 'keyword' });
+  if (isVerificationCredit(t.amount, t.description, parsed))
+    return cat('other_income', `${money(amt)} account check → Other income`, `A ${money(amt)} credit${parsed.name ? ` from ${parsed.name}` : ''} is a bank or payment gateway confirming the account (penny drop), not a customer's payment`, 0.9);
+  if (parsed.special === 'fd' && !inflow) return cat('fixed_deposits', `Fixed deposit made → Fixed deposits`, 'The narration opens a fixed deposit: money moved from the current account into a deposit (an asset), not an expense', 0.95);
+  if (parsed.special === 'fd_closure' && inflow) return cat('fixed_deposits', `Fixed deposit closed → Fixed deposits`, 'The narration closes or matures a fixed deposit: the deposit comes back (book any interest separately)', 0.85);
+  if (parsed.special === 'upi_settlement' && inflow)
+    return cat('customer_advances', `UPI collections → Customer advances (to be matched to customers)`, 'A UPI collection settlement pays out what customers paid through your UPI QR / collect link in one sum. It is kept as customer receipts until matched to the customers who paid', 0.6);
+  if (parsed.special === 'refund' && inflow) {
+    const kw = KEYWORDS.find((k) => k.dir === 'out' && k.re.test(`${parsed.merchant ?? ''} ${t.description}`.toUpperCase()));
+    if (kw) return cat(kw.key, `Refund from ${parsed.merchant ?? 'merchant'} → ${book.accounts.find((a) => a.system_key === kw.key)?.name ?? kw.label}`, `A refund from ${parsed.merchant ?? 'the merchant'}: it reduces the ${kw.label} it was paid as`, 0.82);
+  }
+  return null;
+}
+
 /** Every rule-based candidate for one bank line, best first. */
 async function candidates(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string> = new Set()): Promise<Proposal[]> {
   const out: Proposal[] = [];
@@ -298,9 +449,17 @@ async function candidates(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>
   const descN = norm(`${t.description} ${t.reference ?? ''}`);
   const acc = (id: string) => book.accounts.find((a) => a.id === id);
 
+  const raw = parseNarration(t.description, book.ownNames);
+  // a name counts only where the bank's format says where it is (IMPS, NEFT, UPI…), not words of a free-text line
+  const parsed: Parsed = ['imps', 'neft', 'rtgs', 'upi', 'card', 'refund', 'cheque'].includes(raw.channel) ? raw : { ...raw, name: null };
   // 0. the workspace's own money: an owner's / partner's personal account, or another company account
-  const own = await ownCandidate(ctx, t, book, taken);
+  const own = await ownCandidate(ctx, t, book, taken, parsed);
   if (own) return [own];
+  // 0b. fixed deposits, UPI collection settlements, ₹1 account checks, refunds
+  const special = await specialCandidate(ctx, t, parsed, book);
+  if (special) out.push(special);
+  // who it is from or to: a customer, a customer's contact, a vendor
+  const party = resolveParty(t, parsed, book);
 
   // 1. the workspace's own bank rules
   const rule = book.rules.find((r) => (!r.bank_account_id || r.bank_account_id === t.bank_account_id) && desc.includes(r.contains.toUpperCase()) && (r.direction === 'any' || (r.direction === 'in') === inflow));
@@ -359,7 +518,7 @@ async function candidates(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>
       .filter((i) => !taken.has(i.id))
       .map((i) => {
         const numHit = i.invoice_number && norm(i.invoice_number).length >= 3 && descN.includes(norm(i.invoice_number).replace(/^0+/, ''));
-        const nameHit = nameWords(i.customer).some((w) => desc.includes(w));
+        const nameHit = (party?.type === 'customer' && party.id === i.account_id) || nameWords(i.customer).some((w) => desc.includes(w));
         const exact = Math.abs(i.balance_due - amt) <= 0.5;
         const tdsGap = !exact && amt < i.balance_due && amt >= i.balance_due * 0.88 ? r2(i.balance_due - amt) : 0;
         // TDS of 1%, 2%, 5% or 10% on the taxable value explains the short receipt
@@ -390,7 +549,15 @@ async function candidates(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>
         ]
           .filter(Boolean)
           .join('; '),
-        payload: { customerId: top.i.account_id, invoiceId: top.i.id, invoiceNumber: top.i.invoice_number, settle: top.i.balance_due, tdsAmount: top.tdsGap },
+        payload: {
+          customerId: top.i.account_id,
+          invoiceId: top.i.id,
+          invoiceNumber: top.i.invoice_number,
+          settle: top.i.balance_due,
+          tdsAmount: top.tdsGap,
+          // paid by someone at the customer: added as their contact when approved
+          payerName: parsed.name && !sameName(parsed.name, top.i.customer) && !(party?.contact && sameName(parsed.name, party.contact.name)) ? parsed.name : null,
+        },
         confidence: conf,
         source: 'invoice',
       });
@@ -401,7 +568,7 @@ async function candidates(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>
       .map((b) => {
         const ref = b.vendor_ref ?? b.bill_number ?? '';
         const numHit = norm(ref).length >= 3 && descN.includes(norm(ref).replace(/^0+/, ''));
-        const nameHit = nameWords(b.vendor).some((w) => desc.includes(w));
+        const nameHit = (party?.type === 'vendor' && party.id === b.vendor_id) || nameWords(b.vendor).some((w) => desc.includes(w));
         const exact = Math.abs(b.balance_due - amt) <= 0.5;
         let c = 0;
         if (exact && numHit) c = 0.98;
@@ -457,41 +624,74 @@ async function candidates(ctx: RecordCtx, t: Txn, book: Book, taken: Set<string>
   const kw = KEYWORDS.find((k) => k.dir === (inflow ? 'in' : 'out') && k.re.test(desc));
   if (kw) {
     const id = book.accounts.find((a) => a.system_key === kw.key)?.id ?? (await sys(ctx.tx, ctx.tenantId, kw.key).catch(() => null));
-    if (id)
+    if (id) {
+      // the vendor named on the line goes on the entry (created when approved if new)
+      const vendor = !inflow && party?.type === 'vendor' ? party : null;
+      const newVendor = !inflow && !vendor && parsed.name ? parsed.name : null;
       out.push({
         txnId: t.id,
         kind: 'categorize',
-        title: `${inflow ? 'Receipt' : 'Payment'} → ${acc(id)?.name ?? kw.label}`,
-        reason: `The narration looks like ${kw.label}`,
-        payload: { accountId: id },
+        title: `${inflow ? 'Receipt' : 'Payment'} → ${acc(id)?.name ?? kw.label}${vendor ? ` · ${vendor.name}` : newVendor ? ` · ${newVendor} (new vendor)` : ''}`,
+        reason: `The narration looks like ${kw.label}${parsed.remark ? ` (“${parsed.remark}”)` : ''}${vendor ? `; ${vendor.via}` : newVendor ? `; ${newVendor} is added as a vendor` : ''}`,
+        payload: { accountId: id, ...(vendor ? { partyType: 'vendor', partyId: vendor.id } : newVendor ? { newParty: { type: 'vendor', name: newVendor } } : {}) },
         confidence: kw.conf,
         source: 'keyword',
       });
+    }
   }
 
-  // 6. nothing in the books explains it: the party may be missing. Money in → a customer receipt kept as
-  // an advance (allocated when the invoice is raised); money out → a vendor payment kept as an advance.
-  if (!out.length && key) {
-    const words = key.split(' ').filter((w) => !GENERIC.has(w));
-    if (words.length) {
-      const list = inflow ? book.customers : book.vendors;
-      const known = list.find((x) => {
-        const n = nameWords(x.name);
-        return n.length > 0 && n.every((w) => desc.includes(w) || (t.counterparty ?? '').toUpperCase().includes(w));
+  // 6. no invoice, bill, rule or habit explains it: who is it, and what to create
+  // only when nothing else fits (a rejected suggestion is not replaced by a guess)
+  if (!out.length) {
+    const via = party ?? payerFor(t, book);
+    if (via && via.type === (inflow ? 'customer' : 'vendor')) {
+      const w = inflow ? workFor(book, via.id, amt) : null;
+      // the person who paid, when it is someone at the customer and not yet their contact
+      const payer = inflow && parsed.name && !sameName(parsed.name, via.name) && !via.contact ? parsed.name : null;
+      const role = via === party ? (inflow ? 'existing_customer' : 'existing_vendor') : 'paid_for_customer';
+      out.push({
+        txnId: t.id,
+        kind: 'new_party',
+        title: inflow
+          ? `${role === 'paid_for_customer' ? `Receipt from ${via.name}${payer ? `, paid by ${payer}` : ''}` : `Advance from ${via.name}`} (existing customer)${w ? ` · ${w.kind.replace('_', ' ')} ${w.name}` : ''}`
+          : `Advance to ${via.name} (existing vendor)`,
+        reason: [
+          via.via,
+          `no open ${inflow ? 'invoice' : 'bill'} for ${money(amt)}, so it is kept as an advance and applied when the ${inflow ? 'invoice is raised' : 'bill is entered'}`,
+          w ? `linked to the ${w.kind.replace('_', ' ')} ${w.name} (${w.why})` : null,
+          payer ? `${payer} is added as a contact at ${via.name}` : null,
+        ]
+          .filter(Boolean)
+          .join('; '),
+        payload: {
+          partyType: inflow ? 'customer' : 'vendor',
+          partyId: via.id,
+          name: via.name,
+          role,
+          contactName: payer,
+          ...(w ? { [w.kind === 'project' ? 'projectId' : w.kind === 'deal' ? 'dealId' : 'salesOrderId']: w.id, workName: w.name } : {}),
+        },
+        confidence: role === 'paid_for_customer' ? via.conf : Math.min(0.85, via.conf),
+        source: 'missing',
       });
-      const name = known?.name ?? partyName(t.counterparty ?? key);
-      if (known || inflow || t.counterparty || amt >= 2000)
+    } else if (key || parsed.name) {
+      const words = (key ?? '').split(' ').filter((w) => !GENERIC.has(w));
+      const name = parsed.name ?? (words.length ? partyName(t.counterparty ?? key) : null);
+      if (name && (inflow || t.counterparty || parsed.name || amt >= 2000)) {
+        const looksPerson = /^[A-Za-z]+( [A-Za-z]+){1,2}$/.test(name) && !/\b(LLP|PVT|LTD|LIMITED|TRADERS|ENTERPRISES|SOLUTIONS|SERVICES|FOUNDATION|TRUST|SOCIETY|INDIA|CORPORATION|BANK|STORE|MART|CO)\b/i.test(name);
         out.push({
           txnId: t.id,
           kind: 'new_party',
-          title: inflow ? `${known ? 'Advance from' : 'New customer'} ${name}: receipt kept as an advance` : `${known ? 'Advance to' : 'New vendor'} ${name}: payment kept as an advance`,
-          reason: known
-            ? `${name} is ${inflow ? 'a customer' : 'a vendor'} but has no open ${inflow ? 'invoice' : 'bill'} for ${money(amt)}; it is applied when one is ${inflow ? 'raised' : 'entered'}`
-            : `No ${inflow ? 'customer, invoice' : 'vendor, bill'} or rule fits; ${inflow ? 'a customer' : 'a vendor'} “${name}” is created from the narration. Change it if it is something else (e.g. capital, a loan, an expense)`,
-          payload: { partyType: inflow ? 'customer' : 'vendor', partyId: known?.id ?? null, name },
-          confidence: known ? 0.6 : 0.4,
+          title: inflow ? `New customer: ${name}` : `New vendor: ${name}`,
+          reason:
+            `No ${inflow ? 'customer, contact, invoice' : 'vendor, bill'} or rule matches ${name}; ${inflow ? 'a customer' : 'a vendor'} “${name}” is created and the ${inflow ? 'receipt' : 'payment'} kept as an advance.` +
+            (inflow && looksPerson ? ` If ${name} pays for one of your customers, choose “Paid for a customer” to add them as that customer's contact.` : '') +
+            (looksPerson ? ` If ${name} is a partner or owner, choose “Partner / owner money”.` : ' Change it if it is something else (capital, a loan, an expense).'),
+          payload: { partyType: inflow ? 'customer' : 'vendor', partyId: null, name, role: inflow ? 'new_customer' : 'new_vendor' },
+          confidence: 0.4,
           source: 'missing',
         });
+      }
     }
   }
 
@@ -507,12 +707,37 @@ const partyName = (s: string) =>
     .replace(/\b[a-z]/g, (c) => c.toUpperCase())
     .slice(0, 120);
 
+/** A person at a customer (who paid on their behalf): found among their contacts, or added. */
+async function contactAt(ctx: RecordCtx, accountId: string, name: string): Promise<{ id: string; created: boolean; events: RecordEvent[] }> {
+  const have = await ctx.tx.query<{ id: string; full_name: string }>(`select id, full_name from contacts where tenant_id = $1 and account_id = $2 and deleted_at is null`, [ctx.tenantId, accountId]);
+  const same = have.find((c) => sameName(c.full_name, name));
+  if (same) return { id: same.id, created: false, events: [] };
+  const words = name.trim().split(/\s+/);
+  const last = words.length > 1 ? words.pop()! : words[0]!;
+  const first = words.length && words[0] !== last ? words.join(' ') : null;
+  const r = await createRecord(ctx, 'contact', { first_name: first, last_name: last, account_id: accountId });
+  return { id: String(r.record.id), created: true, events: r.events };
+}
+
+/** A customer or vendor by name: the existing one (however spelt), or a new one. */
+async function partyByName(ctx: RecordCtx, type: 'customer' | 'vendor', name: string): Promise<{ id: string; created: boolean; events: RecordEvent[] }> {
+  const rows = await ctx.tx.query<{ id: string; name: string }>(`select id, name from ${type === 'customer' ? 'accounts' : 'vendors'} where tenant_id = $1 and deleted_at is null`, [ctx.tenantId]);
+  const same = rows.find((r) => sameName(r.name, name));
+  if (same) return { id: same.id, created: false, events: [] };
+  const r = await createRecord(ctx, type === 'customer' ? 'account' : 'vendor', type === 'customer' ? { name } : { name, notes: 'Created by the accounts desk from a bank line' });
+  return { id: String(r.record.id), created: true, events: r.events };
+}
+
 /**
  * Records a bank line as money from a customer / to a vendor with nothing to apply it to yet (an
  * advance), creating the customer or vendor when it doesn't exist. It is applied to the invoice or bill
  * later (Payments → allocate, or automatically when the document is created).
  */
-async function recordAdvance(ctx: RecordCtx, txnId: string, party: { partyType: 'customer' | 'vendor'; partyId?: string | null; name?: string | null }) {
+async function recordAdvance(
+  ctx: RecordCtx,
+  txnId: string,
+  party: { partyType: 'customer' | 'vendor'; partyId?: string | null; name?: string | null; contactName?: string | null; dealId?: string | null; projectId?: string | null; salesOrderId?: string | null },
+) {
   const t = await ctx.tx.one<{ status: string; amount: string; txn_date: Date; description: string; reference: string | null; bank_account_id: string }>(
     `select status, amount, txn_date, description, reference, bank_account_id from bank_transactions where tenant_id = $1 and id = $2`,
     [ctx.tenantId, txnId],
@@ -528,21 +753,24 @@ async function recordAdvance(ctx: RecordCtx, txnId: string, party: { partyType: 
   if (!partyId) {
     const name = (party.name ?? '').trim();
     if (name.length < 2) throw badRequest('Name the customer or vendor');
-    const existing = await ctx.tx.one<{ id: string }>(`select id from ${inflow ? 'accounts' : 'vendors'} where tenant_id = $1 and deleted_at is null and lower(name) = lower($2) limit 1`, [ctx.tenantId, name]);
-    if (existing) partyId = existing.id;
-    else {
-      const r = await createRecord(ctx, inflow ? 'account' : 'vendor', inflow ? { name } : { name, notes: 'Created by the accounts desk from a bank line' });
-      events.push(...r.events);
-      partyId = String(r.record.id);
-      created = true;
-    }
+    const r = await partyByName(ctx, inflow ? 'customer' : 'vendor', name);
+    events.push(...r.events);
+    partyId = r.id;
+    created = r.created;
+  }
+  // the person who paid for the customer becomes their contact
+  let contactId: string | null = null;
+  if (inflow && party.contactName && party.contactName.trim().length >= 2) {
+    const c = await contactAt(ctx, partyId, party.contactName.trim());
+    events.push(...c.events);
+    contactId = c.id;
   }
   const amt = Math.abs(Number(t.amount));
   const date = d10(t.txn_date);
   const ref = (t.reference ?? t.description).slice(0, 60);
   const note = `Recorded by the accounts desk from the bank line of ${date}: ${t.description.slice(0, 200)}`;
   const r = inflow
-    ? await recordPayment(ctx, { accountId: partyId, amount: amt, date, mode: 'bank_transfer', reference: ref, notes: note, depositAccountId: gl })
+    ? await recordPayment(ctx, { accountId: partyId, amount: amt, date, mode: 'bank_transfer', reference: ref, notes: party.contactName ? `${note} (paid by ${party.contactName})` : note, depositAccountId: gl, salesOrderId: party.salesOrderId ?? undefined })
     : await recordVendorPayment(ctx, { vendorId: partyId, amount: amt, date, mode: 'bank_transfer', paidThroughId: gl, reference: ref, notes: note });
   events.push(...r.events);
   const l = await ctx.tx.one<{ id: string }>(
@@ -552,7 +780,10 @@ async function recordAdvance(ctx: RecordCtx, txnId: string, party: { partyType: 
   );
   if (!l) throw badRequest('The advance was recorded but not posted to this bank account');
   await matchTxn(ctx, txnId, l.id);
-  return { result: { [inflow ? 'paymentId' : 'vendorPaymentId']: r.id, paymentNumber: r.number, partyId, partyCreated: created }, events };
+  // what the money is for: the customer's project or deal
+  if (inflow && (party.dealId || party.projectId))
+    await ctx.tx.query(`update payments set deal_id = coalesce($3, deal_id), project_id = coalesce($4, project_id) where tenant_id = $1 and id = $2`, [ctx.tenantId, r.id, party.dealId ?? null, party.projectId ?? null]);
+  return { result: { [inflow ? 'paymentId' : 'vendorPaymentId']: r.id, paymentNumber: r.number, partyId, partyCreated: created, contactId }, events };
 }
 
 /* ───────────────────────── bookkeeper: AI for the rest ───────────────────────── */
@@ -686,14 +917,24 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
       await matchTxn(ctx, p.bank_txn_id, String(pl.lineId));
       return { result: { lineId: pl.lineId }, events: [] };
     case 'categorize': {
-      const r = await categorize(ctx, p.bank_txn_id, { accountId: String(pl.accountId), partyType: pl.partyType ?? null, partyId: pl.partyId ?? null, description: pl.narration ?? null });
-      return { result: r, events: [] };
+      // a vendor (or customer) named on the line and new to the books is created first
+      let partyType = pl.partyType ?? null;
+      let partyId = pl.partyId ?? null;
+      const events: RecordEvent[] = [];
+      const np = pl.newParty as { type: 'customer' | 'vendor'; name: string } | undefined;
+      if (!partyId && np?.name) {
+        const r = await partyByName(ctx, np.type, np.name);
+        events.push(...r.events);
+        [partyType, partyId] = [np.type, r.id];
+      }
+      const r = await categorize(ctx, p.bank_txn_id, { accountId: String(pl.accountId), partyType, partyId, description: pl.narration ?? null });
+      return { result: { ...r, partyId }, events };
     }
     case 'exclude':
       await excludeTxn(ctx, p.bank_txn_id);
       return { result: {}, events: [] };
     case 'new_party':
-      return recordAdvance(ctx, p.bank_txn_id, { partyType: pl.partyType, partyId: pl.partyId, name: pl.name });
+      return recordAdvance(ctx, p.bank_txn_id, { partyType: pl.partyType, partyId: pl.partyId, name: pl.name, contactName: pl.contactName, dealId: pl.dealId, projectId: pl.projectId, salesOrderId: pl.salesOrderId });
     case 'settlement': {
       const st = await ctx.tx.one<{ amount: number; fees: number; tax: number; settlement_id: string; utr: string | null; bank_txn_id: string | null }>(
         `select amount::float8 as amount, fees::float8 as fees, tax::float8 as tax, settlement_id, utr, bank_txn_id from gateway_settlements where tenant_id = $1 and id = $2 for update`,
@@ -745,7 +986,10 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
         allocations: [{ invoiceId: String(pl.invoiceId), amount: settle }],
       });
       await matchPosted('payment', r.id);
-      return { result: { paymentId: r.id, paymentNumber: r.number }, events: r.events };
+      const events = [...r.events];
+      // paid by someone at the customer: they become the customer's contact
+      if (pl.payerName) events.push(...(await contactAt(ctx, inv.account_id, String(pl.payerName))).events);
+      return { result: { paymentId: r.id, paymentNumber: r.number }, events };
     }
     case 'vendor_payment': {
       const bill = await ctx.tx.one<{ balance_due: number; vendor_id: string; status: string }>(`select balance_due::float8 as balance_due, vendor_id, status from bills where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, pl.billId]);
@@ -809,6 +1053,7 @@ export async function runBookkeeper(deps: DeskDeps, opts: { trigger?: string; ba
       `update acct_proposals p set status = 'stale' from bank_transactions t where p.tenant_id = $1 and p.status = 'pending' and t.tenant_id = p.tenant_id and t.id = p.bank_txn_id and t.status <> 'unmatched'`,
       [ctx.tenantId],
     );
+
     const txns = await ctx.tx.query<Txn>(
       `select t.id, t.bank_account_id, b.gl_account_id, to_char(t.txn_date, 'YYYY-MM-DD') as txn_date, t.description, t.reference, t.counterparty, t.amount::float8 as amount
          from bank_transactions t join bank_accounts b on b.tenant_id = t.tenant_id and b.id = t.bank_account_id
@@ -912,9 +1157,15 @@ export const decideSchema = z.object({
   /** a person's correction: what to do instead */
   change: z
     .object({
-      kind: z.enum(['categorize', 'receipt', 'vendor_payment', 'match', 'exclude', 'new_party']),
+      kind: z.enum(['categorize', 'receipt', 'vendor_payment', 'match', 'exclude', 'new_party', 'partner']),
       /** new_party: the customer / vendor (existing id, or a name to create) */
       partyName: z.string().trim().min(2).max(120).nullish(),
+      /** new_party, money in: the person who paid for the customer (added as their contact) */
+      contactName: z.string().trim().min(2).max(120).nullish(),
+      /** partner: who (an existing partner, or a name to add to the partner list) and their role */
+      personId: z.string().uuid().nullish(),
+      personName: z.string().trim().min(2).max(120).nullish(),
+      personRole: z.enum(['partner', 'director', 'proprietor', 'other']).nullish(),
       accountId: z.string().uuid().nullish(),
       partyType: z.enum(['customer', 'vendor']).nullish(),
       partyId: z.string().uuid().nullish(),
@@ -939,7 +1190,28 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
     return { ok: true, status: 'rejected', events: [] as RecordEvent[] };
   }
   let row: Row = p;
-  if (input.change) {
+  if (input.change?.kind === 'partner') {
+    // money between the business and a partner / owner: their capital, loan or drawings ledger
+    const c = input.change;
+    const t = await ctx.tx.one<{ amount: string }>(`select amount from bank_transactions where tenant_id = $1 and id = $2`, [ctx.tenantId, p.bank_txn_id]);
+    let person = c.personId ? await ctx.tx.one<{ id: string; name: string; account_in: string; account_out: string }>(`select id, name, account_in, account_out from acct_persons where tenant_id = $1 and id = $2`, [ctx.tenantId, c.personId]) : null;
+    if (!person) {
+      if (!c.personName) throw badRequest('Choose the partner or give their name');
+      const all = await ctx.tx.query<{ id: string; name: string; account_in: string; account_out: string }>(`select id, name, account_in, account_out from acct_persons where tenant_id = $1`, [ctx.tenantId]);
+      person = all.find((x) => sameName(x.name, c.personName!)) ?? null;
+      if (!person) {
+        const created = await savePerson(ctx, null, { name: c.personName, role: c.personRole ?? undefined, identifiers: [] });
+        person = await ctx.tx.one<{ id: string; name: string; account_in: string; account_out: string }>(`select id, name, account_in, account_out from acct_persons where tenant_id = $1 and id = $2`, [ctx.tenantId, (created as { id: string }).id]);
+      }
+    }
+    const inflow = Number(t!.amount) > 0;
+    await ctx.tx.query(`update acct_proposals set status = 'rejected', decided_at = now(), decided_by = app.current_user_id() where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
+    row = (await ctx.tx.one<Row>(
+      `insert into acct_proposals (tenant_id, agent, bank_txn_id, kind, title, reason, payload, confidence, source) values ($1,'bookkeeper',$2,'categorize',$3,'Changed by a person: partner / owner money',$4,1,'person')
+       returning id, bank_txn_id, kind, payload, status, title`,
+      [ctx.tenantId, p.bank_txn_id, `${inflow ? 'From' : 'To'} ${person!.name} (partner / owner)`, JSON.stringify({ accountId: inflow ? person!.account_in : person!.account_out, ownPersonId: person!.id })],
+    ))!;
+  } else if (input.change) {
     const c = input.change;
     const payload: Record<string, unknown> =
       c.kind === 'categorize'
@@ -951,7 +1223,7 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
             : c.kind === 'match'
               ? { lineId: c.lineId }
               : c.kind === 'new_party'
-                ? { partyType: c.partyType ?? null, partyId: c.partyId ?? null, name: c.partyName ?? null }
+                ? { partyType: c.partyType ?? null, partyId: c.partyId ?? null, name: c.partyName ?? null, contactName: c.contactName ?? null }
                 : {};
     if (c.kind === 'categorize' && !c.accountId) throw badRequest('Choose the account');
     if (c.kind === 'receipt' && !c.invoiceId) throw badRequest('Choose the invoice');
@@ -968,6 +1240,8 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
   }
   const r = await applySafely(ctx, row, 'person');
   if (!r.ok) throw badRequest(r.error);
+  // what was just learnt (a new customer, contact, vendor or partner) is used for the other lines from the same payer
+  const refreshed = await reproposeSimilar(ctx, row.bank_txn_id!);
   if (input.makeRule && row.kind === 'categorize') {
     const t = await ctx.tx.one<{ amount: string; bank_account_id: string }>(`select amount, bank_account_id from bank_transactions where tenant_id = $1 and id = $2`, [ctx.tenantId, row.bank_txn_id]);
     const acc = await ctx.tx.one<{ name: string }>(`select name from gl_accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, row.payload.accountId]);
@@ -980,7 +1254,40 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
       partyId: (row.payload.partyId as string | null) ?? null,
     });
   }
-  return { ok: true, status: 'applied', result: r.result, events: r.events };
+  return { ok: true, status: 'applied', result: r.result, events: r.events, refreshed };
+}
+
+/**
+ * After a person's decision: the other pending lines from the same payer are looked at again, so a
+ * customer, contact, vendor or partner created a moment ago is used for them (each is then reviewed as usual).
+ */
+async function reproposeSimilar(ctx: RecordCtx, txnId: string) {
+  const t = await ctx.tx.one<{ description: string; counterparty: string | null }>(`select description, counterparty from bank_transactions where tenant_id = $1 and id = $2`, [ctx.tenantId, txnId]);
+  if (!t) return 0;
+  const key = payeeKey(t.description, t.counterparty);
+  if (!key) return 0;
+  const pending = await ctx.tx.query<Txn & { pid: string; confidence: number; kind: string }>(
+    `select p.id as pid, p.confidence::float8 as confidence, p.kind, t.id, t.bank_account_id, b.gl_account_id, to_char(t.txn_date, 'YYYY-MM-DD') as txn_date, t.description, t.reference, t.counterparty, t.amount::float8 as amount
+       from acct_proposals p join bank_transactions t on t.tenant_id = p.tenant_id and t.id = p.bank_txn_id
+       join bank_accounts b on b.tenant_id = t.tenant_id and b.id = t.bank_account_id
+      where p.tenant_id = $1 and p.status = 'pending' and t.status = 'unmatched' and t.id <> $2 limit 500`,
+    [ctx.tenantId, txnId],
+  );
+  const same = pending.filter((x) => payeeKey(x.description, x.counterparty) === key);
+  if (!same.length) return 0;
+  const book = await loadBook(ctx);
+  let n = 0;
+  for (const x of same) {
+    const best = (await candidates(ctx, x, book))[0];
+    if (!best || (best.kind === x.kind && best.confidence <= x.confidence + 0.001 && best.kind !== 'new_party')) continue;
+    await ctx.tx.query(`update acct_proposals set status = 'stale' where tenant_id = $1 and id = $2`, [ctx.tenantId, x.pid]);
+    await ctx.tx.query(
+      `insert into acct_proposals (tenant_id, agent, bank_txn_id, kind, title, reason, payload, confidence, source) values ($1,'bookkeeper',$2,$3,$4,$5,$6,$7,$8)`,
+      [ctx.tenantId, x.id, best.kind, best.title.slice(0, 300), best.reason.slice(0, 1000), JSON.stringify(best.payload), Math.round(best.confidence * 1000) / 1000, best.source],
+    );
+    n++;
+  }
+  return n;
 }
 
 /** Books a bank line as a customer's receipt against an invoice (used by the invoice import), on record as a person's decision. */

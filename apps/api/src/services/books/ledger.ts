@@ -44,6 +44,7 @@ export const DEFAULT_CHART: SeedAccount[] = [
   { code: '1420', name: 'EMD and performance security with customers', type: 'asset', subtype: 'current_asset', key: 'emd_deposits' },
   { code: '1430', name: 'Retention money with customers', type: 'asset', subtype: 'current_asset', key: 'retention_receivable' },
   { code: '1440', name: 'Margin money against bank guarantees', type: 'asset', subtype: 'current_asset', key: 'bg_margin' },
+  { code: '1450', name: 'Fixed deposits', type: 'asset', subtype: 'current_asset', key: 'fixed_deposits' },
   { code: '1500', name: 'Furniture and fixtures', type: 'asset', subtype: 'fixed_asset', key: 'fa_furniture' },
   { code: '1510', name: 'Plant and machinery', type: 'asset', subtype: 'fixed_asset', key: 'fa_machinery' },
   { code: '1520', name: 'Computers', type: 'asset', subtype: 'fixed_asset', key: 'fa_computers' },

@@ -95,3 +95,32 @@ All under `/api/v1/books`, books admins only.
 | Own accounts | `GET /desk/own`, `POST /desk/own/persons`, `PUT /desk/own/persons/:id` (`name`, `role`, `accountIn`, `accountOut`, `identifiers`), `DELETE /desk/own/persons/:id`, `PUT /desk/own/banks/:id` (`identifiers`), `GET /desk/own/misbooked`, `POST /desk/own/rebook` (`txnIds`) |
 | Statements | `POST /bank-accounts/:id/statement` with `toDesk: true` hands the new lines to the bookkeeper |
 | Invoice import | `POST /imports`, `POST /imports/:id/files` (`pages` text, `rows`, or `images`), `GET /imports`, `GET /imports/:id`, `PATCH /imports/items/:id` (`data`, `choices`), `POST /imports/items/:id/ai`, `POST /imports/items/:id/reject`, `POST /imports/items/approve` (`ids`) |
+
+## Who a bank line is from or to
+
+The bookkeeper reads the narration's format (Yes Bank, HDFC, ICICI, SBI, Axis, Kotak): IMPS
+(`IMPS/NA/XXXX9042/RRN:…/HDFC BANK/Harsha Rani/IFB`), NEFT/RTGS (`NEFT Cr-IFSC-PAYER-YOUR NAME-UTR`), UPI
+(`UPI/…/From:XXXXXX7936-3@ybl/…`), card purchases (`PCA:…:MERCHANT CITY`), refunds, net-banking and cheques. It
+takes the name the bank printed (never the company's own name or codes like RRN), the masked digits and
+the remark (`services/books/narration.ts`). Then, in order:
+
+| Who | How it is recognised | Proposed as |
+| --- | --- | --- |
+| A partner / director / owner | the name in Organisation → Partners & directors (no identifier needed), or a listed mobile / UPI / account (also its masked last digits with the name) | **Partner / owner**: to their capital / current account, not a sale or expense |
+| Your other bank account | its number, or the same amount leaving / arriving within 2 days | transfer |
+| An existing customer | its name, a contact's name, or the phone digits in a UPI id (`XXXXXX7936` = a contact's or the customer's phone) | an invoice receipt if one fits (also with TDS); otherwise **Customer advance**, linked to their open project, deal or order (also an order less 1–10 % TDS) |
+| Someone paying for a customer | the amount is exactly what one customer is billed (an invoice or a deal charge, with or without GST) | **Paid for a customer**: the receipt, and the payer added as that customer's contact |
+| A vendor | its name or phone digits; a bill if one fits | **Vendor payment** / **Vendor advance** |
+| Professional fees (CA, GST filing, audit, legal) | words in the narration or remark | **Expense · new vendor**: Professional fees, with the CA added as a vendor |
+| Fixed deposit made / closed | `NEW FD`, `FIXED DEPOSIT`, closure / maturity | Fixed deposits (asset) |
+| UPI collection settlement | `UPI COLLECTION SETTLEMENT` | Customer advances, to match to the customers who paid |
+| ₹1–2 account check | a tiny credit from API banking, Razorpay, Cashfree… | Other income |
+| A merchant refund | `REFUND:` with a known merchant | back to the expense it was (e.g. software) |
+| Nobody known | — | **New customer** / **New vendor** named as the bank printed it |
+
+In review, **Change** offers: against an invoice / bill, *Customer (or paid for one)* with an optional *Paid by*
+contact, **Partner / owner money** (an existing partner, or add one to the partner list with their role),
+book to an account, or not business. On approval Synapse creates what is missing — the customer or vendor,
+the payer as the customer's contact, the partner with their ledgers — records the receipt, payment or
+advance (linked to the project / deal / order), and looks again at the other pending lines from the same
+payer so they use what was just learnt.

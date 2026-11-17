@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { badRequest, conflict, notFound } from '../../lib/errors';
 import { voidPayment } from '../billing';
 import type { RecordCtx, RecordEvent } from '../records';
+import { type Parsed, sameName } from './narration';
 import { undoTxn } from './banking';
 import { voidVendorPayment } from './bills';
 import { assertBooksAdmin, sys } from './ledger';
@@ -128,10 +129,12 @@ export async function loadOwn(ctx: RecordCtx): Promise<Own> {
 
 /**
  * The own-account a bank line names, if any. Numbers and UPI ids win over names; a company account
- * naming itself (its own number printed on its own statement) doesn't count.
+ * naming itself (its own number printed on its own statement) doesn't count. Beyond the identifiers
+ * listed, a partner is recognised by the name in the partner list (as the bank prints it) and by the
+ * masked digits banks print (XXXX9042 = the end of their account number; a UPI id with the end of
+ * their mobile number).
  */
-export function findOwn(own: Own, line: { bank_account_id: string; description: string; reference?: string | null; counterparty?: string | null }): OwnHit | null {
-  if (!own.idents.length) return null;
+export function findOwn(own: Own, line: { bank_account_id: string; description: string; reference?: string | null; counterparty?: string | null }, parsed?: Parsed | null): (OwnHit & { implied?: boolean }) | null {
   const text = [line.description, line.reference, line.counterparty].filter(Boolean).join(' ');
   const order: IdentKind[] = ['mobile', 'upi', 'account', 'name'];
   for (const kind of order) {
@@ -146,6 +149,25 @@ export function findOwn(own: Own, line: { bank_account_id: string; description: 
       }
     }
   }
+  const active = own.persons.filter((p) => p.is_active);
+  if (!active.length) return null;
+  const implied = (person: OwnPerson, kind: IdentKind, value: string) => ({ type: 'person' as const, person, ident: { id: '', person_id: person.id, bank_account_id: null, kind, value, match_key: value }, implied: true });
+  // masked digits: the end of an account number or mobile they listed, or of their phone
+  const digits = [parsed?.masked, parsed?.vpaDigits].filter((x): x is string => !!x && x.length >= 4);
+  for (const d of digits) {
+    const hits = active.filter(
+      (p) =>
+        own.idents.some((i) => i.person_id === p.id && (i.kind === 'account' || i.kind === 'mobile') && i.match_key.endsWith(d)) ||
+        (p.phone ?? '').replace(/\D/g, '').endsWith(d),
+    );
+    // the digits alone could be anyone's: with the name too, or the only person they fit
+    const named = hits.filter((p) => parsed?.name && sameName(parsed.name, p.name));
+    if (named.length === 1) return implied(named[0]!, 'account', `XXXX${d}`);
+  }
+  // the name in the partner list, as the bank prints it
+  const name = parsed?.name ?? null;
+  const byName = active.filter((p) => (name ? sameName(name, p.name) : ` ${squash(text)} `.includes(` ${squash(p.name)} `) && squash(p.name).includes(' ')));
+  if (byName.length === 1) return implied(byName[0]!, 'name', byName[0]!.name);
   return null;
 }
 

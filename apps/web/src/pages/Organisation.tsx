@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { BankModal, ORG_PATHS, PersonModal, ROLES } from '../components/books/OwnAccounts';
 import { DocTemplatesTab } from '../components/admin/DocTemplates';
-import { OrgDocuments } from '../components/OrgDocuments';
+import { DocSlot, OrgDocuments } from '../components/OrgDocuments';
 import { local, setSignerPort, signerPort } from '../lib/dsc';
 import { date as fmtDate } from '../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
@@ -131,11 +131,11 @@ function Profile({ d }: { d: Json }) {
             ))}
           </select>,
         )}
-        {field('PAN', <input className="mono" maxLength={10} value={p.pan} disabled={ro} onChange={(e) => setP({ ...p, pan: e.target.value.toUpperCase() })} />)}
-        {field('GSTIN', <input className="mono" maxLength={15} value={p.gstin} disabled={ro} onChange={(e) => setP({ ...p, gstin: e.target.value.toUpperCase() })} />)}
-        {field('TAN', <input className="mono" maxLength={10} value={p.tan} disabled={ro} onChange={(e) => setP({ ...p, tan: e.target.value.toUpperCase() })} />)}
-        {field('LLPIN / CIN / registration no.', <input value={p.registrationNo} disabled={ro} onChange={set('registrationNo')} />)}
-        {field('Udyam (MSME) no.', <input value={p.udyam} disabled={ro} onChange={set('udyam')} />)}
+        {field('PAN', <><input className="mono" maxLength={10} value={p.pan} disabled={ro} onChange={(e) => setP({ ...p, pan: e.target.value.toUpperCase() })} /><DocSlot kind="pan" number={p.pan} label="PAN card" /></>)}
+        {field('GSTIN', <><input className="mono" maxLength={15} value={p.gstin} disabled={ro} onChange={(e) => setP({ ...p, gstin: e.target.value.toUpperCase() })} /><DocSlot kind="gst" number={p.gstin} label="GST certificate" /></>)}
+        {field('TAN', <><input className="mono" maxLength={10} value={p.tan} disabled={ro} onChange={(e) => setP({ ...p, tan: e.target.value.toUpperCase() })} /><DocSlot kind="tan" number={p.tan} label="TAN letter" /></>)}
+        {field('LLPIN / CIN / registration no.', <><input value={p.registrationNo} disabled={ro} onChange={set('registrationNo')} /><DocSlot kind="incorporation" number={p.registrationNo} label="incorporation certificate" /></>)}
+        {field('Udyam (MSME) no.', <><input value={p.udyam} disabled={ro} onChange={set('udyam')} /><DocSlot kind="udyam" number={p.udyam} label="Udyam certificate" /></>)}
         {field('Incorporated on', <input type="date" value={p.incorporatedOn} disabled={ro} onChange={set('incorporatedOn')} />)}
         {field('Registered address', <textarea rows={2} value={p.address} disabled={ro} onChange={set('address')} />, true)}
         {field('City', <input value={p.city} disabled={ro} onChange={set('city')} />)}
@@ -150,11 +150,11 @@ function Profile({ d }: { d: Json }) {
           Startup India (DPIIT recognition)
         </legend>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-          {field('DPIIT recognition no.', <input className="mono" value={p.dpiitNumber ?? ''} disabled={ro} placeholder="DIPP123456" onChange={(e) => setP({ ...p, dpiitNumber: e.target.value.toUpperCase().replace(/\s/g, '') })} />)}
+          {field('DPIIT recognition no.', <><input className="mono" value={p.dpiitNumber ?? ''} disabled={ro} placeholder="DIPP123456" onChange={(e) => setP({ ...p, dpiitNumber: e.target.value.toUpperCase().replace(/\s/g, '') })} /><DocSlot kind="startup_india" number={p.dpiitNumber} label="recognition certificate" /></>)}
           {field('Recognised on', <input type="date" value={p.dpiitRecognisedOn ?? ''} disabled={ro} onChange={set('dpiitRecognisedOn')} />)}
           {field('Sector', <input value={p.startupSector ?? ''} disabled={ro} onChange={set('startupSector')} placeholder="e.g. Artificial Intelligence" />)}
           {field('Industry', <input value={p.startupIndustry ?? ''} disabled={ro} onChange={set('startupIndustry')} placeholder="e.g. IT Services" />)}
-          {field('Sec 80-IAC certificate no.', <input value={p.section80IacCertNo ?? ''} disabled={ro} onChange={set('section80IacCertNo')} placeholder="if the tax exemption was granted" />)}
+          {field('Sec 80-IAC certificate no.', <><input value={p.section80IacCertNo ?? ''} disabled={ro} onChange={set('section80IacCertNo')} placeholder="if the tax exemption was granted" /><DocSlot kind="section_80iac" number={p.section80IacCertNo} label="80-IAC certificate" /></>)}
           {field('80-IAC claimed from (financial year)', <input value={p.section80IacFrom ?? ''} disabled={ro} onChange={set('section80IacFrom')} placeholder="2026-27" />)}
           <label className="row small" style={{ gap: 6, alignSelf: 'end', paddingBottom: 10 }}>
             <input type="checkbox" checked={!!p.section56Exempt} disabled={ro} onChange={(e) => setP({ ...p, section56Exempt: e.target.checked })} />
@@ -162,7 +162,7 @@ function Profile({ d }: { d: Json }) {
           </label>
         </div>
         <p className="muted small" style={{ margin: '8px 0 0' }}>
-          Keep the recognition certificate and exemption letters under Documents.
+          Upload each certificate under its number above; other papers (MoA, partnership deed, licences, rent agreement…) go in the Documents tab.
         </p>
       </fieldset>
       {d.isAdmin && (

@@ -254,3 +254,57 @@ function DocModal({ doc, kind, personId, userId, kinds, profile, onClose }: { do
     </Modal>
   );
 }
+
+/**
+ * Under a registration number on the Organisation profile (PAN, GSTIN, TAN…): the certificate's copy, to
+ * view, upload or replace there and then. The same document as in the Documents tab.
+ */
+export function DocSlot({ kind, number, label = 'certificate' }: { kind: string; number?: string | null; label?: string }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const q = useQuery({ queryKey: ['organisation', 'documents'], queryFn: () => get<Json>('/api/v1/organisation/documents'), retry: false, staleTime: 30_000 });
+  if (q.error || !q.data) return null;
+  const doc = ((q.data.documents ?? []) as Json[]).find((d) => !d.personId && !d.userId && d.kind === kind);
+  const send = async (f: File) => {
+    if (f.size > MAX) return toast('Files can be at most 25 MB', true);
+    setBusy(true);
+    try {
+      let id = doc?.id as string | undefined;
+      if (!id) {
+        // the number as typed on the profile goes with it (left out if it is not complete yet)
+        const made = await post<Json>('/api/v1/organisation/documents', { kind, number: number?.trim() || null }).catch(() => post<Json>('/api/v1/organisation/documents', { kind, number: null }));
+        id = made.id;
+      }
+      await upload(`/api/v1/organisation/documents/${id}/file?name=${encodeURIComponent(f.name)}`, f);
+      qc.invalidateQueries({ queryKey: ['organisation', 'documents'] });
+      toast('Uploaded');
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="row small" style={{ gap: 8, marginTop: 4 }}>
+      <input ref={input} type="file" hidden accept="image/*,application/pdf" onChange={(e) => e.target.files?.[0] && send(e.target.files[0])} />
+      {doc?.file ? (
+        <>
+          <a href={doc.file.url} target="_blank" rel="noreferrer">
+            📎 View {label}
+          </a>
+          <button type="button" className="btn ghost sm" disabled={busy} onClick={() => input.current?.click()}>
+            {busy ? 'Uploading…' : 'Replace'}
+          </button>
+          {doc.status === 'expired' && <span className="chip bad">Expired</span>}
+          {doc.status === 'expiring' && <span className="chip warn">Renew soon</span>}
+        </>
+      ) : (
+        <button type="button" className="btn ghost sm" disabled={busy} onClick={() => input.current?.click()}>
+          {busy ? 'Uploading…' : `📎 Upload ${label}`}
+        </button>
+      )}
+    </span>
+  );
+}
