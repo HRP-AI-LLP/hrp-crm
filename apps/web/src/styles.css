@@ -202,8 +202,9 @@ table.data { width: 100%; border-collapse: collapse; }
 .ai-box { background: linear-gradient(0deg, var(--accent-soft), var(--accent-soft)); border: 1px solid var(--accent-line); border-radius: var(--r-md); padding: 14px 16px; }
 .ai-box ul { margin: 8px 0 0; padding-left: 18px; }
 .ai-box li { margin: 3px 0; }
-.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding: 0 8px; }
-.tabs button { all: unset; cursor: pointer; padding: 11px 12px; font-weight: 600; color: var(--ink-3); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding: 0 8px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+/* the underline sits on the bar's line; a negative margin would overflow it and show a vertical scrollbar */
+.tabs button { all: unset; cursor: pointer; padding: 11px 12px; font-weight: 600; color: var(--ink-3); border-bottom: 2px solid transparent; white-space: nowrap; flex: none; }
 .tabs button[aria-selected='true'] { color: var(--ink); border-bottom-color: var(--accent); }
 
 /* ---------- pipeline board ---------- */

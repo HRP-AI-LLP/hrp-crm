@@ -80,7 +80,7 @@ export function BooksPage() {
         </div>
       </div>
       <section className="panel">
-        <div className="tabs" role="tablist" style={{ overflowX: 'auto' }}>
+        <div className="tabs" role="tablist">
           {TABS.map(([k, l]) => (
             <button key={k} role="tab" aria-selected={tab === k} onClick={() => go(k)}>
               {l}

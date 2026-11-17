@@ -49,7 +49,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
   ];
   return (
     <section className="panel" style={{ marginBottom: 20 }}>
-      <div className="tabs" role="tablist" style={{ overflowX: 'auto' }}>
+      <div className="tabs" role="tablist">
         {tabs.map(([k, l]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
             {l}

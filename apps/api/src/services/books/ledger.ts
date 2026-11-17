@@ -223,7 +223,8 @@ export async function postJournal(tx: Tx, tenantId: string, j: JournalInput): Pr
   }
   const accounts = await tx.query<{ id: string; is_active: boolean }>(`select id, is_active from gl_accounts where tenant_id = $1 and id = any($2::uuid[])`, [tenantId, [...new Set(lines.map((l) => l.accountId))]]);
   if (accounts.length !== new Set(lines.map((l) => l.accountId)).size) throw badRequest('An account on this entry does not exist');
-  const number = j.sourceType === 'manual' || j.sourceType === 'opening' ? await nextJournalNumber(tx, j.date) : null;
+  // every entry gets the next voucher number of its financial year (JV/26-27/0001), whatever posted it
+  const number = await nextJournalNumber(tx, j.date);
   const jr = await tx.one<{ id: string }>(
     `insert into journals (tenant_id, number, entry_date, source_type, source_id, reference, narration, currency, exchange_rate, total) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,
     [tenantId, number, j.date, j.sourceType, j.sourceId ?? null, j.reference ?? null, j.narration ?? null, j.currency ?? 'INR', j.exchangeRate ?? 1, r2(Math.max(d, c))],
