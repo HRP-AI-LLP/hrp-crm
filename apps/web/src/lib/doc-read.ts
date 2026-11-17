@@ -32,15 +32,28 @@ async function imageFile(file: File): Promise<string> {
 }
 
 /** Lines of a page from positioned text runs (top to bottom, left to right). */
-function pageText(items: { str: string; x: number; y: number; h: number }[]) {
+function pageText(items: { str: string; x: number; y: number; h: number; w?: number }[]) {
   const xs = items.filter((i) => i.str.trim()).sort((a, b) => b.y - a.y || a.x - b.x);
-  const lines: { y: number; parts: { x: number; s: string }[] }[] = [];
+  const lines: { y: number; parts: { x: number; w: number; h: number; s: string }[] }[] = [];
   for (const it of xs) {
     const last = lines[lines.length - 1];
-    if (last && Math.abs(last.y - it.y) <= Math.max(2, Math.min(it.h || 8, 10) * 0.45)) last.parts.push({ x: it.x, s: it.str });
-    else lines.push({ y: it.y, parts: [{ x: it.x, s: it.str }] });
+    const part = { x: it.x, w: it.w ?? it.str.length * (it.h || 8) * 0.5, h: it.h || 8, s: it.str };
+    if (last && Math.abs(last.y - it.y) <= Math.max(2, Math.min(it.h || 8, 10) * 0.45)) last.parts.push(part);
+    else lines.push({ y: it.y, parts: [part] });
   }
-  return lines.map((l) => l.parts.sort((a, b) => a.x - b.x).map((p) => p.s.trim()).join(' ')).join('\n');
+  // a wide gap between words is a column break (Bill To | Ship To, notes | totals): written as a tab
+  return lines
+    .map((l) =>
+      l.parts
+        .sort((a, b) => a.x - b.x)
+        .map((p, i, all) => {
+          const prev = all[i - 1];
+          const gap = prev ? p.x - (prev.x + prev.w) : 0;
+          return `${i ? (gap > Math.max(p.h, prev!.h) * 2.2 ? '\t' : ' ') : ''}${p.s.trim()}`;
+        })
+        .join(''),
+    )
+    .join('\n');
 }
 
 async function pdfPages(file: File, password?: string): Promise<ReadPart[]> {

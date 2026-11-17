@@ -4,6 +4,7 @@
  * and recurring documents.
  */
 import { financialYear } from '@synapse/shared';
+import { z } from 'zod';
 import type { Tx } from '../../lib/db';
 import { badRequest, notFound } from '../../lib/errors';
 import { issueInvoice, refreshInvoicePaid, saveInvoiceLines } from '../billing';
@@ -666,7 +667,12 @@ export function nextRun(date: string, frequency: RecurringInput['frequency'], ev
 }
 
 export async function listRecurring(ctx: RecordCtx) {
-  return ctx.tx.query(`select id, name, kind, frequency, every, start_date, end_date, next_date, last_run_at, last_doc_id, runs, auto_issue, status, last_error, template from recurring_profiles where tenant_id = $1 order by status, next_date`, [ctx.tenantId]);
+  return ctx.tx.query(
+    `select p.id, p.name, p.kind, p.frequency, p.every, p.start_date, p.end_date, p.next_date, p.last_run_at, p.last_doc_id, p.runs, p.auto_issue, p.status, p.last_error, p.template, p.deal_id, p.project_id, p.account_id,
+            (select json_agg(json_build_object('effective_from', c.effective_from, 'lines', c.lines, 'tax_inclusive', c.tax_inclusive, 'note', c.note) order by c.effective_from) from recurring_price_changes c where c.tenant_id = p.tenant_id and c.profile_id = p.id) as price_changes
+       from recurring_profiles p where p.tenant_id = $1 order by p.status, p.next_date`,
+    [ctx.tenantId],
+  );
 }
 
 async function checkTemplate(ctx: RecordCtx, kind: RecurringInput['kind'], tpl: Record<string, any>) {
@@ -710,8 +716,68 @@ export async function deleteRecurring(ctx: RecordCtx, id: string) {
   await ctx.tx.query(`delete from recurring_profiles where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
 }
 
+/** The price change in force on a date (latest effective on or before it). */
+async function priceOn(ctx: RecordCtx, profileId: string, date: string) {
+  return ctx.tx.one<{ lines: any[]; tax_inclusive: boolean }>(
+    `select lines, tax_inclusive from recurring_price_changes where tenant_id = $1 and profile_id = $2 and effective_from <= $3::date order by effective_from desc limit 1`,
+    [ctx.tenantId, profileId, date],
+  );
+}
+
+export const priceChangeSchema = z.object({
+  effectiveFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  taxInclusive: z.boolean().default(false),
+  note: z.string().trim().max(500).nullish(),
+  lines: z
+    .array(
+      z.object({
+        productId: z.string().uuid().nullish(),
+        name: z.string().trim().min(1).max(200),
+        description: z.string().max(2000).nullish(),
+        hsnSac: z.string().max(20).nullish(),
+        unit: z.string().max(20).nullish(),
+        quantity: z.coerce.number().positive().max(1e9),
+        unitPrice: z.coerce.number().min(0).max(1e12),
+        discountPct: z.coerce.number().min(0).max(100).default(0),
+        taxRate: z.coerce.number().min(0).max(100).default(0),
+      }),
+    )
+    .min(1)
+    .max(100),
+});
+
+/**
+ * Changes a recurring invoice's price from a date onward (₹3,000 + GST → ₹1,200 including GST from
+ * June). Invoices dated before it keep the old price; the history stays on the profile.
+ */
+export async function addPriceChange(ctx: RecordCtx, profileId: string, input: z.infer<typeof priceChangeSchema>) {
+  const p = await ctx.tx.one<{ kind: string; start_date: Date }>(`select kind, start_date from recurring_profiles where tenant_id = $1 and id = $2`, [ctx.tenantId, profileId]);
+  if (!p) throw notFound('Recurring profile not found');
+  if (p.kind !== 'invoice') throw badRequest('Price changes are for recurring invoices');
+  await checkTemplate(ctx, 'invoice', { values: {} });
+  await ctx.tx.query(
+    `insert into recurring_price_changes (tenant_id, profile_id, effective_from, lines, tax_inclusive, note) values ($1,$2,$3,$4,$5,$6)
+     on conflict (tenant_id, profile_id, effective_from) do update set lines = excluded.lines, tax_inclusive = excluded.tax_inclusive, note = excluded.note, created_by = app.current_user_id(), created_at = now()`,
+    [ctx.tenantId, profileId, input.effectiveFrom, JSON.stringify(input.lines), input.taxInclusive, input.note ?? null],
+  );
+  return priceChanges(ctx, profileId);
+}
+
+export async function removePriceChange(ctx: RecordCtx, profileId: string, effectiveFrom: string) {
+  await checkTemplate(ctx, 'invoice', { values: {} });
+  await ctx.tx.query(`delete from recurring_price_changes where tenant_id = $1 and profile_id = $2 and effective_from = $3::date`, [ctx.tenantId, profileId, effectiveFrom]);
+  return priceChanges(ctx, profileId);
+}
+
+export async function priceChanges(ctx: RecordCtx, profileId: string) {
+  return ctx.tx.query(
+    `select to_char(effective_from, 'YYYY-MM-DD') as effective_from, lines, tax_inclusive, note, created_at from recurring_price_changes where tenant_id = $1 and profile_id = $2 order by effective_from`,
+    [ctx.tenantId, profileId],
+  );
+}
+
 /** Creates one document from a profile for the given date. */
-async function generate(ctx: RecordCtx, p: Record<string, any>, date: string): Promise<{ id: string; events: RecordEvent[] }> {
+async function generate(ctx: RecordCtx, p: Record<string, any>, date: string, period = date): Promise<{ id: string; events: RecordEvent[] }> {
   const tpl = p.template as Record<string, any>;
   if (p.kind === 'journal') {
     await validateManualLines(ctx, tpl.lines);
@@ -721,12 +787,19 @@ async function generate(ctx: RecordCtx, p: Record<string, any>, date: string): P
   }
   const objectKey = p.kind as 'invoice' | 'bill' | 'expense';
   const dateField = { invoice: 'invoice_date', bill: 'bill_date', expense: 'expense_date' }[objectKey];
-  const values = { ...(tpl.values as Record<string, unknown>), [dateField]: date, name: `${(tpl.values as any).name ?? p.name}` };
+  // a price change in force on this date replaces the template's lines
+  // the price of the period being billed (an invoice made early still bills that period)
+  const change = objectKey === 'invoice' ? await priceOn(ctx, String(p.id), period) : null;
+  const values: Record<string, unknown> = { ...(tpl.values as Record<string, unknown>), [dateField]: date, name: `${(tpl.values as any).name ?? p.name}` };
+  if (change) values.tax_inclusive = change.tax_inclusive;
   delete (values as any).due_date;
   const { record, events } = await createRecord(ctx, objectKey, values, { fromAutomation: true });
   const id = String(record.id);
   if (objectKey === 'invoice') {
-    if (Array.isArray(tpl.lines)) events.push(...(await saveInvoiceLines(ctx, id, tpl.lines)));
+    // the invoice knows the schedule it came from, and its deal and project
+    await ctx.tx.query(`update invoices set recurring_profile_id = $3, deal_id = coalesce(deal_id, $4), project_id = coalesce(project_id, $5) where tenant_id = $1 and id = $2`, [ctx.tenantId, id, p.id, p.deal_id ?? null, p.project_id ?? null]);
+    const lines = change ? change.lines : tpl.lines;
+    if (Array.isArray(lines)) events.push(...(await saveInvoiceLines(ctx, id, lines)));
     if (p.auto_issue) events.push(...(await issueInvoice(ctx, id)));
   } else if (objectKey === 'bill') {
     if (Array.isArray(tpl.lines)) events.push(...(await saveBillLines(ctx, id, tpl.lines)));
@@ -745,7 +818,7 @@ export async function runRecurring(ctx: RecordCtx, id: string) {
   const p = await ctx.tx.one<Record<string, any>>(`select * from recurring_profiles where tenant_id = $1 and id = $2 for update`, [ctx.tenantId, id]);
   if (!p) throw notFound('Recurring profile not found');
   const date = d10(p.next_date) <= today() ? d10(p.next_date) : today();
-  const r = await generate(ctx, p, date);
+  const r = await generate(ctx, p, date, d10(p.next_date));
   await advance(ctx.tx, ctx.tenantId, p, r.id, null);
   return r;
 }

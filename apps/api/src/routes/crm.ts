@@ -154,7 +154,13 @@ export const crmRoutes = new Hono<AppEnv>()
     await enqueue(c.env, safeCtx(c), eventJobs(c.var.tenant.id, c.var.principal.user.id, events));
     if (body.next_follow_up_at && record.next_follow_up_at) await noteReminder(c.env, record.next_follow_up_at as string);
     if ((body.priority || body.category) && record.first_response_due) await noteReminder(c.env, record.first_response_due as string);
-    if (c.req.param('object') === 'invoice' && record.status === 'draft' && (body.place_of_supply !== undefined || body.account_id !== undefined)) {
+    // "Prices include GST" changed on a draft: the lines are worked out again
+    if (body.tax_inclusive !== undefined && ['quote', 'sales_order', 'purchase_order', 'bill'].includes(c.req.param('object'))) {
+      const { recalcLines } = await import('../services/doc-totals');
+      await c.var.db.tx(scope(c), (tx) => recalcLines(rctx(c, tx), c.req.param('object'), c.req.param('id')));
+      return c.json(await c.var.db.tx(scope(c, true), (tx) => getRecord(rctx(c, tx), c.req.param('object'), c.req.param('id'))));
+    }
+    if (c.req.param('object') === 'invoice' && record.status === 'draft' && (body.place_of_supply !== undefined || body.account_id !== undefined || body.tax_inclusive !== undefined)) {
       const { refreshDraft } = await import('../services/billing');
       await c.var.db.tx(scope(c), (tx) => refreshDraft(rctx(c, tx), c.req.param('id')));
       return c.json(await c.var.db.tx(scope(c, true), (tx) => getRecord(rctx(c, tx), 'invoice', c.req.param('id'))));

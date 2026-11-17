@@ -49,10 +49,10 @@ export async function getOrder(ctx: RecordCtx, id: string) {
   };
 }
 
-export async function saveOrderLines(ctx: RecordCtx, id: string, lines: LineInput[]) {
+export async function saveOrderLines(ctx: RecordCtx, id: string, lines: LineInput[], taxInclusive?: boolean) {
   const { row } = await loadRow(ctx, 'sales_order', id, 'update', true);
   if (row.status !== 'draft') throw badRequest('Only draft orders can be changed. Reopen the order as a draft first.');
-  const events = await replaceLines(ctx, DOC, id, row, lines);
+  const events = await replaceLines(ctx, DOC, id, row, lines, taxInclusive);
   await reevaluate(ctx, 'sales_order', id);
   await rescaleMilestones(ctx, id);
   return events;
@@ -86,7 +86,7 @@ export async function orderFromQuote(ctx: RecordCtx, quoteId: string, opts: { al
     [ctx.tenantId, quoteId, id],
   );
   await ctx.tx.query(
-    `update sales_orders o set subtotal = q.subtotal, discount_total = q.discount_total, tax_total = q.tax_total, grand_total = q.grand_total, max_discount_pct = q.max_discount_pct,
+    `update sales_orders o set subtotal = q.subtotal, discount_total = q.discount_total, tax_total = q.tax_total, grand_total = q.grand_total, max_discount_pct = q.max_discount_pct, tax_inclusive = q.tax_inclusive,
             -- the discount was approved on the quote already
             approval_status = case when q.approval_status = 'approved' then 'approved' else o.approval_status end
        from quotes q where o.tenant_id = $1 and o.id = $2 and q.tenant_id = $1 and q.id = $3`,

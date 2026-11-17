@@ -10,9 +10,11 @@ import { recurringSweep } from './setup';
 export async function booksDailySweep(env: Env, db: Db, tenantId: string) {
   const on = await db.tx({ tenantId, readOnly: true }, async (tx) => {
     const ctx = await systemCtxFor(env, tx, tenantId);
-    return !!ctx && enabledApps(ctx.meta).has('books');
+    // recurring invoices run with GST billing alone; the rest of the round needs books
+    const apps = ctx ? enabledApps(ctx.meta) : new Set<string>();
+    return { books: apps.has('books'), billing: apps.has('billing') };
   });
-  if (!on) return { created: 0 };
+  if (!on.books && !on.billing) return { created: 0 };
   const r = await recurringSweep((fn) =>
     db.tx({ tenantId }, async (tx) => {
       const ctx = await systemCtxFor(env, tx, tenantId);
@@ -21,6 +23,7 @@ export async function booksDailySweep(env: Env, db: Db, tenantId: string) {
     }),
   );
   await enqueue(env, null, eventJobs(tenantId, null, r.events));
+  if (!on.books) return { created: r.created };
   const desk = await deskSweep(env, db, tenantId).catch((e) => ({ error: (e as Error).message }));
   return { created: r.created, desk };
 }

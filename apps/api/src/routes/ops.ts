@@ -218,8 +218,8 @@ export const opsRoutes = new Hono<AppEnv>()
   // ============================================================================ sales orders
   .get('/orders/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => getOrder(rctx(c, tx), c.req.param('id')))))
   .put('/orders/:id/lines', async (c) => {
-    const b = z.object({ lines: z.array(lineSchema).max(300) }).parse(await c.req.json());
-    const events = await c.var.db.tx(scope(c), (tx) => saveOrderLines(rctx(c, tx), c.req.param('id'), b.lines));
+    const b = z.object({ lines: z.array(lineSchema).max(300), taxInclusive: z.boolean().optional() }).parse(await c.req.json());
+    const events = await c.var.db.tx(scope(c), (tx) => saveOrderLines(rctx(c, tx), c.req.param('id'), b.lines, b.taxInclusive));
     await emit(c, events);
     return c.json(await c.var.db.tx(scope(c, true), (tx) => getOrder(rctx(c, tx), c.req.param('id'))));
   })
@@ -287,8 +287,8 @@ export const opsRoutes = new Hono<AppEnv>()
   // ============================================================================ purchasing
   .get('/purchase-orders/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => getPurchaseOrder(rctx(c, tx), c.req.param('id')))))
   .put('/purchase-orders/:id/lines', async (c) => {
-    const b = z.object({ lines: z.array(lineSchema).max(300) }).parse(await c.req.json());
-    const events = await c.var.db.tx(scope(c), (tx) => savePoLines(rctx(c, tx), c.req.param('id'), b.lines));
+    const b = z.object({ lines: z.array(lineSchema).max(300), taxInclusive: z.boolean().optional() }).parse(await c.req.json());
+    const events = await c.var.db.tx(scope(c), (tx) => savePoLines(rctx(c, tx), c.req.param('id'), b.lines, b.taxInclusive));
     await emit(c, events);
     return c.json(await c.var.db.tx(scope(c, true), (tx) => getPurchaseOrder(rctx(c, tx), c.req.param('id'))));
   })

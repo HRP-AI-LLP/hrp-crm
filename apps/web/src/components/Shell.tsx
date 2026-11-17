@@ -181,7 +181,10 @@ export function Shell() {
   const inbox = useQuery({ queryKey: ['inbox-badge'], queryFn: () => get<{ counts: { unread: number } }>('/api/v1/inbox?view=mine&status=open'), enabled: !!me, refetchInterval: 60_000, staleTime: 30_000 });
   const copilot = useQuery({ queryKey: ['copilot'], queryFn: () => get<{ insights: unknown[] }>('/api/v1/intel/copilot'), enabled: !!me, refetchInterval: 300_000, staleTime: 120_000 });
   const online = useOnline();
-  const admin = me && (can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains') || can('privacy') || can('developers') || can('ai'));
+  // people an admin named to manage the organisation profile reach it without the rest of Settings
+  const orgQ = useQuery({ queryKey: ['organisation'], queryFn: () => get<Record<string, any>>('/api/v1/organisation'), enabled: !!me, staleTime: 300_000, retry: false });
+  const orgManager = !!orgQ.data?.canManage;
+  const admin = me && (can('organisation') || can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains') || can('privacy') || can('developers') || can('ai'));
 
   return (
     <div className="shell">
@@ -274,6 +277,7 @@ export function Shell() {
           <div>Assist</div>
           <NavLink to="/knowledge">Knowledge base</NavLink>
           {(can('developers') || can('channels') || can('users')) && <NavLink to="/developers">Developers</NavLink>}
+          {!admin && orgManager && <NavLink to="/organisation">Organisation</NavLink>}
           {admin && <NavLink to="/settings">Settings</NavLink>}
         </div>
         <div className="nav-foot">

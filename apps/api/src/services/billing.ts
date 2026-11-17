@@ -19,6 +19,7 @@ import { enabledApps } from './apps';
 import { assertProducts } from './lines';
 import { nextFyNumber } from './numbering';
 import { computeLines, letterhead, type LineInput } from './quotes';
+import { dueFromTerms } from './hooks';
 import { createRecord, loadRow, Params, type RecordCtx, type RecordEvent, readRowSystem, toDto, visibilityWhere } from './records';
 import { retentionFromReceipt, retentionOnVoid } from './books/deposits';
 import type { TallyLedgers } from './gst-exports';
@@ -35,6 +36,8 @@ export interface BillingSettings {
   /** UPI ID printed as a pay-by-QR on invoices (no gateway needed) */
   upiVpa: string;
   upiPayee: string;
+  /** saved signature put on every invoice when it is issued */
+  autoSignId: string;
   ledgers: TallyLedgers;
 }
 
@@ -50,6 +53,7 @@ export async function billingSettings(ctx: RecordCtx): Promise<BillingSettings> 
     bankDetails: b.bankDetails ?? '',
     upiVpa: b.upiVpa ?? '',
     upiPayee: b.upiPayee ?? '',
+    autoSignId: b.autoSignId ?? '',
     ledgers: {
       sales: 'Sales', cgst: 'Output CGST', sgst: 'Output SGST', igst: 'Output IGST', roundOff: 'Round Off', bank: 'Bank',
       tds: 'TDS Receivable', gstTds: 'GST TDS Receivable', ld: 'Liquidated Damages', retention: 'Retention Money Receivable', bankCharges: 'Bank Charges',
@@ -134,7 +138,7 @@ async function recompute(ctx: RecordCtx, id: string, row: Record<string, unknown
     igst += s.igst;
     await ctx.tx.query(`update invoice_lines set line_cgst = $3, line_sgst = $4, line_igst = $5 where tenant_id = $1 and id = $2`, [ctx.tenantId, l.id, s.cgst, s.sgst, s.igst]);
   }
-  const c = computeLines(lines.map((l) => ({ ...l, discountPct: l.discountPct, taxRate: l.taxRate })) as LineInput[]);
+  const c = computeLines(lines.map((l) => ({ ...l, discountPct: l.discountPct, taxRate: l.taxRate })) as LineInput[], !!row.tax_inclusive);
   const exact = r2(c.subtotal - c.discountTotal + c.taxTotal);
   const total = settings.roundOff ? Math.round(exact) : exact;
   await ctx.tx.query(
@@ -175,12 +179,16 @@ export async function getInvoice(ctx: RecordCtx, id: string) {
   };
 }
 
-export async function saveInvoiceLines(ctx: RecordCtx, id: string, input: (LineInput & { orderLineId?: string | null; isService?: boolean })[]): Promise<RecordEvent[]> {
+export async function saveInvoiceLines(ctx: RecordCtx, id: string, input: (LineInput & { orderLineId?: string | null; isService?: boolean })[], taxInclusive?: boolean): Promise<RecordEvent[]> {
   const { row } = await loadRow(ctx, 'invoice', id, 'update', true);
   if (row.status !== 'draft') throw badRequest('Issued invoices cannot be changed. Raise a credit note instead.');
   if (input.length > 300) throw badRequest('An invoice can have at most 300 lines');
   await assertProducts(ctx, input);
-  const c = computeLines(input);
+  if (taxInclusive !== undefined && taxInclusive !== !!row.tax_inclusive) {
+    await ctx.tx.query(`update invoices set tax_inclusive = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, taxInclusive]);
+    row.tax_inclusive = taxInclusive;
+  }
+  const c = computeLines(input, !!row.tax_inclusive);
   await ctx.tx.query(`delete from invoice_lines where tenant_id = $1 and order_id = $2`, [ctx.tenantId, id]);
   for (const [i, l] of c.lines.entries()) {
     const src = input[i]!;
@@ -252,6 +260,8 @@ export async function invoiceFromOrder(ctx: RecordCtx, orderId: string, opts: { 
   const billTo = (o.bill_to as Record<string, string> | null) ?? {};
   const r = await createRecord(ctx, 'invoice', {
     name: milestone ? `${o.name} — ${milestone.name}` : String(o.name),
+    // a milestone bills a share of the taxable value; otherwise the order's prices as they were entered
+    tax_inclusive: milestone ? false : !!o.tax_inclusive,
     account_id: o.account_id ?? null,
     contact_id: o.contact_id ?? null,
     place_of_supply: billTo.state || acc?.state || null,
@@ -302,7 +312,8 @@ export async function issueInvoice(ctx: RecordCtx, id: string, imported: { numbe
     : await nextFyNumber(ctx, series, date, series === 'credit_note' ? settings.creditNotePrefix : series === 'proforma' ? 'PI' : settings.invoicePrefix);
   if (imported && (await ctx.tx.one(`select 1 from invoices where tenant_id = $1 and doc_type = $2 and invoice_number = $3 and id <> $4`, [ctx.tenantId, row.doc_type, n.number, id])))
     throw badRequest(`Invoice ${n.number} is already in Synapse`);
-  const due = row.due_date ?? new Date(new Date(`${date}T00:00:00Z`).getTime() + settings.dueDays * 86_400_000).toISOString().slice(0, 10);
+  // terms (other than custom) date the invoice from the day it is issued
+  const due = dueFromTerms(row.payment_terms as string | null, date) ?? row.due_date ?? new Date(new Date(`${date}T00:00:00Z`).getTime() + settings.dueDays * 86_400_000).toISOString().slice(0, 10);
   await ctx.tx.query(
     `update invoices set status = 'issued', invoice_number = $3, financial_year = $4, issued_at = now(), due_date = $5,
             buyer_name = $6, buyer_gstin = $7, buyer_address = $8, buyer_state = $9, buyer_pincode = $10,
@@ -321,6 +332,17 @@ export async function issueInvoice(ctx: RecordCtx, id: string, imported: { numbe
   await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'invoice',$3)`, [ctx.tenantId, imported ? `Imported as ${n.number}${imported.source ? ` from ${imported.source}` : ''}` : `Issued as ${n.number}`, id]);
   await repost(ctx.tx, ctx.tenantId, 'invoice', id);
   if (row.sales_order_id) await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'sales_order',$3)`, [ctx.tenantId, `${series === 'credit_note' ? 'Credit note' : 'Invoice'} ${n.number} issued`, row.sales_order_id]);
+  // the signature an admin chose to put on every invoice (not on invoices raised and signed elsewhere)
+  if (settings.autoSignId && !imported) {
+    const { signDocument } = await import('./organisation');
+    await ctx.tx.query('savepoint auto_sign');
+    try {
+      await signDocument(ctx, 'invoice', id, settings.autoSignId, { system: true });
+      await ctx.tx.query('release savepoint auto_sign');
+    } catch {
+      await ctx.tx.query('rollback to savepoint auto_sign');
+    }
+  }
   return events;
 }
 

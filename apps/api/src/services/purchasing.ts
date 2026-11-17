@@ -26,10 +26,10 @@ export async function getPurchaseOrder(ctx: RecordCtx, id: string) {
   return { po: toDto(obj, row, ctx.principal.permissions), lines: await readLines(ctx, DOC, id), vendor, receipts, company: await letterhead(ctx) };
 }
 
-export async function savePoLines(ctx: RecordCtx, id: string, lines: LineInput[]) {
+export async function savePoLines(ctx: RecordCtx, id: string, lines: LineInput[], taxInclusive?: boolean) {
   const { row } = await loadRow(ctx, 'purchase_order', id, 'update', true);
   if (row.status !== 'draft') throw badRequest('Only draft purchase orders can be changed');
-  const events = await replaceLines(ctx, DOC, id, row, lines);
+  const events = await replaceLines(ctx, DOC, id, row, lines, taxInclusive);
   await reevaluate(ctx, 'purchase_order', id);
   return events;
 }

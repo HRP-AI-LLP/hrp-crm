@@ -33,6 +33,8 @@ import { BillPanel, ExpensePanel, MakeRecurring, VendorPaymentPanel, WriteOffBut
 import { ProjectWorkspace } from '../components/projects/ProjectWorkspace';
 import { JobWorkPanel, WorkOrderPanel } from '../components/mfg/MfgPanels';
 import { RecordDeposits } from '../components/books/Deposits';
+import { DealCharges } from '../components/deals/DealCharges';
+import { SignaturesPanel } from '../components/SignaturesPanel';
 
 /** Mirrors the API: documents that drive stock, tax or customer commitments are deleted only in these states. */
 const DELETABLE_IN: Record<string, string[]> = {
@@ -219,6 +221,7 @@ export function RecordDetailPage() {
             <QuoteRevisions quoteId={id} />
           </div>
           <QuoteEditor quoteId={id} canEdit={canEdit} />
+          <SignaturesPanel object="quote" id={id} signable={rec.status !== "superseded"} />
         </div>
       )}
 
@@ -226,12 +229,14 @@ export function RecordDetailPage() {
         <>
           <ApprovalBar object={object} record={rec} canEdit={canEdit} />
           <OrderPanel orderId={id} canEdit={canEdit} />
+          <SignaturesPanel object="sales_order" id={id} signable={rec.status !== 'cancelled'} />
         </>
       )}
       {object === 'purchase_order' && (
         <>
           <ApprovalBar object={object} record={rec} canEdit={canEdit} />
           <PoPanel poId={id} canEdit={canEdit} />
+          <SignaturesPanel object="purchase_order" id={id} signable={rec.status !== 'cancelled'} />
         </>
       )}
       {object === 'vendor' && <VendorScorecard vendorId={id} />}
@@ -248,6 +253,7 @@ export function RecordDetailPage() {
             </div>
           )}
           <InvoicePanel id={id} canEdit={canEdit} />
+          <SignaturesPanel object="invoice" id={id} signable={!['draft', 'cancelled'].includes(String(rec.status))} why="Issue the invoice first: a signed draft would change" />
         </>
       )}
       {object === 'bill' && (
@@ -258,6 +264,7 @@ export function RecordDetailPage() {
       )}
       {object === 'vendor_payment' && <VendorPaymentPanel id={id} canEdit={canEdit} />}
       {object === 'expense' && <ExpensePanel rec={rec} canEdit={canEdit} />}
+      {object === 'deal' && <DealCharges dealId={id} canEdit={canEdit} />}
       {(object === 'deal' || object === 'project') && apps.has('billing') && me && (hasAdmin(me.permissions, 'books') || hasAdmin(me.permissions, 'billing')) && (
         <RecordDeposits object={object} rec={rec as Record<string, unknown>} />
       )}

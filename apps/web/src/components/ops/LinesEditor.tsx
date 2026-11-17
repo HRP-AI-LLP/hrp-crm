@@ -55,6 +55,7 @@ export function LinesEditor({
   taxLabel = "GST",
   saveLabel = "Save lines",
   hideTotals = false,
+  taxInclusive: initialInclusive = false,
   onSave,
 }: {
   lines: DocLine[];
@@ -66,9 +67,13 @@ export function LinesEditor({
   saveLabel?: string;
   /** the caller shows its own totals (invoices: CGST/SGST/IGST from the server) */
   hideTotals?: boolean;
-  onSave: (lines: DocLine[]) => Promise<unknown>;
+  /** "Prices include GST": rates are what the customer pays */
+  taxInclusive?: boolean;
+  onSave: (lines: DocLine[], taxInclusive: boolean) => Promise<unknown>;
 }) {
   const [lines, setLines] = useState<DocLine[]>(initial);
+  const [inclusive, setInclusive] = useState(initialInclusive);
+  useEffect(() => setInclusive(initialInclusive), [initialInclusive]);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const products = useProductOptions();
@@ -76,7 +81,7 @@ export function LinesEditor({
     setLines(initial);
     setDirty(false);
   }, [initial]);
-  const calc = useMemo(() => computeLines(lines), [lines]);
+  const calc = useMemo(() => computeLines(lines, inclusive), [lines, inclusive]);
   const edit = (i: number, patch: Partial<DocLine>) => {
     setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
     setDirty(true);
@@ -96,7 +101,7 @@ export function LinesEditor({
   const save = async () => {
     setBusy(true);
     try {
-      await onSave(lines.filter((l) => l.name.trim()));
+      await onSave(lines.filter((l) => l.name.trim()), inclusive);
       setDirty(false);
     } finally {
       setBusy(false);
@@ -105,6 +110,21 @@ export function LinesEditor({
 
   return (
     <div className="stack">
+      {(!locked || inclusive) && (
+        <label className="row small" style={{ gap: 6 }}>
+          <input
+            type="checkbox"
+            disabled={locked}
+            checked={inclusive}
+            onChange={(e) => {
+              setInclusive(e.target.checked);
+              setDirty(true);
+            }}
+          />
+          Prices include {taxLabel}
+          {inclusive && <span className="muted">— the rate is what the customer pays; the taxable value is worked back from it</span>}
+        </label>
+      )}
       <div className="table-wrap">
         <table className="data qlines">
           <thead>

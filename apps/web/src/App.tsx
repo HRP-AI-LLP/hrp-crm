@@ -17,11 +17,13 @@ const PublicFormPage = page(() => import('./pages/PublicForm'), 'PublicFormPage'
 const RecordDetailPage = page(() => import('./pages/RecordDetail'), 'RecordDetailPage');
 const RecordListPage = page(() => import('./pages/RecordList'), 'RecordListPage');
 const SettingsPage = page(() => import('./pages/Settings'), 'SettingsPage');
+const OrganisationPage = page(() => import('./pages/Organisation'), 'OrganisationPage');
 const TasksPage = page(() => import('./pages/Tasks'), 'TasksPage');
 const CalendarPage = page(() => import('./pages/Calendar'), 'CalendarPage');
 const DashboardsPage = page(() => import('./pages/Dashboards'), 'DashboardsPage');
 const ForecastPage = page(() => import('./pages/Forecast'), 'ForecastPage');
 const PublicQuotePage = page(() => import('./pages/QuotePages'), 'PublicQuotePage');
+const VerifyPage = page(() => import('./pages/VerifyPage'), 'VerifyPage');
 const QuotePrintPage = page(() => import('./pages/QuotePages'), 'QuotePrintPage');
 const ReportBuilderPage = page(() => import('./pages/Reports'), 'ReportBuilderPage');
 const ReportsPage = page(() => import('./pages/Reports'), 'ReportsPage');
@@ -78,6 +80,7 @@ export function App() {
     <Routes>
       <Route path="/f/:key" element={<PublicFormPage />} />
       <Route path="/q/:token" element={<PublicQuotePage />} />
+      <Route path="/verify/:tenant/:code" element={<VerifyPage />} />
       <Route path="/d/:token" element={<JobConfirmPage kind="shipment" />} />
       <Route path="/i/:token" element={<JobConfirmPage kind="installation" />} />
       <Route path="/t/:token" element={<TicketStatusPage />} />
@@ -140,6 +143,7 @@ export function App() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:id" element={<ProjectPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="organisation" element={<OrganisationPage />} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="health" element={<HealthPage />} />
         <Route path="copilot" element={<CopilotPage />} />

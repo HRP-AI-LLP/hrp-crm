@@ -31,7 +31,40 @@ async function applySla(ctx: HookCtx, cols: Record<string, unknown>, from: Date,
   cols.resolution_due = pol ? new Date(from.getTime() + pol.resolution_minutes * 60_000).toISOString() : null;
 }
 
+/** Due date from payment terms and the invoice date (null for custom terms: the date is set by hand). */
+export function dueFromTerms(terms: string | null | undefined, invoiceDate: string): string | null {
+  if (!terms || terms === 'custom') return null;
+  const d = new Date(`${invoiceDate.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return null;
+  if (terms === 'due_on_receipt') return invoiceDate.slice(0, 10);
+  const net = /^net_(\d{1,3})$/.exec(terms);
+  if (net) return new Date(d.getTime() + Number(net[1]) * 86_400_000).toISOString().slice(0, 10);
+  const months = terms === 'end_of_month' ? 1 : terms === 'end_of_next_month' ? 2 : 0;
+  if (!months) return null;
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + months, 0)).toISOString().slice(0, 10);
+}
+
+const todayIst = () => new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10);
+const asDate = (v: unknown) => (v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v).slice(0, 10) : null);
+
+/** Invoices: terms default to the customer's; the due date follows the terms. */
+async function invoiceTerms(ctx: HookCtx, cols: Record<string, unknown>, row: Record<string, unknown> | null) {
+  const accountId = cols.account_id !== undefined ? cols.account_id : row?.account_id;
+  if (!row && cols.payment_terms === undefined && accountId) {
+    const a = await ctx.tx.one<{ payment_terms: string | null }>(`select payment_terms from accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, accountId]);
+    if (a?.payment_terms) cols.payment_terms = a.payment_terms;
+  }
+  const terms = (cols.payment_terms !== undefined ? cols.payment_terms : row?.payment_terms) as string | null | undefined;
+  const changed = !row || cols.payment_terms !== undefined || cols.invoice_date !== undefined;
+  if (!changed || !terms || terms === 'custom') return;
+  if (row && cols.due_date !== undefined && cols.payment_terms === undefined) return; // a due date set by hand wins
+  const date = asDate(cols.invoice_date !== undefined ? cols.invoice_date : row?.invoice_date) ?? todayIst();
+  const due = dueFromTerms(terms, date);
+  if (due) cols.due_date = due;
+}
+
 export async function beforeCreate(ctx: HookCtx, objectKey: string, cols: Record<string, unknown>) {
+  if (objectKey === 'invoice') await invoiceTerms(ctx, cols, null);
   if (objectKey === 'ticket') {
     cols.priority ??= 'normal';
     cols.status ??= 'new';
@@ -124,6 +157,7 @@ export async function beforeCreate(ctx: HookCtx, objectKey: string, cols: Record
 }
 
 export async function beforeUpdate(ctx: HookCtx, objectKey: string, row: Record<string, unknown>, cols: Record<string, unknown>) {
+  if (objectKey === 'invoice' && row.status === 'draft') await invoiceTerms(ctx, cols, row);
   if (objectKey === 'ticket') {
     const now = new Date().toISOString();
     const to = cols.status as string | undefined;

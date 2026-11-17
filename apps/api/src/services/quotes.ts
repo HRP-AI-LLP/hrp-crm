@@ -26,7 +26,12 @@ export type LineInput = z.infer<typeof lineSchema>;
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-export function computeLines(lines: LineInput[]) {
+/**
+ * Line arithmetic. Prices are before GST by default; with `taxInclusive` (the document's "Prices include
+ * GST") the price and discount are GST-inclusive, and the taxable value is worked back from the amount:
+ * ₹1,200 at 18% → taxable ₹1,016.95 + GST ₹183.05, total exactly ₹1,200.
+ */
+export function computeLines(lines: LineInput[], taxInclusive = false) {
   let subtotal = 0;
   let discount = 0;
   let tax = 0;
@@ -34,6 +39,17 @@ export function computeLines(lines: LineInput[]) {
     const gross = r2(l.quantity * l.unitPrice);
     const disc = r2((gross * l.discountPct) / 100);
     const net = r2(gross - disc);
+    if (taxInclusive) {
+      // the amount is what the customer pays; GST is inside it
+      const k = 1 + l.taxRate / 100;
+      const taxable = r2(net / k);
+      const lineTax = r2(net - taxable);
+      const grossEx = r2(gross / k);
+      subtotal += grossEx;
+      discount += r2(grossEx - taxable);
+      tax += lineTax;
+      return { ...l, position: i + 1, lineSubtotal: taxable, lineTax, lineTotal: net };
+    }
     const lineTax = r2((net * l.taxRate) / 100);
     subtotal += gross;
     discount += disc;
@@ -112,7 +128,7 @@ export async function getQuote(ctx: RecordCtx, id: string) {
 }
 
 /** Replaces all line items and recalculates totals. */
-export async function saveLines(ctx: RecordCtx, id: string, input: LineInput[], opts: { priceBookId?: string | null; billTo?: unknown } = {}): Promise<RecordEvent[]> {
+export async function saveLines(ctx: RecordCtx, id: string, input: LineInput[], opts: { priceBookId?: string | null; billTo?: unknown; taxInclusive?: boolean } = {}): Promise<RecordEvent[]> {
   const { row } = await loadRow(ctx, 'quote', id, 'update', true);
   if (row.status === 'accepted') throw badRequest('Accepted quotes cannot be changed. Convert it to an order, or create a new quote.');
   if (row.status === 'superseded') throw badRequest('This revision was replaced by a newer one.');
@@ -127,7 +143,9 @@ export async function saveLines(ctx: RecordCtx, id: string, input: LineInput[], 
     const pb = await ctx.tx.one(`select 1 from price_books where tenant_id = $1 and id = $2`, [ctx.tenantId, opts.priceBookId]);
     if (!pb) throw badRequest('Unknown price book');
   }
-  const c = computeLines(input);
+  const inclusive = opts.taxInclusive ?? !!row.tax_inclusive;
+  if (opts.taxInclusive !== undefined && opts.taxInclusive !== !!row.tax_inclusive) await ctx.tx.query(`update quotes set tax_inclusive = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, opts.taxInclusive]);
+  const c = computeLines(input, inclusive);
   await ctx.tx.query(`delete from quote_lines where tenant_id = $1 and quote_id = $2`, [ctx.tenantId, id]);
   for (const l of c.lines) {
     await ctx.tx.query(

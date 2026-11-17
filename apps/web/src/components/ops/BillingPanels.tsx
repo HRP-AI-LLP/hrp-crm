@@ -286,8 +286,9 @@ export function InvoicePanel({ id, canEdit }: { id: string; canEdit: boolean }) 
           currency={inv.currency}
           saveLabel="Save invoice"
           hideTotals
-          onSave={async (lines) => {
-            await act(() => put(`/api/v1/invoices/${id}/lines`, { lines: lines.map((l) => ({ ...toLineInput(l), orderLineId: (l as Json).orderLineId ?? null })) }), 'Invoice saved');
+          taxInclusive={!!inv.tax_inclusive}
+          onSave={async (lines, taxInclusive) => {
+            await act(() => put(`/api/v1/invoices/${id}/lines`, { taxInclusive, lines: lines.map((l) => ({ ...toLineInput(l), orderLineId: (l as Json).orderLineId ?? null })) }), 'Invoice saved');
           }}
         />
         <div className="spread" style={{ alignItems: 'flex-start' }}>

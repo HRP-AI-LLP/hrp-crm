@@ -48,9 +48,13 @@ async function assertPostingAccounts(ctx: RecordCtx, ids: (string | null | undef
 }
 
 /** Replaces a draft bill's lines and recomputes it. */
-export async function saveBillLines(ctx: RecordCtx, id: string, input: BillLineInput[]): Promise<RecordEvent[]> {
+export async function saveBillLines(ctx: RecordCtx, id: string, input: BillLineInput[], taxInclusive?: boolean): Promise<RecordEvent[]> {
   const { row } = await loadRow(ctx, 'bill', id, 'update', true);
   if (row.status !== 'draft') throw badRequest('Only draft bills can be edited');
+  if (taxInclusive !== undefined && taxInclusive !== !!row.tax_inclusive) {
+    await ctx.tx.query(`update bills set tax_inclusive = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, taxInclusive]);
+    row.tax_inclusive = taxInclusive;
+  }
   if (input.length > 300) throw badRequest('A bill can have at most 300 lines');
   await assertPostingAccounts(ctx, input.map((l) => l.accountId));
   const pids = [...new Set(input.map((l) => l.productId).filter((x): x is string => !!x))];
@@ -64,7 +68,7 @@ export async function saveBillLines(ctx: RecordCtx, id: string, input: BillLineI
     const ok = await ctx.tx.query(`select id from purchase_order_lines where tenant_id = $1 and order_id = $2 and id = any($3::uuid[])`, [ctx.tenantId, row.purchase_order_id, poLines]);
     if (ok.length !== poLines.length) throw badRequest('A line refers to another purchase order');
   }
-  const c = computeLines(input);
+  const c = computeLines(input, !!row.tax_inclusive);
   await ctx.tx.query(`delete from bill_lines where tenant_id = $1 and order_id = $2`, [ctx.tenantId, id]);
   for (const l of c.lines) {
     const src = input[l.position - 1]!;
@@ -98,8 +102,11 @@ export async function recomputeBill(ctx: RecordCtx, id: string) {
     igst += s.igst;
     await ctx.tx.query(`update bill_lines set line_cgst = $3, line_sgst = $4, line_igst = $5 where tenant_id = $1 and id = $2`, [ctx.tenantId, l.id, s.cgst, s.sgst, s.igst]);
   }
-  const subtotal = r2(lines.reduce((a, l) => a + Number(l.quantity) * Number(l.unit_price), 0));
   const taxable = r2(lines.reduce((a, l) => a + Number(l.line_subtotal), 0));
+  // prices including GST: the amount before discount is worked back the same way as the taxable value
+  const subtotal = b.tax_inclusive
+    ? r2(lines.reduce((a, l) => a + (Number(l.quantity) * Number(l.unit_price)) / (1 + Number(l.tax_rate) / 100), 0))
+    : r2(lines.reduce((a, l) => a + Number(l.quantity) * Number(l.unit_price), 0));
   const tax = r2(cgst + sgst + igst);
   // under reverse charge the supplier charges no GST: you pay it to the government yourself
   const exact = r2(taxable + (b.reverse_charge ? 0 : tax));

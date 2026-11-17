@@ -148,8 +148,9 @@ export function BillPanel({ id, canEdit }: { id: string; canEdit: boolean }) {
           currency={b.currency}
           saveLabel="Save bill"
           hideTotals
-          onSave={async (lines) => {
-            await act(() => put(`/api/v1/books/bills/${id}/lines`, { lines: lines.map((l) => ({ ...toLineInput(l), accountId: (l as Json).accountId ?? null, projectId: (l as Json).projectId ?? null, poLineId: (l as Json).poLineId ?? null })) }), 'Bill saved');
+          taxInclusive={!!b.tax_inclusive}
+          onSave={async (lines, taxInclusive) => {
+            await act(() => put(`/api/v1/books/bills/${id}/lines`, { taxInclusive, lines: lines.map((l) => ({ ...toLineInput(l), accountId: (l as Json).accountId ?? null, projectId: (l as Json).projectId ?? null, poLineId: (l as Json).poLineId ?? null })) }), 'Bill saved');
           }}
         />
         {data.lines.length > 0 && <LineAccounts billId={id} lines={data.lines} locked={!canEdit || !draft} onSaved={() => act(async () => undefined, 'Accounts saved')} />}
@@ -671,8 +672,8 @@ export function ExpensePanel({ rec, canEdit }: { rec: Json; canEdit: boolean }) 
 /* ───────────────────────── make recurring ───────────────────────── */
 
 const KEEP: Record<'invoice' | 'bill' | 'expense', string[]> = {
-  invoice: ['name', 'account_id', 'doc_type', 'place_of_supply', 'currency', 'exchange_rate', 'notes', 'terms'],
-  bill: ['name', 'vendor_id', 'place_of_supply', 'reverse_charge', 'itc_eligible', 'currency', 'exchange_rate', 'tds_section', 'tds_rate', 'notes'],
+  invoice: ['name', 'subject', 'account_id', 'contact_id', 'deal_id', 'customer_ref', 'doc_type', 'place_of_supply', 'currency', 'exchange_rate', 'tax_inclusive', 'payment_terms', 'notes', 'terms'],
+  bill: ['name', 'vendor_id', 'place_of_supply', 'tax_inclusive', 'reverse_charge', 'itc_eligible', 'currency', 'exchange_rate', 'tds_section', 'tds_rate', 'notes'],
   expense: ['name', 'amount', 'amount_is_inclusive', 'tax_rate', 'supply_type', 'itc_eligible', 'vendor_id', 'vendor_name', 'vendor_gstin', 'billable', 'customer_id', 'notes'],
 };
 

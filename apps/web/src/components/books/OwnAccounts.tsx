@@ -21,14 +21,14 @@ const KINDS: [Ident['kind'], string, string][] = [
   ['name', 'Name as the bank prints it', 'PRASHANT K SRIVASTAVA'],
 ];
 const KIND_LABEL = Object.fromEntries(KINDS.map(([k, l]) => [k, l]));
-const ROLES: [string, string, string][] = [
+export const ROLES: [string, string, string][] = [
   ['partner', 'Partner', "One running ledger: “<name> — partner's current account” (equity)"],
   ['director', 'Director', 'One running ledger: “Loan from <name> (director)” (liability)'],
   ['proprietor', 'Proprietor', "Money in to Owner's capital, money out to Drawings"],
   ['other', 'Other (family, relative)', 'One running ledger: “<name> — personal account” (liability)'],
 ];
 
-function IdentEditor({ list, onChange, kinds = KINDS }: { list: Ident[]; onChange: (l: Ident[]) => void; kinds?: typeof KINDS }) {
+export function IdentEditor({ list, onChange, kinds = KINDS }: { list: Ident[]; onChange: (l: Ident[]) => void; kinds?: typeof KINDS }) {
   return (
     <div className="stack" style={{ gap: 6 }}>
       {list.map((it, i) => (
@@ -55,7 +55,11 @@ function IdentEditor({ list, onChange, kinds = KINDS }: { list: Ident[]; onChang
   );
 }
 
-function PersonModal({ person, defaultRole, onClose, onSaved }: { person: Json | null; defaultRole: string; onClose: () => void; onSaved: (r: Json) => void }) {
+/** Where people and bank identifiers are saved: the accounts desk, or Settings → Organisation. */
+export const DESK_PATHS = { person: '/api/v1/books/desk/own/persons', bank: '/api/v1/books/desk/own/banks' };
+export const ORG_PATHS = { person: '/api/v1/organisation/people', bank: '/api/v1/organisation/bank-accounts' };
+
+export function PersonModal({ person, defaultRole, onClose, onSaved, paths = DESK_PATHS, details = false, users = [] }: { person: Json | null; defaultRole: string; onClose: () => void; onSaved: (r: Json) => void; paths?: typeof DESK_PATHS; details?: boolean; users?: { id: string; name: string }[] }) {
   const toast = useToast();
   const accounts = useQuery({ queryKey: ['books', 'accounts'], queryFn: () => get<Json[]>('/api/v1/books/accounts'), staleTime: 30_000 });
   const [f, setF] = useState({
@@ -65,6 +69,14 @@ function PersonModal({ person, defaultRole, onClose, onSaved }: { person: Json |
     accountIn: person?.account_in ?? '',
     accountOut: person?.account_out ?? '',
     identifiers: (person?.identifiers ?? [{ kind: 'mobile', value: '' }]) as Ident[],
+    designation: person?.designation ?? '',
+    phone: person?.phone ?? '',
+    email: person?.email ?? '',
+    pan: person?.pan ?? '',
+    din: person?.din ?? '',
+    sharePct: person?.share_pct ?? '',
+    joinedOn: person?.joined_on ?? '',
+    userId: person?.user_id ?? '',
   });
   const [busy, setBusy] = useState(false);
   const ledgers = (accounts.data ?? []).filter((a) => ['equity', 'liability'].includes(a.type) && !['accounts_payable', 'credit_card', 'tax_payable'].includes(a.subtype) && a.is_active !== false);
@@ -76,8 +88,11 @@ function PersonModal({ person, defaultRole, onClose, onSaved }: { person: Json |
         role: f.role,
         identifiers: f.identifiers.filter((i) => i.value.trim()),
         ...(f.custom ? { accountIn: f.accountIn || null, accountOut: f.accountOut || null } : {}),
+        ...(details
+          ? { designation: f.designation || null, phone: f.phone || null, email: f.email || null, pan: f.pan || null, din: f.din || null, sharePct: f.sharePct === '' ? null : Number(f.sharePct), joinedOn: f.joinedOn || null, userId: f.userId || null }
+          : {}),
       };
-      const r = person ? await put<Json>(`/api/v1/books/desk/own/persons/${person.id}`, body) : await post<Json>('/api/v1/books/desk/own/persons', body);
+      const r = person ? await put<Json>(`${paths.person}/${person.id}`, body) : await post<Json>(paths.person, body);
       onSaved(r);
       onClose();
     } catch (e) {
@@ -106,6 +121,49 @@ function PersonModal({ person, defaultRole, onClose, onSaved }: { person: Json |
           Name
           <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Prashant Srivastava" autoFocus />
         </label>
+        {details && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
+            <label className="field">
+              Designation
+              <input value={f.designation} onChange={(e) => setF({ ...f, designation: e.target.value })} placeholder="Designated partner" />
+            </label>
+            <label className="field">
+              Share / capital %
+              <input className="num" inputMode="decimal" value={f.sharePct} onChange={(e) => setF({ ...f, sharePct: e.target.value })} />
+            </label>
+            <label className="field">
+              Phone
+              <input value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} />
+            </label>
+            <label className="field">
+              Email
+              <input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+            </label>
+            <label className="field">
+              PAN
+              <input className="mono" maxLength={10} value={f.pan} onChange={(e) => setF({ ...f, pan: e.target.value.toUpperCase() })} />
+            </label>
+            <label className="field">
+              DIN / DPIN
+              <input className="mono" maxLength={8} value={f.din} onChange={(e) => setF({ ...f, din: e.target.value })} />
+            </label>
+            <label className="field">
+              Partner / director since
+              <input type="date" value={f.joinedOn} onChange={(e) => setF({ ...f, joinedOn: e.target.value })} />
+            </label>
+            <label className="field">
+              Their Synapse user
+              <select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>
+                <option value="">—</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
         <div className="field">
           Role in the business
           <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })}>
@@ -154,7 +212,7 @@ function PersonModal({ person, defaultRole, onClose, onSaved }: { person: Json |
   );
 }
 
-function BankModal({ bank, onClose, onSaved }: { bank: Json; onClose: () => void; onSaved: (r: Json) => void }) {
+export function BankModal({ bank, onClose, onSaved, paths = DESK_PATHS }: { bank: Json; onClose: () => void; onSaved: (r: Json) => void; paths?: typeof DESK_PATHS }) {
   const toast = useToast();
   const kinds = KINDS.filter(([k]) => k === 'account' || k === 'upi');
   const [list, setList] = useState<Ident[]>(bank.identifiers.length ? bank.identifiers : [{ kind: 'account', value: '' }]);
@@ -162,7 +220,7 @@ function BankModal({ bank, onClose, onSaved }: { bank: Json; onClose: () => void
   const save = async () => {
     setBusy(true);
     try {
-      onSaved(await put<Json>(`/api/v1/books/desk/own/banks/${bank.id}`, { identifiers: list.filter((i) => i.value.trim()) }));
+      onSaved(await put<Json>(`${paths.bank}/${bank.id}`, { identifiers: list.filter((i) => i.value.trim()) }));
       onClose();
     } catch (e) {
       toast((e as Error).message, true);

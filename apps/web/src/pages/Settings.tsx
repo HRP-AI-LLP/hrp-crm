@@ -5,6 +5,7 @@ import { SolutionsPanel } from '../components/admin/SolutionsAdmin';
 import { AgentsAdmin, CompetitorsAdmin } from '../components/admin/IntelAdmin';
 import { QuickReplies, TemplatesModal } from '../components/admin/WhatsAppAdmin';
 import { useOAuthReturn } from '../lib/oauthReturn';
+import { OrganisationTab } from './Organisation';
 import { AutomationsTab } from '../components/builders/AutomationBuilder';
 import { FieldEditor, TYPE_LABELS } from '../components/builders/FieldEditor';
 import { LayoutBuilder } from '../components/builders/LayoutBuilder';
@@ -26,6 +27,9 @@ import { useMeta } from '../lib/hooks';
 type Json = Record<string, any>;
 
 const GROUPS: [string, [string, string, string][]][] = [
+  ['Company', [
+    ['organisation', 'Organisation', 'organisation'],
+  ]],
   ['Customise', [
     ['fields', 'Objects & fields', 'metadata'],
     ['pipelines', 'Pipelines', 'metadata'],
@@ -114,6 +118,7 @@ export function SettingsPage() {
           <h2>{current?.[1]}</h2>
         </div>
         <div className="panel-body">
+          {tab === 'organisation' && <OrganisationTab />}
           {tab === 'fields' && <ObjectsTab />}
           {tab === 'pipelines' && <PipelinesTab />}
           {tab === 'sales' && <SalesSetup />}

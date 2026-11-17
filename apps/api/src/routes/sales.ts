@@ -128,8 +128,8 @@ export const salesRoutes = new Hono<AppEnv>()
   // ============================================================================ quotes
   .get('/quotes/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => getQuote(rctx(c, tx), c.req.param('id')))))
   .put('/quotes/:id/lines', async (c) => {
-    const b = z.object({ lines: z.array(lineSchema).max(200), priceBookId: uuid.nullish(), billTo: z.record(z.string(), z.string().max(500)).nullish() }).parse(await c.req.json());
-    const events = await c.var.db.tx(scope(c), (tx) => saveLines(rctx(c, tx), c.req.param('id'), b.lines, { priceBookId: b.priceBookId === undefined ? undefined : b.priceBookId, billTo: b.billTo === undefined ? undefined : b.billTo }));
+    const b = z.object({ lines: z.array(lineSchema).max(200), priceBookId: uuid.nullish(), billTo: z.record(z.string(), z.string().max(500)).nullish(), taxInclusive: z.boolean().optional() }).parse(await c.req.json());
+    const events = await c.var.db.tx(scope(c), (tx) => saveLines(rctx(c, tx), c.req.param('id'), b.lines, { priceBookId: b.priceBookId === undefined ? undefined : b.priceBookId, billTo: b.billTo === undefined ? undefined : b.billTo, taxInclusive: b.taxInclusive }));
     await enqueue(c.env, safeCtx(c), eventJobs(c.var.tenant.id, c.var.principal.user.id, events));
     return c.json(await c.var.db.tx(scope(c, true), (tx) => getQuote(rctx(c, tx), c.req.param('id'))));
   })

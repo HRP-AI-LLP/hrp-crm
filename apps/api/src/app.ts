@@ -13,6 +13,8 @@ import { flowRoutes, rulesAdminRoutes } from './routes/flow';
 import { appsAdminRoutes, opsRoutes } from './routes/ops';
 import { fieldRoutes, serviceAdminRoutes } from './routes/field';
 import { billingAdminRoutes, billingRoutes } from './routes/billing';
+import { organisationRoutes, verifyPublicRoutes } from './routes/organisation';
+import { dealBillingRoutes } from './routes/deal-billing';
 import { booksRoutes } from './routes/books';
 import { projectRoutes } from './routes/projects';
 import { manufacturingRoutes } from './routes/manufacturing';
@@ -61,6 +63,7 @@ export function createApp() {
   app.route('/api/public', whatsappPublicRoutes);
   app.route('/api/public', sharePublicRoutes);
   app.route('/api/public', tallyPublicRoutes);
+  app.route('/api/public', verifyPublicRoutes);
 
   app.use('/api/auth/*', tenantResolver);
   app.route('/api/auth', authRoutes);
@@ -75,6 +78,8 @@ export function createApp() {
   app.route('/api/v1', opsRoutes);
   app.route('/api/v1', fieldRoutes);
   app.route('/api/v1', billingRoutes);
+  app.route('/api/v1', organisationRoutes);
+  app.route('/api/v1', dealBillingRoutes);
   app.route('/api/v1', booksRoutes);
   app.route('/api/v1', projectRoutes);
   app.route('/api/v1', manufacturingRoutes);

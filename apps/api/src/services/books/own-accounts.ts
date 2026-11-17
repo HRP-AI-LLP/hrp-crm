@@ -17,6 +17,9 @@ import type { RecordCtx, RecordEvent } from '../records';
 import { undoTxn } from './banking';
 import { voidVendorPayment } from './bills';
 import { assertBooksAdmin, sys } from './ledger';
+import { canManageOrg } from '../organisation';
+import { hasAdmin } from '@synapse/shared';
+import { forbidden } from '../../lib/errors';
 
 export type IdentKind = 'mobile' | 'upi' | 'account' | 'name';
 export type Role = 'partner' | 'director' | 'proprietor' | 'other';
@@ -36,6 +39,14 @@ export interface OwnPerson {
   account_in: string;
   account_out: string;
   is_active: boolean;
+  designation?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  pan?: string | null;
+  din?: string | null;
+  share_pct?: number | null;
+  joined_on?: string | null;
+  user_id?: string | null;
 }
 export interface OwnBank {
   id: string;
@@ -102,7 +113,11 @@ export function identMatches(ident: Pick<OwnIdent, 'kind' | 'match_key'>, text: 
 export const identConfidence = (kind: IdentKind) => (kind === 'name' ? 0.9 : 0.99);
 
 export async function loadOwn(ctx: RecordCtx): Promise<Own> {
-  const persons = await ctx.tx.query<OwnPerson>(`select id, name, role, account_in, account_out, is_active from acct_persons where tenant_id = $1 order by created_at`, [ctx.tenantId]);
+  const persons = await ctx.tx.query<OwnPerson>(
+    `select id, name, role, account_in, account_out, is_active, designation, phone, email, pan, din, share_pct::float8 as share_pct, to_char(joined_on, 'YYYY-MM-DD') as joined_on, user_id
+       from acct_persons where tenant_id = $1 order by created_at`,
+    [ctx.tenantId],
+  );
   const idents = await ctx.tx.query<OwnIdent>(`select id, person_id, bank_account_id, kind, value, match_key from acct_identifiers where tenant_id = $1 order by created_at`, [ctx.tenantId]);
   const banks = await ctx.tx.query<OwnBank>(
     `select b.id, b.gl_account_id, a.name from bank_accounts b join gl_accounts a on a.tenant_id = b.tenant_id and a.id = b.gl_account_id where b.tenant_id = $1 and b.is_active`,
@@ -134,12 +149,23 @@ export function findOwn(own: Own, line: { bank_account_id: string; description: 
   return null;
 }
 
+/** Books admins (accounts desk) and the organisation profile's managers keep this list. */
+async function assertOwnAccess(ctx: RecordCtx) {
+  if (hasAdmin(ctx.principal.permissions, 'books') || (await canManageOrg(ctx))) return;
+  throw forbidden('Only books admins and the organisation profile managers can change this');
+}
+
 /* ───────────────────────── people and their ledgers ───────────────────────── */
 
 /** From the PAN (4th letter, also the 6th character of the GSTIN): F firm / LLP, C company, P proprietor. */
 async function constitution(ctx: RecordCtx): Promise<'F' | 'C' | 'P' | null> {
   const t = await ctx.tx.one<{ settings: any }>(`select settings from tenants where id = $1`, [ctx.tenantId]);
   const c = t?.settings?.company ?? {};
+  // the constitution chosen in the organisation profile, else the PAN's 4th letter
+  const k = String(c.constitution ?? '');
+  if (['llp', 'partnership'].includes(k)) return 'F';
+  if (['private_limited', 'public_limited', 'opc', 'section_8'].includes(k)) return 'C';
+  if (k === 'proprietorship') return 'P';
   const pan = String(c.pan ?? '').toUpperCase();
   const gstin = String(c.gstin ?? '').toUpperCase();
   const ch = /^[A-Z]{5}\d{4}[A-Z]$/.test(pan) ? pan[3] : /^\d{2}[A-Z]{5}\d{4}[A-Z]/.test(gstin) ? gstin[5] : null;
@@ -192,6 +218,14 @@ export const personSchema = z.object({
   accountOut: z.string().uuid().nullish(),
   isActive: z.boolean().optional(),
   identifiers: z.array(identInput).max(30).default([]),
+  designation: z.string().trim().max(120).nullish(),
+  phone: z.union([z.literal(''), z.string().trim().regex(/^[+0-9 ()\-.]{4,25}$/, 'invalid phone number')]).nullish(),
+  email: z.union([z.literal(''), z.string().trim().toLowerCase().pipe(z.email())]).nullish(),
+  pan: z.union([z.literal(''), z.string().trim().toUpperCase().regex(/^[A-Z]{5}[0-9]{4}[A-Z]$/, 'PAN looks like ABCDE1234F')]).nullish(),
+  din: z.union([z.literal(''), z.string().trim().regex(/^[0-9]{8}$/, 'DIN / DPIN is 8 digits')]).nullish(),
+  sharePct: z.number().min(0).max(100).nullish(),
+  joinedOn: z.union([z.literal(''), z.string().regex(/^\d{4}-\d{2}-\d{2}$/)]).nullish(),
+  userId: z.string().uuid().nullish(),
 });
 
 export const bankIdentsSchema = z.object({ identifiers: z.array(identInput).max(20) });
@@ -236,7 +270,7 @@ async function staleProposals(ctx: RecordCtx) {
 }
 
 export async function savePerson(ctx: RecordCtx, id: string | null, input: z.infer<typeof personSchema>) {
-  await assertBooksAdmin(ctx);
+  await assertOwnAccess(ctx);
   const cur = id ? await ctx.tx.one<OwnPerson>(`select id, name, role, account_in, account_out, is_active from acct_persons where tenant_id = $1 and id = $2`, [ctx.tenantId, id]) : null;
   if (id && !cur) throw notFound();
   const role = input.role ?? cur?.role ?? (await defaultRole(ctx));
@@ -258,19 +292,35 @@ export async function savePerson(ctx: RecordCtx, id: string | null, input: z.inf
     : (await ctx.tx.one<{ id: string }>(`insert into acct_persons (tenant_id, name, role, account_in, account_out, is_active) values ($1,$2,$3,$4,$5,$6) returning id`, [
         ctx.tenantId, input.name, role, accIn, accOut, input.isActive ?? true,
       ]))!.id;
+  // the profile details, when given
+  const det: [string, unknown][] = [
+    ['designation', input.designation],
+    ['phone', input.phone],
+    ['email', input.email],
+    ['pan', input.pan],
+    ['din', input.din],
+    ['share_pct', input.sharePct],
+    ['joined_on', input.joinedOn],
+    ['user_id', input.userId],
+  ];
+  const given = det.filter(([, v]) => v !== undefined);
+  if (given.length)
+    await ctx.tx.query(`update acct_persons set ${given.map(([k], i) => `${k} = $${i + 3}`).join(', ')} where tenant_id = $1 and id = $2`, [
+      ctx.tenantId, pid, ...given.map(([, v]) => (v === '' ? null : v)),
+    ]);
   await writeIdents(ctx, { personId: pid }, input.identifiers);
   await staleProposals(ctx);
   return { id: pid };
 }
 
 export async function deletePerson(ctx: RecordCtx, id: string) {
-  await assertBooksAdmin(ctx);
+  await assertOwnAccess(ctx);
   const r = await ctx.tx.one(`delete from acct_persons where tenant_id = $1 and id = $2 returning id`, [ctx.tenantId, id]);
   if (!r) throw notFound();
 }
 
 export async function saveBankIdents(ctx: RecordCtx, bankAccountId: string, input: z.infer<typeof bankIdentsSchema>) {
-  await assertBooksAdmin(ctx);
+  await assertOwnAccess(ctx);
   if (!(await ctx.tx.one(`select 1 from bank_accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, bankAccountId]))) throw notFound('Bank account not found');
   await writeIdents(ctx, { bankAccountId }, input.identifiers);
   await staleProposals(ctx);
@@ -279,7 +329,7 @@ export async function saveBankIdents(ctx: RecordCtx, bankAccountId: string, inpu
 
 /** People, the company's bank accounts, and what identifies each. */
 export async function listOwn(ctx: RecordCtx) {
-  await assertBooksAdmin(ctx);
+  await assertOwnAccess(ctx);
   const own = await loadOwn(ctx);
   const names = new Map(
     (await ctx.tx.query<{ id: string; name: string }>(`select id, name from gl_accounts where tenant_id = $1 and id = any($2::uuid[])`, [ctx.tenantId, own.persons.flatMap((p) => [p.account_in, p.account_out])])).map((a) => [a.id, a.name]),

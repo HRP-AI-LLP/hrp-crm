@@ -144,8 +144,9 @@ export function OrderPanel({ orderId, canEdit }: { orderId: string; canEdit: boo
           currency={o.currency}
           extraCols={status === 'draft' ? [] : [{ key: 'reservedQty', label: 'Reserved' }, { key: 'shippedQty', label: 'Shipped' }, { key: 'deliveredQty', label: 'Delivered' }]}
           saveLabel="Save order"
-          onSave={async (lines) => {
-            await act(() => put(`/api/v1/orders/${orderId}/lines`, { lines: lines.map(toLineInput) }), 'Order saved');
+          taxInclusive={!!o.tax_inclusive}
+          onSave={async (lines, taxInclusive) => {
+            await act(() => put(`/api/v1/orders/${orderId}/lines`, { taxInclusive, lines: lines.map(toLineInput) }), 'Order saved');
           }}
         />
 

@@ -29,6 +29,7 @@ export const INSTALLATION_STATUSES = ['scheduled', 'in_progress', 'on_hold', 'co
 export const TICKET_STATUSES = ['new', 'open', 'in_progress', 'waiting_customer', 'resolved', 'closed'] as const;
 export const TICKET_PRIORITIES = ['low', 'normal', 'high', 'urgent'] as const;
 export const TICKET_CATEGORIES = ['damage', 'defect', 'installation', 'delivery', 'warranty', 'billing', 'feedback', 'other'] as const;
+export const PAYMENT_TERMS = ['due_on_receipt', 'net_7', 'net_15', 'net_30', 'net_45', 'net_60', 'end_of_month', 'end_of_next_month', 'custom'] as const;
 export const INVOICE_STATUSES = ['draft', 'issued', 'partially_paid', 'paid', 'cancelled'] as const;
 export const PAYMENT_MODES = ['cash', 'upi', 'bank_transfer', 'cheque', 'card', 'other'] as const;
 export const BILL_STATUSES = ['draft', 'open', 'partially_paid', 'paid', 'void'] as const;
@@ -38,7 +39,7 @@ export const PROJECT_STATUSES = ['planning', 'active', 'on_hold', 'completed', '
 export const PROJECT_BILLING_METHODS = ['fixed_price', 'time_project_rate', 'time_staff_rate', 'time_task_rate', 'non_billable'] as const;
 export const EXPENSE_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'recorded', 'reimbursed', 'void'] as const;
 export const VENDOR_TYPES = ['manufacturer', 'supplier', 'contractor', 'transporter', 'installer', 'service_provider', 'other'] as const;
-const LABELS: Record<string, string> = { gem: 'GeM portal', tender: 'Tender (CPPP / e-procurement)', ngo: 'NGO / trust / society' };
+const LABELS: Record<string, string> = { due_on_receipt: 'Due on receipt', net_7: 'Net 7 days', net_15: 'Net 15 days', net_30: 'Net 30 days', net_45: 'Net 45 days', net_60: 'Net 60 days', end_of_month: 'Due end of the month', end_of_next_month: 'Due end of next month', gem: 'GeM portal', tender: 'Tender (CPPP / e-procurement)', ngo: 'NGO / trust / society' };
 const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: LABELS[v] ?? v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
 
 const owner: FieldDef = { key: 'owner_id', label: 'Owner', type: 'user', standard: true, indexed: true };
@@ -93,6 +94,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'state', label: 'State', type: 'text', standard: true, helpText: 'Decides CGST + SGST (same state) or IGST' },
     { key: 'pincode', label: 'PIN code', type: 'text', standard: true },
     owner,
+    { key: 'payment_terms', label: 'Payment terms', type: 'picklist', standard: true, helpText: 'Default for this customer\'s invoices', options: { choices: choices(PAYMENT_TERMS) } },
   ],
   deal: [
     { key: 'name', label: 'Deal name', type: 'text', standard: true, required: true },
@@ -100,6 +102,8 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },
     ...pipelineFields,
     { key: 'amount', label: 'Amount', type: 'currency', standard: true, options: { min: 0 } },
+    { key: 'one_time_total', label: 'One-time charges', type: 'currency', standard: true, readOnly: true, helpText: 'From the deal\'s charges (before GST)' },
+    { key: 'recurring_monthly', label: 'Recurring per month', type: 'currency', standard: true, readOnly: true, helpText: 'Recurring charges as a monthly amount (before GST)' },
     { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
     { key: 'close_date', label: 'Close date', type: 'date', standard: true },
     { key: 'source', label: 'Source', type: 'picklist', standard: true, options: { addable: true, choices: choices(LEAD_SOURCES) } },
@@ -149,6 +153,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'account_id', label: 'Account', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
     { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },
     { key: 'valid_until', label: 'Valid until', type: 'date', standard: true },
+    { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
     { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
     { key: 'subtotal', label: 'Subtotal', type: 'currency', standard: true, readOnly: true },
     { key: 'discount_total', label: 'Discount', type: 'currency', standard: true, readOnly: true },
@@ -181,6 +186,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'installation_required', label: 'Needs installation', type: 'boolean', standard: true },
     { key: 'fulfilment_status', label: 'Fulfilment', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['unfulfilled', 'partially_delivered', 'delivered']) } },
     { key: 'payment_status', label: 'Payment', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['unpaid', 'partially_paid', 'paid']) } },
+    { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
     { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
     { key: 'subtotal', label: 'Subtotal', type: 'currency', standard: true, readOnly: true },
     { key: 'discount_total', label: 'Discount', type: 'currency', standard: true, readOnly: true },
@@ -223,6 +229,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'warehouse_id', label: 'Deliver to', type: 'picklist', standard: true, options: { choices: [] } },
     { key: 'order_date', label: 'PO date', type: 'date', standard: true },
     { key: 'expected_date', label: 'Expected by', type: 'date', standard: true },
+    { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
     { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
     { key: 'subtotal', label: 'Subtotal', type: 'currency', standard: true, readOnly: true },
     { key: 'discount_total', label: 'Discount', type: 'currency', standard: true, readOnly: true },
@@ -310,16 +317,20 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'account_id', label: 'Customer', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
     { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },
     { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, readOnly: true, options: { lookupObject: 'sales_order' } },
+    { key: 'deal_id', label: 'Deal', type: 'lookup', standard: true, options: { lookupObject: 'deal' } },
     { key: 'original_invoice_id', label: 'Against invoice', type: 'lookup', standard: true, readOnly: true, options: { lookupObject: 'invoice' } },
     { key: 'customer_ref', label: "Buyer's order / contract no.", type: 'text', standard: true, indexed: true, options: { maxLength: 100 }, helpText: 'e.g. the GeM contract number or the purchase order number' },
     { key: 'customer_ref_date', label: 'Order / contract date', type: 'date', standard: true },
+    { key: 'subject', label: 'Subject', type: 'text', standard: true, options: { maxLength: 500 }, helpText: 'Printed above the lines, e.g. Monthly maintenance for the website' },
     { key: 'invoice_date', label: 'Invoice date', type: 'date', standard: true, indexed: true },
+    { key: 'payment_terms', label: 'Payment terms', type: 'picklist', standard: true, helpText: 'Sets the due date from the invoice date', options: { choices: choices(PAYMENT_TERMS) } },
     { key: 'due_date', label: 'Due date', type: 'date', standard: true, indexed: true },
     { key: 'place_of_supply', label: 'Place of supply', type: 'text', standard: true, helpText: 'State the goods / services are supplied to; defaults to the customer state' },
     { key: 'shipping_address', label: 'Ship to', type: 'textarea', standard: true },
     { key: 'reverse_charge', label: 'Reverse charge', type: 'boolean', standard: true },
     { key: 'buyer_gstin', label: 'Customer GSTIN', type: 'text', standard: true, readOnly: true },
     { key: 'supply_type', label: 'Supply', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['intra', 'inter', 'export']) } },
+    { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
     { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
     { key: 'taxable_total', label: 'Taxable value', type: 'currency', standard: true, readOnly: true },
     { key: 'cgst_total', label: 'CGST', type: 'currency', standard: true, readOnly: true },
@@ -370,6 +381,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'place_of_supply', label: 'Place of supply', type: 'text', standard: true },
     { key: 'reverse_charge', label: 'Reverse charge', type: 'boolean', standard: true },
     { key: 'itc_eligible', label: 'Input tax credit eligible', type: 'boolean', standard: true },
+    { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
     { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
     { key: 'exchange_rate', label: 'Exchange rate', type: 'number', standard: true, options: { min: 0 } },
     { key: 'tds_section', label: 'TDS section', type: 'text', standard: true, helpText: 'e.g. 194C, 194J — the rate comes from the section unless you set one' },

@@ -29,7 +29,8 @@ interface Entry {
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 /** Same arithmetic as the API (discount per line, then GST on the discounted amount). */
-export function computeLines(lines: QuoteLine[]) {
+/** Same arithmetic as the server; `taxInclusive`: prices already include GST. */
+export function computeLines(lines: QuoteLine[], taxInclusive = false) {
   let subtotal = 0;
   let discount = 0;
   let tax = 0;
@@ -37,6 +38,16 @@ export function computeLines(lines: QuoteLine[]) {
     const gross = r2((Number(l.quantity) || 0) * (Number(l.unitPrice) || 0));
     const disc = r2((gross * (Number(l.discountPct) || 0)) / 100);
     const net = r2(gross - disc);
+    if (taxInclusive) {
+      const k = 1 + (Number(l.taxRate) || 0) / 100;
+      const taxable = r2(net / k);
+      const grossEx = r2(gross / k);
+      const t = r2(net - taxable);
+      subtotal += grossEx;
+      discount += r2(grossEx - taxable);
+      tax += t;
+      return { ...l, lineSubtotal: taxable, lineTax: t, lineTotal: net };
+    }
     const t = r2((net * (Number(l.taxRate) || 0)) / 100);
     subtotal += gross;
     discount += disc;
@@ -58,6 +69,7 @@ export function QuoteEditor({ quoteId, canEdit }: { quoteId: string; canEdit: bo
   const [lines, setLines] = useState<QuoteLine[]>([]);
   const [bookId, setBookId] = useState<string>('');
   const [billTo, setBillTo] = useState<Record<string, string>>({});
+  const [inclusive, setInclusive] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [sending, setSending] = useState(false);
@@ -68,10 +80,11 @@ export function QuoteEditor({ quoteId, canEdit }: { quoteId: string; canEdit: bo
     setLines(data.lines.length ? data.lines : []);
     setBookId(String(data.quote.price_book_id ?? books.data?.items.find((b) => b.is_default)?.id ?? ''));
     setBillTo((data.quote.bill_to as Record<string, string>) ?? {});
+    setInclusive(!!data.quote.tax_inclusive);
     setDirty(false);
   }, [data, books.data]);
 
-  const calc = useMemo(() => computeLines(lines), [lines]);
+  const calc = useMemo(() => computeLines(lines, inclusive), [lines, inclusive]);
   if (!data) return null;
   const q = data.quote;
   const locked = q.status !== 'draft' || !canEdit;
@@ -96,6 +109,7 @@ export function QuoteEditor({ quoteId, canEdit }: { quoteId: string; canEdit: bo
         lines: clean.map((l) => ({ productId: l.productId ?? null, name: l.name.trim(), description: l.description || null, hsnSac: l.hsnSac || null, unit: l.unit || null, quantity: Number(l.quantity), unitPrice: Number(l.unitPrice), discountPct: Number(l.discountPct) || 0, taxRate: Number(l.taxRate) || 0 })),
         priceBookId: bookId || null,
         billTo,
+        taxInclusive: inclusive,
       });
       qc.setQueryData(['quote', quoteId], r);
       qc.invalidateQueries({ queryKey: ['record', 'quote', quoteId] });
@@ -208,6 +222,13 @@ export function QuoteEditor({ quoteId, canEdit }: { quoteId: string; canEdit: bo
             <input value={billTo.address ?? ''} disabled={locked} onChange={(e) => { setBillTo({ ...billTo, address: e.target.value }); setDirty(true); }} />
           </label>
         </div>
+        {(!locked || inclusive) && (
+          <label className="row small" style={{ gap: 6 }}>
+            <input type="checkbox" disabled={locked} checked={inclusive} onChange={(e) => { setInclusive(e.target.checked); setDirty(true); }} />
+            Prices include GST
+            {inclusive && <span className="muted">— the rate is what the customer pays; the taxable value is worked back from it</span>}
+          </label>
+        )}
         <datalist id="in-states">
           {IN_STATES.map((s) => (
             <option key={s} value={s} />

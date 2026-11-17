@@ -126,8 +126,8 @@ export const booksRoutes = new Hono<AppEnv>()
   })
   .put('/books/bills/:id/lines', async (c) => {
     requireBooks(c);
-    const b = z.object({ lines: z.array(billLineSchema).max(300) }).parse(await c.req.json());
-    await emit(c, await c.var.db.tx(scope(c), (tx) => saveBillLines(rctx(c, tx), qUuid(c), b.lines)));
+    const b = z.object({ lines: z.array(billLineSchema).max(300), taxInclusive: z.boolean().optional() }).parse(await c.req.json());
+    await emit(c, await c.var.db.tx(scope(c), (tx) => saveBillLines(rctx(c, tx), qUuid(c), b.lines, b.taxInclusive)));
     return c.json(await c.var.db.tx(scope(c, true), (tx) => getBill(rctx(c, tx), qUuid(c))));
   })
   .post('/books/bills/:id/recalculate', async (c) => {

@@ -257,6 +257,8 @@ export function InvoiceImport() {
                           {!pl.customer?.id && <span className="chip">Customer</span>}
                           {pl.contact && <span className="chip">Contact</span>}
                           {pl.project?.new && <span className="chip">Project</span>}
+                          {pl.deal && <span className="chip" title={pl.recurring ? `Recurring: ${pl.recurring.name}` : ''}>Deal: {pl.deal.name}</span>}
+                          {d.taxInclusive && <span className="chip">incl. GST</span>}
                           <span className="chip">Invoice</span>
                           {pl.payment?.mode !== 'later' && <span className="chip">Receipt</span>}
                         </div>
@@ -314,6 +316,7 @@ function EditInvoice({ item, onClose, onDone, onApprove }: { item: Json; onClose
   const customers = useQuery({ queryKey: ['books', 'parties', 'accounts_receivable'], queryFn: () => get<{ items: Json[] }>('/api/v1/records/account?limit=200&sort=name&dir=asc') });
   const projects = useQuery({ queryKey: ['records', 'project', 'all'], queryFn: () => get<{ items: Json[] }>('/api/v1/records/project?limit=200').catch(() => ({ items: [] })) });
   const banks = useQuery({ queryKey: ['books', 'bank-accounts'], queryFn: () => get<Json[]>('/api/v1/books/bank-accounts') });
+  const deals = useQuery({ queryKey: ['records', 'deal', 'import'], queryFn: () => get<{ items: Json[] }>('/api/v1/records/deal?limit=200&sort=updated_at&dir=desc').catch(() => ({ items: [] })) });
   const tax = (Number(d.cgst) || 0) + (Number(d.sgst) || 0) + (Number(d.igst) || 0);
   const linesSum = (d.lines as Json[]).reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const setC = (k: string, v: unknown) => setD({ ...d, customer: { ...d.customer, [k]: v } });
@@ -331,6 +334,9 @@ function EditInvoice({ item, onClose, onDone, onApprove }: { item: Json; onClose
     customer: Object.fromEntries(Object.entries(d.customer).map(([k, v]) => [k, v === '' ? null : v])),
     lines: (d.lines as Json[]).map((l) => ({ description: String(l.description || 'Item'), hsn: l.hsn || null, qty: Number(l.qty) || 1, rate: Number(l.rate) || 0, taxRate: Number(l.taxRate) || 0, amount: Number(l.amount) || 0 })),
     paid: { ...d.paid, amount: n2(d.paid?.amount) },
+    taxInclusive: !!d.taxInclusive,
+    subject: d.subject || null,
+    customerRef: d.customerRef || null,
   });
   const save = async (andApprove = false) => {
     setBusy(true);
@@ -405,7 +411,19 @@ function EditInvoice({ item, onClose, onDone, onApprove }: { item: Json; onClose
             Due date
             <input type="date" value={d.dueDate ?? ''} onChange={(e) => setD({ ...d, dueDate: e.target.value })} />
           </label>
+          <label className="field">
+            P.O. / order no.
+            <input value={d.customerRef ?? ''} onChange={(e) => setD({ ...d, customerRef: e.target.value })} />
+          </label>
         </div>
+        <label className="field">
+          Subject
+          <input value={d.subject ?? ''} onChange={(e) => setD({ ...d, subject: e.target.value })} />
+        </label>
+        <label className="row small" style={{ gap: 6 }}>
+          <input type="checkbox" checked={!!d.taxInclusive} onChange={(e) => setD({ ...d, taxInclusive: e.target.checked })} />
+          The line amounts include GST (“Tax inclusive” on the document)
+        </label>
 
         <fieldset style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}>
           <legend className="small" style={{ fontWeight: 600 }}>
@@ -460,6 +478,21 @@ function EditInvoice({ item, onClose, onDone, onApprove }: { item: Json; onClose
           </label>
         </fieldset>
 
+        <label className="field">
+          Deal
+          <select
+            value={ch.dealId === null ? '__none' : (ch.dealId ?? '')}
+            onChange={(e) => setCh({ ...ch, dealId: e.target.value === '__none' ? null : e.target.value || undefined, recurringProfileId: undefined })}
+          >
+            <option value="">{plan.deal ? `Found: ${plan.deal.name}${plan.recurring ? ` (recurring: ${plan.recurring.name})` : ''}` : 'No deal found'}</option>
+            <option value="__none">No deal</option>
+            {(deals.data?.items ?? []).map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <label className="field">
           Project
           <select

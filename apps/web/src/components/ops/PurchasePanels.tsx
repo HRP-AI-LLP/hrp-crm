@@ -89,8 +89,9 @@ export function PoPanel({ poId, canEdit }: { poId: string; canEdit: boolean }) {
           currency={p.currency}
           extraCols={status === 'draft' ? [] : [{ key: 'receivedQty', label: 'Received' }, { key: 'rejectedQty', label: 'Rejected' }]}
           saveLabel="Save PO"
-          onSave={async (lines) => {
-            await act(() => put(`/api/v1/purchase-orders/${poId}/lines`, { lines: lines.map(toLineInput) }), 'Purchase order saved');
+          taxInclusive={!!p.tax_inclusive}
+          onSave={async (lines, taxInclusive) => {
+            await act(() => put(`/api/v1/purchase-orders/${poId}/lines`, { taxInclusive, lines: lines.map(toLineInput) }), 'Purchase order saved');
           }}
         />
         {data.receipts.length > 0 && (

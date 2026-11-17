@@ -54,8 +54,8 @@ const invLineSchema = lineSchema.extend({ orderLineId: uuid.nullish(), isService
 export const billingRoutes = new Hono<AppEnv>()
   .get('/invoices/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => getInvoice(rctx(c, tx), c.req.param('id')))))
   .put('/invoices/:id/lines', async (c) => {
-    const b = z.object({ lines: z.array(invLineSchema).max(300) }).parse(await c.req.json());
-    await emit(c, await c.var.db.tx(scope(c), (tx) => saveInvoiceLines(rctx(c, tx), c.req.param('id'), b.lines)));
+    const b = z.object({ lines: z.array(invLineSchema).max(300), taxInclusive: z.boolean().optional() }).parse(await c.req.json());
+    await emit(c, await c.var.db.tx(scope(c), (tx) => saveInvoiceLines(rctx(c, tx), c.req.param('id'), b.lines, b.taxInclusive)));
     return c.json(await c.var.db.tx(scope(c, true), (tx) => getInvoice(rctx(c, tx), c.req.param('id'))));
   })
   .post('/invoices/:id/recalculate', async (c) => {
@@ -184,6 +184,8 @@ const settingsSchema = z.object({
   bankDetails: z.string().max(1000).optional(),
   upiVpa: z.union([z.literal(''), z.string().trim().regex(/^[A-Za-z0-9._-]{2,256}@[A-Za-z][A-Za-z0-9.-]{1,64}$/, 'A UPI ID looks like business@okhdfcbank')]).optional(),
   upiPayee: z.string().trim().max(50).optional(),
+  /** a saved signature put on every invoice when it is issued ('' = none) */
+  autoSignId: z.union([z.literal(''), z.string().uuid()]).optional(),
   ledgers: z
     .object({
       sales: z.string().max(80), cgst: z.string().max(80), sgst: z.string().max(80), igst: z.string().max(80), roundOff: z.string().max(80), bank: z.string().max(80),

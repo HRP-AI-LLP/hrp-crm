@@ -48,6 +48,10 @@ export interface DocLabels {
   showValidity?: boolean;
   /** text printed under the totals (e.g. bank details on invoices) */
   footerNote?: string | null;
+  /** saved signatures put on the document; each prints with a code anyone can check */
+  signatures?: { signerName: string; designation: string | null; image: string; signedAt: string; verifyCode: string; valid: boolean; revoked?: boolean }[];
+  /** where a signature code is checked */
+  verifyBase?: string | null;
 }
 
 export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabels }) {
@@ -115,7 +119,7 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
         </div>
         <div>
           <h3>Subject</h3>
-          <b>{q.name}</b>
+          <b>{q.subject || q.name}</b>
         </div>
       </section>
 
@@ -235,6 +239,13 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
               <th>Total</th>
               <td>{money2(q.grand_total, cur)}</td>
             </tr>
+            {!!q.tax_inclusive && (
+              <tr>
+                <td colSpan={2} className="muted small" style={{ textAlign: 'right' }}>
+                  Prices include GST
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </section>
@@ -259,9 +270,32 @@ export function QuoteDocument({ doc, labels }: { doc: QuoteDoc; labels?: DocLabe
         ) : (
           <span />
         )}
-        <div>
-          <p>For {company.name}</p>
-          <div className="qdoc-sigline">Authorised signatory</div>
+        <div style={{ display: 'flex', gap: 24, alignItems: 'flex-end' }}>
+          {(labels?.signatures ?? []).filter((s) => !s.revoked).length ? (
+            (labels?.signatures ?? [])
+              .filter((s) => !s.revoked)
+              .map((s) => (
+                <div key={s.verifyCode} className="qdoc-signed" style={{ maxWidth: 320 }}>
+                  <p>For {company.name}</p>
+                  <img src={s.image} alt={`Signature of ${s.signerName}`} style={{ height: 48, maxWidth: 170, objectFit: 'contain', display: 'block' }} />
+                  <div className="qdoc-sigline">
+                    {s.signerName}
+                    {s.designation ? `, ${s.designation}` : ''}
+                  </div>
+                  <p className="small" style={{ margin: 0 }}>
+                    Digitally signed {new Date(s.signedAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Kolkata' })}
+                  </p>
+                  <p className="small" style={{ margin: 0 }}>
+                    Verify: {labels?.verifyBase ? `${labels.verifyBase}/${s.verifyCode}` : s.verifyCode}
+                  </p>
+                </div>
+              ))
+          ) : (
+            <div>
+              <p>For {company.name}</p>
+              <div className="qdoc-sigline">Authorised signatory</div>
+            </div>
+          )}
         </div>
       </footer>
     </article>

@@ -6,8 +6,12 @@ import { type DocLabels, QuoteDocument, type QuoteDoc } from '../components/Quot
 import { Spinner } from '../components/ui';
 import { get } from '../lib/api';
 import { date } from '../lib/format';
+import { useAuth } from '../lib/auth';
 
 type Json = Record<string, any>;
+
+const TERMS: Record<string, string> = { due_on_receipt: 'Due on receipt', end_of_month: 'Due end of the month', end_of_next_month: 'Due end of next month' };
+for (const n of [7, 15, 30, 45, 60]) TERMS[`net_${n}`] = `Net ${n} days`;
 
 /** Builds the printable document (shared A4 layout) for orders, purchase orders and invoices. */
 function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back: string } | null {
@@ -51,6 +55,7 @@ function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back:
     const billTo = { name: i.buyer_name ?? d.account?.name, address: i.buyer_address ?? [d.account?.address, d.account?.city].filter(Boolean).join(', '), state: i.place_of_supply ?? i.buyer_state ?? d.account?.state ?? '', gstin: i.buyer_gstin ?? d.account?.gstin ?? '' };
     const rows: [string, string][] = [];
     if (i.customer_ref) rows.push(["Buyer's order / contract", `${i.customer_ref}${i.customer_ref_date ? ` dt. ${date(i.customer_ref_date)}` : ''}`]);
+    if (i.payment_terms && i.payment_terms !== 'custom' && !cn) rows.push(['Terms', TERMS[i.payment_terms] ?? String(i.payment_terms).replace(/_/g, ' ')]);
     if (i.due_date && !cn) rows.push(['Due date', date(i.due_date)]);
     if (i.place_of_supply) rows.push(['Place of supply', `${i.place_of_supply}${i.pos_code ? ` (${i.pos_code})` : ''}`]);
     if (i.reverse_charge) rows.push(['Reverse charge', 'Yes']);
@@ -103,6 +108,8 @@ function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels; back:
   return null;
 }
 
+const shapeOrNull = (kind: string, data: Json | undefined) => (data ? shape(kind, data) : null);
+
 const SOURCES: Record<string, (id: string) => string> = {
   sales_order: (id) => `/api/v1/orders/${id}`,
   purchase_order: (id) => `/api/v1/purchase-orders/${id}`,
@@ -114,7 +121,11 @@ export function DocPrintPage() {
   const { kind = '', id = '' } = useParams();
   const src = SOURCES[kind];
   const { data, error } = useQuery({ queryKey: ['print', kind, id], queryFn: () => get<Json>(src!(id)), enabled: !!src });
-  const s = data ? shape(kind, data) : null;
+  const signable = ['invoice', 'sales_order', 'purchase_order'].includes(kind);
+  const sigs = useQuery({ queryKey: ['doc-signatures', kind, id], queryFn: () => get<Json[]>(`/api/v1/documents/${kind}/${id}/signatures`), enabled: signable, staleTime: 30_000 });
+  const { me } = useAuth();
+  const base = shapeOrNull(kind, data);
+  const s = base && signable ? { ...base, labels: { ...base.labels, signatures: (sigs.data ?? []) as NonNullable<DocLabels['signatures']>, verifyBase: me?.tenant?.id ? `${location.origin}/verify/${me.tenant.id}` : null } } : base;
   useEffect(() => {
     if (s) document.title = `${s.labels.number ?? s.labels.title} — ${s.doc.quote.name}`;
   }, [s]);

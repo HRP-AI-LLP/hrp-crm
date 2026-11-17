@@ -74,10 +74,12 @@ export async function assertProducts(ctx: RecordCtx, input: LineInput[]) {
 }
 
 /** Replaces all lines and the header totals; returns update events for automations. */
-export async function replaceLines(ctx: RecordCtx, doc: LineDoc, id: string, prior: Record<string, unknown>, input: LineInput[]): Promise<RecordEvent[]> {
+export async function replaceLines(ctx: RecordCtx, doc: LineDoc, id: string, prior: Record<string, unknown>, input: LineInput[], taxInclusive?: boolean): Promise<RecordEvent[]> {
   if (input.length > 300) throw badRequest('A document can have at most 300 lines');
   await assertProducts(ctx, input);
-  const c = computeLines(input);
+  const inclusive = taxInclusive ?? !!prior.tax_inclusive;
+  if (taxInclusive !== undefined && taxInclusive !== !!prior.tax_inclusive) await ctx.tx.query(`update ${ident(doc.header)} set tax_inclusive = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, taxInclusive]);
+  const c = computeLines(input, inclusive);
   await ctx.tx.query(`delete from ${ident(doc.table)} where tenant_id = $1 and order_id = $2`, [ctx.tenantId, id]);
   for (const l of c.lines) {
     await ctx.tx.query(
