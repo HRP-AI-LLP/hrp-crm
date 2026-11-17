@@ -26,6 +26,14 @@ _DEPS = _Path(__file__).resolve().parent / ".deps"
 if _DEPS.is_dir() and str(_DEPS) not in _sys.path:
     _sys.path.insert(0, str(_DEPS))
 
+# Windows consoles and pipes default to a code page (cp1252) that cannot print every character, e.g. a
+# certificate holder's name in Devanagari: print UTF-8, and never crash on a character that won't show
+for _stream in (_sys.stdout, _sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError):
+        pass
+
 import argparse
 import base64
 import hashlib
@@ -285,7 +293,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     ap = argparse.ArgumentParser(description="HRP Synapse DSC signer (USB token)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("pair", help="pair with a Synapse workspace (code from Settings → Organisation → Digital signatures)")
+    p = sub.add_parser("pair", help="pair with a Synapse workspace (code from Organisation > Digital signatures)")
     p.add_argument("code")
     p.add_argument("--origin", required=True, action="append", help="your Synapse address, e.g. https://acme.synapse.example or http://localhost:8787 (repeat for several)")
     s = sub.add_parser("serve", help="run the signer")
@@ -322,7 +330,7 @@ def main() -> None:
         origins = sorted(set().union(*(origins_of(p) for p in cfg["pairings"]))) if cfg["pairings"] else []
         print(f"Synapse DSC signer {VERSION} on http://127.0.0.1:{port}")
         print(f"  token driver: {lib or 'not found yet (install the token driver, or pass --lib)'}")
-        print(f"  answering:    {', '.join(origins) if origins else 'nobody yet: pair it from Organisation → Digital signatures'}")
+        print(f"  answering:    {', '.join(origins) if origins else 'nobody yet: pair it from Organisation > Digital signatures'}")
         srv.serve_forever()
 
 

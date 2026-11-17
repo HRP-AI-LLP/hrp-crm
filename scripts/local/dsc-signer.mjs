@@ -78,7 +78,7 @@ export function startDscSigner({ skip = false } = {}) {
   }
   const serve = () => {
     if (stopped) return;
-    child = spawn(py.cmd, [...py.pre, 'dsc_signer.py', 'serve'], { cwd: DIR, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONUNBUFFERED: '1' } });
+    child = spawn(py.cmd, [...py.pre, 'dsc_signer.py', 'serve'], { cwd: DIR, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8' } });
     prefixed(child.stdout, process.stdout);
     prefixed(child.stderr, process.stderr);
     child.on('error', (e) => console.log(`${tag} could not start the signer: ${e.message}`));
@@ -123,6 +123,6 @@ if (process.argv[1] && (win ? self.toLowerCase() === process.argv[1].toLowerCase
     }
     if (!sub || sub === 'install') process.exit(0);
   }
-  const r = spawnSync(py.cmd, [...py.pre, 'dsc_signer.py', sub, ...rest], { cwd: DIR, stdio: 'inherit' });
+  const r = spawnSync(py.cmd, [...py.pre, 'dsc_signer.py', sub, ...rest], { cwd: DIR, stdio: 'inherit', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
   process.exit(r.status ?? 1);
 }
