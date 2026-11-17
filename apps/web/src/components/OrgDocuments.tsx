@@ -13,6 +13,13 @@ type Json = Record<string, any>;
 
 /** Shown as a checklist for every organisation / person even before anything is uploaded. */
 const COMPANY_CORE = ['pan', 'tan', 'gst', 'incorporation', 'udyam', 'startup_india'];
+/** The founding document a constitution has: an LLP's agreement or a firm's deed, a company's MoA / AoA, a trust's deed. */
+export function foundingDoc(constitution?: string | null): [string, string] | null {
+  if (constitution === 'llp' || constitution === 'partnership') return ['llp_agreement', constitution === 'llp' ? 'LLP agreement' : 'partnership deed'];
+  if (['private_limited', 'public_limited', 'opc', 'section_8'].includes(constitution ?? '')) return ['moa_aoa', 'MoA and AoA'];
+  if (constitution === 'trust' || constitution === 'society') return ['trust_deed', constitution === 'trust' ? 'trust deed' : 'society registration'];
+  return null;
+}
 const PERSON_CORE = ['pan', 'aadhaar', 'uan', 'pf'];
 const PARTNER_CORE = ['pan', 'aadhaar', 'din'];
 const MAX = 25 * 1024 * 1024;
@@ -35,7 +42,7 @@ export function OrgDocuments({ d }: { d: Json }) {
       <Group
         title={d.profile?.legalName || 'The organisation'}
         personId={null}
-        core={COMPANY_CORE}
+        core={[...COMPANY_CORE, ...(foundingDoc(d.profile?.constitution) ? [foundingDoc(d.profile?.constitution)![0]] : [])]}
         kinds={kinds(false)}
         docs={docs.filter((x) => !x.personId && !x.userId)}
         onEdit={(doc, kind) => setEdit({ doc, kind, personId: null })}

@@ -21,6 +21,7 @@ export const COMPANY_DOCS: [string, string, string][] = [
   ['gst', 'GST registration (REG-06)', 'gstin'],
   ['incorporation', 'Certificate of incorporation / registration', 'registrationNo'],
   ['llp_agreement', 'LLP agreement / partnership deed', ''],
+  ['trust_deed', 'Trust deed / society registration', ''],
   ['moa_aoa', 'MoA and AoA', ''],
   ['udyam', 'Udyam (MSME) certificate', 'udyam'],
   ['startup_india', 'Startup India (DPIIT) recognition', 'dpiitNumber'],

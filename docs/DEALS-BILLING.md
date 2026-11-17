@@ -172,3 +172,11 @@ the search, filters, stage and sort (up to 5,000), in the list's column order an
 Selected rows can be exported the same way. CSV export stays for Excel and now includes the name column.
 
 A table can opt out with `data-export="off"` or name its report with `data-export-title="…"`.
+
+### Logo and founding documents
+
+Organisation → Profile has the **logo** (any image; kept as a PNG at most 600 px across). Invoices, quotes,
+orders and purchase orders print it unless their template sets its own; PDF reports carry it top right.
+Under **Constitution** the profile shows the founding document to upload for it: the **LLP agreement**
+(LLP), the **partnership deed** (firm), **MoA and AoA** (companies), the **trust deed / society registration**
+(trust, society). It is also on the Documents tab's checklist.

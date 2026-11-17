@@ -21,7 +21,7 @@ export interface QuoteDoc {
   lines: QuoteLine[];
   account: { name: string; billing_address?: Record<string, string> | string | null } | null;
   contact: { name: string; email?: string | null; phone?: string | null } | null;
-  company: { name: string; address: string; state: string; gstin: string; email: string; phone: string; website: string };
+  company: { name: string; address: string; state: string; gstin: string; email: string; phone: string; website: string; logo?: string | null };
 }
 
 const addr = (a: unknown): string => {
@@ -114,7 +114,9 @@ export function QuoteDocument({ doc, labels, template }: { doc: QuoteDoc; labels
   const style = st
     ? ({ '--acc': st.accent, '--acc2': st.accent2, '--txt': st.text, fontFamily: FONTS[st.font] ?? FONTS.sans, fontSize: `${st.fontSize}px`, color: st.text } as React.CSSProperties)
     : undefined;
-  const logo = st?.logo && st.logoPosition !== 'none' ? <img className="qdoc-logo" src={st.logo} alt="" /> : null;
+  // the template's own logo, else the organisation's (Organisation → Profile)
+  const logoSrc = st?.logoPosition === 'none' ? null : (st?.logo || company.logo || null);
+  const logo = logoSrc ? <img className="qdoc-logo" src={logoSrc} alt="" /> : null;
   const body = (
     <>
       {st?.headerNote && <p className="qdoc-headnote">{st.headerNote}</p>}

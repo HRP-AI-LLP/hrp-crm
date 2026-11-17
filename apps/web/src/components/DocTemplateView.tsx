@@ -29,7 +29,7 @@ export function templateView(doc: QuoteDoc, labels?: DocLabels, template?: DocTe
         .join('')
     : `<div class="sig"><div>For ${esc(company.name)}</div><div style="margin-top:36px;border-top:1px solid #94a3b8">Authorised signatory</div></div>`;
   return {
-    company: { ...company, logo_img: template?.settings.logo ? `<img src="${esc(template.settings.logo)}" alt="" style="max-height:64px;max-width:160px">` : '' },
+    company: { ...company, logo_img: (template?.settings.logo || company.logo) ? `<img src="${esc((template?.settings.logo || company.logo)!)}" alt="" style="max-height:64px;max-width:160px">` : '' },
     doc: {
       title: template?.settings.labels?.title || labels?.title || 'Tax invoice',
       number: (labels ? labels.number : q.quote_number) ?? '',

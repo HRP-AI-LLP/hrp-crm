@@ -63,6 +63,8 @@ export const profileSchema = z.object({
   section80IacCertNo: z.string().trim().max(60).optional(),
   section80IacFrom: z.union([z.literal(''), z.string().regex(/^\d{4}-\d{2}$/)]).optional(),
   section56Exempt: z.boolean().optional(),
+  // the organisation's logo (a PNG data URL, resized in the browser): printed on documents and reports
+  logo: z.union([z.literal(''), z.string().regex(/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/, 'The logo must be a PNG or JPEG image').max(400_000, 'The logo is too large (at most about 300 KB)')]).optional(),
   address: z.string().trim().max(500).optional(),
   city: z.string().trim().max(80).optional(),
   state: z.string().trim().max(60).optional(),
@@ -104,6 +106,7 @@ export async function getProfile(ctx: RecordCtx) {
       section80IacCertNo: company.section80IacCertNo ?? '',
       section80IacFrom: company.section80IacFrom ?? '',
       section56Exempt: company.section56Exempt ?? false,
+      logo: company.logo ?? '',
       address: company.address ?? '',
       city: company.city ?? '',
       state: company.state ?? '',

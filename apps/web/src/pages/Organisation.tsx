@@ -7,7 +7,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { BankModal, ORG_PATHS, PersonModal, ROLES } from '../components/books/OwnAccounts';
 import { DocTemplatesTab } from '../components/admin/DocTemplates';
-import { DocSlot, OrgDocuments } from '../components/OrgDocuments';
+import { DocSlot, foundingDoc, OrgDocuments } from '../components/OrgDocuments';
+import { forgetPdfOrganisation } from '../lib/table-pdf';
 import { local, setSignerPort, signerPort } from '../lib/dsc';
 import { date as fmtDate } from '../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
@@ -93,6 +94,7 @@ function useSaveProfile() {
       const { managers, ...rest } = profile;
       const r = await put<Json>('/api/v1/organisation', { ...rest, ...(profile._isAdmin ? { managers } : {}) });
       qc.setQueryData(['organisation'], r);
+      forgetPdfOrganisation(); // reports print the new name / logo
       toast('Saved');
       return true;
     } catch (e) {
@@ -118,6 +120,10 @@ function Profile({ d }: { d: Json }) {
   return (
     <div className="stack">
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
+        <div className="field">
+          Logo
+          <LogoField value={p.logo ?? ''} disabled={ro} onChange={(logo) => setP({ ...p, logo })} />
+        </div>
         {field('Legal name', <input value={p.legalName} disabled={ro} onChange={set('legalName')} />)}
         {field('Trade name', <input value={p.tradeName} disabled={ro} onChange={set('tradeName')} />)}
         {field(
@@ -130,6 +136,12 @@ function Profile({ d }: { d: Json }) {
               </option>
             ))}
           </select>,
+        )}
+        {foundingDoc(p.constitution) && (
+          <div className="field">
+            {foundingDoc(p.constitution)![1][0]!.toUpperCase() + foundingDoc(p.constitution)![1].slice(1)}
+            <DocSlot kind={foundingDoc(p.constitution)![0]} label={foundingDoc(p.constitution)![1]} />
+          </div>
         )}
         {field('PAN', <><input className="mono" maxLength={10} value={p.pan} disabled={ro} onChange={(e) => setP({ ...p, pan: e.target.value.toUpperCase() })} /><DocSlot kind="pan" number={p.pan} label="PAN card" /></>)}
         {field('GSTIN', <><input className="mono" maxLength={15} value={p.gstin} disabled={ro} onChange={(e) => setP({ ...p, gstin: e.target.value.toUpperCase() })} /><DocSlot kind="gst" number={p.gstin} label="GST certificate" /></>)}
@@ -1069,3 +1081,61 @@ function PairedModal({ code, onClose }: { code: string; onClose: () => void }) {
     </Modal>
   );
 }
+
+/**
+ * The organisation's logo: any image, made into a PNG at most 600 px across (transparency kept) so it
+ * stays small enough to travel with every document. Printed on invoices, quotes, orders and PDF reports
+ * unless a document template sets its own.
+ */
+function LogoField({ value, disabled, onChange }: { value: string; disabled: boolean; onChange: (v: string) => void }) {
+  const toast = useToast();
+  const pick = async (f: File) => {
+    if (!/^image\//.test(f.type)) return toast('Choose an image (PNG, JPG, SVG or WebP)', true);
+    if (f.size > 8 * 1024 * 1024) return toast('That image is larger than 8 MB', true);
+    const url = URL.createObjectURL(f);
+    try {
+      const img = await new Promise<HTMLImageElement>((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = () => rej(new Error('Could not read that image'));
+        i.src = url;
+      });
+      const w0 = img.naturalWidth || 600;
+      const h0 = img.naturalHeight || 200;
+      const k = Math.min(1, 600 / Math.max(w0, h0));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(w0 * k));
+      c.height = Math.max(1, Math.round(h0 * k));
+      c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
+      const png = c.toDataURL('image/png');
+      onChange(png.length > 380_000 ? c.toDataURL('image/jpeg', 0.85) : png);
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  };
+  return (
+    <div className="row" style={{ gap: 10, alignItems: 'center', minHeight: 40 }}>
+      {value ? (
+        <img src={value} alt="Organisation logo" style={{ maxHeight: 48, maxWidth: 160, objectFit: 'contain', background: '#fff', border: '1px solid var(--line)', borderRadius: 6, padding: 4 }} />
+      ) : (
+        <span className="muted small">No logo yet</span>
+      )}
+      {!disabled && (
+        <>
+          <label className="btn ghost sm" style={{ cursor: 'pointer' }}>
+            {value ? 'Change' : '📎 Upload logo'}
+            <input type="file" hidden accept="image/png,image/jpeg,image/svg+xml,image/webp" onChange={(e) => e.target.files?.[0] && pick(e.target.files[0])} />
+          </label>
+          {value && (
+            <button type="button" className="btn ghost sm" onClick={() => onChange('')}>
+              Remove
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+

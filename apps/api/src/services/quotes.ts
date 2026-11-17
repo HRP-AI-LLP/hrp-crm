@@ -104,7 +104,7 @@ async function lines(ctx: RecordCtx, quoteId: string) {
 export async function letterhead(ctx: RecordCtx) {
   const t = await ctx.tx.one<{ name: string; settings: Record<string, any> }>(`select name, settings from tenants where id = $1`, [ctx.tenantId]);
   const c = (t?.settings?.company ?? {}) as Record<string, string | undefined>;
-  return { name: c.legalName || t?.name || '', address: c.address ?? '', state: c.state ?? '', gstin: c.gstin ?? '', email: c.email ?? '', phone: c.phone ?? '', website: c.website ?? '', terms: c.quoteTerms ?? '' };
+  return { name: c.legalName || t?.name || '', address: c.address ?? '', state: c.state ?? '', gstin: c.gstin ?? '', email: c.email ?? '', phone: c.phone ?? '', website: c.website ?? '', terms: c.quoteTerms ?? '', logo: c.logo || null };
 }
 
 async function partyName(ctx: RecordCtx, table: 'accounts' | 'contacts', id: unknown) {
