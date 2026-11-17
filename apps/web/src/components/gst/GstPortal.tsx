@@ -2090,8 +2090,57 @@ function Gstr2bMonth({
     "all" | "matched" | "mismatch" | "unmatched" | "missing"
   >("all");
   const [q, setQ] = useState("");
+  const qc = useQueryClient();
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [adding, setAdding] = useState<string[] | null>(null);
+  const [linking, setLinking] = useState<Json | null>(null);
+  const [busy, setBusy] = useState(false);
   const lines: Json[] = data?.lines ?? [];
   const missing: Json[] = data?.missingInGstr2b ?? [];
+  const refresh = () => {
+    qc.invalidateQueries({
+      queryKey: ["gst", "gstr2b-month", conn.id, period],
+    });
+    qc.invalidateQueries({ queryKey: ["gst", "gstr2b-saved", conn.id] });
+    qc.invalidateQueries({ queryKey: ["books"] });
+  };
+  const run = async (fn: () => Promise<Json>, ok: (r: Json) => string) => {
+    setBusy(true);
+    try {
+      const r = await fn();
+      toast(ok(r));
+      refresh();
+      return r;
+    } catch (e) {
+      toast((e as Error).message, true);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const syncBooks = () =>
+    run(
+      () => post<Json>(`/api/v1/books/gstr-2b/${period}/rematch`),
+      (r) =>
+        `Matched again: ${r.matched} matched, ${r.mismatch} with differences, ${r.unmatched} not in your books`,
+    );
+  const unlink = (l: Json) =>
+    run(
+      () => del<Json>(`/api/v1/books/gstr-2b/lines/${l.id}/link`),
+      () => "Link removed",
+    );
+  const addable = (l: Json) =>
+    l.match_status === "unmatched" &&
+    l.bill_status !== "draft" &&
+    !["credit_note", "debit_note"].includes(l.doc_type) &&
+    Number(l.taxable) >= 0;
+  const toggle = (id: string) =>
+    setSel((s) => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
   const count = (k: string) => lines.filter((l) => l.match_status === k).length;
   const needle = q.trim().toLowerCase();
   const hit = (...xs: unknown[]) =>
@@ -2241,6 +2290,47 @@ function Gstr2bMonth({
             />
           </div>
           <div
+            className="row"
+            style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}
+          >
+            <button
+              className="btn sm"
+              disabled={busy}
+              title="Match this month against your bills again — picks up bills entered or corrected since (free)"
+              onClick={syncBooks}
+            >
+              Sync with books
+            </button>
+            {count("unmatched") > 0 && (
+              <>
+                <button
+                  className="btn sm primary"
+                  disabled={busy || !sel.size}
+                  onClick={() => setAdding([...sel])}
+                >
+                  Add selected to books{sel.size ? ` (${sel.size})` : ""}
+                </button>
+                <button
+                  className="btn sm ghost"
+                  disabled={busy}
+                  onClick={() =>
+                    setSel(new Set(lines.filter(addable).map((l) => l.id)))
+                  }
+                >
+                  Select all not in books
+                </button>
+                {sel.size > 0 && (
+                  <button
+                    className="btn sm ghost"
+                    onClick={() => setSel(new Set())}
+                  >
+                    Clear
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+          <div
             className="table-wrap"
             style={{ maxHeight: 460, overflow: "auto" }}
           >
@@ -2292,6 +2382,7 @@ function Gstr2bMonth({
               <table className="data">
                 <thead>
                   <tr>
+                    <th style={{ width: 28 }} />
                     <th>Supplier</th>
                     <th>Document</th>
                     <th>Date</th>
@@ -2305,6 +2396,16 @@ function Gstr2bMonth({
                 <tbody>
                   {shown.map((l) => (
                     <tr key={l.id}>
+                      <td>
+                        {addable(l) && (
+                          <input
+                            type="checkbox"
+                            checked={sel.has(l.id)}
+                            onChange={() => toggle(l.id)}
+                            aria-label={`Select ${l.doc_number}`}
+                          />
+                        )}
+                      </td>
                       <td>
                         {l.supplier_name ?? "—"}
                         <div className="muted small">{l.supplier_gstin}</div>
@@ -2327,20 +2428,65 @@ function Gstr2bMonth({
                         {l.note && <div className="muted small">{l.note}</div>}
                       </td>
                       <td>
-                        {l.bill_id ? (
-                          <Link to={`/o/bill/${l.bill_id}`}>
-                            {l.bill_number}
-                          </Link>
-                        ) : (
-                          "—"
+                        {l.bill_id && (
+                          <div>
+                            <Link to={`/o/bill/${l.bill_id}`}>
+                              {l.bill_number ?? "Draft bill"}
+                            </Link>
+                            {l.bill_status === "draft" && (
+                              <span
+                                className="chip warn"
+                                style={{ marginLeft: 6 }}
+                              >
+                                Draft
+                              </span>
+                            )}
+                          </div>
                         )}
+                        <div className="row" style={{ gap: 4, marginTop: 2 }}>
+                          {addable(l) && (
+                            <button
+                              className="btn sm"
+                              disabled={busy}
+                              onClick={() => setAdding([l.id])}
+                            >
+                              Add to books
+                            </button>
+                          )}
+                          {l.match_status !== "matched" &&
+                            l.bill_status !== "draft" && (
+                              <button
+                                className="btn sm ghost"
+                                disabled={busy}
+                                title="Match it to a bill already in your books (when its number was typed differently)"
+                                onClick={() => setLinking(l)}
+                              >
+                                Link to a bill
+                              </button>
+                            )}
+                          {/Linked by hand/.test(l.note ?? "") && (
+                            <button
+                              className="btn sm ghost"
+                              disabled={busy}
+                              onClick={() => unlink(l)}
+                            >
+                              Unlink
+                            </button>
+                          )}
+                          {["credit_note", "debit_note"].includes(l.doc_type) &&
+                            l.match_status === "unmatched" && (
+                              <span className="muted small">
+                                Enter as a vendor credit on the bill
+                              </span>
+                            )}
+                        </div>
                       </td>
                     </tr>
                   ))}
                   {!shown.length && (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={9}
                         className="muted"
                         style={{ textAlign: "center", padding: 16 }}
                       >
@@ -2354,7 +2500,7 @@ function Gstr2bMonth({
                 {shown.length > 1 && (
                   <tfoot>
                     <tr>
-                      <td colSpan={3}>
+                      <td colSpan={4}>
                         <b>{shown.length} document(s)</b>
                       </td>
                       <td style={{ textAlign: "right" }}>
@@ -2378,6 +2524,293 @@ function Gstr2bMonth({
           )}
         </div>
       )}
+      {adding && (
+        <AddToBooks
+          lines={lines.filter((l) => adding.includes(l.id))}
+          onClose={() => setAdding(null)}
+          onDone={() => {
+            setAdding(null);
+            setSel(new Set());
+            refresh();
+          }}
+        />
+      )}
+      {linking && (
+        <LinkBill
+          line={linking}
+          onClose={() => setLinking(null)}
+          onDone={() => {
+            setLinking(null);
+            refresh();
+          }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+/** Enters GSTR-2B invoices that are missing from the books as bills (and the supplier when new). */
+function AddToBooks({
+  lines,
+  onClose,
+  onDone,
+}: {
+  lines: Json[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const toast = useToast();
+  const { data: accounts } = useQuery({
+    queryKey: ["books", "accounts"],
+    queryFn: () => get<Json[]>("/api/v1/books/accounts"),
+    staleTime: 30_000,
+  });
+  const usable = (accounts ?? []).filter(
+    (a) =>
+      a.is_active !== false &&
+      (a.type === "expense" ||
+        (a.type === "asset" &&
+          ![
+            "accounts_receivable",
+            "bank",
+            "cash",
+            "credit_card",
+            "tax_payable",
+          ].includes(a.subtype))),
+  );
+  const [accountId, setAccountId] = useState("");
+  const [postIt, setPostIt] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<Json | null>(null);
+  const go = async () => {
+    setBusy(true);
+    try {
+      const r = await post<Json>("/api/v1/books/gstr-2b/add-to-books", {
+        lineIds: lines.map((l) => l.id),
+        accountId: accountId || null,
+        post: postIt,
+      });
+      setResult(r);
+      toast(
+        `${r.added} bill(s) entered${r.posted ? `, ${r.posted} posted` : ""}${r.vendorsCreated ? `, ${r.vendorsCreated} new supplier(s)` : ""}`,
+        r.added < lines.length,
+      );
+      if (r.added === lines.length) onDone();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const total = (k: string) => lines.reduce((n, l) => n + Number(l[k] ?? 0), 0);
+  return (
+    <Modal
+      title={`Add ${lines.length} document(s) to the books`}
+      onClose={result ? onDone : onClose}
+      footer={
+        result ? (
+          <button className="btn primary" onClick={onDone}>
+            Done
+          </button>
+        ) : (
+          <>
+            <button className="btn ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="btn primary" disabled={busy} onClick={go}>
+              {busy
+                ? "Entering…"
+                : postIt
+                  ? "Enter and post bills"
+                  : "Enter as draft bills"}
+            </button>
+          </>
+        )
+      }
+    >
+      {!result ? (
+        <div className="stack">
+          <div className="muted small">
+            Each document becomes a bill with the supplier's invoice number and
+            date, and one line for the taxable value ({money2(total("taxable"))}{" "}
+            in all) at the GST rate it implies (tax {money2(total("tax"))}). A
+            supplier not yet in Synapse is added from its GSTIN.
+          </div>
+          <label className="field">
+            Book the purchase to
+            <select
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value)}
+            >
+              <option value="">Purchases (default)</option>
+              {usable.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.code ? `${a.code} · ` : ""}
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="row" style={{ gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={postIt}
+              onChange={(e) => setPostIt(e.target.checked)}
+            />
+            Post the bills now (they then match GSTR-2B and count for ITC).
+            Leave unticked to review them as drafts first.
+          </label>
+          <div
+            className="table-wrap"
+            style={{ maxHeight: 240, overflow: "auto" }}
+          >
+            <table className="data">
+              <tbody>
+                {lines.map((l) => (
+                  <tr key={l.id}>
+                    <td>
+                      {l.supplier_name ?? l.supplier_gstin}
+                      <div className="muted small">{l.supplier_gstin}</div>
+                    </td>
+                    <td>{l.doc_number}</td>
+                    <td>{l.doc_date ? date(l.doc_date) : ""}</td>
+                    <td style={{ textAlign: "right" }}>{money2(l.taxable)}</td>
+                    <td style={{ textAlign: "right" }}>{money2(l.tax)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <tbody>
+              {(result.results as Json[]).map((r) => {
+                const l = lines.find((x) => x.id === r.lineId);
+                return (
+                  <tr key={r.lineId}>
+                    <td>{l?.doc_number}</td>
+                    <td className="small">
+                      {r.ok ? (
+                        <>
+                          <Link to={`/o/bill/${r.billId}`}>
+                            {r.billNumber ?? "Draft bill"}
+                          </Link>{" "}
+                          · {r.status === "open" ? "posted" : r.status}
+                          {r.vendorCreated ? " · new supplier" : ""}
+                        </>
+                      ) : (
+                        <span style={{ color: "var(--bad)" }}>{r.error}</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/** Matches a GSTR-2B document to a bill already in the books, for when the number was typed differently. */
+function LinkBill({
+  line,
+  onClose,
+  onDone,
+}: {
+  line: Json;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const toast = useToast();
+  const { data, error } = useQuery({
+    queryKey: ["gst", "gstr2b-candidates", line.id],
+    queryFn: () =>
+      get<Json>(`/api/v1/books/gstr-2b/lines/${line.id}/candidates`),
+  });
+  const [busy, setBusy] = useState(false);
+  const link = async (billId: string) => {
+    setBusy(true);
+    try {
+      const r = await post<Json>(
+        `/api/v1/books/gstr-2b/lines/${line.id}/link`,
+        { billId },
+      );
+      toast(
+        `Linked — ${r.matched} matched, ${r.mismatch} with differences this month`,
+      );
+      onDone();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title={`Link ${line.doc_number} to a bill`} onClose={onClose} wide>
+      <div className="stack">
+        <div className="muted small">
+          {line.supplier_name ?? ""} {line.supplier_gstin} · taxable{" "}
+          {money2(line.taxable)} · tax {money2(line.tax)}. Posted bills from
+          this supplier within six months, closest amount first. The link is
+          kept when the month is fetched again.
+        </div>
+        {error ? (
+          <div className="muted">{(error as Error).message}</div>
+        ) : !data ? (
+          <Spinner />
+        ) : !data.bills.length ? (
+          <Empty title="No posted bill from this supplier around that date">
+            Enter it with <b>Add to books</b> instead, or post the bill first if
+            it is still a draft.
+          </Empty>
+        ) : (
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Bill</th>
+                  <th>Their number</th>
+                  <th>Date</th>
+                  <th style={{ textAlign: "right" }}>Taxable</th>
+                  <th style={{ textAlign: "right" }}>Tax</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {(data.bills as Json[]).map((b) => (
+                  <tr key={b.id}>
+                    <td>
+                      <Link to={`/o/bill/${b.id}`}>{b.bill_number}</Link>
+                      {b.sameAmount && (
+                        <span className="chip good" style={{ marginLeft: 6 }}>
+                          Same amount
+                        </span>
+                      )}
+                    </td>
+                    <td>{b.vendor_ref ?? "—"}</td>
+                    <td>{date(b.bill_date)}</td>
+                    <td style={{ textAlign: "right" }}>{money2(b.taxable)}</td>
+                    <td style={{ textAlign: "right" }}>{money2(b.tax)}</td>
+                    <td>
+                      <button
+                        className="btn sm primary"
+                        disabled={busy}
+                        onClick={() => link(b.id)}
+                      >
+                        Link
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </Modal>
   );
 }

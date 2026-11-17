@@ -214,6 +214,28 @@ describe('GST through gstinapi.in', () => {
     expect((await api('GET', `/api/v1/gst/connections/${ids.conn}/gstr2b/${PERIOD}?raw=1`)).json.raw).toHaveLength(1);
     expect(calls.length).toBe(before2b);
 
+    // the supplier invoice is not in the books: enter it as a bill (supplier created from GSTR-2B)
+    const line = det.json.lines[0];
+    expect(line.match_status).toBe('unmatched');
+    const add = await api('POST', '/api/v1/books/gstr-2b/add-to-books', { lineIds: [line.id], post: true });
+    expect(add.status, JSON.stringify(add.json)).toBe(200);
+    expect(add.json).toMatchObject({ added: 1, posted: 1, vendorsCreated: 1, match: { matched: 1 } });
+    const billId = add.json.results[0].billId;
+    const bill = await api('GET', `/api/v1/books/bills/${billId}`);
+    expect(bill.json.bill ?? bill.json).toMatchObject({ vendor_ref: 'SS/9', taxable_total: 10000, cgst_total: 900, sgst_total: 900 });
+    const after = (await api('GET', `/api/v1/gst/connections/${ids.conn}/gstr2b/${PERIOD}`)).json.lines[0];
+    expect(after).toMatchObject({ match_status: 'matched', bill_id: billId });
+    // a second add is refused for that line, the others would go on
+    expect((await api('POST', '/api/v1/books/gstr-2b/add-to-books', { lineIds: [after.id] })).json).toMatchObject({ added: 0, results: [{ ok: false }] });
+    // link by hand: the bill is offered as a candidate with the same amount, and the link survives a re-match
+    const cand = await api('GET', `/api/v1/books/gstr-2b/lines/${after.id}/candidates`);
+    expect(cand.json.bills).toEqual([expect.objectContaining({ id: billId, sameAmount: true })]);
+    expect((await api('POST', `/api/v1/books/gstr-2b/lines/${after.id}/link`, { billId })).json).toMatchObject({ matched: 1 });
+    expect((await api('POST', `/api/v1/books/gstr-2b/${PERIOD}/rematch`)).json).toMatchObject({ matched: 1 });
+    expect((await api('GET', `/api/v1/gst/connections/${ids.conn}/gstr2b/${PERIOD}`)).json.lines[0].note).toMatch(/Linked by hand/);
+    expect((await api('DELETE', `/api/v1/books/gstr-2b/lines/${after.id}/link`)).json).toMatchObject({ matched: 1 });
+    expect(calls.length).toBe(before2b);
+
     const fy = new Date().getUTCMonth() >= 3 ? new Date().getUTCFullYear() : new Date().getUTCFullYear() - 1;
     await api('POST', `/api/v1/gst/connections/${ids.conn}/sync-returns`, { fyStart: fy, refresh: false });
     await api('POST', `/api/v1/gst/connections/${ids.conn}/sync-returns`, { fyStart: fy, refresh: false });

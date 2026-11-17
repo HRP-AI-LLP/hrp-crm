@@ -561,7 +561,7 @@ export interface Gstr2bRow {
   itcAvailable?: boolean;
 }
 
-const normDoc = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+/, '');
+export const normDoc = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^0+/, '');
 
 /** Imports a GSTR-2B period (replacing an earlier import of it) and matches it against bills. */
 export async function importGstr2b(ctx: RecordCtx, period: string, rows: Gstr2bRow[]) {
@@ -583,11 +583,22 @@ export async function matchGstr2b(ctx: RecordCtx, importId: string) {
       where tenant_id = $1 and doc_type = 'bill' and status not in ('draft','void') and deleted_at is null and vendor_gstin is not null and bill_date >= current_date - interval '24 months'`,
     [ctx.tenantId],
   );
+  // links someone made by hand (0035) win over matching by document number
+  const links = await ctx.tx.query<{ supplier_gstin: string; doc_key: string; bill_id: string }>(`select supplier_gstin, doc_key, bill_id from gstr2b_links where tenant_id = $1`, [ctx.tenantId]);
+  const linked = links.length
+    ? await ctx.tx.query<Record<string, any>>(
+        `select id, vendor_gstin, vendor_ref, bill_date, taxable_total::float8 as taxable, (igst_total + cgst_total + sgst_total)::float8 as tax from bills
+          where tenant_id = $1 and id = any($2::uuid[]) and status not in ('draft','void') and deleted_at is null`,
+        [ctx.tenantId, links.map((x) => x.bill_id)],
+      )
+    : [];
   const used = new Set<string>();
   let matched = 0;
   let mismatch = 0;
   for (const l of lines) {
-    const b = bills.find((x) => !used.has(x.id) && x.vendor_gstin === l.supplier_gstin && x.vendor_ref && normDoc(x.vendor_ref) === normDoc(l.doc_number));
+    const link = links.find((x) => x.supplier_gstin === l.supplier_gstin && x.doc_key === normDoc(l.doc_number));
+    const byHand = link ? linked.find((x) => x.id === link.bill_id && !used.has(x.id)) : undefined;
+    const b = byHand ?? bills.find((x) => !used.has(x.id) && !links.some((k) => k.bill_id === x.id) && x.vendor_gstin === l.supplier_gstin && x.vendor_ref && normDoc(x.vendor_ref) === normDoc(l.doc_number));
     let status = 'unmatched';
     let note: string | null = null;
     if (b) {
@@ -597,6 +608,7 @@ export async function matchGstr2b(ctx: RecordCtx, importId: string) {
       const okTax = Math.abs(b.tax - tax) <= 1;
       status = okTaxable && okTax ? 'matched' : 'mismatch';
       if (status === 'mismatch') note = `Books: taxable ${b.taxable.toFixed(2)}, tax ${b.tax.toFixed(2)}; GSTR-2B: taxable ${Number(l.taxable).toFixed(2)}, tax ${tax.toFixed(2)}`;
+      if (byHand) note = note ? `Linked by hand. ${note}` : 'Linked by hand';
     }
     if (status === 'matched') matched++;
     if (status === 'mismatch') mismatch++;
@@ -609,7 +621,7 @@ export async function gstr2bReport(ctx: RecordCtx, period: string) {
   const imp = await ctx.tx.one<{ id: string; created_at: string }>(`select id, created_at from gstr2b_imports where tenant_id = $1 and period = $2`, [ctx.tenantId, period]);
   if (!imp) return null;
   const lines = await ctx.tx.query(
-    `select l.id, l.supplier_gstin, l.supplier_name, l.doc_number, l.doc_date, l.taxable::float8 as taxable, (l.igst + l.cgst + l.sgst)::float8 as tax, l.itc_available, l.match_status, l.note, l.bill_id, b.bill_number
+    `select l.id, l.supplier_gstin, l.supplier_name, l.doc_number, l.doc_date, l.doc_type, l.taxable::float8 as taxable, (l.igst + l.cgst + l.sgst)::float8 as tax, l.itc_available, l.match_status, l.note, l.bill_id, b.bill_number, b.status as bill_status
        from gstr2b_lines l left join bills b on b.tenant_id = l.tenant_id and b.id = l.bill_id where l.tenant_id = $1 and l.import_id = $2 order by l.match_status desc, l.supplier_gstin`,
     [ctx.tenantId, imp.id],
   );

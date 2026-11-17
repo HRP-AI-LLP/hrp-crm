@@ -30,6 +30,7 @@ import {
 } from '../services/books/bills';
 import { expenseAction, expenseBooks, setExpenseAccounts } from '../services/books/expenses';
 import * as rep from '../services/books/reports';
+import * as g2b from '../services/books/gstr2b';
 import * as setup from '../services/books/setup';
 import { enqueue, eventJobs } from '../services/jobs';
 import type { RecordCtx, RecordEvent } from '../services/records';
@@ -563,6 +564,33 @@ export const booksRoutes = new Hono<AppEnv>()
       })
       .parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => setup.importGstr2b(rctx(c, tx), b.period, b.rows)));
+  })
+  // GSTR-2B documents not in the books: match again, link by hand, or enter as bills (no GST provider call)
+  .post('/books/gstr-2b/:period/rematch', async (c) => {
+    requireAdmin(c);
+    const period = z.string().regex(/^(0[1-9]|1[0-2])\d{4}$/).parse(c.req.param('period'));
+    return c.json(await c.var.db.tx(scope(c), (tx) => g2b.rematchGstr2b(rctx(c, tx), period)));
+  })
+  .get('/books/gstr-2b/lines/:id/candidates', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => g2b.gstr2bCandidates(rctx(c, tx), qUuid(c))));
+  })
+  .post('/books/gstr-2b/lines/:id/link', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ billId: uuid }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => g2b.linkGstr2b(rctx(c, tx), qUuid(c), b.billId)));
+  })
+  .delete('/books/gstr-2b/lines/:id/link', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => g2b.unlinkGstr2b(rctx(c, tx), qUuid(c))));
+  })
+  .post('/books/gstr-2b/add-to-books', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ lineIds: z.array(uuid).min(1).max(500), accountId: uuid.nullish(), post: z.boolean().default(true) }).parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => g2b.addGstr2bToBooks(rctx(c, tx), b));
+    await emit(c, r.events);
+    const { events: _e, ...rest } = r;
+    return c.json(rest);
   })
   .get('/books/recurring', async (c) => {
     requireAdmin(c);
