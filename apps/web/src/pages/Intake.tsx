@@ -124,6 +124,7 @@ function GemBids() {
         <a className="btn sm ghost" href="https://bidplus.gem.gov.in/all-bids" target="_blank" rel="noreferrer noopener">
           GeM all bids ↗
         </a>
+        <DefaultOwner />
       </div>
       {rows.length ? (
         <table className="data" data-export-title="GeM bids">
@@ -131,32 +132,60 @@ function GemBids() {
             <tr>
               <th>Bid</th>
               <th>What</th>
-              <th>Buyer</th>
+              <th>Ministry / buyer</th>
+              <th className="num">Bid value</th>
+              <th className="num">EMD</th>
+              <th>Exemptions</th>
+              <th>Opened</th>
               <th>Closes</th>
               <th>Status</th>
-              <th className="num">Corrigenda</th>
               <th>Owner</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((b) => (
               <tr key={b.id} className="click" onClick={() => setOpen(b.id)}>
-                <td style={{ whiteSpace: 'nowrap' }}>{b.bid_number}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  {b.bid_number}
+                  {b.corrigenda ? (
+                    <div>
+                      <span className="chip warn" title="Corrigenda issued">
+                        {b.corrigenda} corr.
+                      </span>
+                    </div>
+                  ) : null}
+                </td>
                 <td>
                   {b.title ?? b.category ?? <span className="muted">{b.fetch_error ? 'Could not read it from GeM yet' : 'Reading it from GeM…'}</span>}
                   <div className="small muted">
-                    {[b.quantity ? `Qty ${b.quantity}` : null, b.emd_amount ? `EMD ${money2(b.emd_amount)}` : b.emd_amount === 0 ? 'No EMD' : null, (b.files ?? []).filter((f: Json) => f.fileId).length ? `${(b.files ?? []).filter((f: Json) => f.fileId).length} document(s)` : null]
+                    {[b.quantity ? `Qty ${b.quantity}` : null, (b.files ?? []).filter((f: Json) => f.fileId).length ? `${(b.files ?? []).filter((f: Json) => f.fileId).length} document(s)` : null]
                       .filter(Boolean)
                       .join(' · ')}
                   </div>
                 </td>
-                <td className="small">{[b.organisation, b.department ?? b.ministry].filter(Boolean).join(' · ') || '—'}</td>
+                <td className="small">
+                  {b.ministry ?? '—'}
+                  <div className="muted">{[b.organisation, b.department].filter(Boolean).join(' · ')}</div>
+                </td>
+                <td className="num">{b.bid_value ? money2(b.bid_value) : '—'}</td>
+                <td className="num">{b.emd_amount ? money2(b.emd_amount) : b.emd_amount === 0 ? 'None' : '—'}</td>
+                <td className="small">
+                  {b.mse_exempt == null && b.startup_exempt == null ? (
+                    '—'
+                  ) : (
+                    <>
+                      <span className={`chip ${b.mse_exempt ? 'good' : ''}`}>MSE {b.mse_exempt ? '✓' : '✗'}</span> <span className={`chip ${b.startup_exempt ? 'good' : ''}`}>Startup {b.startup_exempt ? '✓' : '✗'}</span>
+                    </>
+                  )}
+                </td>
+                <td className="small" style={{ whiteSpace: 'nowrap' }}>
+                  {b.start_at ? dateTime(b.start_at) : b.bid_date ? date(b.bid_date) : '—'}
+                </td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   {b.end_at ? dateTime(b.end_at) : '—'}
                   <div className="small muted">{left(b.end_at)}</div>
                 </td>
                 <td>{statusChip(b.status)}</td>
-                <td className="num">{b.corrigenda ? <span className="chip warn">{b.corrigenda}</span> : '—'}</td>
                 <td className="small">{b.owner_name ?? '—'}</td>
               </tr>
             ))}
@@ -181,6 +210,33 @@ function GemBids() {
         />
       )}
     </div>
+  );
+}
+
+/** Who new GeM bids belong to (the admin chooses; otherwise the workspace owner). */
+function DefaultOwner() {
+  const { data } = useQuery({ queryKey: ['intake', 'gem-settings'], queryFn: () => get<Json>('/api/v1/intake/gem-settings') });
+  const { data: users } = useUsers();
+  const act = useAct([['intake']]);
+  if (!data) return null;
+  const name = (id: string | null) => (users?.items ?? []).find((u) => u.id === id)?.full_name ?? '—';
+  if (!data.canEdit) return <span className="small muted">New bids go to {name(data.effectiveOwnerId)}</span>;
+  return (
+    <label className="row small" style={{ gap: 6, marginLeft: 'auto' }}>
+      New bids go to
+      <select
+        value={data.defaultOwnerId ?? ''}
+        style={{ width: 'auto' }}
+        onChange={(e) => act(() => put<Json>('/api/v1/intake/gem-settings', { defaultOwnerId: e.target.value || null, applyToUnowned: true }), (r) => `Saved${r.applied ? `; ${r.applied} bid(s) without an owner given to them` : ''}`)}
+      >
+        <option value="">The workspace owner</option>
+        {(users?.items ?? []).map((u) => (
+          <option key={u.id} value={u.id}>
+            {u.full_name}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -610,6 +666,7 @@ function ItemModal({ item, onClose }: { item: Json; onClose: () => void }) {
             <Link to={`/o/bill/${data.link_id}`}>Open the bill made from this mail</Link>
           </p>
         )}
+        {data.kind === 'statement' && <StatementPanel item={data} onDone={onClose} />}
         {data.status === 'new' && (!att || data.kind === 'statement') && (
           <div className="row" style={{ gap: 6 }}>
             <button className="btn primary" onClick={async () => (await act(() => post(`/api/v1/intake/items/${item.id}/status`, { status: 'done' }), 'Marked done')) !== null && onClose()}>
@@ -647,6 +704,79 @@ function ItemModal({ item, onClose }: { item: Json; onClose: () => void }) {
   );
 }
 
+/** A statement that came by mail: opened with the account's saved password (or one typed here), imported, matched on the desk. */
+function StatementPanel({ item, onDone }: { item: Json; onDone: () => void }) {
+  const { data: banks } = useQuery({ queryKey: ['books', 'bank-accounts'], queryFn: () => get<Json[]>('/api/v1/books/bank-accounts'), retry: false });
+  const act = useAct([['intake'], ['books']]);
+  const [f, setF] = useState({ bankAccountId: item.link_object === 'bank_account' ? item.link_id : '', password: '', remember: true });
+  const [busy, setBusy] = useState(false);
+  const st = item.data?.statement as Json | undefined;
+  const list = (banks ?? []).filter((b) => b.kind !== 'cash');
+  const read = async () => {
+    setBusy(true);
+    const r = await act(
+      () => post<Json>(`/api/v1/intake/items/${item.id}/statement`, { bankAccountId: f.bankAccountId || null, password: f.password || null, remember: f.remember }),
+      (x: Json) => (x.status === 'imported' ? `${x.message}; the accounts desk is matching them` : x.message),
+    );
+    setBusy(false);
+    if (r?.status === 'imported') onDone();
+  };
+  return (
+    <div className="panel stack" style={{ padding: 12 }}>
+      <b>Statement</b>
+      {st ? (
+        <p className="small" style={{ margin: 0, color: st.status === 'imported' ? undefined : 'var(--warn)' }}>
+          {st.message}
+          {st.at ? <span className="muted"> · {dateTime(st.at)}</span> : null}
+        </p>
+      ) : (
+        <p className="small muted" style={{ margin: 0 }}>
+          Read automatically within a few minutes when the account's statement password is saved (Books → Banking → Details).
+        </p>
+      )}
+      {item.status !== 'done' && (
+        <>
+          <div className="grid2">
+            <label className="field">
+              Account or card
+              <select value={f.bankAccountId} onChange={(e) => setF({ ...f, bankAccountId: e.target.value })}>
+                <option value="">Find it from the mail</option>
+                {list.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                    {b.account_last4 ? ` ••${b.account_last4}` : ''}
+                    {b.has_statement_password ? ' 🔑' : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              PDF password (if not saved)
+              <input type="password" autoComplete="new-password" value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} />
+              {f.password && f.bankAccountId && (
+                <label className="row small" style={{ gap: 4 }}>
+                  <input type="checkbox" checked={f.remember} onChange={(e) => setF({ ...f, remember: e.target.checked })} />
+                  Save it on this account for next time
+                </label>
+              )}
+            </label>
+          </div>
+          <div>
+            <button className="btn primary" disabled={busy} onClick={read}>
+              {busy ? 'Reading…' : 'Read and import the statement'}
+            </button>
+          </div>
+        </>
+      )}
+      {item.status === 'done' && item.link_object === 'bank_account' && (
+        <Link to="/books#desk" className="small">
+          See it on the accounts desk
+        </Link>
+      )}
+    </div>
+  );
+}
+
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'SGD', 'AUD', 'CAD', 'AED', 'JPY', 'CHF'];
 const num = (v: string) => (v.trim() === '' ? null : Number(v));
 
@@ -674,7 +804,7 @@ function ApproveMail({ id, onDone }: { id: string; onDone: () => void }) {
       importOfServices: !!p.supplier?.foreign,
       reverseCharge: !!p.reverseCharge,
       itcEligible: true,
-      accountId: '',
+      accountId: p.suggest?.accountId ?? '',
       projectId: '',
       lines: (p.lines?.length ? p.lines : [{ description: '', hsnSac: '', quantity: 1, unitPrice: 0, taxRate: 18 }]).map((l: Json) => ({ ...l, quantity: String(l.quantity), unitPrice: String(l.unitPrice), taxRate: String(l.taxRate), hsnSac: l.hsnSac ?? '' })),
       paid: !!p.paid,
@@ -782,7 +912,7 @@ function ApproveMail({ id, onDone }: { id: string; onDone: () => void }) {
           <span />
         )}
         <label className="field">
-          Expense account
+          Expense account {p.suggest && f.accountId === p.suggest.accountId && <span className="small muted">(suggested {p.suggest.why})</span>}
           <select value={f.accountId} onChange={(e) => set({ accountId: e.target.value })}>
             <option value="">Purchases (default)</option>
             {(p.choices?.accounts ?? [])

@@ -10,6 +10,7 @@ import { Db } from './lib/db';
 import type { Job } from './services/jobs';
 import { dailyBackups } from './services/backup';
 import { mailSweep } from './services/mail';
+import { statementSweep } from './services/books/statement-mail';
 import { gemDetailsSweep } from './services/intake/gem-fetch';
 import { intakeSweep } from './services/intake/intake';
 import { campaignSweep } from './services/campaigns';
@@ -52,6 +53,8 @@ export default {
         await intakeSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'intake-sweep', msg: (e as Error).message })));
         // followed GeM bids: details and bid documents read from GeM's public pages
         await gemDetailsSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'gem-details', msg: (e as Error).message })));
+        // statements that came by mail: opened with the saved passwords, imported, handed to the desk
+        await statementSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'statement-mail', msg: (e as Error).message })));
         // campaigns send in batches while one is running (a KV flag keeps idle workspaces asleep)
         await campaignSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'campaign-sweep', msg: (e as Error).message })));
         await digestSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'digest-sweep', msg: (e as Error).message })));

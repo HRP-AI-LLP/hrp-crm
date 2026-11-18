@@ -225,7 +225,29 @@ export function sameName(a: string, b: string) {
   if (!wa.length || !wb.length) return false;
   const [short, long] = wa.length <= wb.length ? [wa, wb] : [wb, wa];
   if (short.join('').length < 5) return false;
-  return short.every((w) => long.includes(w));
+  if (short.every((w) => long.includes(w))) return true;
+  // banks often run the words together, surname first or last: SRIVASTAVASUNITA is Sunita Srivastava
+  return joinedName(wa.join(''), wb) || joinedName(wb.join(''), wa);
+}
+
+/** Is `joined` (no spaces) these name words run together, in any order? Short words cannot match this way. */
+function joinedName(joined: string, words: string[]) {
+  if (words.length < 2 || words.length > 4 || joined.length < 8 || words.some((w) => w.length < 2)) return false;
+  if (joined.length !== words.join('').length) return false;
+  const go = (rest: string, left: string[]): boolean => !left.length ? !rest : left.some((w, i) => rest.startsWith(w) && go(rest.slice(w.length), left.filter((_, j) => j !== i)));
+  return go(joined, words);
+}
+
+/** Does the text carry this person's name, spaced or run together (any word order)? */
+export function nameInText(text: string, name: string) {
+  const words = squash(name).split(' ').filter((w) => w.length >= 2 && !['MR', 'MRS', 'MS', 'DR', 'SHRI', 'SMT'].includes(w));
+  if (words.length < 2) return false;
+  const t = ` ${squash(text)} `;
+  if (t.includes(` ${words.join(' ')} `) || t.includes(` ${[...words].reverse().join(' ')} `)) return true;
+  return t
+    .trim()
+    .split(' ')
+    .some((tok) => joinedName(tok, words));
 }
 
 /** Last four digits of a phone, for matching masked UPI ids and account numbers. */

@@ -25,6 +25,7 @@ import { type Integration, mailboxToken, ProviderError, providerFetch, readSecre
 import { createRecord, type RecordCtx, type RecordEvent } from '../records';
 import { systemCtxFor } from '../system';
 import { pdfText } from '../../lib/pdf-text';
+import { defaultBidOwner } from './gem';
 import { readReceipt } from './receipt';
 import { businessTerms, type BusinessTerms, classify, hasDocument, type IntakeKind, namesBusiness, parseCorrigendum, parseGemUpdate, parseNewBids } from './parse';
 
@@ -310,6 +311,8 @@ async function upsertBid(ctx: RecordCtx, bidNumber: string, fields: Record<strin
       ]);
     return { id: cur.id, created: false };
   }
+  // a new bid goes to the person the admin chose (else the workspace owner)
+  fields = { ...fields, owner_id: fields.owner_id ?? (await defaultBidOwner(ctx)) };
   const keys = Object.keys(fields).filter((k) => fields[k] !== null && fields[k] !== undefined);
   const r = await ctx.tx.one<{ id: string }>(
     `insert into gem_bids (tenant_id, bid_number, source_item_id${keys.map((k) => `, ${k}`).join('')}) values ($1,$2,$3${keys.map((_, i) => `,$${i + 4}`).join('')}) returning id`,
@@ -451,6 +454,9 @@ export async function setItemStatus(ctx: RecordCtx, id: string, status: 'new' | 
 
 /* ───────────────────────── bills from mail ───────────────────────── */
 
+/** Bumped when the reading of mailed documents improves: files read before are read again. */
+export const READ_VERSION = 2;
+
 export async function ownGstins(ctx: RecordCtx) {
   const t = await ctx.tx.one<{ settings: any }>(`select settings from tenants where id = $1`, [ctx.tenantId]);
   return [t?.settings?.company?.gstin].filter((g): g is string => !!g).map((g) => g.toUpperCase());
@@ -474,9 +480,10 @@ export async function readAttachment(ctx: RecordCtx, id: string, fileId: string,
   const receipt = text.trim().length > 40 ? readReceipt(text, [names?.n, names?.l].filter((x): x is string => !!x)) : null;
   if (r && receipt) {
     const d = r.data as Record<string, any>;
-    // a longer number read from its label wins over a cut-short one ("F13F9483" of "F13F9483-0019")
-    if (receipt.number && (!d.number || receipt.number.startsWith(d.number) || receipt.number.length > String(d.number).length)) d.number = receipt.number;
+    // a number read under its heading wins over a heading word or a cut-short one ("INVOICE", "F13F9483")
+    if (receipt.number && (!d.number || !/\d/.test(String(d.number)) || receipt.number.startsWith(d.number) || receipt.number.length > String(d.number).length)) d.number = receipt.number;
     d.date ??= receipt.date;
+    const lines = receipt.lines.map((l) => ({ description: l.period ? `${l.description} (${l.period})` : l.description, hsn: l.hsn ?? receipt.hsnSac, qty: l.qty, rate: l.unitPrice, amount: l.amount, taxRate: l.taxPct ?? receipt.taxRate ?? 0 }));
     if (receipt.currency !== 'INR') {
       d.currency = receipt.currency;
       if (receipt.subtotal != null) d.taxable = receipt.subtotal;
@@ -484,12 +491,28 @@ export async function readAttachment(ctx: RecordCtx, id: string, fileId: string,
       d.cgst = 0;
       d.sgst = 0;
       d.igst = receipt.tax ?? 0;
-      if (receipt.lines.length) d.lines = receipt.lines.map((l) => ({ description: l.period ? `${l.description} (${l.period})` : l.description, hsn: receipt.hsnSac, qty: l.qty, rate: l.unitPrice, amount: l.amount, taxRate: l.taxPct ?? 0 }));
+      if (lines.length) d.lines = lines;
+    } else {
+      // what the Indian rules missed: lines, values and tax from the headings and table
+      if (!d.lines?.length && lines.length) d.lines = lines;
+      d.taxable ??= receipt.subtotal;
+      d.total ??= receipt.total;
+      if (!Number(d.cgst) && !Number(d.sgst) && !Number(d.igst)) {
+        d.cgst = receipt.cgst ?? 0;
+        d.sgst = receipt.sgst ?? 0;
+        d.igst = receipt.igst ?? (receipt.cgst || receipt.sgst ? 0 : (receipt.tax ?? 0));
+      }
+      if (receipt.reverseCharge != null) d.reverseCharge = receipt.reverseCharge;
+      if (receipt.placeOfSupply) d.placeOfSupply = receipt.placeOfSupply;
     }
+    if (receipt.paid) d.paid = { ...(d.paid ?? {}), status: 'paid', amount: d.paid?.amount ?? receipt.amountPaid ?? receipt.total, date: d.paid?.date ?? receipt.paidOn };
+    // with the number, date, supplier, lines and totals read, it is no longer a guess
+    const got = [d.number, d.date, receipt.supplier.name, d.lines?.length, d.total ?? d.taxable].filter(Boolean).length;
+    r.confidence = Math.max(r.confidence ?? 0, got / 5);
   }
   const read = r
-    ? { ...r, receipt, party: { gstin: receipt?.supplier.foreign ? null : party, name: (receipt?.supplier.foreign ? receipt.supplier.name : null) ?? r.data.customer?.name ?? receipt?.supplier.name ?? null }, ours: ours.length > 0, scanned: false }
-    : { data: null, receipt: null, confidence: 0, warnings: ['No text in this file (a scan or photo): enter the bill by hand'], scanned: true };
+    ? { ...r, v: READ_VERSION, receipt, party: { gstin: receipt?.supplier.foreign ? null : party, name: receipt?.supplier.name ?? r.data.customer?.name ?? null }, ours: ours.length > 0, scanned: false }
+    : { data: null, v: READ_VERSION, receipt: null, confidence: 0, warnings: ['No text in this file (a scan or photo): enter the bill by hand'], scanned: true };
   const data = { ...it.data, reads: { ...(it.data.reads ?? {}), [fileId]: read } };
   await ctx.tx.query(`update intake_items set data = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, JSON.stringify(data)]);
   return read;

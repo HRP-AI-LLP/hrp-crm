@@ -24,6 +24,8 @@ const MAX_LINKED = 12;
 export interface GemSession {
   cookie: string;
   token: string;
+  /** the cookies by name: replies may set new ones (load-balancer and session cookies) */
+  jar?: Map<string, string>;
 }
 
 export interface GemFound {
@@ -48,23 +50,37 @@ async function get(f: Fetcher, url: string, init: RequestInit = {}) {
   return f(url, { ...init, headers: { 'user-agent': UA, ...(init.headers ?? {}) }, redirect: 'follow', signal: AbortSignal.timeout(45_000) });
 }
 
-function cookiesOf(res: Response): string {
+function setCookies(res: Response): string[] {
   const h = res.headers as Headers & { getSetCookie?: () => string[]; getAll?: (n: string) => string[] };
-  const list = h.getSetCookie?.() ?? h.getAll?.('set-cookie') ?? (h.get('set-cookie') ?? '').split(/,(?=\s*[^;,=\s]+=)/);
-  return list
-    .map((c) => c.split(';')[0]!.trim())
-    .filter((c) => c.includes('='))
-    .join('; ');
+  return h.getSetCookie?.() ?? h.getAll?.('set-cookie') ?? (h.get('set-cookie') ?? '').split(/,(?=\s*[^;,=\s]+=)/);
 }
 
-/** The search page sets a session cookie and carries the form token the search needs. */
+function keep(jar: Map<string, string>, res: Response) {
+  for (const c of setCookies(res)) {
+    const [pair] = c.split(';');
+    const i = pair!.indexOf('=');
+    if (i > 0) jar.set(pair!.slice(0, i).trim(), pair!.slice(i + 1).trim());
+  }
+}
+
+const cookieOf = (jar: Map<string, string>) => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
+
+/** The search page sets the session cookies and carries the form token the search needs. */
 export async function gemSession(f: Fetcher = fetch): Promise<GemSession> {
-  const res = await get(f, `${BASE}/all-bids`);
-  if (!res.ok) throw new Error(`GeM answered ${res.status} for the bid search`);
-  const html = await res.text();
-  const token = /csrf_bd_gem_nk['"]?\s*[:=]\s*['"]([0-9a-f]{16,})['"]/i.exec(html)?.[1];
-  if (!token) throw new Error('GeM changed its bid search page (no form token found)');
-  return { cookie: cookiesOf(res), token };
+  let last = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 800 * attempt));
+    const res = await get(f, `${BASE}/all-bids`, { headers: { accept: 'text/html,application/xhtml+xml', 'accept-language': 'en-IN,en;q=0.9' } });
+    last = res.status;
+    if (!res.ok) continue;
+    const html = await res.text();
+    const token = /csrf_bd_gem_nk['"]?\s*[:=]\s*['"]([0-9a-f]{16,})['"]/i.exec(html)?.[1];
+    if (!token) continue;
+    const jar = new Map<string, string>();
+    keep(jar, res);
+    return { cookie: cookieOf(jar), token, jar };
+  }
+  throw new Error(last ? `GeM's bid search page answered ${last} (GeM may be busy; it is tried again in a few minutes)` : 'GeM changed its bid search page (no form token found)');
 }
 
 /** GeM writes Indian times with a "Z": 15:00 IST comes as 15:00:00Z. */
@@ -81,6 +97,38 @@ const text = (v: unknown) => {
   return typeof x === 'string' && x.trim() ? x.trim() : null;
 };
 
+/** One search on GeM. GeM's load balancer sometimes answers 403/404 to a session it has not seen: a new session and another try. */
+async function search(s: GemSession, payload: unknown, f: Fetcher) {
+  let last = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) {
+      await new Promise((r) => setTimeout(r, 700 * attempt));
+      Object.assign(s, await gemSession(f));
+    }
+    const res = await get(f, `${BASE}/all-bids-data`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json, text/javascript, */*; q=0.01',
+        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'x-requested-with': 'XMLHttpRequest',
+        origin: BASE,
+        referer: `${BASE}/all-bids`,
+        ...(s.cookie ? { cookie: s.cookie } : {}),
+      },
+      body: new URLSearchParams({ payload: JSON.stringify(payload), csrf_bd_gem_nk: s.token }).toString(),
+    });
+    last = res.status;
+    if (s.jar) {
+      keep(s.jar, res);
+      s.cookie = cookieOf(s.jar);
+    }
+    if (!res.ok) continue;
+    const j = (await res.json().catch(() => null)) as { code?: number; response?: { response?: { docs?: Record<string, unknown>[] } } } | null;
+    if (j?.response?.response) return j.response.response.docs ?? [];
+  }
+  throw new Error(`GeM answered ${last || 'with something unreadable'} for the bid search three times; it is tried again in a few minutes`);
+}
+
 /** Finds a bid by number among ongoing, finished and cancelled bids. */
 export async function gemLookup(s: GemSession, bidNumber: string, f: Fetcher = fetch): Promise<GemFound | null> {
   for (const status of ['ongoing_bids', 'bidrastatus', 'cancelled_bids']) {
@@ -88,19 +136,8 @@ export async function gemLookup(s: GemSession, bidNumber: string, f: Fetcher = f
       param: { searchBid: bidNumber, searchType: 'fullText' },
       filter: { bidStatusType: status, byType: 'all', highBidValue: '', byEndDate: { from: '', to: '' }, sort: 'Bid-End-Date-Oldest' },
     };
-    const res = await get(f, `${BASE}/all-bids-data`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'x-requested-with': 'XMLHttpRequest',
-        referer: `${BASE}/all-bids`,
-        ...(s.cookie ? { cookie: s.cookie } : {}),
-      },
-      body: new URLSearchParams({ payload: JSON.stringify(payload), csrf_bd_gem_nk: s.token }).toString(),
-    });
-    if (!res.ok) throw new Error(`GeM answered ${res.status} for the bid search`);
-    const j = (await res.json().catch(() => null)) as { response?: { response?: { docs?: Record<string, unknown>[] } } } | null;
-    const doc = j?.response?.response?.docs?.find((d) => text(d.b_bid_number) === bidNumber);
+    const docs = await search(s, payload, f);
+    const doc = docs.find((d) => text(d.b_bid_number) === bidNumber);
     if (!doc) continue;
     const gemId = Number(first(doc.b_id) ?? doc.id);
     const type = Number(first(doc.b_bid_type) ?? 1);

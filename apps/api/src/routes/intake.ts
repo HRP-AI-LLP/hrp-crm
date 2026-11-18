@@ -8,6 +8,9 @@ import type { AppEnv } from '../env';
 import { notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enqueue, eventJobs } from '../services/jobs';
+import { runBookkeeper } from '../services/books/desk';
+import { assertBooksAdmin } from '../services/books/ledger';
+import { readMailedStatement, systemDeps } from '../services/books/statement-mail';
 import * as approve from '../services/intake/approve';
 import * as gem from '../services/intake/gem';
 import { fetchBidFromGem } from '../services/intake/gem-fetch';
@@ -72,6 +75,16 @@ export const intakeRoutes = new Hono<AppEnv>()
     await emit(c, r.events);
     return c.json({ billId: r.billId, vendorId: r.vendorId, lines: r.lines }, 201);
   })
+  .post('/intake/items/:id/statement', async (c) => {
+    const b = z.object({ password: z.string().max(100).nullish(), bankAccountId: z.string().uuid().nullish(), remember: z.boolean().optional() }).parse(await c.req.json().catch(() => ({})));
+    const r = await c.var.db.tx(scope(c), async (tx) => {
+      await assertBooksAdmin(rctx(c, tx));
+      return readMailedStatement(rctx(c, tx), c.env, id(c), b);
+    });
+    // the accounts desk takes the new lines: matches, categories, GST and projects
+    const desk = r.status === 'imported' && r.added && r.bankAccountId ? await runBookkeeper(systemDeps(c.env, c.var.db, c.var.tenant.id), { trigger: 'import', bankAccountId: r.bankAccountId }).catch(() => null) : null;
+    return c.json({ ...r, desk: desk ? { ok: true } : null });
+  })
   .post('/intake/items/:id/proposal', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => approve.proposal(rctx(c, tx), c.env, id(c)))))
   .post('/intake/items/:id/approve', async (c) => {
     const b = approve.approveSchema.parse(await c.req.json());
@@ -96,6 +109,11 @@ export const intakeRoutes = new Hono<AppEnv>()
     const b = z.object({ name: z.string().trim().max(200).default('bid.pdf'), data: z.string().max(20_000_000).nullish(), pages }).parse(await c.req.json());
     const bytes = b.data ? Uint8Array.from(atob(b.data), (ch) => ch.charCodeAt(0)) : null;
     return c.json(await c.var.db.tx(scope(c), (tx) => gem.attachBidDocument(rctx(c, tx), c.env, id(c), { name: b.name, bytes, pages: b.pages })));
+  })
+  .get('/intake/gem-settings', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => gem.gemSettings(rctx(c, tx)))))
+  .put('/intake/gem-settings', async (c) => {
+    const b = z.object({ defaultOwnerId: z.string().uuid().nullable(), applyToUnowned: z.boolean().optional() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => gem.saveGemSettings(rctx(c, tx), b)));
   })
   .post('/intake/gem/:id/fetch', async (c) => {
     const bid = id(c);

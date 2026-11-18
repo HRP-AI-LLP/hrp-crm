@@ -38,8 +38,11 @@ export const JOB_WORK_STATUSES = ['draft', 'sent', 'partially_received', 'receiv
 export const PROJECT_STATUSES = ['planning', 'active', 'on_hold', 'completed', 'cancelled'] as const;
 export const PROJECT_BILLING_METHODS = ['fixed_price', 'time_project_rate', 'time_staff_rate', 'time_task_rate', 'non_billable'] as const;
 export const EXPENSE_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'recorded', 'reimbursed', 'void'] as const;
+export const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY', 'CHF', 'SAR', 'QAR', 'NZD', 'HKD', 'MYR', 'ZAR', 'SEK', 'NOK', 'DKK', 'CNY', 'BDT', 'NPR', 'LKR'] as const;
+export const DEAL_PRICING = ['fixed', 'hourly', 'daily', 'per_task', 'per_person_month', 'monthly_retainer', 'per_unit', 'milestone', 'subscription'] as const;
 export const VENDOR_TYPES = ['manufacturer', 'supplier', 'contractor', 'transporter', 'installer', 'service_provider', 'other'] as const;
-const LABELS: Record<string, string> = { due_on_receipt: 'Due on receipt', net_7: 'Net 7 days', net_15: 'Net 15 days', net_30: 'Net 30 days', net_45: 'Net 45 days', net_60: 'Net 60 days', end_of_month: 'Due end of the month', end_of_next_month: 'Due end of next month', gem: 'GeM portal', tender: 'Tender (CPPP / e-procurement)', ngo: 'NGO / trust / society' };
+const LABELS: Record<string, string> = { fixed: 'Fixed bid', hourly: 'Hourly (time & materials)', daily: 'Per day', per_task: 'Per task / ticket', per_person_month: 'Per person per month', monthly_retainer: 'Monthly retainer', per_unit: 'Per unit / licence', milestone: 'Milestone based', subscription: 'Subscription', due_on_receipt: 'Due on receipt', net_7: 'Net 7 days', net_15: 'Net 15 days', net_30: 'Net 30 days', net_45: 'Net 45 days', net_60: 'Net 60 days', end_of_month: 'Due end of the month', end_of_next_month: 'Due end of next month', gem: 'GeM portal', tender: 'Tender (CPPP / e-procurement)', ngo: 'NGO / trust / society' };
+const currencyChoices = () => CURRENCIES.map((c) => ({ value: c, label: c }));
 const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: LABELS[v] ?? v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
 
 const owner: FieldDef = { key: 'owner_id', label: 'Owner', type: 'user', standard: true, indexed: true };
@@ -101,10 +104,14 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'account_id', label: 'Account', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
     { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },
     ...pipelineFields,
-    { key: 'amount', label: 'Amount', type: 'currency', standard: true, options: { min: 0 } },
+    { key: 'pricing_model', label: 'Pricing', type: 'picklist', standard: true, options: { choices: choices(DEAL_PRICING) }, helpText: 'Fixed bid, or a rate times hours / tasks / people / months' },
+    { key: 'unit_rate', label: 'Rate', type: 'currency', standard: true, options: { min: 0 }, helpText: 'Per hour, day, task, person-month, month or unit (as the pricing says)' },
+    { key: 'units', label: 'Quantity', type: 'number', standard: true, options: { min: 0 }, helpText: 'Hours, days, tasks, people, months or units' },
+    { key: 'duration_months', label: 'Months', type: 'number', standard: true, options: { min: 0 }, helpText: 'For per person per month: how many months' },
+    { key: 'amount', label: 'Amount', type: 'currency', standard: true, options: { min: 0 }, helpText: 'Worked out from the rate when the pricing is not a fixed bid' },
     { key: 'one_time_total', label: 'One-time charges', type: 'currency', standard: true, readOnly: true, helpText: 'From the deal\'s charges (before GST)' },
     { key: 'recurring_monthly', label: 'Recurring per month', type: 'currency', standard: true, readOnly: true, helpText: 'Recurring charges as a monthly amount (before GST)' },
-    { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
+    { key: 'currency', label: 'Currency', type: 'picklist', standard: true, options: { choices: currencyChoices() } },
     { key: 'close_date', label: 'Close date', type: 'date', standard: true },
     { key: 'source', label: 'Source', type: 'picklist', standard: true, options: { addable: true, choices: choices(LEAD_SOURCES) } },
     { key: 'bid_number', label: 'Bid / tender no.', type: 'text', standard: true, indexed: true, options: { maxLength: 100 }, helpText: 'e.g. GEM/2026/B/1234567' },
@@ -154,7 +161,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },
     { key: 'valid_until', label: 'Valid until', type: 'date', standard: true },
     { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
-    { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
+    { key: 'currency', label: 'Currency', type: 'picklist', standard: true, options: { choices: currencyChoices() } },
     { key: 'subtotal', label: 'Subtotal', type: 'currency', standard: true, readOnly: true },
     { key: 'discount_total', label: 'Discount', type: 'currency', standard: true, readOnly: true },
     { key: 'tax_total', label: 'Tax', type: 'currency', standard: true, readOnly: true },
@@ -187,7 +194,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'fulfilment_status', label: 'Fulfilment', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['unfulfilled', 'partially_delivered', 'delivered']) } },
     { key: 'payment_status', label: 'Payment', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['unpaid', 'partially_paid', 'paid']) } },
     { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
-    { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
+    { key: 'currency', label: 'Currency', type: 'picklist', standard: true, options: { choices: currencyChoices() } },
     { key: 'subtotal', label: 'Subtotal', type: 'currency', standard: true, readOnly: true },
     { key: 'discount_total', label: 'Discount', type: 'currency', standard: true, readOnly: true },
     { key: 'tax_total', label: 'Tax', type: 'currency', standard: true, readOnly: true },
@@ -230,7 +237,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'order_date', label: 'PO date', type: 'date', standard: true },
     { key: 'expected_date', label: 'Expected by', type: 'date', standard: true },
     { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
-    { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
+    { key: 'currency', label: 'Currency', type: 'picklist', standard: true, options: { choices: currencyChoices() } },
     { key: 'subtotal', label: 'Subtotal', type: 'currency', standard: true, readOnly: true },
     { key: 'discount_total', label: 'Discount', type: 'currency', standard: true, readOnly: true },
     { key: 'tax_total', label: 'Tax', type: 'currency', standard: true, readOnly: true },
@@ -331,7 +338,8 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'buyer_gstin', label: 'Customer GSTIN', type: 'text', standard: true, readOnly: true },
     { key: 'supply_type', label: 'Supply', type: 'picklist', standard: true, readOnly: true, options: { choices: choices(['intra', 'inter', 'export']) } },
     { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
-    { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
+    { key: 'currency', label: 'Currency', type: 'picklist', standard: true, options: { choices: currencyChoices() } },
+    { key: 'exchange_rate', label: 'Exchange rate (₹ per unit)', type: 'number', standard: true, options: { min: 0 }, helpText: 'Foreign currency only: left at 1, the day\'s reference rate is used when the invoice is issued' },
     { key: 'taxable_total', label: 'Taxable value', type: 'currency', standard: true, readOnly: true },
     { key: 'cgst_total', label: 'CGST', type: 'currency', standard: true, readOnly: true },
     { key: 'sgst_total', label: 'SGST', type: 'currency', standard: true, readOnly: true },
@@ -382,7 +390,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'reverse_charge', label: 'Reverse charge', type: 'boolean', standard: true },
     { key: 'itc_eligible', label: 'Input tax credit eligible', type: 'boolean', standard: true },
     { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
-    { key: 'currency', label: 'Currency', type: 'text', standard: true, options: { maxLength: 3 } },
+    { key: 'currency', label: 'Currency', type: 'picklist', standard: true, options: { choices: currencyChoices() } },
     { key: 'exchange_rate', label: 'Exchange rate', type: 'number', standard: true, options: { min: 0 } },
     { key: 'tds_section', label: 'TDS section', type: 'text', standard: true, helpText: 'e.g. 194C, 194J — the rate comes from the section unless you set one' },
     { key: 'tds_rate', label: 'TDS %', type: 'percent', standard: true },
@@ -486,6 +494,7 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'start_date', label: 'Start date', type: 'date', standard: true, indexed: true },
     { key: 'end_date', label: 'End date', type: 'date', standard: true, indexed: true },
     { key: 'billing_method', label: 'Billing', type: 'picklist', standard: true, options: { choices: choices(PROJECT_BILLING_METHODS) } },
+    { key: 'currency', label: 'Currency', type: 'picklist', standard: true, options: { choices: currencyChoices() }, helpText: 'Rates, fees and invoices of this project are in this currency' },
     { key: 'project_rate', label: 'Hourly rate (project)', type: 'currency', standard: true, options: { min: 0 } },
     { key: 'fixed_fee', label: 'Fixed fee', type: 'currency', standard: true, options: { min: 0 } },
     { key: 'budget_type', label: 'Budget', type: 'picklist', standard: true, options: { choices: choices(['none', 'hours', 'cost', 'revenue']) } },

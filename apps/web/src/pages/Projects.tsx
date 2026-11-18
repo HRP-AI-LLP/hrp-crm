@@ -1,4 +1,5 @@
 /** Projects list and the project page (works for members as well as record owners). */
+import { CURRENCIES } from '@synapse/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
@@ -126,7 +127,7 @@ function NewProject({ onClose }: { onClose: () => void }) {
   const nav = useNavigate();
   const toast = useToast();
   const accounts = useQuery({ queryKey: ['accounts-pick'], queryFn: () => get<{ items: Json[] }>('/api/v1/records/account?limit=200&sort=name&dir=asc') });
-  const [f, setF] = useState({ name: '', project_code: '', account_id: '', billing_method: 'time_project_rate', project_rate: '', fixed_fee: '', start_date: new Date().toISOString().slice(0, 10), end_date: '', budget_hours: '' });
+  const [f, setF] = useState({ name: '', project_code: '', account_id: '', billing_method: 'time_project_rate', project_rate: '', fixed_fee: '', start_date: new Date().toISOString().slice(0, 10), end_date: '', budget_hours: '', currency: 'INR' });
   return (
     <Modal
       title="New project"
@@ -137,7 +138,7 @@ function NewProject({ onClose }: { onClose: () => void }) {
           disabled={!f.name.trim()}
           onClick={async () => {
             try {
-              const body: Json = { name: f.name.trim(), billing_method: f.billing_method, start_date: f.start_date || null };
+              const body: Json = { name: f.name.trim(), billing_method: f.billing_method, start_date: f.start_date || null, currency: f.currency };
               if (f.project_code) body.project_code = f.project_code;
               if (f.account_id) body.account_id = f.account_id;
               if (f.project_rate) body.project_rate = Number(f.project_rate);
@@ -185,14 +186,22 @@ function NewProject({ onClose }: { onClose: () => void }) {
             ))}
           </select>
         </label>
+        <label className="field">
+          Currency
+          <select value={f.currency} onChange={(e) => setF({ ...f, currency: e.target.value })}>
+            {CURRENCIES.map((c) => (
+              <option key={c}>{c}</option>
+            ))}
+          </select>
+        </label>
         {f.billing_method === 'fixed_price' ? (
           <label className="field">
-            Fixed fee (₹)
+            Fixed fee ({f.currency})
             <input inputMode="decimal" value={f.fixed_fee} onChange={(e) => setF({ ...f, fixed_fee: e.target.value })} />
           </label>
         ) : (
           <label className="field">
-            Hourly rate (₹)
+            Hourly rate ({f.currency})
             <input inputMode="decimal" value={f.project_rate} onChange={(e) => setF({ ...f, project_rate: e.target.value })} />
           </label>
         )}

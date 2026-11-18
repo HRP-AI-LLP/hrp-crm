@@ -942,6 +942,7 @@ export async function invoiceProject(
   const r = await createRecord(ctx, 'invoice', {
     name: `${project.name}${project.project_code ? ` (${project.project_code})` : ''}`.slice(0, 200),
     account_id: project.account_id,
+    currency: project.currency ?? 'INR',
   });
   const id = String(r.record.id);
   await ctx.tx.query(`update invoices set project_id = $3, customer_ref = $4, customer_ref_date = $5 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, projectId, project.customer_ref ?? null, project.customer_ref_date ?? null]);

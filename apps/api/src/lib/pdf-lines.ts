@@ -68,3 +68,34 @@ export async function pdfLinks(bytes: Uint8Array): Promise<string[]> {
     return [];
   }
 }
+
+export class PdfPasswordNeeded extends Error {
+  constructor(public wrong: boolean) {
+    super(wrong ? 'The PDF password is not right' : 'The PDF is password-protected');
+  }
+}
+
+/** Positioned text runs per page (for statement tables); a protected PDF needs its password. */
+export async function pdfItemsOf(bytes: Uint8Array, password?: string, maxPages = 200): Promise<{ str: string; x: number; y: number; w: number; h: number }[][]> {
+  const { getDocumentProxy } = await import('unpdf');
+  let doc;
+  try {
+    doc = await getDocumentProxy(new Uint8Array(bytes), password ? { password } : {});
+  } catch (e) {
+    const err = e as { name?: string; code?: number };
+    if (err?.name === 'PasswordException') throw new PdfPasswordNeeded(err.code === 2);
+    throw e;
+  }
+  const pages: { str: string; x: number; y: number; w: number; h: number }[][] = [];
+  for (let p = 1; p <= Math.min(doc.numPages, maxPages); p++) {
+    const page = await doc.getPage(p);
+    const tc = await page.getTextContent();
+    pages.push(
+      (tc.items as { str?: string; transform?: number[]; width?: number; height?: number }[])
+        .filter((i) => typeof i.str === 'string' && i.transform)
+        .map((i) => ({ str: i.str!, x: i.transform![4]!, y: i.transform![5]!, w: i.width ?? 0, h: i.height ?? Math.abs(i.transform![3] ?? 8) })),
+    );
+  }
+  await doc.destroy?.();
+  return pages;
+}

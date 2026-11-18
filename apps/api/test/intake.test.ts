@@ -3,11 +3,13 @@
  * bids, mailed invoices into draft bills, and a GeM bid checked against the organisation with its
  * documents put together in one PDF.
  */
+import { readFileSync } from 'node:fs';
 import net from 'node:net';
 import { PDFDocument, PDFName, PDFString, StandardFonts } from 'pdf-lib';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { parseMail } from '../src/lib/mime';
 import { classify, parseBidDocument, parseCorrigendum, parseNewBids } from '../src/services/intake/parse';
+import { nameInText, sameName } from '../src/services/books/narration';
 import { fakeR2, makeHarness } from './harness';
 
 let h: Awaited<ReturnType<typeof makeHarness>>;
@@ -366,6 +368,8 @@ describe('a followed bid read from GeM', () => {
       calls.push(url);
       if (url.endsWith('/all-bids')) return new Response(`<script>var x = {'csrf_bd_gem_nk': '4afcc6aa67bbdd8602376eef4e11b396'};</script>`, { headers: { 'set-cookie': 'ci_session=abc; path=/', 'content-type': 'text/html' } });
       if (url.endsWith('/all-bids-data')) {
+        // GeM's load balancer turns a session away now and then: a new session and another try
+        if (!calls.some((u, i) => u.endsWith('/all-bids-data') && i < calls.length - 1)) return new Response('Not Found', { status: 404 });
         const body = new URLSearchParams(String(init.body));
         expect(body.get('csrf_bd_gem_nk')).toBe('4afcc6aa67bbdd8602376eef4e11b396');
         expect(init.headers.cookie).toBe('ci_session=abc');
@@ -520,5 +524,106 @@ describe('a foreign invoice and its card receipt, approved', () => {
     expect((await api('POST', `/api/v1/books/bank-accounts/${company.id}/settle`, { amount: 1, date: '2026-11-15' })).status).toBe(400);
     expect((await api('PUT', `/api/v1/books/bank-accounts/${company.id}`, { creditLimit: 600000, dueDay: 8 })).status).toBe(200);
     expect(((await api('GET', '/api/v1/books/bank-accounts')).json as any[]).find((b) => b.id === company.id)).toMatchObject({ credit_limit: 600000, due_day: 8, statement_day: 18 });
+  });
+});
+
+describe('an Indian tax invoice laid out in columns', () => {
+  it('reads the number and date under their headings, the supplier, the table, the GST and that it is paid; suggests the account', async () => {
+    const d = await PDFDocument.create();
+    const p = d.addPage([595, 842]);
+    const f = await d.embedFont(StandardFonts.Helvetica);
+    const b = await d.embedFont(StandardFonts.HelveticaBold);
+    const t = (s: string, x: number, y: number, size = 8, font = f) => p.drawText(s, { x, y: 842 - y, size, font });
+    t('gstinapi.in', 70, 50, 16, b); t('TAX INVOICE', 440, 50, 14, b); t('PAID', 500, 90, 9, b);
+    t('INVOICE NO.', 70, 120, 7); t('INVOICE DATE', 190, 120, 7); t('PLACE OF SUPPLY', 310, 120, 7); t('REVERSE CHARGE', 430, 120, 7);
+    t('306/26-27', 70, 132, 9, b); t('17 Nov 2026', 190, 132, 9, b); t('Uttar Pradesh (09)', 310, 132, 9, b); t('No', 430, 132, 9, b);
+    t('SUPPLIER', 70, 160, 7); t('BILL TO', 320, 160, 7);
+    t('Tarun Soft Consultancy', 70, 172, 10, b); t('HRP AI LLP', 320, 172, 10, b);
+    t('205, La Citadel Complex, Magob', 70, 186); t(`GSTIN: ${OWN_GSTIN}`, 320, 186, 8, b);
+    t('GSTIN: 24APLPV0398G1ZH    PAN: APLPV0398G', 70, 210, 8, b);
+    t('#', 75, 262, 7, b); t('DESCRIPTION OF SERVICE', 95, 262, 7, b); t('SAC', 350, 262, 7, b); t('QTY', 410, 262, 7, b); t('RATE', 470, 262, 7, b); t('TAXABLE VALUE', 510, 262, 7, b);
+    t('1', 75, 285); t('250 GSTIN lookup credits', 95, 285); t('998315', 350, 285); t('1', 415, 285); t('Rs. 199.00', 460, 285); t('Rs. 199.00', 525, 285);
+    t('AMOUNT IN WORDS', 70, 320, 7); t('Taxable Value', 380, 320); t('Rs. 199.00', 525, 320);
+    t('Rupees Two Hundred Thirty Five Only', 70, 335, 8, b); t('IGST @ 18%', 380, 335); t('Rs. 36.00', 530, 335);
+    t('Tax payable on reverse charge: No.  Payment received in full online.', 70, 355, 7); t('Total Invoice Value', 380, 365, 10, b); t('Rs. 235.00', 520, 365, 10, b);
+    t('DECLARATION', 70, 470, 7); t('For Tarun Soft Consultancy', 440, 470, 9, b);
+    const pdf = await d.save();
+    messages.push({ uid: Math.max(...messages.map((m) => m.uid)) + 1, raw: mail({ id: 'inv-306@gstinapi.in', from: 'gstinapi.in <help@gstinapi.in>', subject: 'Invoice 306/26-27 — gstinapi.in', pdf: { name: '306-26-27.pdf', bytes: pdf } }) });
+    expect((await api('POST', `/api/v1/intake/mailboxes/${ids.mb}/sync`)).json.taken).toBeGreaterThan(0);
+    const item = ((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[]).find((i) => /306\/26-27/.test(i.subject));
+    const r = await api('POST', `/api/v1/intake/items/${item.id}/proposal`);
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json).toMatchObject({
+      supplier: { name: 'Tarun Soft Consultancy', gstin: '24APLPV0398G1ZH', foreign: false }, number: '306/26-27', date: '2026-11-17', currency: 'INR', reverseCharge: false,
+      subtotal: 199, tax: 36, total: 235, paid: { amount: 235, through: null }, suggest: { why: 'from SAC/HSN 998315' },
+    });
+    expect(r.json.lines).toEqual([{ description: '250 GSTIN lookup credits', hsnSac: '998315', quantity: 1, unitPrice: 199, taxRate: 18 }]);
+    expect(r.json.confidence).toBeGreaterThanOrEqual(0.8);
+    const acct = (r.json.choices.accounts as any[]).find((a) => a.id === r.json.suggest.accountId);
+    expect(acct.name).toMatch(/Software/);
+    const bank = (r.json.choices.payFrom as any[]).find((x) => x.kind === 'bank') ?? (r.json.choices.payFrom as any[])[0];
+    const a = await api('POST', `/api/v1/intake/items/${item.id}/approve`, {
+      vendorName: r.json.supplier.name, gstin: r.json.supplier.gstin, number: r.json.number, date: r.json.date, accountId: r.json.suggest.accountId, lines: r.json.lines,
+      post: true, payment: { paidThroughId: bank.gl_account_id, date: r.json.date, amount: 235 },
+    });
+    expect(a.status, JSON.stringify(a.json)).toBe(201);
+    const bill = (await api('GET', `/api/v1/records/bill/${a.json.billId}`)).json;
+    expect(bill).toMatchObject({ vendor_ref: '306/26-27', status: 'paid' });
+    expect(Number(bill.grand_total)).toBe(235);
+    expect(Number(bill.igst_total)).toBeCloseTo(35.82, 2); // 18% of 199 (the invoice rounds it to 36)
+  });
+});
+
+describe('a card statement that comes by mail, password-protected', () => {
+  it('asks for the password, opens it with the one saved on the card, and imports the lines the card way round', async () => {
+    const pdf = new Uint8Array(readFileSync(new URL('./fixtures/card-statement-protected.pdf', import.meta.url)));
+    messages.push({ uid: Math.max(...messages.map((m) => m.uid)) + 1, raw: mail({ id: 'stmt-nov@hdfcbank.net', from: 'HDFC Bank <emailstatements.cards@hdfcbank.net>', subject: 'Your HDFC Bank Credit Card Statement - November 2026', pdf: { name: 'Statement_Nov2026.pdf', bytes: pdf } }) });
+    expect((await api('POST', `/api/v1/intake/mailboxes/${ids.mb}/sync`)).json.taken).toBeGreaterThan(0);
+    const item = ((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[]).find((i) => i.kind === 'statement');
+    expect(item).toBeTruthy();
+    // no password saved yet
+    const first = await api('POST', `/api/v1/intake/items/${item.id}/statement`, {});
+    expect(first.json).toMatchObject({ status: 'needs_password' });
+    // the password saved on the card ending 9814 (never shown back)
+    const card = ((await api('GET', '/api/v1/books/bank-accounts')).json as any[]).find((b) => b.account_last4 === '9814');
+    expect((await api('PUT', `/api/v1/books/bank-accounts/${card.id}`, { statementPassword: 'SURE1811', statementSenders: 'hdfcbank.net' })).status).toBe(200);
+    const listed = ((await api('GET', '/api/v1/books/bank-accounts')).json as any[]).find((b) => b.id === card.id);
+    expect(listed).toMatchObject({ has_statement_password: true, statement_senders: 'hdfcbank.net' });
+    expect(JSON.stringify(listed)).not.toContain('SURE1811');
+    const r = await api('POST', `/api/v1/intake/items/${item.id}/statement`, {});
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json).toMatchObject({ status: 'imported', bankAccountId: card.id, added: 3 });
+    const txns = (await api('GET', `/api/v1/books/bank-accounts/${card.id}/transactions?status=all`)).json as any[];
+    const amounts = Object.fromEntries(txns.map((t: any) => [t.description, Number(t.amount)]));
+    expect(amounts).toMatchObject({ 'ANTHROPIC SAN FRANCISCO US': -9105.6, 'PAYMENT RECEIVED - THANK YOU': 20000, 'IGST ON FOREIGN MARKUP': -57.36 });
+    expect(((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[]).find((i) => i.id === item.id)).toMatchObject({ status: 'done', link_object: 'bank_account', link_id: card.id });
+  });
+});
+
+describe('deals priced by rate, projects in any currency, partner names run together', () => {
+  it('works the deal amount out from the rate', async () => {
+    for (const a of ['projects']) await api('POST', `/api/admin/apps/${a}/enable`);
+    const d = await api('POST', '/api/v1/records/deal', { name: 'Dev team for Acme', pricing_model: 'per_person_month', unit_rate: 150000, units: 3, duration_months: 6, currency: 'USD' });
+    expect(d.status, JSON.stringify(d.json)).toBe(201);
+    const deal = (await api('GET', `/api/v1/records/deal/${d.json.id}`)).json;
+    expect(Number(deal.amount)).toBe(2700000);
+    expect((await api('PATCH', `/api/v1/records/deal/${d.json.id}`, { pricing_model: 'hourly', units: 120, unit_rate: 40 })).status).toBe(200);
+    expect(Number((await api('GET', `/api/v1/records/deal/${d.json.id}`)).json.amount)).toBe(4800);
+    // a fixed bid keeps the amount typed in
+    expect((await api('PATCH', `/api/v1/records/deal/${d.json.id}`, { pricing_model: 'fixed', amount: 9999 })).status).toBe(200);
+    expect(Number((await api('GET', `/api/v1/records/deal/${d.json.id}`)).json.amount)).toBe(9999);
+    expect((await api('POST', '/api/v1/records/deal', { name: 'x', currency: 'XYZ' })).status).toBe(400);
+  });
+
+  it('a project keeps its currency', async () => {
+    const p = await api('POST', '/api/v1/records/project', { name: 'Website for a London client', currency: 'GBP', billing_method: 'fixed_price', fixed_fee: 5000 });
+    expect(p.status, JSON.stringify(p.json)).toBe(201);
+    expect((await api('GET', `/api/v1/records/project/${p.json.id}`)).json.currency).toBe('GBP');
+  });
+
+  it('knows a partner when the bank runs the name together', () => {
+    expect(sameName('SRIVASTAVASUNITA', 'Sunita Srivastava')).toBe(true);
+    expect(nameInText('UPI/DR/412345678/SRIVASTAVASUNITA/SBIN/upi', 'Sunita Srivastava')).toBe(true);
+    expect(nameInText('UPI/DR/412345678/SUNILKUMAR/SBIN/upi', 'Sunita Srivastava')).toBe(false);
   });
 });

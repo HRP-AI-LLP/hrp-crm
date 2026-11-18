@@ -9,7 +9,7 @@ export const BID_RE = /GEM\/\d{4}\/[A-Z]\/\d{4,}/g;
 
 const DOCISH = /\.(pdf|jpe?g|png|webp|xlsx?|csv)$/i;
 const BILL_WORDS = /\b(tax\s*invoice|invoice|bill|receipt|payment\s*receipt|proforma|credit\s*note|debit\s*note|purchase\s*order\s*acknowledg|e-?invoice|subscription\s*renew)/i;
-const STATEMENT_WORDS = /\b(statement\s+of\s+account|account\s+statement|e-?statement|ledger\s+statement)/i;
+const STATEMENT_WORDS = /\b(statement\s+of\s+account|account\s+statement|e-?statement|e-?stmt|ledger\s+statement|(?:credit\s+)?card\s+statement|statement\s+for\s+(?:your\s+)?(?:\w+\s+)?(?:credit\s+card|card|account)|monthly\s+statement|bank\s+statement|transaction\s+statement)/i;
 const PAYMENT_WORDS = /(payment\s+(?:received|successful|success|confirmation|confirmed|receipt|done|of\s+rs)|receipt\s+for\s+(?:your\s+)?payment|paid\s+successfully|transaction\s+(?:successful|receipt)|payment\s+advice|remittance\s+advice)/i;
 const NOT_BILLS = /\b(otp|one\s*time\s*password|password|verify|verification|newsletter|webinar|unsubscribe)\b/i;
 
@@ -25,6 +25,8 @@ export function classify(h: { from: string | null; subject: string; contentType:
     return null;
   }
   if (!read.bills) return null;
+  // statements often say they are password-protected: still a statement
+  if (STATEMENT_WORDS.test(subject) && /multipart\/(mixed|related|report)/i.test(h.contentType) && !/\b(otp|one\s*time\s*password)\b/i.test(subject)) return 'statement';
   if (NOT_BILLS.test(subject)) return null;
   // payment receipts and remittance advices: kept with or without a file
   if (PAYMENT_WORDS.test(subject)) return 'payment';
@@ -161,6 +163,8 @@ export interface BidDocument {
   emdAmount: number | null;
   epbgPercent: number | null;
   bidType: string | null;
+  /** the estimated bid value, when the buyer declares it */
+  bidValue: number | null;
   /** Other facts worth showing (office, contract period, offer validity, evaluation, estimated value…). */
   extra: Record<string, string>;
   /** "Scope of Work:1793699147.pdf" → { '1793699147.pdf': 'Scope of Work' } (names of linked buyer files). */
@@ -241,6 +245,10 @@ export function parseBidDocument(text: string): BidDocument {
       return n ? Number(n[1]) : null;
     })(),
     bidType: after(/Type of Bid/i),
+    bidValue: (() => {
+      const v = after(/Estimated Bid Value(?!\s+indicated)(?:\s*\(.*?\))?/i);
+      return v && /\d/.test(v) ? inr(v) : null;
+    })(),
     extra: (() => {
       const e: Record<string, string> = {};
       const put = (k: string, v: string | null | undefined) => {

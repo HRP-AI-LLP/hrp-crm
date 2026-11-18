@@ -25,7 +25,7 @@ export function assertGem(ctx: RecordCtx, write = false) {
 }
 
 const COLS = `b.id, b.bid_number, b.title, b.category, b.quantity::float8 as quantity, b.ministry, b.department, b.organisation, b.bid_date::text, b.start_at, b.end_at, b.opening_at,
-  b.emd_amount::float8 as emd_amount, b.epbg_percent::float8 as epbg_percent, b.min_turnover::float8 as min_turnover, b.experience_years::float8 as experience_years,
+  b.emd_amount::float8 as emd_amount, b.bid_value::float8 as bid_value, b.epbg_percent::float8 as epbg_percent, b.min_turnover::float8 as min_turnover, b.experience_years::float8 as experience_years,
   b.mse_exempt, b.startup_exempt, b.documents_required, b.bid_type, b.status, b.corrigenda, b.last_corrigendum_at, b.document_file_id, b.notes, b.owner_id, u.full_name as owner_name,
   b.deal_id, b.gem_id::float8 as gem_id, b.details, b.files, b.fetched_at, b.fetch_error, b.created_at, b.updated_at`;
 
@@ -37,6 +37,37 @@ export async function listBids(ctx: RecordCtx, q: { status?: string | null; open
       order by case when b.end_at > now() then 0 else 1 end, b.end_at nulls last, b.created_at desc limit 1000`,
     [ctx.tenantId, q.status ?? null, q.open ?? false],
   );
+}
+
+/** Who new bids belong to: the person the admin chose, else the workspace owner. */
+export async function defaultBidOwner(ctx: RecordCtx): Promise<string | null> {
+  const t = await ctx.tx.one<{ id: string | null }>(
+    `select u.id from tenants t join users u on u.tenant_id = t.id and u.id::text = t.settings -> 'gem' ->> 'defaultOwnerId' and u.status = 'active' where t.id = $1`,
+    [ctx.tenantId],
+  );
+  if (t?.id) return t.id;
+  return (await ctx.tx.one<{ id: string }>(`select id from users where tenant_id = $1 and is_owner order by created_at limit 1`, [ctx.tenantId]))?.id ?? null;
+}
+
+export async function gemSettings(ctx: RecordCtx) {
+  assertGem(ctx);
+  const t = await ctx.tx.one<{ g: any }>(`select settings -> 'gem' as g from tenants where id = $1`, [ctx.tenantId]);
+  return { defaultOwnerId: (t?.g?.defaultOwnerId as string | undefined) ?? null, effectiveOwnerId: await defaultBidOwner(ctx), canEdit: hasAdmin(ctx.principal.permissions, 'metadata') || ctx.principal.user.isOwner === true };
+}
+
+/** The admin picks who new bids go to; bids nobody owns yet go to them too. */
+export async function saveGemSettings(ctx: RecordCtx, input: { defaultOwnerId: string | null; applyToUnowned?: boolean }) {
+  if (!(hasAdmin(ctx.principal.permissions, 'metadata') || ctx.principal.user.isOwner)) throw forbidden('Only an admin sets who owns new GeM bids');
+  if (input.defaultOwnerId && !(await ctx.tx.one(`select 1 from users where tenant_id = $1 and id = $2 and status = 'active'`, [ctx.tenantId, input.defaultOwnerId]))) throw badRequest('Choose an active user');
+  await ctx.tx.query(`update tenants set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{gem}', coalesce(settings -> 'gem', '{}'::jsonb) || jsonb_build_object('defaultOwnerId', $2::text)) where id = $1`, [
+    ctx.tenantId, input.defaultOwnerId,
+  ]);
+  let applied = 0;
+  if (input.applyToUnowned !== false) {
+    const owner = await defaultBidOwner(ctx);
+    if (owner) applied = (await ctx.tx.query(`update gem_bids set owner_id = $2, updated_at = now() where tenant_id = $1 and owner_id is null returning id`, [ctx.tenantId, owner])).length;
+  }
+  return { applied };
 }
 
 export const bidUpdateSchema = z.object({
@@ -64,7 +95,7 @@ export async function addBid(ctx: RecordCtx, input: { bidNumber: string; title?:
   if (!/^GEM\/\d{4}\/[A-Z]\/\d{4,}$/.test(n)) throw badRequest('A GeM bid number looks like GEM/2026/B/1234567');
   const r = await ctx.tx.one<{ id: string }>(
     `insert into gem_bids (tenant_id, bid_number, title, end_at, owner_id, status) values ($1,$2,$3,$4,$5,'reviewing') on conflict (tenant_id, bid_number) do update set updated_at = now() returning id`,
-    [ctx.tenantId, n, input.title ?? null, input.endAt ?? null, ctx.principal.user.id],
+    [ctx.tenantId, n, input.title ?? null, input.endAt ?? null, (await defaultBidOwner(ctx)) ?? ctx.principal.user.id],
   );
   return { id: r!.id };
 }
@@ -89,12 +120,12 @@ export async function applyBidRead(ctx: RecordCtx, id: string, d: BidDocument, f
             organisation = coalesce($7, organisation), bid_date = coalesce($8::date, bid_date), end_at = coalesce($9::timestamptz, end_at), opening_at = coalesce($10::timestamptz, opening_at),
             emd_amount = coalesce($11, emd_amount), epbg_percent = coalesce($12, epbg_percent), min_turnover = coalesce($13, min_turnover), experience_years = coalesce($14, experience_years),
             mse_exempt = coalesce($15, mse_exempt), startup_exempt = coalesce($16, startup_exempt), documents_required = case when $17::jsonb = '[]'::jsonb then documents_required else $17::jsonb end,
-            bid_type = coalesce($18, bid_type), document_file_id = coalesce($19, document_file_id), details = details || $20::jsonb,
+            bid_type = coalesce($18, bid_type), document_file_id = coalesce($19, document_file_id), details = details || $20::jsonb, bid_value = coalesce($22, bid_value),
             status = case when status = 'new' and $21::boolean then 'reviewing' else status end, updated_at = now()
       where tenant_id = $1 and id = $2`,
     [
       ctx.tenantId, id, d.category, d.quantity, d.ministry, d.department, d.organisation, d.bidDate, d.endAt, d.openingAt, d.emdAmount, d.epbgPercent, d.minTurnover, d.experienceYears,
-      d.mseExempt, d.startupExempt, JSON.stringify(d.documentsRequired), d.bidType, fileId, JSON.stringify(d.extra ?? {}), review,
+      d.mseExempt, d.startupExempt, JSON.stringify(d.documentsRequired), d.bidType, fileId, JSON.stringify(d.extra ?? {}), review, d.bidValue ?? null,
     ],
   );
 }

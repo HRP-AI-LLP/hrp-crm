@@ -4,6 +4,7 @@
  *                                   everything else (ledger, banking, reports, setup) needs the
  *                                   "books" admin permission.
  */
+import { setStatementPassword } from '../services/books/statement-mail';
 import { hasAdmin } from '@synapse/shared';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -343,8 +344,20 @@ export const booksRoutes = new Hono<AppEnv>()
   })
   .put('/books/bank-accounts/:id', async (c) => {
     requireAdmin(c);
-    const b = z.object({ bankName: z.string().max(120).nullish(), last4: z.string().regex(/^\d{4}$/).nullish(), ifsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/).nullish() }).merge(bank.cardFields).parse(await c.req.json());
-    await c.var.db.tx(scope(c), (tx) => bank.updateBankAccount(rctx(c, tx), qUuid(c), b));
+    const b = z
+      .object({
+        bankName: z.string().max(120).nullish(),
+        last4: z.string().regex(/^\d{4}$/).nullish(),
+        ifsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/).nullish(),
+        statementPassword: z.string().max(100).nullish(),
+        statementSenders: z.string().max(500).nullish(),
+      })
+      .merge(bank.cardFields)
+      .parse(await c.req.json());
+    await c.var.db.tx(scope(c), async (tx) => {
+      await bank.updateBankAccount(rctx(c, tx), qUuid(c), b);
+      if (b.statementPassword !== undefined || b.statementSenders !== undefined) await setStatementPassword(rctx(c, tx), c.env, qUuid(c), { password: b.statementPassword, senders: b.statementSenders });
+    });
     return c.json({ ok: true });
   })
   .post('/books/bank-accounts/:id/settle', async (c) => {

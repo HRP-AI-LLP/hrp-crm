@@ -314,7 +314,7 @@ function Banking() {
             {data.map((a) => (
               <tr key={a.id} className="click" onClick={() => setSel(a.id)}>
                 <td>
-                  <b>{a.name}</b> {a.account_last4 && <span className="muted small">••{a.account_last4}</span>}
+                  <b>{a.name}</b> {a.account_last4 && <span className="muted small">••{a.account_last4}</span>} {a.has_statement_password && <span className="chip" title="Statement PDF password saved">🔑</span>}
                   {a.kind === 'credit_card' && (
                     <div className="small muted">
                       {[
@@ -331,7 +331,7 @@ function Banking() {
                 </td>
                 <td>
                   {a.kind.replace('_', ' ')}
-                  {(a.kind === 'credit_card' || a.kind === 'bank') && (
+                  {a.kind !== 'cash' && (
                     <button
                       className="btn sm ghost"
                       style={{ marginLeft: 6 }}
@@ -526,6 +526,9 @@ function CardDetails({ acc, onClose, onDone }: { acc: Json; onClose: () => void;
     creditLimit: acc.credit_limit != null ? String(acc.credit_limit) : '',
     statementDay: acc.statement_day ? String(acc.statement_day) : '',
     dueDay: acc.due_day ? String(acc.due_day) : '',
+    password: '',
+    clearPassword: false,
+    senders: acc.statement_senders ?? '',
   });
   const owed = acc.kind === 'credit_card' ? -(acc.book_balance || 0) : 0;
   const [settle, setSettle] = useState({ amount: owed > 0 ? String(owed) : '', date: today() });
@@ -539,7 +542,13 @@ function CardDetails({ acc, onClose, onDone }: { acc: Json; onClose: () => void;
           className="btn primary"
           onClick={async () => {
             try {
-              await put(`/api/v1/books/bank-accounts/${acc.id}`, { bankName: f.bankName || null, last4: f.last4 || null, ...(card ? cardBody(f) : {}) });
+              await put(`/api/v1/books/bank-accounts/${acc.id}`, {
+                bankName: f.bankName || null,
+                last4: f.last4 || null,
+                ...(card ? cardBody(f) : {}),
+                ...(f.password ? { statementPassword: f.password } : f.clearPassword ? { statementPassword: null } : {}),
+                statementSenders: f.senders.trim() || null,
+              });
               toast('Saved');
               onDone();
               onClose();
@@ -562,6 +571,29 @@ function CardDetails({ acc, onClose, onDone }: { acc: Json; onClose: () => void;
           <input value={f.last4} maxLength={4} inputMode="numeric" onChange={(e) => setF({ ...f, last4: e.target.value.replace(/\D/g, '') })} />
         </label>
         {card && <CardFields f={f} set={(p) => setF({ ...f, ...p })} persons={persons} />}
+        <label className="field">
+          Statement PDF password
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={f.password}
+            placeholder={acc.has_statement_password && !f.clearPassword ? 'Saved — type to change' : 'e.g. first 4 letters of name + DDMM'}
+            onChange={(e) => setF({ ...f, password: e.target.value, clearPassword: false })}
+          />
+          <span className="small muted">
+            Kept encrypted; used to open the statements that come by mail.{' '}
+            {acc.has_statement_password && !f.clearPassword && (
+              <button type="button" className="btn sm ghost" onClick={() => setF({ ...f, password: '', clearPassword: true })}>
+                Remove it
+              </button>
+            )}
+          </span>
+        </label>
+        <label className="field">
+          Statement mails come from
+          <input value={f.senders} onChange={(e) => setF({ ...f, senders: e.target.value })} placeholder="e.g. hdfcbank.net, cc.statements@axisbank.com" />
+          <span className="small muted">Optional: helps pick this account when the mail does not show its last four digits.</span>
+        </label>
       </div>
       {card && acc.holder === 'personal' && (
         <div className="panel" style={{ margin: '0 16px 12px', padding: 12 }}>

@@ -9,12 +9,13 @@
 import { z } from 'zod';
 import type { Env } from '../../env';
 import { badRequest, notFound } from '../../lib/errors';
+import { fxRate, rateForDoc } from '../../lib/fx';
 import { pdfLines } from '../../lib/pdf-lines';
 import { cardByLast4 } from '../books/banking';
 import { postBill, recordVendorPayment, saveBillLines } from '../books/bills';
 import { saveFile } from '../files';
 import { createRecord, type RecordCtx, type RecordEvent } from '../records';
-import { assertIntake, readAttachment } from './intake';
+import { assertIntake, READ_VERSION, readAttachment } from './intake';
 import type { ReceiptRead } from './receipt';
 
 type Read = {
@@ -38,19 +39,6 @@ type Item = {
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-/** The reference rate of a day (ECB, via frankfurter.dev): null when it cannot be had. */
-export async function fxRate(currency: string, date: string | null, f: typeof fetch = fetch): Promise<{ rate: number; date: string } | null> {
-  if (currency === 'INR') return { rate: 1, date: date ?? '' };
-  try {
-    const res = await f(`https://api.frankfurter.dev/v1/${date ?? 'latest'}?base=${encodeURIComponent(currency)}&symbols=INR`, { signal: AbortSignal.timeout(10_000) });
-    if (!res.ok) return null;
-    const j = (await res.json()) as { rates?: { INR?: number }; date?: string };
-    return j.rates?.INR ? { rate: j.rates.INR, date: j.date ?? date ?? '' } : null;
-  } catch {
-    return null;
-  }
-}
-
 async function loadItem(ctx: RecordCtx, id: string, lock = false) {
   const it = await ctx.tx.one<Item>(
     `select data, attachments, from_name, from_address, subject, status, link_object, link_id from intake_items where tenant_id = $1 and id = $2${lock ? ' for update' : ''}`,
@@ -68,7 +56,7 @@ export async function readAll(ctx: RecordCtx, env: Env, id: string) {
   for (const a of it.attachments) {
     // read again when it was read before the receipt reading existed
     const prev = it.data.reads?.[a.fileId];
-    if (a.contentType !== 'application/pdf' || (prev && 'receipt' in prev)) continue;
+    if (a.contentType !== 'application/pdf' || prev?.v === READ_VERSION) continue;
     const f = await ctx.tx.one<{ storage_key: string }>(`select storage_key from files where tenant_id = $1 and id = $2`, [ctx.tenantId, a.fileId]);
     const obj = f && (await env.FILES.get(f.storage_key));
     if (!obj) continue;
@@ -92,7 +80,7 @@ export async function proposal(ctx: RecordCtx, env: Env, id: string, f: typeof f
   const d = inv?.[1].data ?? {};
   const currency = reads.map(([, r]) => r.receipt?.currency).find((c) => c && c !== 'INR') ?? (d.currency as string | undefined) ?? 'INR';
   const foreign = reads.some(([, r]) => r.receipt?.supplier.foreign);
-  const supplierName = reads.map(([, r]) => (r.receipt?.supplier.foreign ? r.receipt.supplier.name : null)).find(Boolean) ?? inv?.[1].party?.name ?? it.from_name ?? null;
+  const supplierName = rc?.supplier.name ?? reads.map(([, r]) => r.receipt?.supplier.name).find(Boolean) ?? inv?.[1].party?.name ?? it.from_name ?? null;
   const gstin = foreign ? null : (inv?.[1].party?.gstin ?? null);
   const taxId = reads.map(([, r]) => r.receipt?.supplier.taxId).find(Boolean) ?? null;
   const number = rc?.number ?? (d.number as string | undefined) ?? paidRead?.number ?? null;
@@ -101,7 +89,7 @@ export async function proposal(ctx: RecordCtx, env: Env, id: string, f: typeof f
   const tax = foreign ? (rc?.tax ?? 0) : Number(d.cgst ?? 0) + Number(d.sgst ?? 0) + Number(d.igst ?? 0);
   const taxable = foreign ? (rc?.subtotal ?? d.taxable ?? null) : (d.taxable ?? null);
   // a foreign supplier charging no GST: import of services, GST paid by us under reverse charge
-  const reverseCharge = foreign && !tax;
+  const reverseCharge = (foreign && !tax) || (!foreign && d.reverseCharge === true);
   const rateGuess = (t: number | null) => (t ? [0, 5, 12, 18, 28, 40].reduce((best, r) => (Math.abs((t * r) / 100 - tax) < Math.abs((t * best) / 100 - tax) ? r : best), 18) : 18);
   const lineRate = reverseCharge ? 18 : rateGuess(taxable);
   const lines =
@@ -119,11 +107,13 @@ export async function proposal(ctx: RecordCtx, env: Env, id: string, f: typeof f
   const paid = paidRead ?? (rc?.paid ? rc : null);
   const card = paid?.card ?? reads.map(([, r]) => r.receipt?.card).find(Boolean) ?? null;
   const through = await cardByLast4(ctx, card?.last4);
-  const rate = currency === 'INR' ? { rate: 1, date: date ?? '' } : await fxRate(currency, date, f);
+  const rate = currency === 'INR' ? { rate: 1, date: date ?? '' } : date ? await rateForDoc(ctx.tx, ctx.tenantId, currency, date, f) : await fxRate(currency, null, f);
   // the vendor already on file: by GSTIN, else by name
   let vendor: { id: string; name: string } | null = null;
   if (gstin) vendor = await ctx.tx.one(`select id, name from vendors where tenant_id = $1 and upper(gstin) = $2 and deleted_at is null`, [ctx.tenantId, gstin]);
   if (!vendor && supplierName) vendor = await ctx.tx.one(`select id, name from vendors where tenant_id = $1 and lower(name) = lower($2) and deleted_at is null`, [ctx.tenantId, supplierName]);
+  // the expense account: as this supplier's last bills, else from the SAC / HSN and the words on it
+  const suggestion = await suggestAccount(ctx, vendor?.id ?? null, hsn ?? lines.find((l) => l.hsnSac)?.hsnSac ?? null, [supplierName, ...lines.map((l) => l.description)].filter(Boolean).join(' '));
   const accounts = await ctx.tx.query(
     `select id, code, name, type, subtype from gl_accounts where tenant_id = $1 and is_active and (type = 'expense' or subtype in ('bank','cash','credit_card','fixed_asset')) order by type, code nulls last, name`,
     [ctx.tenantId],
@@ -163,8 +153,52 @@ export async function proposal(ctx: RecordCtx, env: Env, id: string, f: typeof f
         }
       : null,
     confidence: inv?.[1].confidence ?? 0,
+    suggest: suggestion,
     choices: { accounts, payFrom, projects },
   };
+}
+
+/** SAC (services) and HSN chapters → the expense account they usually belong to. */
+const SAC_KEYS: [RegExp, string][] = [
+  [/^99831[12]/, 'professional_fees'], // management and business consulting
+  [/^99831[3-9]|^99843[1-4]|^99841/, 'software'], // IT consulting, design, hosting, infrastructure; online content and software
+  [/^9983[6]/, 'marketing'], // advertising
+  [/^998[23]|^9985[0-49]/, 'professional_fees'], // legal, accounting, architecture, other professional and support services
+  [/^9984[1-2]/, 'telephone'],
+  [/^99713/, 'insurance'],
+  [/^9971/, 'bank_charges'],
+  [/^997[23]/, 'rent'],
+  [/^996[4-6]|^99855/, 'travel'],
+  [/^9963/, 'meals'],
+  [/^9987/, 'repairs'],
+  [/^4802|^4817|^4820|^9608/, 'stationery'],
+  [/^8471|^8473|^8517|^8528/, 'office'],
+];
+const WORDS: [RegExp, string][] = [
+  [/\b(software|subscription|saas|cloud|hosting|domain|api|credits?|licen[cs]e|server|gstin\s+lookup|plan)\b/i, 'software'],
+  [/\b(consult\w*|professional|legal|audit|accounting|ca\s+fees?)\b/i, 'professional_fees'],
+  [/\b(internet|broadband|mobile|telephone|recharge|airtel|jio)\b/i, 'telephone'],
+  [/\b(advertis\w*|marketing|ads|promotion|campaign)\b/i, 'marketing'],
+  [/\b(travel|flight|train|cab|taxi|hotel|stay)\b/i, 'travel'],
+  [/\b(food|meal|restaurant|catering)\b/i, 'meals'],
+  [/\b(rent|lease)\b/i, 'rent'],
+  [/\b(repair|maintenance|amc)\b/i, 'repairs'],
+  [/\b(insurance|premium)\b/i, 'insurance'],
+];
+
+async function suggestAccount(ctx: RecordCtx, vendorId: string | null, sac: string | null, words: string) {
+  if (vendorId) {
+    const last = await ctx.tx.one<{ id: string; name: string }>(
+      `select a.id, a.name from bill_lines l join bills b on b.tenant_id = l.tenant_id and b.id = l.bill_id join gl_accounts a on a.tenant_id = l.tenant_id and a.id = l.account_id
+        where l.tenant_id = $1 and b.vendor_id = $2 and b.status not in ('draft','void') and b.deleted_at is null order by b.bill_date desc limit 1`,
+      [ctx.tenantId, vendorId],
+    );
+    if (last) return { accountId: last.id, name: last.name, why: 'as this supplier’s last bill' };
+  }
+  const key = (sac && SAC_KEYS.find(([re]) => re.test(sac))?.[1]) ?? WORDS.find(([re]) => re.test(words))?.[1] ?? null;
+  if (!key) return null;
+  const a = await ctx.tx.one<{ id: string; name: string }>(`select id, name from gl_accounts where tenant_id = $1 and system_key = $2 and is_active`, [ctx.tenantId, key]);
+  return a ? { accountId: a.id, name: a.name, why: sac && SAC_KEYS.some(([re]) => re.test(sac)) ? `from SAC/HSN ${sac}` : 'from what was bought' } : null;
 }
 
 export const approveSchema = z.object({

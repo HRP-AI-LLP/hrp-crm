@@ -9,6 +9,7 @@
  * and seller details are snapshotted at issue; the database refuses later edits of an issued
  * document (only payment state, e-invoice details and cancellation may change).
  */
+import { rateForDoc } from '../lib/fx';
 import { repost } from './books/posting';
 import { financialYear, hasAdmin, objectPerm, splitTax, stateCode, stateName, supplyType, validGstin } from '@synapse/shared';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
@@ -314,6 +315,12 @@ export async function issueInvoice(ctx: RecordCtx, id: string, imported: { numbe
     throw badRequest(`Invoice ${n.number} is already in Synapse`);
   // terms (other than custom) date the invoice from the day it is issued
   const due = dueFromTerms(row.payment_terms as string | null, date) ?? row.due_date ?? new Date(new Date(`${date}T00:00:00Z`).getTime() + settings.dueDays * 86_400_000).toISOString().slice(0, 10);
+  // a foreign-currency invoice is booked at the day's reference rate unless one was set
+  if (row.currency && row.currency !== 'INR' && Number(row.exchange_rate ?? 1) === 1) {
+    const fx = await rateForDoc(ctx.tx, ctx.tenantId, String(row.currency), date);
+    if (!fx) throw badRequest(`Set the ${row.currency} exchange rate on the invoice (the day's rate could not be fetched)`);
+    await ctx.tx.query(`update invoices set exchange_rate = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, fx.rate]);
+  }
   await ctx.tx.query(
     `update invoices set status = 'issued', invoice_number = $3, financial_year = $4, issued_at = now(), due_date = $5,
             buyer_name = $6, buyer_gstin = $7, buyer_address = $8, buyer_state = $9, buyer_pincode = $10,

@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { badRequest, conflict, notFound } from '../../lib/errors';
 import { voidPayment } from '../billing';
 import type { RecordCtx, RecordEvent } from '../records';
-import { type Parsed, sameName } from './narration';
+import { nameInText, type Parsed, sameName } from './narration';
 import { undoTxn } from './banking';
 import { voidVendorPayment } from './bills';
 import { assertBooksAdmin, sys } from './ledger';
@@ -106,7 +106,7 @@ export function identMatches(ident: Pick<OwnIdent, 'kind' | 'match_key'>, text: 
     case 'account':
       return new RegExp(`(?<![0-9])${escapeRe(ident.match_key)}(?![0-9])`).test(text.replace(/(\d)[\s-](?=\d)/g, '$1'));
     case 'name':
-      return ` ${squash(text)} `.includes(` ${ident.match_key} `);
+      return ` ${squash(text)} `.includes(` ${ident.match_key} `) || nameInText(text, ident.match_key);
   }
 }
 
@@ -166,7 +166,7 @@ export function findOwn(own: Own, line: { bank_account_id: string; description: 
   }
   // the name in the partner list, as the bank prints it
   const name = parsed?.name ?? null;
-  const byName = active.filter((p) => (name ? sameName(name, p.name) : ` ${squash(text)} `.includes(` ${squash(p.name)} `) && squash(p.name).includes(' ')));
+  const byName = active.filter((p) => (name ? sameName(name, p.name) || nameInText(name, p.name) : nameInText(text, p.name)));
   if (byName.length === 1) return implied(byName[0]!, 'name', byName[0]!.name);
   return null;
 }

@@ -35,7 +35,7 @@ export async function listBankAccounts(ctx: RecordCtx) {
   return ctx.tx.query(
     `select b.id, b.gl_account_id, b.kind, b.bank_name, b.account_last4, b.ifsc, b.is_active, b.last_statement_date, a.name, a.code,
             b.holder, b.person_id, (select p.name from acct_persons p where p.tenant_id = b.tenant_id and p.id = b.person_id) as person_name, b.card_network,
-            b.credit_limit::float8 as credit_limit, b.statement_day, b.due_day, b.card_label,
+            b.credit_limit::float8 as credit_limit, b.statement_day, b.due_day, b.card_label, (b.statement_password_ciphertext is not null) as has_statement_password, b.statement_senders,
             coalesce((select sum(l.debit - l.credit) from journal_lines l where l.tenant_id = b.tenant_id and l.account_id = b.gl_account_id and l.posted), 0)::float8 as book_balance,
             coalesce((select sum(l.debit - l.credit) from journal_lines l where l.tenant_id = b.tenant_id and l.account_id = b.gl_account_id and l.posted and l.reconciliation_id is not null), 0)::float8 as cleared_balance,
             (select count(*)::int from bank_transactions t where t.tenant_id = b.tenant_id and t.bank_account_id = b.id and t.status = 'unmatched') as unmatched,
