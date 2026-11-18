@@ -11,6 +11,7 @@
  *               (number, date, GSTIN, taxable value, GST, total, lines) and a draft bill is created with
  *               the vendor (found by GSTIN or added) and the document attached.
  */
+import { jsonSafe } from '../../lib/json-safe';
 import { hasAdmin } from '@synapse/shared';
 import { z } from 'zod';
 import type { Env } from '../../env';
@@ -367,7 +368,7 @@ export async function takeIn(ctx: RecordCtx, env: Env, mb: Pick<Mailbox, 'id'>, 
       if (r.created) newBids++;
       ids.push(b.bidNumber);
     }
-    await ctx.tx.query(`update intake_items set data = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, JSON.stringify({ bids: ids })]);
+    await ctx.tx.query(`update intake_items set data = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, jsonSafe({ bids: ids })]);
   } else if (kind === 'gem_corrigendum') {
     const c = parseCorrigendum(m.subject, text);
     if (c.bidNumber) {
@@ -375,7 +376,7 @@ export async function takeIn(ctx: RecordCtx, env: Env, mb: Pick<Mailbox, 'id'>, 
       await ctx.tx.query(`update gem_bids set corrigenda = corrigenda + 1, last_corrigendum_at = greatest(last_corrigendum_at, $3::timestamptz), updated_at = now() where tenant_id = $1 and id = $2`, [
         ctx.tenantId, r.id, c.corrigendumAt ?? m.date,
       ]);
-      await ctx.tx.query(`update intake_items set data = $3, link_object = 'gem_bid', link_id = $4 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, JSON.stringify(c), r.id]);
+      await ctx.tx.query(`update intake_items set data = $3, link_object = 'gem_bid', link_id = $4 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, jsonSafe(c), r.id]);
       await tellFollowers(ctx, r.id, 'corrigendum issued — check the changes on GeM');
     }
   } else if (kind === 'gem_update') {
@@ -384,7 +385,7 @@ export async function takeIn(ctx: RecordCtx, env: Env, mb: Pick<Mailbox, 'id'>, 
       const r = await upsertBid(ctx, u.bidNumber, {}, id);
       if (u.status)
         await ctx.tx.query(`update gem_bids set status = $3, updated_at = now() where tenant_id = $1 and id = $2 and status not in ('won','lost','cancelled','skipped')`, [ctx.tenantId, r.id, u.status]);
-      await ctx.tx.query(`update intake_items set data = $3, link_object = 'gem_bid', link_id = $4 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, JSON.stringify(u), r.id]);
+      await ctx.tx.query(`update intake_items set data = $3, link_object = 'gem_bid', link_id = $4 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, jsonSafe(u), r.id]);
       await tellFollowers(ctx, r.id, u.what);
     }
   } else {
@@ -398,7 +399,7 @@ export async function takeIn(ctx: RecordCtx, env: Env, mb: Pick<Mailbox, 'id'>, 
         /* a type the store refuses: skipped */
       }
     }
-    await ctx.tx.query(`update intake_items set attachments = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, JSON.stringify(files)]);
+    await ctx.tx.query(`update intake_items set attachments = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, jsonSafe(files)]);
   }
   return { id, newBids, events: [] };
 }
@@ -514,7 +515,7 @@ export async function readAttachment(ctx: RecordCtx, id: string, fileId: string,
     ? { ...r, v: READ_VERSION, receipt, party: { gstin: receipt?.supplier.foreign ? null : party, name: receipt?.supplier.name ?? r.data.customer?.name ?? null }, ours: ours.length > 0, scanned: false }
     : { data: null, v: READ_VERSION, receipt: null, confidence: 0, warnings: ['No text in this file (a scan or photo): enter the bill by hand'], scanned: true };
   const data = { ...it.data, reads: { ...(it.data.reads ?? {}), [fileId]: read } };
-  await ctx.tx.query(`update intake_items set data = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, JSON.stringify(data)]);
+  await ctx.tx.query(`update intake_items set data = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, jsonSafe(data)]);
   return read;
 }
 

@@ -6,6 +6,7 @@
  * the bill. The books, GST (RCM in GSTR-3B, ITC), the supplier's ledger, the project and the card's
  * reconciliation all follow from the posted bill and payment.
  */
+import { jsonSafe } from '../../lib/json-safe';
 import { z } from 'zod';
 import type { Env } from '../../env';
 import { badRequest, notFound } from '../../lib/errors';
@@ -307,7 +308,7 @@ export async function approveMail(ctx: RecordCtx, env: Env, id: string, input: z
     }
   }
   await ctx.tx.query(`update intake_items set status = 'done', link_object = 'bill', link_id = $3, data = data || $4::jsonb where tenant_id = $1 and id = $2`, [
-    ctx.tenantId, id, billId, JSON.stringify({ approved: { billId, paymentId, at: new Date().toISOString() } }),
+    ctx.tenantId, id, billId, jsonSafe({ approved: { billId, paymentId, at: new Date().toISOString() } }),
   ]);
   return { billId, vendorId, paymentId, balanceLeft: left, events };
 }

@@ -6,6 +6,7 @@
  *
  * Only public pages are read; nothing is signed in to and nothing is submitted.
  */
+import { jsonSafe } from '../../lib/json-safe';
 import type { Db } from '../../lib/db';
 import type { Env } from '../../env';
 import { badRequest, notFound } from '../../lib/errors';
@@ -279,8 +280,8 @@ export async function fetchBidFromGem(env: Env, db: Db, tenantId: string, bidId:
                 fetched_at = now(), fetch_error = null, fetch_attempts = 0, updated_at = now()
           where tenant_id = $1 and id = $2`,
         [
-          tenantId, bidId, found.gemId, found.category, found.quantity, found.ministry, found.department, found.startAt, found.endAt, JSON.stringify(files),
-          JSON.stringify({ 'GeM page': found.documentUrl, ...(found.bidType && found.bidType !== 1 ? { Kind: found.bidType === 5 ? 'Direct reverse auction' : 'Reverse auction' } : {}) }),
+          tenantId, bidId, found.gemId, found.category, found.quantity, found.ministry, found.department, found.startAt, found.endAt, jsonSafe(files),
+          jsonSafe({ 'GeM page': found.documentUrl, ...(found.bidType && found.bidType !== 1 ? { Kind: found.bidType === 5 ? 'Direct reverse auction' : 'Reverse auction' } : {}) }),
           found.cancelled,
         ],
       );

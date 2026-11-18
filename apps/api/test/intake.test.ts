@@ -627,3 +627,11 @@ describe('deals priced by rate, projects in any currency, partner names run toge
     expect(nameInText('UPI/DR/412345678/SUNILKUMAR/SBIN/upi', 'Sunita Srivastava')).toBe(false);
   });
 });
+
+describe('text with NUL characters from a PDF', () => {
+  it('is stored without them (jsonb refuses \\u0000)', async () => {
+    const item = ((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[]).find((i) => /306\/26-27/.test(i.subject));
+    const r = await api('POST', `/api/v1/intake/items/${item.id}/read`, { fileId: item.attachments[0].fileId, pages: ['TAX INVOICE\u0000\nInvoice No: 99/26-27\u0000\nTotal Rs. 100.00\nSupplier\u0000 Name Pvt Ltd extra text here'] });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+  });
+});

@@ -7,6 +7,7 @@
  * Which account: the last four digits named in the mail or the statement, the senders saved on the
  * account, or the account whose password opens the file.
  */
+import { jsonSafe } from '../../lib/json-safe';
 import { linesFromRows, rowsFromItems } from '@synapse/shared';
 import type { Env } from '../../env';
 import type { Db } from '../../lib/db';
@@ -167,7 +168,7 @@ function notFoundAcc(): never {
 
 async function save(ctx: RecordCtx, id: string, data: Record<string, any>, res: StatementResult) {
   await ctx.tx.query(`update intake_items set data = $3::jsonb where tenant_id = $1 and id = $2`, [
-    ctx.tenantId, id, JSON.stringify({ ...data, statement: { ...res, at: new Date().toISOString(), tries: Number(data.statement?.tries ?? 0) + 1 } }),
+    ctx.tenantId, id, jsonSafe({ ...data, statement: { ...res, at: new Date().toISOString(), tries: Number(data.statement?.tries ?? 0) + 1 } }),
   ]);
   return res;
 }

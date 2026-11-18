@@ -6,6 +6,7 @@
  *
  * Submitting stays on GeM: the seller signs in there and uploads the pack.
  */
+import { jsonSafe } from '../../lib/json-safe';
 import { hasAdmin, objectPerm } from '@synapse/shared';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import { z } from 'zod';
@@ -125,7 +126,7 @@ export async function applyBidRead(ctx: RecordCtx, id: string, d: BidDocument, f
       where tenant_id = $1 and id = $2`,
     [
       ctx.tenantId, id, d.category, d.quantity, d.ministry, d.department, d.organisation, d.bidDate, d.endAt, d.openingAt, d.emdAmount, d.epbgPercent, d.minTurnover, d.experienceYears,
-      d.mseExempt, d.startupExempt, JSON.stringify(d.documentsRequired), d.bidType, fileId, JSON.stringify(d.extra ?? {}), review, d.bidValue ?? null,
+      d.mseExempt, d.startupExempt, jsonSafe(d.documentsRequired), d.bidType, fileId, jsonSafe(d.extra ?? {}), review, d.bidValue ?? null,
     ],
   );
 }

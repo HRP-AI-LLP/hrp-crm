@@ -1,3 +1,4 @@
+import { cleanText } from './json-safe';
 /**
  * Rough text of a PDF, good enough to look for a GSTIN or a name in it: content streams are inflated
  * (FlateDecode) and the strings shown on the page (Tj / TJ, literal and hex) are collected. Fonts with
@@ -71,5 +72,5 @@ export async function pdfText(bytes: Uint8Array): Promise<string> {
   }
   // plain-text strings outside streams (metadata, uncompressed files)
   parts.push(shownText(s.slice(0, 200_000)));
-  return parts.join('\n');
+  return cleanText(parts.join('\n'));
 }

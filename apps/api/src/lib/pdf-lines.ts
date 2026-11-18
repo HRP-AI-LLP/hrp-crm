@@ -4,6 +4,8 @@
  * quick reader in pdf-text.ts cannot decode (GeM bid documents, most generated invoices).
  */
 
+import { cleanText } from './json-safe';
+
 type Item = { str: string; transform: number[]; width: number; height: number };
 
 function pageText(items: Item[]): string {
@@ -40,7 +42,7 @@ export async function pdfLines(bytes: Uint8Array, maxPages = 60): Promise<string
     for (let p = 1; p <= Math.min(doc.numPages, maxPages); p++) {
       const page = await doc.getPage(p);
       const tc = await page.getTextContent();
-      out.push(pageText(tc.items as Item[]));
+      out.push(cleanText(pageText(tc.items as Item[])).replace(/[\u0001-\u0008\u000b\u000c\u000e-\u001f]/g, ''));
     }
     await doc.destroy?.();
     return out;
@@ -93,7 +95,7 @@ export async function pdfItemsOf(bytes: Uint8Array, password?: string, maxPages 
     pages.push(
       (tc.items as { str?: string; transform?: number[]; width?: number; height?: number }[])
         .filter((i) => typeof i.str === 'string' && i.transform)
-        .map((i) => ({ str: i.str!, x: i.transform![4]!, y: i.transform![5]!, w: i.width ?? 0, h: i.height ?? Math.abs(i.transform![3] ?? 8) })),
+        .map((i) => ({ str: cleanText(i.str!).replace(/[\u0001-\u0008\u000b\u000c\u000e-\u001f]/g, ''), x: i.transform![4]!, y: i.transform![5]!, w: i.width ?? 0, h: i.height ?? Math.abs(i.transform![3] ?? 8) })),
     );
   }
   await doc.destroy?.();
