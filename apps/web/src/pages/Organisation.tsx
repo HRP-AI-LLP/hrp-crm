@@ -13,9 +13,10 @@ import { local, setSignerPort, signerPort } from '../lib/dsc';
 import { date as fmtDate } from '../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
 import { del, get, post, put } from '../lib/api';
+import { useAuth } from '../lib/auth';
 
 type Json = Record<string, any>;
-type Tab = 'profile' | 'contacts' | 'people' | 'banks' | 'documents' | 'signatures' | 'dsc' | 'templates';
+type Tab = 'profile' | 'contacts' | 'leaders' | 'people' | 'banks' | 'documents' | 'signatures' | 'dsc' | 'templates';
 
 const CONSTITUTIONS: [string, string][] = [
   ['llp', 'Limited liability partnership (LLP)'],
@@ -61,6 +62,7 @@ export function OrganisationTab() {
           [
             ['profile', 'Profile'],
             ['contacts', 'Phones, emails & contacts'],
+            ['leaders', 'Leadership & key people'],
             ['people', 'Partners & directors'],
             ['banks', 'Bank accounts'],
             ['documents', 'Documents'],
@@ -76,6 +78,7 @@ export function OrganisationTab() {
       </div>
       {tab === 'profile' && <Profile d={d} />}
       {tab === 'contacts' && <Contacts d={d} />}
+      {tab === 'leaders' && <KeyPeople d={d} />}
       {tab === 'people' && <People d={d} />}
       {tab === 'banks' && <Banks d={d} />}
       {tab === 'documents' && <OrgDocuments d={d} />}
@@ -248,6 +251,159 @@ function Contacts({ d }: { d: Json }) {
         </div>
       )}
     </div>
+  );
+}
+
+const DESIGNATIONS = [
+  'Founder & CEO', 'Co-founder', 'Chief Executive Officer (CEO)', 'Chief Technology Officer (CTO)', 'Chief Operating Officer (COO)', 'Chief Financial Officer (CFO)',
+  'Chief Product Officer (CPO)', 'Chief Marketing Officer (CMO)', 'Managing Partner', 'Designated Partner', 'Managing Director', 'Director', 'Company Secretary',
+  'Head of Engineering', 'Head of Sales', 'Head of Delivery', 'Head of HR', 'Finance Manager', 'Advisor',
+];
+type KeyPerson = { name: string; designation: string; department: string; email: string; phone: string; since: string; userId: string | null; linkedin: string; bio: string };
+const blankKey: KeyPerson = { name: '', designation: '', department: '', email: '', phone: '', since: '', userId: null, linkedin: '', bio: '' };
+
+/** The leadership team and other key people: who runs what. Partners' money stays under Partners & directors. */
+function KeyPeople({ d }: { d: Json }) {
+  const save = useSaveProfile();
+  const { me } = useAuth();
+  const ro = !d.canManage;
+  const people = (d.profile.keyPeople ?? []) as KeyPerson[];
+  const [edit, setEdit] = useState<{ i: number | null; p: KeyPerson } | null>(null);
+  const users = (d.users ?? []) as { id: string; name: string; email: string }[];
+  const write = (list: KeyPerson[]) => save({ ...d.profile, keyPeople: list, _isAdmin: false });
+  const mine = me ? people.findIndex((p) => p.userId === me.user.id) : -1;
+  const initials = (n: string) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0]!.toUpperCase()).join('');
+  return (
+    <div className="stack">
+      <p className="muted small" style={{ margin: 0 }}>
+        The people who run the organisation and what each one is responsible for. Partners and directors whose personal money the accounts desk should recognise are added under <b>Partners &amp; directors</b>; a partner can be here too, with their title.
+      </p>
+      {!ro && (
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn primary sm" onClick={() => setEdit({ i: null, p: { ...blankKey } })}>
+            Add a key person
+          </button>
+          {me && mine < 0 && (
+            <button className="btn sm" onClick={() => setEdit({ i: null, p: { ...blankKey, name: me.user.fullName, email: me.user.email, userId: me.user.id } })}>
+              Add me
+            </button>
+          )}
+        </div>
+      )}
+      {!people.length ? (
+        <Empty title="No key people yet">Add yourself and the leadership team — CEO, CTO, CFO and the heads of each function.</Empty>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 }}>
+          {people.map((p, i) => (
+            <div key={i} className="panel" style={{ padding: 14, display: 'grid', gap: 8 }}>
+              <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+                <div style={{ width: 44, height: 44, borderRadius: '50%', background: 'var(--brand-100)', color: 'var(--brand-800)', display: 'grid', placeItems: 'center', fontWeight: 700, flex: 'none' }}>{initials(p.name)}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 600 }}>{p.name}</div>
+                  <div className="small" style={{ color: 'var(--accent-ink)' }}>
+                    {p.designation}
+                    {p.department ? ` · ${p.department}` : ''}
+                  </div>
+                </div>
+              </div>
+              {p.bio && <div className="small muted">{p.bio}</div>}
+              <div className="small muted" style={{ display: 'grid', gap: 2 }}>
+                {p.email && <span>{p.email}</span>}
+                {p.phone && <span>{p.phone}</span>}
+                {p.since && <span>Since {fmtDate(p.since)}</span>}
+                {p.userId && <span>Signs in as {users.find((u) => u.id === p.userId)?.name ?? 'a user'}</span>}
+              </div>
+              {!ro && (
+                <div className="row" style={{ gap: 6 }}>
+                  <button className="btn ghost sm" onClick={() => setEdit({ i, p: { ...blankKey, ...p } })}>
+                    Edit
+                  </button>
+                  <button
+                    className="btn ghost sm"
+                    onClick={() => {
+                      if (confirm(`Remove ${p.name} from the key people?`)) write(people.filter((_, j) => j !== i));
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {edit && (
+        <KeyPersonModal
+          value={edit.p}
+          users={users}
+          onClose={() => setEdit(null)}
+          onSave={async (p) => {
+            const list = edit.i == null ? [...people, p] : people.map((x, j) => (j === edit.i ? p : x));
+            if (await write(list)) setEdit(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function KeyPersonModal({ value, users, onClose, onSave }: { value: KeyPerson; users: { id: string; name: string; email: string }[]; onClose: () => void; onSave: (p: KeyPerson) => void }) {
+  const [p, setP] = useState<KeyPerson>(value);
+  const set = (k: keyof KeyPerson, v: string | null) => setP({ ...p, [k]: v });
+  return (
+    <Modal title={value.name ? `Edit ${value.name}` : 'Add a key person'} onClose={onClose}>
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSave(p);
+        }}
+      >
+        <div className="grid2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {field(
+            'Signs in as (optional)',
+            <select
+              value={p.userId ?? ''}
+              onChange={(e) => {
+                const u = users.find((x) => x.id === e.target.value);
+                setP({ ...p, userId: u?.id ?? null, name: p.name || u?.name || '', email: p.email || u?.email || '' });
+              }}
+            >
+              <option value="">— not a user —</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>,
+          )}
+          {field('Name', <input required value={p.name} onChange={(e) => set('name', e.target.value)} />)}
+          {field(
+            'Designation',
+            <>
+              <input required list="key-designations" value={p.designation} onChange={(e) => set('designation', e.target.value)} placeholder="Chief Technology Officer (CTO)" />
+              <datalist id="key-designations">
+                {DESIGNATIONS.map((x) => (
+                  <option key={x} value={x} />
+                ))}
+              </datalist>
+            </>,
+          )}
+          {field('Department / responsible for', <input value={p.department} onChange={(e) => set('department', e.target.value)} placeholder="Technology & AI" />)}
+          {field('Email', <input type="email" value={p.email} onChange={(e) => set('email', e.target.value)} />)}
+          {field('Phone', <input value={p.phone} onChange={(e) => set('phone', e.target.value)} />)}
+          {field('In this role since', <input type="date" value={p.since} onChange={(e) => set('since', e.target.value)} />)}
+          {field('LinkedIn', <input value={p.linkedin} onChange={(e) => set('linkedin', e.target.value)} placeholder="https://linkedin.com/in/…" />)}
+          {field('About (one or two lines)', <textarea rows={2} value={p.bio} onChange={(e) => set('bio', e.target.value)} />, true)}
+        </div>
+        <div className="row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn primary">Save</button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

@@ -1041,3 +1041,4 @@ a.cite:hover { background: var(--brand-100); }
 .tbl-export .btn { font-size: 12px; opacity: 0.75; }
 .tbl-export .btn:hover, .tbl-export .btn:focus-visible { opacity: 1; }
 @media print { .tbl-export, .export-menu { display: none !important; } }
+@media (max-width: 900px) { .books-dash-row { grid-template-columns: 1fr !important; } }

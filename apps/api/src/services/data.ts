@@ -176,6 +176,8 @@ export async function mergeRecords(
   }
 
   const t = ctx.tenantId;
+  // issued invoices, posted bills and ledger lines may be re-pointed at the kept record during this merge only
+  await ctx.tx.query(`select set_config('app.merging', 'on', true)`);
   // generic children
   for (const table of ['tasks', 'activities', 'messages']) {
     await ctx.tx.query(`update ${table} set related_id = $3 where tenant_id = $1 and related_object = $2 and related_id = any($4::uuid[])`, [t, objectKey, masterId, ids]);
@@ -196,11 +198,36 @@ export async function mergeRecords(
       }
     }
   }
+  // every other table that points at this one (payments, contracts, bank rules, receipts …), found from
+  // the database's own foreign keys, so nothing is left pointing at a removed record
+  const own = storageFor(objectKey).table;
+  const refs = await ctx.tx.query<{ tbl: string; col: string }>(
+    `select distinct cl.relname as tbl, a.attname as col
+       from pg_constraint c join pg_class cl on cl.oid = c.conrelid join pg_class ref on ref.oid = c.confrelid
+       join pg_attribute a on a.attrelid = c.conrelid and a.attnum = any(c.conkey) and a.attname <> 'tenant_id'
+      where c.contype = 'f' and ref.relname = $1 and cl.relname <> $1`,
+    [own],
+  );
+  for (const r of refs) {
+    await ctx.tx.query('savepoint merge_ref');
+    try {
+      await ctx.tx.query(`update ${ident(r.tbl)} set ${ident(r.col)} = $2 where tenant_id = $1 and ${ident(r.col)} = any($3::uuid[])`, [t, masterId, ids]);
+      await ctx.tx.query('release savepoint merge_ref');
+    } catch {
+      // a one-per-record row (a duplicate link) that the kept record already has: leave it with the removed one
+      await ctx.tx.query('rollback to savepoint merge_ref');
+    }
+  }
+  // the ledger names customers and vendors without a foreign key
+  if (objectKey === 'account' || objectKey === 'vendor') {
+    await ctx.tx.query(`update journal_lines set party_id = $2 where tenant_id = $1 and party_type = $4 and party_id = any($3::uuid[])`, [t, masterId, ids, objectKey === 'account' ? 'customer' : 'vendor']);
+  }
   if (objectKey === 'contact' || objectKey === 'account') {
     const col = objectKey === 'contact' ? 'converted_contact_id' : 'converted_account_id';
     await ctx.tx.query(`update leads set ${col} = $2 where tenant_id = $1 and ${col} = any($3::uuid[])`, [t, masterId, ids]);
   }
 
+  await ctx.tx.query(`select set_config('app.merging', 'off', true)`);
   const s = storageFor(objectKey);
   await ctx.tx.query(`update ${ident(s.table)} set deleted_at = now(), merged_into = $2 where tenant_id = $1 and id = any($3::uuid[])`, [t, masterId, ids]);
   // children moved to the master: its roll-ups grow; parents of the merged rows shrink

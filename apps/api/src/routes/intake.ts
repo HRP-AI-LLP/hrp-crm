@@ -86,7 +86,7 @@ export const intakeRoutes = new Hono<AppEnv>()
     return c.json({ ...r, desk: desk ? { ok: true } : null });
   })
   .post('/intake/items/:id/import-invoices', async (c) => {
-    const r = await c.var.db.tx(scope(c), (tx) => approve.importOurInvoices(rctx(c, tx), id(c)));
+    const r = await c.var.db.tx(scope(c), (tx) => approve.importOurInvoices(rctx(c, tx), id(c), c.env));
     await emit(c, r.events);
     return c.json({ results: r.results, approved: r.approved, invoiceId: r.invoiceId });
   })

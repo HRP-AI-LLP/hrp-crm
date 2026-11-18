@@ -34,6 +34,7 @@ import { expenseAction, expenseBooks, setExpenseAccounts } from '../services/boo
 import * as rep from '../services/books/reports';
 import * as desk from '../services/books/desk';
 import * as docs from '../services/books/doc-import';
+import { attachSourceFiles, keepSourceFiles } from '../services/books/import-files';
 import * as feeds from '../services/books/feeds';
 import * as g2b from '../services/books/gstr2b';
 import * as setup from '../services/books/setup';
@@ -756,7 +757,10 @@ export const booksRoutes = new Hono<AppEnv>()
     requireAdmin(c);
     const b = docs.fileSchema.parse(await c.req.json());
     const d = deskDeps(c);
-    return c.json(await docs.stageFile({ run: (fn) => d.run(fn), ai: d.ai }, qUuid(c), b));
+    const r = await docs.stageFile({ run: (fn) => d.run(fn), ai: d.ai }, qUuid(c), b);
+    // the file itself is kept with what was read from it, for the invoice it becomes
+    await c.var.db.tx(scope(c), (tx) => keepSourceFiles(rctx(c, tx), c.env, r.ids, b)).catch(() => undefined);
+    return c.json(r);
   })
   .patch('/books/imports/items/:id', async (c) => {
     requireAdmin(c);
@@ -782,6 +786,7 @@ export const booksRoutes = new Hono<AppEnv>()
     const b = z.object({ ids: z.array(uuid).min(1).max(500) }).parse(await c.req.json());
     const r = await c.var.db.tx(scope(c), (tx) => docs.approveMany(rctx(c, tx), b.ids));
     await emit(c, r.events);
+    await c.var.db.tx(scope(c), (tx) => attachSourceFiles(rctx(c, tx), c.env, r.results)).catch(() => undefined);
     // receipts not tied to a bank line yet, and everything else in the bank, go to the bookkeeper
     const k = r.approved ? await desk.runBookkeeper(deskDeps(c), { trigger: 'import' }).catch(() => null) : null;
     if (k) await emit(c, k.events);

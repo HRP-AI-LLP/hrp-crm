@@ -129,6 +129,12 @@ export function MergeModal({ obj, master, candidates, onClose }: { obj: ObjectMe
   const [picked, setPicked] = useState<string[]>(candidates.slice(0, 1).map((c) => c.id));
   const [choices, setChoices] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
+  const [extra, setExtra] = useState<DuplicateMatch[]>([]);
+  const others = useQuery({
+    queryKey: ['merge-pick', obj.key],
+    queryFn: () => get<{ items: RecordDto[] }>(`/api/v1/records/${obj.key}?limit=200`),
+  });
+  const offered = [...candidates, ...extra];
   const dupes = useQuery({
     queryKey: ['merge-candidates', obj.key, picked.join(',')],
     queryFn: () => Promise.all(picked.map((id) => get<RecordDto>(`/api/v1/records/${obj.key}/${id}`))),
@@ -184,10 +190,32 @@ export function MergeModal({ obj, master, candidates, onClose }: { obj: ObjectMe
       }
     >
       <div className="modal-body" style={{ display: 'block' }}>
-        {candidates.length > 1 && (
+        <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+          <span className="muted small">Add another {obj.label.toLowerCase()} that is the same:</span>
+          <select
+            value=""
+            style={{ maxWidth: 360 }}
+            onChange={(e) => {
+              const r = (others.data?.items ?? []).find((x) => x.id === e.target.value);
+              if (!r) return;
+              setExtra((x) => [...x, { id: r.id, title: String(r.title ?? r.name ?? ''), reasons: ['chosen'] } as unknown as DuplicateMatch]);
+              setPicked((p) => [...p, r.id]);
+            }}
+          >
+            <option value="">Choose…</option>
+            {(others.data?.items ?? [])
+              .filter((r) => r.id !== master.id && !offered.some((c) => c.id === r.id))
+              .map((r) => (
+                <option key={r.id} value={r.id}>
+                  {String(r.title ?? r.name ?? 'Untitled')}
+                </option>
+              ))}
+          </select>
+        </div>
+        {offered.length > 0 && (
           <div className="row" style={{ flexWrap: 'wrap', gap: 14, marginBottom: 12 }}>
             <span className="muted small">Merge into this record:</span>
-            {candidates.map((c) => (
+            {offered.map((c) => (
               <label key={c.id} className="row">
                 <input type="checkbox" checked={picked.includes(c.id)} onChange={(e) => setPicked((p) => (e.target.checked ? [...p, c.id] : p.filter((x) => x !== c.id)))} />
                 {c.title || 'Untitled'}
@@ -195,7 +223,9 @@ export function MergeModal({ obj, master, candidates, onClose }: { obj: ObjectMe
             ))}
           </div>
         )}
-        {dupes.isLoading ? (
+        {!picked.length ? (
+          <p className="muted">Choose the {obj.label.toLowerCase()} to merge into this one. Its invoices, payments, deals, contacts and history move here; it is then removed.</p>
+        ) : dupes.isLoading ? (
           <Spinner />
         ) : !differing.length ? (
           <p>All fields already match. Merging just combines their history.</p>

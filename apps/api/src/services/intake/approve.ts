@@ -199,12 +199,23 @@ async function ourInvoice(ctx: RecordCtx, env: Env, id: string, it: Item) {
 }
 
 /** Approves the mail's own invoices (all, or the ones given) and links the mail to the first invoice. */
-export async function importOurInvoices(ctx: RecordCtx, id: string) {
+export async function importOurInvoices(ctx: RecordCtx, id: string, env?: Env) {
   await assertBooksAdmin(ctx);
   const it = await loadItem(ctx, id, true);
   const ids = (it.data.importItemIds as string[] | undefined) ?? [];
   if (!ids.length) throw badRequest('Open the mail first so its invoice is read');
   const r = await approveMany(ctx, ids);
+  // the mail's PDFs go with the invoices made from them
+  if (env?.FILES)
+    for (const x of r.results) {
+      const inv = (x.created?.invoice as { id?: string } | undefined)?.id;
+      if (!x.ok || !inv) continue;
+      for (const a of it.attachments.filter((a) => a.contentType === 'application/pdf')) {
+        const obj = await ctx.tx.one<{ storage_key: string; name: string }>(`select storage_key, name from files where tenant_id = $1 and id = $2`, [ctx.tenantId, a.fileId]);
+        const body = obj && (await env.FILES.get(obj.storage_key));
+        if (body) await saveFile(ctx, env, { objectKey: 'invoice', recordId: inv, name: obj!.name, bytes: new Uint8Array(await body.arrayBuffer()), kind: 'document' }, { system: true }).catch(() => null);
+      }
+    }
   const firstInvoice = r.results.map((x) => (x.created?.invoice as { id?: string } | undefined)?.id).find(Boolean) ?? null;
   if (r.results.every((x) => x.ok) && firstInvoice)
     await ctx.tx.query(`update intake_items set status = 'done', link_object = 'invoice', link_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, firstInvoice]);

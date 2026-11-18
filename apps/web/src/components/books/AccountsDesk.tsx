@@ -684,61 +684,106 @@ function WaitingImports({ items, customers }: { items: Json[]; customers: Json[]
   const toast = useToast();
   const [cust, setCust] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
-  const approve = async (x: Json) => {
-    const customerId = cust[x.id] ?? x.customerId ?? '';
-    setBusy(x.id);
+  // the same invoice read more than once: keep the best reading (customer found, no error), drop the rest
+  const byNumber = new Map<string, Json[]>();
+  for (const x of items) byNumber.set(String(x.number ?? x.id), [...(byNumber.get(String(x.number ?? x.id)) ?? []), x]);
+  const score = (x: Json) => (x.customerId ? 2 : 0) + (x.error ? 0 : 1);
+  const extra = new Set<string>();
+  for (const list of byNumber.values()) {
+    if (list[0]!.inBooks) list.forEach((x) => extra.add(x.id));
+    else [...list].sort((p, q) => score(q) - score(p)).slice(1).forEach((x) => extra.add(x.id));
+  }
+  const rows = items.filter((x) => !extra.has(x.id));
+  const refresh = () => qc.invalidateQueries({ queryKey: ['books'] });
+  const discard = async (ids: string[]) => {
+    setBusy('discard');
     try {
-      if (customerId !== (x.customerId ?? '')) await patch(`/api/v1/books/imports/items/${x.id}`, { choices: { ...x.choices, customerId: customerId || null } });
-      const r = await post<Json>('/api/v1/books/imports/items/approve', { ids: [x.id] });
-      const bad = (r.results as Json[]).find((y) => !y.ok);
-      if (bad) toast(bad.error, true);
-      else toast(`${x.number ?? 'Invoice'} is in the books`);
-      qc.invalidateQueries({ queryKey: ['books'] });
+      for (const id of ids) await post(`/api/v1/books/imports/items/${id}/reject`, {});
+      toast(`${ids.length} discarded`);
+      refresh();
     } catch (e) {
       toast((e as Error).message, true);
     } finally {
       setBusy(null);
     }
   };
+  const approve = async (x: Json) => {
+    const customerId = cust[x.id] ?? x.customerId ?? '';
+    setBusy(x.id);
+    try {
+      if (customerId !== (x.customerId ?? '') || x.status === 'failed') await patch(`/api/v1/books/imports/items/${x.id}`, { choices: { ...x.choices, customerId: customerId || null } });
+      const r = await post<Json>('/api/v1/books/imports/items/approve', { ids: [x.id] });
+      const bad = (r.results as Json[]).find((y) => !y.ok);
+      if (bad) toast(bad.error, true);
+      else toast(`${x.number ?? 'Invoice'} is in the books`);
+      refresh();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const readable = (e: string) => (/last_name/.test(e) ? 'The contact name on it could not be read; approve again (it is skipped now)' : e.replace(/^Validation failed: /, ''));
   return (
     <details open style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 8 }}>
       <summary className="small">
-        <b>Imported invoices not in the books yet ({items.length})</b> — approve them here (correct the customer if it was misread), then tick them above
+        <b>Imported invoices not in the books yet ({rows.length})</b> — approve them here (correct the customer if it was misread), then tick them above
       </summary>
-      <table className="data small" style={{ margin: '6px 0 0' }}>
-        <tbody>
-          {items.map((x) => (
-            <tr key={x.id}>
-              <td>
-                {x.number ?? '—'}
-                <div className="muted">{x.date ?? ''}</div>
-              </td>
-              <td style={{ minWidth: 200 }}>
-                <select value={cust[x.id] ?? x.customerId ?? ''} onChange={(e) => setCust({ ...cust, [x.id]: e.target.value })} aria-label="Customer">
-                  <option value="">New customer: {x.readCustomer ?? '—'}</option>
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-                {x.error && <div style={{ color: 'var(--bad)' }}>{x.error}</div>}
-              </td>
-              <td className="num">{x.total != null ? money2(x.total) : '—'}</td>
-              <td>{x.paid === 'paid' ? 'paid' : x.paid === 'partial' ? 'part paid' : 'unpaid'}</td>
-              <td>
-                {x.duplicate ? (
-                  <span className="muted">already in the books</span>
-                ) : (
-                  <button className="btn sm" disabled={busy === x.id} onClick={() => approve(x)}>
+      {extra.size > 0 && (
+        <div className="row small" style={{ gap: 8, margin: '6px 0', background: 'var(--line-2)', padding: '6px 8px', borderRadius: 6 }}>
+          <span style={{ flex: 1 }}>
+            {extra.size} more cop{extra.size === 1 ? 'y is' : 'ies are'} of invoices read twice or already in the books.
+          </span>
+          <button className="btn sm" disabled={busy === 'discard'} onClick={() => discard([...extra])}>
+            Discard {extra.size}
+          </button>
+        </div>
+      )}
+      {!rows.length ? (
+        <p className="small muted">Nothing left to approve.</p>
+      ) : (
+        <table className="data small" style={{ margin: '6px 0 0', tableLayout: 'fixed', width: '100%' }}>
+          <colgroup>
+            <col style={{ width: 118 }} />
+            <col />
+            <col style={{ width: 96 }} />
+            <col style={{ width: 120 }} />
+          </colgroup>
+          <tbody>
+            {rows.map((x) => (
+              <tr key={x.id}>
+                <td>
+                  {x.number ?? '—'}
+                  <div className="muted">{x.date ?? ''}</div>
+                </td>
+                <td style={{ whiteSpace: 'normal' }}>
+                  <select style={{ width: '100%' }} value={cust[x.id] ?? x.customerId ?? ''} onChange={(e) => setCust({ ...cust, [x.id]: e.target.value })} aria-label="Customer">
+                    <option value="">New customer: {x.readCustomer ?? '—'}</option>
+                    {customers.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  {x.error && <div style={{ color: 'var(--bad)', marginTop: 2 }}>{readable(String(x.error))}</div>}
+                </td>
+                <td className="num">
+                  {x.total != null ? money2(x.total) : '—'}
+                  <div className="muted">{x.paid === 'paid' ? 'paid' : x.paid === 'partial' ? 'part paid' : 'unpaid'}</div>
+                </td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <button className="btn sm primary" disabled={!!busy} onClick={() => approve(x)}>
                     {busy === x.id ? '…' : 'Approve'}
+                  </button>{' '}
+                  <button className="btn sm ghost" title="Discard this reading" disabled={!!busy} onClick={() => discard([x.id])}>
+                    ✕
                   </button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </details>
   );
 }

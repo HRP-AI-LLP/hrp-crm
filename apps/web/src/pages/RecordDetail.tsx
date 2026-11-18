@@ -15,7 +15,7 @@ import { useAuth } from '../lib/auth';
 import { dateTime, relative } from '../lib/format';
 import { useObject, usePipelines } from '../lib/hooks';
 import { TaskList } from './Tasks';
-import { DuplicateBanner, RelatedPanel } from '../components/RecordData';
+import { DuplicateBanner, MergeModal, RelatedPanel } from '../components/RecordData';
 import { EmailComposer } from '../components/EmailComposer';
 import { placeCall, useIntegrationStatus } from '../components/MailboxPanel';
 import { ShareModal } from '../components/ShareModal';
@@ -84,6 +84,7 @@ export function RecordDetailPage() {
   const [composing, setComposing] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [merging, setMerging] = useState(false);
   const pipelines = usePipelines(object);
   const apps = useApps();
   const key = ['record', object, id];
@@ -196,6 +197,11 @@ export function RecordDetailPage() {
               Convert lead
             </button>
           )}
+          {canEdit && ['account', 'contact', 'vendor', 'lead'].includes(object) && (
+            <button className="btn" onClick={() => setMerging(true)} title={`Merge a duplicate ${obj.label.toLowerCase()} into this one`}>
+              Merge…
+            </button>
+          )}
           {perm?.delete !== 'none' && (!DELETABLE_IN[object] || DELETABLE_IN[object]!.includes(String(rec.status))) && (
             <button
               className="btn danger"
@@ -214,6 +220,7 @@ export function RecordDetailPage() {
       </div>
 
       {canEdit && <DuplicateBanner obj={obj} record={rec} />}
+      {merging && <MergeModal obj={obj} master={rec} candidates={[]} onClose={() => setMerging(false)} />}
       {object === 'quote' && (
         <div style={{ marginBottom: 20 }}>
           <ApprovalBar object={object} record={rec} canEdit={canEdit} />

@@ -79,6 +79,23 @@ export const profileSchema = z.object({
     .array(z.object({ name: z.string().trim().min(1).max(120), role: z.string().trim().max(120).default(''), phone: z.string().trim().max(25).default(''), email: z.union([z.literal(''), z.string().trim().toLowerCase().pipe(z.email())]).default('') }))
     .max(50)
     .default([]),
+  /** the leadership team and other key people (CEO, CTO, CFO …): who they are, not their money */
+  keyPeople: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(120),
+        designation: z.string().trim().min(1).max(120),
+        department: z.string().trim().max(80).default(''),
+        email: z.union([z.literal(''), z.string().trim().toLowerCase().pipe(z.email())]).default(''),
+        phone: z.string().trim().max(25).default(''),
+        since: z.union([z.literal(''), z.string().regex(/^\d{4}-\d{2}-\d{2}$/)]).default(''),
+        userId: z.string().uuid().nullish(),
+        linkedin: z.union([z.literal(''), z.string().trim().max(200)]).default(''),
+        bio: z.string().trim().max(600).default(''),
+      }),
+    )
+    .max(50)
+    .optional(),
   managers: z.array(z.string().uuid()).max(20).optional(),
 });
 
@@ -118,6 +135,7 @@ export async function getProfile(ctx: RecordCtx) {
       emails: org.emails ?? [],
       addresses: org.addresses ?? [],
       contacts: org.contacts ?? [],
+      keyPeople: org.keyPeople ?? [],
       managers: org.managers ?? [],
     },
     users: users.map((u) => ({ id: u.id, name: u.full_name, email: u.email })),
@@ -129,9 +147,9 @@ export async function saveProfile(ctx: RecordCtx, input: z.infer<typeof profileS
   // naming who manages the profile is for admins only
   if (input.managers !== undefined && !hasAdmin(ctx.principal.permissions, 'organisation')) throw forbidden('Only admins choose who manages the organisation profile');
   if (input.gstin && input.pan && input.gstin.slice(2, 12) !== input.pan) throw badRequest('The GSTIN does not contain this PAN');
-  const { phones, emails, addresses, contacts, managers, ...company } = input;
+  const { phones, emails, addresses, contacts, managers, keyPeople, ...company } = input;
   const cur = await orgSettings(ctx);
-  const org = { ...cur.org, phones, emails, addresses, contacts, ...(managers !== undefined ? { managers } : {}) };
+  const org = { ...cur.org, phones, emails, addresses, contacts, ...(keyPeople !== undefined ? { keyPeople } : {}), ...(managers !== undefined ? { managers } : {}) };
   // the first phone / email also fill the single fields the documents print
   const merged = { ...cur.company, ...company, phone: company.phone || phones[0]?.number || cur.company.phone || '', email: company.email || emails[0]?.email || cur.company.email || '' };
   await ctx.tx.query(

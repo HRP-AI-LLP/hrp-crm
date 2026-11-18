@@ -461,5 +461,35 @@ export async function booksOverview(ctx: RecordCtx, today = new Date().toISOStri
     [ctx.tenantId],
   );
   const trend = await monthlyProfit(ctx, new Date(Date.parse(`${monthStart}T00:00:00Z`) - 330 * 86_400_000).toISOString().slice(0, 7) + '-01', today);
-  return { today, month: { income: pl.sections[0]!.total + pl.sections[3]!.total, net: pl.netProfit }, year: { income: fy.sections[0]!.total, net: fy.netProfit, grossMargin: fy.grossMargin }, cash: cash?.v ?? 0, receivables: ar, payables: ap, pending, trend };
+  // last month, for the change shown under this month's figures
+  const lmEnd = new Date(Date.parse(`${monthStart}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+  const lm = await profitAndLoss(ctx, `${lmEnd.slice(0, 7)}-01`, lmEnd);
+  // money in each bank, cash and card account
+  const banks = await ctx.tx.query<{ id: string; name: string; kind: string; last4: string | null; balance: number }>(
+    `select b.id, a.name, b.kind, b.account_last4 as last4, coalesce((select sum(l.debit - l.credit) from journal_lines l where l.tenant_id = b.tenant_id and l.account_id = b.gl_account_id and l.posted), 0)::float8 as balance
+       from bank_accounts b join gl_accounts a on a.tenant_id = b.tenant_id and a.id = b.gl_account_id
+      where b.tenant_id = $1 and b.is_active order by b.kind = 'credit_card', a.name`,
+    [ctx.tenantId],
+  );
+  // where the money went this year, and who owes or is owed most
+  const spend = [...fy.sections[1]!.accounts, ...fy.sections[2]!.accounts, ...fy.sections[4]!.accounts].filter((x) => x.amount > 0).sort((a, b) => b.amount - a.amount);
+  const topSpend = [...spend.slice(0, 6).map((x) => ({ name: x.name, amount: x.amount })), ...(spend.length > 6 ? [{ name: 'Everything else', amount: r2(spend.slice(6).reduce((t, x) => t + x.amount, 0)) }] : [])];
+  const owedBy = await ctx.tx.query<{ id: string; name: string; v: number; overdue: number; n: number }>(
+    `select i.account_id as id, coalesce(a.name, max(i.buyer_name), '—') as name, sum(i.balance_due)::float8 as v,
+            coalesce(sum(i.balance_due) filter (where i.due_date < current_date), 0)::float8 as overdue, count(*)::int as n
+       from invoices i left join accounts a on a.tenant_id = i.tenant_id and a.id = i.account_id
+      where i.tenant_id = $1 and i.doc_type = 'tax_invoice' and i.status in ('issued','partially_paid') and i.deleted_at is null and i.balance_due > 0
+      group by i.account_id, a.name order by v desc limit 5`,
+    [ctx.tenantId],
+  );
+  const dueBills = await ctx.tx.query<{ id: string; number: string | null; vendor: string; due: string | null; v: number }>(
+    `select b.id, coalesce(b.vendor_ref, b.bill_number) as number, coalesce(v.name, '—') as vendor, to_char(b.due_date, 'YYYY-MM-DD') as due, b.balance_due::float8 as v
+       from bills b left join vendors v on v.tenant_id = b.tenant_id and v.id = b.vendor_id
+      where b.tenant_id = $1 and b.doc_type = 'bill' and b.status in ('open','partially_paid') and b.deleted_at is null and b.balance_due > 0
+      order by b.due_date nulls last limit 5`,
+    [ctx.tenantId],
+  );
+  return { today, month: { income: pl.sections[0]!.total + pl.sections[3]!.total, expense: r2(pl.sections[1]!.total + pl.sections[2]!.total + pl.sections[4]!.total), net: pl.netProfit },
+    lastMonth: { income: lm.sections[0]!.total + lm.sections[3]!.total, expense: r2(lm.sections[1]!.total + lm.sections[2]!.total + lm.sections[4]!.total), net: lm.netProfit },
+    banks, topSpend, owedBy, dueBills, year: { income: r2(fy.sections[0]!.total + fy.sections[3]!.total), expense: r2(fy.sections[1]!.total + fy.sections[2]!.total + fy.sections[4]!.total), net: fy.netProfit, grossMargin: fy.grossMargin }, cash: cash?.v ?? 0, receivables: ar, payables: ap, pending, trend };
 }

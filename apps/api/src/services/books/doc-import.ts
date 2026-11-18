@@ -846,10 +846,13 @@ export async function rejectItem(ctx: RecordCtx, id: string) {
 
 /* ───────────────────────── approving: creating everything ───────────────────────── */
 
+/** "Ms. Shalini Pathak" → Shalini / Pathak; a single word is the last name (it is the one contacts require). */
 const splitName = (n: string) => {
-  const parts = n.trim().split(/\s+/);
-  return { first_name: parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0]!, last_name: parts.length > 1 ? parts[parts.length - 1]! : null };
+  const parts = n.trim().replace(/^(mr|mrs|ms|miss|dr|shri|smt|sri|prof)\.?\s+/i, '').split(/\s+/).filter(Boolean);
+  return parts.length > 1 ? { first_name: parts.slice(0, -1).join(' '), last_name: parts[parts.length - 1]! } : { first_name: null, last_name: parts[0] ?? n.trim() };
 };
+/** a person's name as read from a document: letters, not amounts or "Total In Words" */
+const personLike = (n: string | null | undefined) => !!n && /\p{L}{2}/u.test(n) && !/\d/.test(n) && !/\b(total|words|amount|invoice|rupees)\b/i.test(n);
 
 /** Creates what the plan says, in order; any failure undoes this document only. */
 export async function approveItem(ctx: RecordCtx, id: string) {
@@ -885,7 +888,7 @@ export async function approveItem(ctx: RecordCtx, id: string) {
       created.customer = { id: customerId, name: d.customer.name };
     }
     // 2. the person on the invoice
-    if (plan.contact) {
+    if (plan.contact && (plan.contact.email || personLike(plan.contact.name))) {
       const exists = plan.contact.email
         ? await ctx.tx.one(`select 1 from contacts where tenant_id = $1 and lower(email) = lower($2) and deleted_at is null`, [ctx.tenantId, plan.contact.email])
         : plan.contact.name
@@ -895,7 +898,7 @@ export async function approveItem(ctx: RecordCtx, id: string) {
             )
           : null;
       if (!exists) {
-        const nm = plan.contact.name ?? plan.contact.email!.split('@')[0]!;
+        const nm = personLike(plan.contact.name) ? plan.contact.name! : plan.contact.email!.split('@')[0]!;
         const r = await createRecord(ctx, 'contact', { ...splitName(nm), ...(plan.contact.email ? { email: plan.contact.email } : {}), ...(plan.contact.phone ? { phone: plan.contact.phone } : {}), account_id: customerId });
         events.push(...r.events);
         created.contact = { id: r.record.id, name: nm };

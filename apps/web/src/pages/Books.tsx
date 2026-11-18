@@ -2,6 +2,7 @@
  * Books: the accounting home. Overview, payables, banking, journals, chart of accounts,
  * reports, recurring transactions, budgets, fixed assets, GST / TDS and settings.
  */
+import { BooksDashboard } from '../components/books/BooksDashboard';
 import { hasAdmin } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -163,13 +164,6 @@ function Overview({ go }: { go: (t: Tab) => void }) {
   const settings = useQuery({ queryKey: ['books', 'settings'], queryFn: () => get<Json>('/api/v1/books/settings') });
   if (isLoading || !data) return <Spinner />;
   const cfg = settings.data?.config;
-  const chart = {
-    categories: (data.trend as Json[]).map((t) => t.month.slice(5) + '/' + t.month.slice(2, 4)),
-    series: [
-      { label: 'Income', values: (data.trend as Json[]).map((t) => Number(t.income)) },
-      { label: 'Expenses', values: (data.trend as Json[]).map((t) => Number(t.expense)) },
-    ],
-  };
   return (
     <div className="stack">
       {cfg && (!cfg.enabled || cfg.books_of_record !== 'synapse') && (
@@ -180,13 +174,6 @@ function Overview({ go }: { go: (t: Tab) => void }) {
           </button>
         </div>
       )}
-      <div className="kpis" style={{ margin: 0 }}>
-        <Kpi label="Cash and bank" value={money2(data.cash)} />
-        <Kpi label="Receivables" value={money2(data.receivables?.v)} sub={`${money2(data.receivables?.overdue)} overdue`} />
-        <Kpi label="Payables" value={money2(data.payables?.v)} sub={`${money2(data.payables?.due_week)} due this week`} />
-        <Kpi label={`Net profit · FY ${fyLabel()}`} value={money2(data.year.net)} tone={data.year.net < 0 ? 'bad' : 'good'} sub={data.year.grossMargin != null ? `Gross margin ${data.year.grossMargin}%` : undefined} />
-        <Kpi label="This month" value={money2(data.month.net)} sub={`Income ${money2(data.month.income)}`} tone={data.month.net < 0 ? 'bad' : undefined} />
-      </div>
       <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
         {data.pending.claims > 0 && (
           <Link className="chip warn" to="/o/expense">
@@ -204,10 +191,7 @@ function Overview({ go }: { go: (t: Tab) => void }) {
           </Link>
         )}
       </div>
-      <div className="panel" style={{ padding: 14 }}>
-        <h3 style={{ marginTop: 0 }}>Income and expenses by month</h3>
-        {chart.categories.length ? <BarChart data={chart} stacked={false} fmt={(n) => moneyShort(n)} /> : <p className="muted">Nothing posted yet.</p>}
-      </div>
+      <BooksDashboard data={data} go={go} fy={fyLabel()} />
     </div>
   );
 }

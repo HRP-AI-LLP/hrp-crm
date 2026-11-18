@@ -2399,8 +2399,10 @@ export async function openDocuments(ctx: RecordCtx) {
     [ctx.tenantId],
   );
   // invoices read from files but not yet approved into the books (Accounts desk → Import invoices)
-  const waiting = await ctx.tx.query<{ id: string; status: string; data: any; plan: any; error: string | null }>(
-    `select id, status, data, plan, error from doc_import_items where tenant_id = $1 and status in ('pending','failed') order by data ->> 'date' desc nulls last limit 200`,
+  const waiting = await ctx.tx.query<{ id: string; status: string; data: any; plan: any; error: string | null; in_books: boolean }>(
+    `select d.id, d.status, d.data, d.plan, d.error,
+            exists (select 1 from invoices i where i.tenant_id = d.tenant_id and i.deleted_at is null and i.status <> 'void' and lower(i.invoice_number) = lower(d.data ->> 'number')) as in_books
+       from doc_import_items d where d.tenant_id = $1 and d.status in ('pending','failed') order by d.data ->> 'date' desc nulls last, d.created_at desc limit 200`,
     [ctx.tenantId],
   );
   const pending = {
@@ -2413,6 +2415,7 @@ export async function openDocuments(ctx: RecordCtx) {
       number: w.data?.number ?? null,
       date: w.data?.date ?? null,
       readCustomer: w.data?.customer?.name ?? null,
+      inBooks: w.in_books,
       customerId: w.plan?.customer?.id ?? null,
       total: w.plan?.invoice?.total ?? w.data?.total ?? null,
       paid: w.data?.paid?.status ?? null,
