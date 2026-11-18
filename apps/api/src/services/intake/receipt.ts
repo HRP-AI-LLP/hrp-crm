@@ -243,7 +243,7 @@ export function readReceipt(text: string, ownNames: string[] = []): ReceiptRead 
   // paid: a PAID stamp, "payment received", an amount paid; not when a balance is still due
   const stamp = lines.some((l) => l.split('\t').some((c) => /^(paid|payment\s+received|paid\s+in\s+full)$/i.test(c.trim())));
   const saysPaid = /\b(payment\s+(?:received|successful|completed)(?:\s+in\s+full)?|paid\s+in\s+full|fully\s+paid|thank\s+you\s+for\s+your\s+payment|payment\s+status\s*:?\s*paid)\b/i.test(all);
-  const unpaid = /\bunpaid\b|\bpayment\s+(?:pending|due)\b/i.test(all) || (amountDue != null && amountDue > 0 && !paidOn && amountPaid == null && !stamp);
+  const unpaid = /\bunpaid\b|\bpayment\s+(?:pending|due|failed|declined)\b|\b(?:failed|declined)\s+payment\b/i.test(all) || (amountDue != null && amountDue > 0 && !paidOn && amountPaid == null && !stamp);
   return {
     currency,
     number,
@@ -268,4 +268,32 @@ export function readReceipt(text: string, ownNames: string[] = []): ReceiptRead 
     card: card ? { network: card[1]!, last4: card[2]! } : null,
     paid: !unpaid && (!!paidOn || amountPaid != null || stamp || saysPaid || /\breceipt\b/i.test(flat.slice(0, 3).join(' '))),
   };
+}
+
+/**
+ * Whose document is it: our own invoice to a customer (our name or GSTIN at the top, someone else under
+ * "Bill to"), or a supplier's bill to us (our name or GSTIN under "Bill to" / "Buyer").
+ */
+export function whoseDocument(text: string, ownGstins: string[], ownNames: string[]): 'ours' | 'theirs' | null {
+  const lines = text.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const names = ownNames.map((n) => n.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()).filter((n) => n.length >= 4);
+  const gst = ownGstins.map((g) => g.toUpperCase());
+  const isOwn = (l: string) => {
+    const up = l.toUpperCase();
+    const low = ` ${l.toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `;
+    return gst.some((g) => up.includes(g)) || names.some((n) => low.includes(` ${n} `));
+  };
+  const billIdx = lines.findIndex((l) => /\b(bill(?:ed)?\s+to|buyer|customer\s*(?:name|details)?\s*:?$|recipient|consignee|invoice\s+to)\b/i.test(l));
+  if (billIdx < 0) return lines.slice(0, 6).some(isOwn) ? 'ours' : null;
+  // the heading line can carry the supplier's column too ("Anthropic, PBC <tab> Bill to"): only cells from the heading on count
+  const head = lines[billIdx]!.split('\t');
+  const at = head.findIndex((c) => /\b(bill(?:ed)?\s+to|buyer|customer|recipient|consignee|invoice\s+to)\b/i.test(c));
+  const after = lines.slice(billIdx + 1, billIdx + 9).map((l) => {
+    const cells = l.split('\t');
+    return head.length > 1 && cells.length > 1 ? cells.slice(Math.min(at, cells.length - 1)).join(' ') : l;
+  });
+  const top = lines.slice(0, billIdx).concat(head.slice(0, Math.max(0, at)).join(' '));
+  if (after.some(isOwn)) return 'theirs';
+  if (top.some(isOwn)) return 'ours';
+  return null;
 }

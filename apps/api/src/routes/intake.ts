@@ -85,6 +85,11 @@ export const intakeRoutes = new Hono<AppEnv>()
     const desk = r.status === 'imported' && r.added && r.bankAccountId ? await runBookkeeper(systemDeps(c.env, c.var.db, c.var.tenant.id), { trigger: 'import', bankAccountId: r.bankAccountId }).catch(() => null) : null;
     return c.json({ ...r, desk: desk ? { ok: true } : null });
   })
+  .post('/intake/items/:id/import-invoices', async (c) => {
+    const r = await c.var.db.tx(scope(c), (tx) => approve.importOurInvoices(rctx(c, tx), id(c)));
+    await emit(c, r.events);
+    return c.json({ results: r.results, approved: r.approved, invoiceId: r.invoiceId });
+  })
   .post('/intake/items/:id/proposal', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => approve.proposal(rctx(c, tx), c.env, id(c)))))
   .post('/intake/items/:id/approve', async (c) => {
     const b = approve.approveSchema.parse(await c.req.json());

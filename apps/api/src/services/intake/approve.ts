@@ -13,6 +13,8 @@ import { badRequest, notFound } from '../../lib/errors';
 import { fxRate, rateForDoc } from '../../lib/fx';
 import { pdfLines } from '../../lib/pdf-lines';
 import { cardByLast4 } from '../books/banking';
+import { approveMany, createBatch, stageFile } from '../books/doc-import';
+import { assertBooksAdmin } from '../books/ledger';
 import { postBill, recordVendorPayment, saveBillLines } from '../books/bills';
 import { saveFile } from '../files';
 import { createRecord, type RecordCtx, type RecordEvent } from '../records';
@@ -20,6 +22,7 @@ import { assertIntake, READ_VERSION, readAttachment } from './intake';
 import type { ReceiptRead } from './receipt';
 
 type Read = {
+  whose?: 'ours' | 'theirs' | null;
   data: Record<string, any> | null;
   confidence?: number;
   receipt?: ReceiptRead | null;
@@ -72,6 +75,8 @@ export async function proposal(ctx: RecordCtx, env: Env, id: string, f: typeof f
   await readAll(ctx, env, id);
   const it = await loadItem(ctx, id);
   const reads = Object.entries((it.data.reads ?? {}) as Record<string, Read>).filter(([, r]) => r.data || r.receipt);
+  // our own invoice to a customer (e.g. sent from Zoho): imported as a sales invoice, not a bill
+  if (reads.some(([, r]) => r.whose === 'ours') && !reads.some(([, r]) => r.whose === 'theirs')) return ourInvoice(ctx, env, id, it);
   const nameOf = (fid: string) => it.attachments.find((a) => a.fileId === fid)?.name ?? '';
   // the invoice: a file not named a receipt, with the most read off it; the receipt: one that says paid
   const score = ([fid, r]: [string, Read]) => (/receipt/i.test(nameOf(fid)) ? -5 : 0) + (r.data?.lines?.length ? 3 : 0) + (r.data?.number ? 2 : 0) + (r.confidence ?? 0);
@@ -159,6 +164,53 @@ export async function proposal(ctx: RecordCtx, env: Env, id: string, f: typeof f
   };
 }
 
+/**
+ * Our own invoice that came by mail (sent from Zoho while moving over, say): read by the invoice
+ * importer (customer, contact, deal, recurring invoice, project, how it was paid) and kept as an import
+ * to check and approve; approving creates the invoice under its original number, in the books.
+ */
+async function ourInvoice(ctx: RecordCtx, env: Env, id: string, it: Item) {
+  await assertBooksAdmin(ctx);
+  let ids = (it.data.importItemIds as string[] | undefined) ?? [];
+  if (!ids.length || !(await ctx.tx.one(`select 1 from doc_import_items where tenant_id = $1 and id = $2`, [ctx.tenantId, ids[0]]))) {
+    const batch = await createBatch(ctx, `Mail: ${it.subject}`.slice(0, 200));
+    ids = [];
+    for (const a of it.attachments) {
+      if (a.contentType !== 'application/pdf' || !env.FILES) continue;
+      const f = await ctx.tx.one<{ storage_key: string }>(`select storage_key from files where tenant_id = $1 and id = $2`, [ctx.tenantId, a.fileId]);
+      const obj = f && (await env.FILES.get(f.storage_key));
+      if (!obj) continue;
+      const pages = (await pdfLines(new Uint8Array(await obj.arrayBuffer()))) ?? [];
+      const r = await stageFile({ run: (fn) => fn(ctx), ai: null }, batch.id, { fileName: a.name, pages });
+      ids.push(...r.ids);
+    }
+    await ctx.tx.query(`update intake_items set kind = 'invoice', data = data || $3::jsonb where tenant_id = $1 and id = $2`, [ctx.tenantId, id, jsonSafe({ importId: batch.id, importItemIds: ids })]);
+  }
+  const items = await ctx.tx.query(
+    `select id, status, confidence::float8 as confidence, data, plan, warnings, error, result from doc_import_items where tenant_id = $1 and id = any($2::uuid[]) order by created_at`,
+    [ctx.tenantId, ids],
+  );
+  const choices = {
+    accounts: await ctx.tx.query(`select id, name from accounts where tenant_id = $1 and deleted_at is null order by name limit 500`, [ctx.tenantId]),
+    deals: await ctx.tx.query(`select id, name, account_id from deals where tenant_id = $1 and deleted_at is null order by updated_at desc limit 300`, [ctx.tenantId]),
+    projects: await ctx.tx.query(`select id, name, account_id from projects where tenant_id = $1 and deleted_at is null order by name limit 300`, [ctx.tenantId]),
+  };
+  return { ours: true as const, status: it.status, link: it.link_id ? { object: it.link_object, id: it.link_id } : null, items, choices };
+}
+
+/** Approves the mail's own invoices (all, or the ones given) and links the mail to the first invoice. */
+export async function importOurInvoices(ctx: RecordCtx, id: string) {
+  await assertBooksAdmin(ctx);
+  const it = await loadItem(ctx, id, true);
+  const ids = (it.data.importItemIds as string[] | undefined) ?? [];
+  if (!ids.length) throw badRequest('Open the mail first so its invoice is read');
+  const r = await approveMany(ctx, ids);
+  const firstInvoice = r.results.map((x) => (x.created?.invoice as { id?: string } | undefined)?.id).find(Boolean) ?? null;
+  if (r.results.every((x) => x.ok) && firstInvoice)
+    await ctx.tx.query(`update intake_items set status = 'done', link_object = 'invoice', link_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, firstInvoice]);
+  return { ...r, invoiceId: firstInvoice };
+}
+
 /** SAC (services) and HSN chapters → the expense account they usually belong to. */
 const SAC_KEYS: [RegExp, string][] = [
   [/^99831[12]/, 'professional_fees'], // management and business consulting
@@ -190,7 +242,7 @@ const WORDS: [RegExp, string][] = [
 async function suggestAccount(ctx: RecordCtx, vendorId: string | null, sac: string | null, words: string) {
   if (vendorId) {
     const last = await ctx.tx.one<{ id: string; name: string }>(
-      `select a.id, a.name from bill_lines l join bills b on b.tenant_id = l.tenant_id and b.id = l.bill_id join gl_accounts a on a.tenant_id = l.tenant_id and a.id = l.account_id
+      `select a.id, a.name from bill_lines l join bills b on b.tenant_id = l.tenant_id and b.id = l.order_id join gl_accounts a on a.tenant_id = l.tenant_id and a.id = l.account_id
         where l.tenant_id = $1 and b.vendor_id = $2 and b.status not in ('draft','void') and b.deleted_at is null order by b.bill_date desc limit 1`,
       [ctx.tenantId, vendorId],
     );

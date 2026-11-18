@@ -628,6 +628,49 @@ describe('deals priced by rate, projects in any currency, partner names run toge
   });
 });
 
+describe('our own invoice sent from Zoho', () => {
+  it('is known as ours (not a bill) and imported as a sales invoice under its number', async () => {
+    const d = await PDFDocument.create();
+    const p = d.addPage([595, 842]);
+    const f = await d.embedFont(StandardFonts.Helvetica);
+    const rows: [string, string?][] = [
+      ['HRP AI LLP'], [`GSTIN ${OWN_GSTIN}`], ['harsha.rani@hrpai.in'], ['', 'TAX INVOICE'], ['# : INV-2026000010', 'Place Of Supply : Uttar Pradesh (09)'], ['Invoice Date : 01/11/2026'],
+      ['Bill To', 'Ship To'], ['Ms. Shalini Pathak', 'Ravi Enclave'], ['Ravi Enclave', 'Sector-87'],
+      ['# Item & Description    HSN /SAC    Qty    Rate    Amount'], ['1 Monthly maintenance charge    998313    1.00    1,200.00    1,200.00'],
+      ['', 'Sub Total    1,200.00'], ['', 'Total    Rs.1,200.00'], ['', 'Balance Due    Rs.0.00'],
+    ];
+    rows.forEach(([a, b], i) => {
+      if (a) p.drawText(a, { x: 40, y: 800 - i * 18, size: 9, font: f });
+      if (b) p.drawText(b, { x: 330, y: 800 - i * 18, size: 9, font: f });
+    });
+    const pdf = await d.save();
+    messages.push({ uid: Math.max(...messages.map((m) => m.uid)) + 1, raw: mail({ id: 'zoho-10@zoho-books.in', from: 'HRP AI LLP <message-service@sender.zoho-books.in>', subject: 'New auto-generated invoice for the recurring profile: Monthly Maintenance', pdf: { name: 'INV-2026000010.pdf', bytes: pdf } }) });
+    expect((await api('POST', `/api/v1/intake/mailboxes/${ids.mb}/sync`)).json.taken).toBeGreaterThan(0);
+    const item = ((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[]).find((i) => /recurring profile/.test(i.subject));
+    const r = await api('POST', `/api/v1/intake/items/${item.id}/proposal`);
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json.ours).toBe(true);
+    expect(r.json.items[0].data).toMatchObject({ number: 'INV-2026000010', date: '2026-11-01' });
+    expect(((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[]).find((i) => i.id === item.id).kind).toBe('invoice');
+    const imp = await api('POST', `/api/v1/intake/items/${item.id}/import-invoices`);
+    expect(imp.status, JSON.stringify(imp.json)).toBe(200);
+    expect(imp.json.results.filter((x: any) => !x.ok)).toEqual([]);
+    const inv = (await api('GET', `/api/v1/invoices/${imp.json.invoiceId}`)).json.invoice;
+    expect(inv).toMatchObject({ invoice_number: 'INV-2026000010', imported: true });
+    expect(((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[]).find((i) => i.id === item.id)).toMatchObject({ status: 'done', link_object: 'invoice' });
+  });
+
+  it('a supplier billed before: the account of their last bill is suggested', async () => {
+    const vendorBill = ((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[]).find((i) => /306\/26-27/.test(i.subject));
+    expect(vendorBill.status).toBe('done');
+    const r = await api('POST', `/api/v1/intake/items/${vendorBill.id}/proposal`);
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json.supplier.vendorId).toBeTruthy();
+    expect(r.json.suggest).toMatchObject({ why: 'as this supplier’s last bill' });
+    expect(r.json.suggest.name).toMatch(/Software/);
+  });
+});
+
 describe('text with NUL characters from a PDF', () => {
   it('is stored without them (jsonb refuses \\u0000)', async () => {
     const item = ((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[]).find((i) => /306\/26-27/.test(i.subject));

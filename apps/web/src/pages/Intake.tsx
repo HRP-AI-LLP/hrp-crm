@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
-import { del, download, get, post, put } from '../lib/api';
+import { del, download, get, patch, post, put } from '../lib/api';
 import { readDocument } from '../lib/doc-read';
 import { date, dateTime, money2 } from '../lib/format';
 import { useUsers } from '../lib/hooks';
@@ -616,9 +616,9 @@ function Documents() {
                 </td>
                 <td className="small">{(i.attachments as Json[]).map((a) => a.name).join(', ')}</td>
                 <td>
-                  {i.status === 'done' && i.link_object === 'bill' ? (
-                    <Link to={`/o/bill/${i.link_id}`} onClick={(e) => e.stopPropagation()}>
-                      Bill made
+                  {i.status === 'done' && (i.link_object === 'bill' || i.link_object === 'invoice') ? (
+                    <Link to={`/o/${i.link_object}/${i.link_id}`} onClick={(e) => e.stopPropagation()}>
+                      {i.link_object === 'bill' ? 'Bill made' : 'Invoice imported'}
                     </Link>
                   ) : (
                     <span className={`chip ${i.status === 'new' ? 'warn' : ''}`}>{i.status === 'new' ? 'to do' : i.status}</span>
@@ -777,6 +777,119 @@ function StatementPanel({ item, onDone }: { item: Json; onDone: () => void }) {
   );
 }
 
+/** Our own invoice to a customer that came by mail (e.g. from Zoho): imported as a sales invoice under its own number. */
+function OurInvoice({ id, p, onDone }: { id: string; p: Json; onDone: () => void }) {
+  const qc = useQueryClient();
+  const act = useAct([['intake'], ['books']]);
+  const nav = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const choose = async (item: Json, change: Json) => {
+    await act(() => patch(`/api/v1/books/imports/items/${item.id}`, { choices: { ...(item.plan?.choices ?? {}), ...change } }));
+    qc.invalidateQueries({ queryKey: ['intake', 'proposal', id] });
+  };
+  const items = (p.items ?? []) as Json[];
+  if (!items.length) return <p className="small muted">This looks like your own invoice, but nothing could be read from its PDF.</p>;
+  const pending = items.filter((x) => x.status === 'pending' || x.status === 'failed');
+  return (
+    <div className="panel stack" style={{ padding: 12 }}>
+      <div>
+        <b>Your own invoice to a customer</b>
+        <div className="small muted">Not a bill: it is brought in as a sales invoice under its original number, with the customer, deal, project and recurring invoice it belongs to, and posted to the books.</div>
+      </div>
+      {items.map((x) => {
+        const d = x.data ?? {};
+        const pl = x.plan ?? {};
+        const acc = pl.customer?.id ?? '';
+        return (
+          <div key={x.id} className="stack" style={{ gap: 8, borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+            <div className="small">
+              <b>{d.number ?? 'No number'}</b> of {d.date ? date(d.date) : '—'} · {d.subject ?? d.lines?.[0]?.description ?? ''} · total <b>{money2(pl.invoice?.total ?? d.total ?? 0)}</b>
+              {d.taxInclusive ? ' (incl. GST)' : ''} · {d.paid?.status === 'paid' ? 'paid' : d.paid?.status ?? ''}
+              {x.status === 'approved' && <span className="chip good" style={{ marginLeft: 6 }}>Imported</span>}
+              {pl.invoice?.duplicate && <span className="chip warn" style={{ marginLeft: 6 }}>Already in Synapse</span>}
+            </div>
+            <div className="grid2">
+              <label className="field">
+                Customer
+                <select disabled={x.status === 'approved'} value={acc} onChange={(e) => choose(x, { customerId: e.target.value || null })}>
+                  <option value="">{pl.customer?.new ? `New: ${pl.customer.name ?? '—'}` : 'Add as new'}</option>
+                  {(p.choices?.accounts ?? []).map((a: Json) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+                {pl.contact?.name && <span className="small muted">Contact: {pl.contact.name}</span>}
+              </label>
+              <label className="field">
+                Deal
+                <select disabled={x.status === 'approved'} value={pl.deal?.id ?? ''} onChange={(e) => choose(x, { dealId: e.target.value || null })}>
+                  <option value="">None</option>
+                  {(p.choices?.deals ?? [])
+                    .filter((dl: Json) => !acc || dl.account_id === acc || dl.id === pl.deal?.id)
+                    .map((dl: Json) => (
+                      <option key={dl.id} value={dl.id}>
+                        {dl.name}
+                      </option>
+                    ))}
+                </select>
+                {pl.recurring?.name && <span className="small muted">One of the recurring invoice “{pl.recurring.name}”</span>}
+              </label>
+              <label className="field">
+                Project
+                <select disabled={x.status === 'approved'} value={pl.project?.id ?? ''} onChange={(e) => choose(x, { projectId: e.target.value || null })}>
+                  <option value="">None</option>
+                  {(p.choices?.projects ?? [])
+                    .filter((pr: Json) => !acc || pr.account_id === acc || pr.id === pl.project?.id)
+                    .map((pr: Json) => (
+                      <option key={pr.id} value={pr.id}>
+                        {pr.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                Payment
+                <select disabled={x.status === 'approved'} value={pl.payment?.mode ?? 'later'} onChange={(e) => choose(x, { payment: e.target.value })}>
+                  {pl.payment?.bank && <option value="bank">Matched to the bank line of {date(pl.payment.bank.date)} ({money2(pl.payment.bank.amount)})</option>}
+                  <option value="record">Paid: record the receipt</option>
+                  <option value="later">Not paid yet</option>
+                </select>
+              </label>
+            </div>
+            {[...(x.warnings ?? []), x.error].filter(Boolean).map((w: string, i: number) => (
+              <div key={i} className="small" style={{ color: 'var(--warn)' }}>
+                {w}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+        <button
+          className="btn primary"
+          disabled={busy || !pending.length}
+          onClick={async () => {
+            setBusy(true);
+            const r = await act(() => post<Json>(`/api/v1/intake/items/${id}/import-invoices`), (x: Json) => (x.approved ? `${x.approved} invoice(s) imported` : 'Not imported: see the reasons'));
+            setBusy(false);
+            qc.invalidateQueries({ queryKey: ['intake', 'proposal', id] });
+            if (r?.invoiceId && r.results.every((y: Json) => y.ok)) {
+              onDone();
+              nav(`/o/invoice/${r.invoiceId}`);
+            }
+          }}
+        >
+          {busy ? 'Importing…' : 'Import as our invoice'}
+        </button>
+        <button className="btn ghost" onClick={async () => (await act(() => post(`/api/v1/intake/items/${id}/status`, { status: 'ignored' }), 'Ignored')) !== null && onDone()}>
+          Ignore
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'SGD', 'AUD', 'CAD', 'AED', 'JPY', 'CHF'];
 const num = (v: string) => (v.trim() === '' ? null : Number(v));
 
@@ -817,6 +930,7 @@ function ApproveMail({ id, onDone }: { id: string; onDone: () => void }) {
   }, [p, f]);
   if (isLoading) return <p className="small muted">Reading the files on this mail…</p>;
   if (error) return <p className="small" style={{ color: 'var(--bad)' }}>{(error as Error).message}</p>;
+  if (p?.ours) return <OurInvoice id={id} p={p} onDone={onDone} />;
   if (!p || !f) return null;
   const set = (x: Json) => setF({ ...f, ...x });
   const setLine = (i: number, x: Json) => set({ lines: f.lines.map((l: Json, j: number) => (j === i ? { ...l, ...x } : l)) });

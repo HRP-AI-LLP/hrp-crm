@@ -27,7 +27,7 @@ import { createRecord, type RecordCtx, type RecordEvent } from '../records';
 import { systemCtxFor } from '../system';
 import { pdfText } from '../../lib/pdf-text';
 import { defaultBidOwner } from './gem';
-import { readReceipt } from './receipt';
+import { readReceipt, whoseDocument } from './receipt';
 import { businessTerms, type BusinessTerms, classify, hasDocument, type IntakeKind, namesBusiness, parseCorrigendum, parseGemUpdate, parseNewBids } from './parse';
 
 const MAX_PER_RUN = 300;
@@ -456,7 +456,7 @@ export async function setItemStatus(ctx: RecordCtx, id: string, status: 'new' | 
 /* ───────────────────────── bills from mail ───────────────────────── */
 
 /** Bumped when the reading of mailed documents improves: files read before are read again. */
-export const READ_VERSION = 2;
+export const READ_VERSION = 3;
 
 export async function ownGstins(ctx: RecordCtx) {
   const t = await ctx.tx.one<{ settings: any }>(`select settings from tenants where id = $1`, [ctx.tenantId]);
@@ -479,7 +479,10 @@ export async function readAttachment(ctx: RecordCtx, id: string, fileId: string,
   // the second reading: foreign currency, full numbers, written-out dates, amount paid, the card
   const names = await ctx.tx.one<{ n: string | null; l: string | null }>(`select name as n, settings -> 'company' ->> 'legalName' as l from tenants where id = $1`, [ctx.tenantId]);
   const receipt = text.trim().length > 40 ? readReceipt(text, [names?.n, names?.l].filter((x): x is string => !!x)) : null;
-  if (r && receipt) {
+  // our own invoice (made in Zoho or elsewhere) to a customer, not a supplier's bill
+  const whose = text.trim().length > 40 ? whoseDocument(text, own, [names?.n, names?.l].filter((x): x is string => !!x)) : null;
+  if (whose === 'ours') await ctx.tx.query(`update intake_items set kind = 'invoice' where tenant_id = $1 and id = $2 and kind in ('bill','payment')`, [ctx.tenantId, id]);
+  if (r && receipt && whose !== 'ours') {
     const d = r.data as Record<string, any>;
     // a number read under its heading wins over a heading word or a cut-short one ("INVOICE", "F13F9483")
     if (receipt.number && (!d.number || !/\d/.test(String(d.number)) || receipt.number.startsWith(d.number) || receipt.number.length > String(d.number).length)) d.number = receipt.number;
@@ -512,7 +515,7 @@ export async function readAttachment(ctx: RecordCtx, id: string, fileId: string,
     r.confidence = Math.max(r.confidence ?? 0, got / 5);
   }
   const read = r
-    ? { ...r, v: READ_VERSION, receipt, party: { gstin: receipt?.supplier.foreign ? null : party, name: receipt?.supplier.name ?? r.data.customer?.name ?? null }, ours: ours.length > 0, scanned: false }
+    ? { ...r, v: READ_VERSION, whose, receipt, party: { gstin: receipt?.supplier.foreign ? null : party, name: receipt?.supplier.name ?? r.data.customer?.name ?? null }, ours: ours.length > 0, scanned: false }
     : { data: null, v: READ_VERSION, receipt: null, confidence: 0, warnings: ['No text in this file (a scan or photo): enter the bill by hand'], scanned: true };
   const data = { ...it.data, reads: { ...(it.data.reads ?? {}), [fileId]: read } };
   await ctx.tx.query(`update intake_items set data = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, jsonSafe(data)]);
