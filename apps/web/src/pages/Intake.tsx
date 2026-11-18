@@ -694,7 +694,7 @@ function Mailboxes() {
         </table>
       ) : (
         <Empty title="No mailbox yet">
-          Add the mailbox that receives GeM alerts and supplier bills — e.g. harsha.rani@hrpai.in on GoDaddy (Titan): server imap.titan.email, port 993, the mailbox password.
+          Add the mailbox that receives GeM alerts and supplier bills — e.g. harsha.rani@hrpai.in on GoDaddy (Titan): server imap.secureserver.net, port 993, the mailbox password.
         </Empty>
       )}
       {edit && <MailboxModal m={edit} presets={data.presets} connections={data.connections} onClose={() => setEdit(null)} onSaved={async (id) => (setEdit(null), id && (await sync(id)))} />}
@@ -740,7 +740,7 @@ function MailboxModal({ m, presets, connections, onClose, onSaved }: { m: Json; 
           Mail service
           <select value={preset} onChange={(e) => pickPreset(e.target.value)}>
             <option value="titan">GoDaddy Professional Email (Titan)</option>
-            <option value="godaddy_workspace">GoDaddy Workspace Email (older)</option>
+            <option value="titan_direct">Titan Mail (not from GoDaddy)</option>
             <option value="gmail">Gmail / Google Workspace (app password)</option>
             <option value="outlook_personal">Outlook.com / Hotmail (app password)</option>
             <option value="yahoo">Yahoo Mail (app password)</option>

@@ -38,11 +38,16 @@ export function assertIntake(ctx: RecordCtx) {
 /* ───────────────────────── mailboxes ───────────────────────── */
 
 export const PRESETS: Record<string, { host: string; port: number; note: string }> = {
-  titan: { host: 'imap.titan.email', port: 993, note: 'GoDaddy Professional Email (Titan): use the mailbox password' },
+  // GoDaddy sells Titan under its own servers; Titan bought elsewhere uses imap.titan.email
+  titan: {
+    host: 'imap.secureserver.net',
+    port: 993,
+    note: 'GoDaddy Professional Email (powered by Titan): the mailbox password. In Titan settings turn on access from other apps, and keep two-step verification off (Titan blocks other apps while it is on).',
+  },
+  titan_direct: { host: 'imap.titan.email', port: 993, note: 'Titan Mail bought from Titan, Hostinger or others: the mailbox password, other-app access on, two-step verification off' },
   gmail: { host: 'imap.gmail.com', port: 993, note: 'Gmail / Google Workspace: turn on 2-step verification and use an app password' },
   zoho: { host: 'imap.zoho.in', port: 993, note: 'Zoho Mail (India): use an app-specific password' },
   outlook: { host: 'outlook.office365.com', port: 993, note: 'Microsoft 365 needs the Microsoft connection (password sign-in is switched off by Microsoft)' },
-  godaddy_workspace: { host: 'imap.secureserver.net', port: 993, note: 'GoDaddy Workspace Email (older plans)' },
   outlook_personal: { host: 'outlook.office365.com', port: 993, note: 'Outlook.com / Hotmail: an app password from account.microsoft.com → Security (if Microsoft refuses it, connect the account instead)' },
   yahoo: { host: 'imap.mail.yahoo.com', port: 993, note: 'Yahoo Mail: an app password from Account security' },
 };
@@ -87,7 +92,7 @@ function checkTls(host: string, tls: boolean) {
 export async function saveMailbox(ctx: RecordCtx, env: Env, id: string | null, input: z.infer<typeof mailboxSchema>) {
   assertIntake(ctx);
   if (input.provider === 'imap') {
-    if (!input.host || !input.port) throw badRequest('Give the IMAP server and port (e.g. imap.titan.email, 993)');
+    if (!input.host || !input.port) throw badRequest('Give the IMAP server and port (e.g. imap.secureserver.net, 993)');
     checkTls(input.host, input.tls);
     if (!id && !input.password) throw badRequest('Give the mailbox password (an app password for Gmail and Zoho)');
   } else {
@@ -256,7 +261,13 @@ export async function syncMailbox(env: Env, db: Db, tenantId: string, mailboxId:
         ? await readImap(env, { ...mb, tenant_id: tenantId } as Mailbox, own)
         : await run((ctx) => (mb.provider === 'google' ? readGoogle(env, ctx.tx, integration!, mb, own) : readMicrosoft(env, ctx.tx, integration!, mb, own)));
   } catch (e) {
-    const msg = e instanceof ImapError && e.auth ? `Sign-in failed: check the password (Gmail and Zoho need an app password). ${e.message}` : (e as Error).message;
+    const titan = /secureserver|titan/i.test(mb.host ?? '');
+    const msg =
+      e instanceof ImapError && e.auth
+        ? titan
+          ? `Sign-in failed. For GoDaddy / Titan mail: use server imap.secureserver.net (GoDaddy) or imap.titan.email (Titan bought elsewhere), the full address and the mailbox password; in Titan settings turn on access from other apps and turn two-step verification off. (${e.message})`
+          : `Sign-in failed: check the password (Gmail, Yahoo, Outlook.com and Zoho need an app password). (${e.message})`
+        : (e as Error).message;
     await run((ctx) => ctx.tx.query(`update intake_mailboxes set status = 'error', last_error = $3, last_sync_at = now() where tenant_id = $1 and id = $2`, [tenantId, mailboxId, msg.slice(0, 1000)]));
     throw badRequest(msg);
   }
