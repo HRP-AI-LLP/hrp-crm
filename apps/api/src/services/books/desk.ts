@@ -1117,7 +1117,45 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
     }
     case 'receipt': {
       // the money of a receipt already recorded (an invoice imported as paid): it moves to this bank and is matched
-      if (pl.paymentId) {
+      // several receipts already recorded, paid together in one bank credit: each goes through clearing,
+      // and one entry moves the total from clearing to this bank
+      const pids = [...new Set([...((pl.paymentIds as string[] | null) ?? []), ...(pl.paymentId ? [String(pl.paymentId)] : [])])];
+      if (pids.length > 1) {
+        const clearing = await sys(ctx.tx, ctx.tenantId, 'gateway_clearing');
+        const lines: { accountId: string; debit?: number; credit?: number }[] = [];
+        const nums: string[] = [];
+        let total = 0;
+        for (const id of pids) {
+          const pay = await ctx.tx.one<{ status: string; number: string | null }>(`select status, payment_number as number from payments where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, id]);
+          if (!pay || pay.status === 'void') throw conflict('One of those receipts is void');
+          await ctx.tx.query(`update payments set deposit_account_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, clearing]);
+          await repost(ctx.tx, ctx.tenantId, 'payment', id);
+          const v = await ctx.tx.one<{ v: number }>(
+            `select coalesce(sum(l.debit - l.credit), 0)::float8 as v from journal_lines l join journals j on j.tenant_id = l.tenant_id and j.id = l.journal_id
+              where l.tenant_id = $1 and j.source_type = 'payment' and j.source_id = $2 and l.account_id = $3 and l.posted`,
+            [ctx.tenantId, id, clearing],
+          );
+          const a = r2(v?.v ?? 0);
+          if (a <= 0) throw badRequest(`Receipt ${pay.number ?? ''} is not posted yet`.trim());
+          total = r2(total + a);
+          nums.push(pay.number ?? id.slice(0, 8));
+          lines.push({ accountId: clearing, credit: a });
+        }
+        if (Math.abs(total - amt) > 0.5) throw badRequest(`Those receipts come to ${money(total)}, the bank line is ${money(amt)}`);
+        lines.unshift({ accountId: gl, debit: amt });
+        const jid = await postJournal(ctx.tx, ctx.tenantId, { date, sourceType: 'bank', sourceId: p.bank_txn_id, reference: t.reference ?? null, narration: `Receipts ${nums.join(', ')} paid together`, lines });
+        await ctx.tx.query(`update journal_lines set bank_txn_id = $3 where tenant_id = $1 and journal_id = $2 and account_id = $4`, [ctx.tenantId, jid, p.bank_txn_id, gl]);
+        await ctx.tx.query(`update bank_transactions set status = 'categorized', journal_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, p.bank_txn_id, jid]);
+        // each receipt's own entry is marked as banked by this line, so it no longer waits for its money
+        await ctx.tx.query(
+          `update journal_lines l set bank_txn_id = $3 from journals j
+            where l.tenant_id = $1 and j.tenant_id = l.tenant_id and j.id = l.journal_id and j.source_type = 'payment' and j.source_id = any($2::uuid[]) and l.account_id = $4 and l.posted`,
+          [ctx.tenantId, pids, p.bank_txn_id, clearing],
+        );
+        return { result: { paymentIds: pids, journalId: jid }, events: [] };
+      }
+      if (pl.paymentId || pids.length === 1) {
+        pl.paymentId = pids[0];
         const pay = await ctx.tx.one<{ status: string }>(`select status from payments where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, pl.paymentId]);
         if (!pay || pay.status === 'void') throw conflict('That receipt is void');
         await ctx.tx.query(`update payments set deposit_account_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, pl.paymentId, gl]);
@@ -1360,6 +1398,8 @@ export const decideSchema = z.object({
       dealId: z.string().uuid().nullish(),
       /** receipt: the receipt already recorded (an invoice imported as paid): this bank line is its money */
       paymentId: z.string().uuid().nullish(),
+      /** receipt: several receipts already recorded that this one bank line pays together */
+      paymentIds: z.array(z.string().uuid()).max(100).nullish(),
       billId: z.string().uuid().nullish(),
       lineId: z.string().uuid().nullish(),
       tdsAmount: z.number().min(0).nullish(),
@@ -1417,6 +1457,7 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
               contractId: c.contractId ?? null,
               dealId: c.dealId ?? null,
               paymentId: c.paymentId ?? null,
+              paymentIds: c.paymentIds ?? null,
               tdsAmount: c.tdsAmount ?? 0,
               gstTdsAmount: c.gstTdsAmount ?? 0,
             }
@@ -1428,7 +1469,7 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
                 ? { partyType: c.partyType ?? null, partyId: c.partyId ?? null, name: c.partyName ?? null, contactName: c.contactName ?? null }
                 : {};
     if (c.kind === 'categorize' && !c.accountId) throw badRequest('Choose the account');
-    if (c.kind === 'receipt' && !c.invoiceId && !c.allocations?.length && !c.paymentId && !c.customerId) throw badRequest('Choose the invoices, the receipt already recorded, or the customer it is an advance from');
+    if (c.kind === 'receipt' && !c.invoiceId && !c.allocations?.length && !c.paymentId && !c.paymentIds?.length && !c.customerId) throw badRequest('Choose the invoices, the receipt already recorded, or the customer it is an advance from');
     if (c.kind === 'vendor_payment' && !c.billId) throw badRequest('Choose the bill');
     if (c.kind === 'match' && !c.lineId) throw badRequest('Choose the entry');
     if (c.kind === 'new_party' && (!c.partyType || (!c.partyId && !c.partyName))) throw badRequest('Choose the customer or vendor, or name a new one');

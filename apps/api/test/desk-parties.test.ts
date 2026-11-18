@@ -177,6 +177,27 @@ describe('one receipt for several invoices, or for the work', () => {
     await api('PUT', `/api/v1/invoices/${fciInv}/lines`, { lines: [{ name: 'Monitoring', quantity: 1, unitPrice: 100, taxRate: 18 }] });
     expect((await api('POST', `/api/v1/invoices/${fciInv}/issue`)).status).toBe(200);
   });
+
+  it('one bank line is the money of two receipts already recorded (imported as paid)', async () => {
+    const mk = async () => {
+      const id = (await api('POST', '/api/v1/records/invoice', { name: 'Maintenance', account_id: ids.sm })).json.id;
+      await api('PUT', `/api/v1/invoices/${id}/lines`, { taxInclusive: true, lines: [{ name: 'Monthly maintenance', quantity: 1, unitPrice: 1200, taxRate: 18 }] });
+      expect((await api('POST', `/api/v1/invoices/${id}/issue`)).status).toBe(200);
+      const pay = await api('POST', '/api/v1/payments', { accountId: ids.sm, amount: 1200, mode: 'upi', allocations: [{ invoiceId: id, amount: 1200 }] });
+      expect(pay.status, JSON.stringify(pay.json)).toBeLessThan(300);
+      return { id, pay: pay.json.id as string };
+    };
+    const [a, b] = [await mk(), await mk()];
+    let docs = (await api('GET', '/api/v1/books/desk/open-documents')).json;
+    expect(docs.invoices.filter((i: any) => [a.id, b.id].includes(i.id) && i.unbanked).length).toBe(2);
+    const line = 'IMPS/PhonePe/two months/RRN 999111';
+    expect((await api('POST', `/api/v1/books/bank-accounts/${ids.yes}/statement`, { toDesk: true, rows: [{ date: daysAgo(1), description: line, amount: 2400 }] })).status).toBe(200);
+    const p = await forLine(line);
+    const r = await api('POST', `/api/v1/books/desk/proposals/${p.id}`, { decision: 'approve', change: { kind: 'receipt', paymentIds: [a.pay, b.pay] } });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    docs = (await api('GET', '/api/v1/books/desk/open-documents')).json;
+    expect(docs.invoices.filter((i: any) => [a.id, b.id].includes(i.id) && i.unbanked).length).toBe(0);
+  });
 });
 
 describe('a government payment less TDS and GST TDS', () => {

@@ -428,8 +428,8 @@ interface Receipt {
   customerId: string;
   /** invoice id → amount applied ('' = its balance) */
   alloc: Record<string, string>;
-  /** a receipt already recorded (invoice imported as paid) that this bank line is the money of */
-  paymentId: string;
+  /** receipts already recorded (invoices imported as paid) that this bank line is the money of */
+  paymentIds: string[];
   /** what the unapplied money is for: 'project:<id>', 'contract:<id>', 'deal:<id>' */
   target: string;
   tds: string;
@@ -437,7 +437,7 @@ interface Receipt {
 }
 
 function receiptChange(rc: Receipt, docs: Json | undefined) {
-  if (rc.paymentId) return { kind: 'receipt', paymentId: rc.paymentId };
+  if (rc.paymentIds.length) return { kind: 'receipt', paymentIds: rc.paymentIds };
   const inv = (docs?.invoices ?? []) as Json[];
   const allocations = Object.entries(rc.alloc).map(([invoiceId, a]) => ({ invoiceId, amount: Number(a) || Number(inv.find((x) => x.id === invoiceId)?.balance ?? 0) })).filter((x) => x.amount > 0);
   const parts = Object.fromEntries(rc.target.split('|').filter(Boolean).map((x) => x.split(':') as [string, string]));
@@ -505,7 +505,7 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
       const room = Math.max(0, Math.round((total - applied) * 100) / 100);
       next[x.id] = String(Math.min(x.balance, room || x.balance));
     } else delete next[x.id];
-    onChange({ ...value, alloc: next, paymentId: '', customerId: on ? x.account_id : value.customerId });
+    onChange({ ...value, alloc: next, paymentIds: [], customerId: on ? x.account_id : value.customerId });
   };
   // the work, by customer: a deal with its project and contract is one engagement, not three choices
   const deals = (docs?.deals ?? []) as Json[];
@@ -538,7 +538,7 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
   return (
     <div className="stack" style={{ gap: 8 }}>
       <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
-        <select value={chosenCustomer} onChange={(e) => onChange({ ...value, customerId: e.target.value, alloc: {}, paymentId: '', target: '' })} style={{ maxWidth: 260 }} aria-label="Customer">
+        <select value={chosenCustomer} onChange={(e) => onChange({ ...value, customerId: e.target.value, alloc: {}, paymentIds: [], target: '' })} style={{ maxWidth: 260 }} aria-label="Customer">
           <option value="">All customers</option>
           {customers.map((c) => (
             <option key={c.id} value={c.id}>
@@ -597,16 +597,27 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
           <summary className="small">Invoices already marked paid whose money is not matched to a bank line yet ({paid.length})</summary>
           {paid.map((x) => {
             const pid = String(x.unbanked).split(',')[0]!.split(':')[0]!;
+            const on = value.paymentIds.includes(pid);
             return (
               <label key={x.id} className="row small" style={{ gap: 6 }}>
-                <input type="radio" name="paid-receipt" checked={value.paymentId === pid} onChange={() => onChange({ ...value, paymentId: pid, alloc: {}, target: '' })} />
-                {x.number} · {x.party} · {money2(x.total, x.currency ?? 'INR')} · {x.date} — this bank line is its money
+                <input type="checkbox" checked={on} onChange={() => onChange({ ...value, paymentIds: on ? value.paymentIds.filter((y) => y !== pid) : [...value.paymentIds, pid], alloc: {}, target: '' })} />
+                {x.number} · {x.party} · {money2(x.total, x.currency ?? 'INR')} · {x.date}
               </label>
             );
           })}
+          {value.paymentIds.length > 0 &&
+            (() => {
+              const sum = paid.filter((x) => value.paymentIds.includes(String(x.unbanked).split(',')[0]!.split(':')[0]!)).reduce((a, x) => a + Number(x.unbanked_amount ?? x.total ?? 0), 0);
+              const ok = Math.abs(sum - amount) < 0.5;
+              return (
+                <div className="small" style={{ color: ok ? 'var(--good, #0a7d33)' : 'var(--bad)' }}>
+                  {value.paymentIds.length} selected · {money2(sum)} {ok ? '= this bank line' : `— the bank line is ${money2(amount)}`}
+                </div>
+              );
+            })()}
         </details>
       )}
-      {fits.length > 0 && !value.paymentId && (
+      {fits.length > 0 && !value.paymentIds.length && (
         <div className="small" style={{ background: 'var(--panel-2, #f4f6fb)', padding: 8, borderRadius: 6 }}>
           The bank line is {money2(short)} less than the invoice{picked.length > 1 ? 's' : ''}: that is exactly{' '}
           {fits.map((f, i) => (
@@ -623,7 +634,7 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
       )}
       {(docs?.pendingImports?.n ?? 0) > 0 && <WaitingImports items={docs!.pendingImports.items ?? []} customers={customers} />}
       {drafts.length > 0 && <div className="small muted">{drafts.length} draft invoice(s) are not shown: issue them first (Invoices) to apply money to them.</div>}
-      {!value.paymentId && (
+      {!value.paymentIds.length && (
         <>
           <div className="small">
             Bank line {money2(amount)}
@@ -765,7 +776,7 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
     personName: p.kind === 'new_party' && !p.payload?.partyId ? (p.payload.name ?? '') : '',
     personRole: 'partner',
   });
-  const [rc, setRc] = useState<Receipt>({ customerId: '', alloc: p.payload?.invoiceId ? { [p.payload.invoiceId]: '' } : {}, paymentId: '', target: '', tds: String(p.payload?.tdsAmount ?? 0), gstTds: '0' });
+  const [rc, setRc] = useState<Receipt>({ customerId: '', alloc: p.payload?.invoiceId ? { [p.payload.invoiceId]: '' } : {}, paymentIds: [], target: '', tds: String(p.payload?.tdsAmount ?? 0), gstTds: '0' });
   const [rule, setRule] = useState(false);
   const [ruleText_, setRuleText] = useState(ruleText(p.description, p.counterparty));
   const [busy, setBusy] = useState(false);
