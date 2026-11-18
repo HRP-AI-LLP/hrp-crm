@@ -1202,6 +1202,7 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
   const [rows, setRows] = useState<Json[] | null>(null);
   const list = rows ?? (data.members as Json[]).map((m) => ({ userId: m.user_id, role: m.role, billRate: m.bill_rate ?? '', costRate: m.cost_rate ?? '' }));
   const [add, setAdd] = useState('');
+  const [invite, setInvite] = useState(false);
   const nameOf = (u: string) => users?.items.find((x) => x.id === u)?.full_name ?? (data.members as Json[]).find((m) => m.user_id === u)?.full_name ?? '—';
   return (
     <div className="stack">
@@ -1252,8 +1253,16 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
       </table>
       {manage && (
         <div className="row" style={{ flexWrap: 'wrap' }}>
-          <select value={add} onChange={(e) => setAdd(e.target.value)} style={{ maxWidth: 280 }}>
+          <select
+            value={add}
+            onChange={(e) => {
+              if (e.target.value === '__new') setInvite(true);
+              else setAdd(e.target.value);
+            }}
+            style={{ maxWidth: 280 }}
+          >
             <option value="">Add a person…</option>
+            <option value="__new">+ Someone new (invite them)…</option>
             {(users?.items ?? [])
               .filter((u) => !list.some((m) => m.userId === u.id))
               .map((u) => (
@@ -1279,6 +1288,106 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
           </button>
         </div>
       )}
+      {invite && (
+        <InvitePerson
+          onClose={() => setInvite(false)}
+          onInvited={async (userId) => {
+            // added to the team and saved straight away
+            const next = [...list, { userId, role: 'member', billRate: '', costRate: '' }];
+            setRows(null);
+            await act(
+              () => put(`/api/v1/projects/${id}/members`, { members: next.map((m) => ({ userId: m.userId, role: m.role, billRate: m.billRate === '' ? null : Number(m.billRate), costRate: m.costRate === '' ? null : Number(m.costRate) })) }),
+              'Invited and added to the team',
+            );
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Invites a new person to the workspace (they get a sign-in link) so they can join the project. */
+function InvitePerson({ onClose, onInvited }: { onClose: () => void; onInvited: (userId: string) => Promise<void> }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const { data: roles, error } = useQuery({ queryKey: ['admin-roles'], queryFn: () => get<{ items: Json[] }>('/api/admin/roles'), retry: false });
+  const [f, setF] = useState({ fullName: '', email: '', role: '' });
+  const [busy, setBusy] = useState(false);
+  const [link, setLink] = useState<string | null>(null);
+  const choices = (roles?.items ?? []).filter((r) => r.key !== 'admin');
+  const role = f.role || choices.find((r) => /member|project|staff|employee|user/i.test(`${r.key} ${r.name}`))?.key || choices[0]?.key || '';
+  if (link)
+    return (
+      <Modal title="Invitation link" onClose={onClose}>
+        <div className="modal-body stack">
+          <p className="small">No mail is set up, so send {f.fullName} this sign-in link yourself (valid for 7 days). They are already on the team.</p>
+          <input readOnly value={link} onFocus={(e) => e.target.select()} />
+          <button className="btn" onClick={() => navigator.clipboard?.writeText(link).then(() => toast('Copied'))}>
+            Copy link
+          </button>
+        </div>
+      </Modal>
+    );
+  return (
+    <Modal
+      title="Add someone new to the team"
+      onClose={onClose}
+      footer={
+        <button
+          className="btn primary"
+          disabled={busy || !f.fullName.trim() || !/^\S+@\S+\.\S+$/.test(f.email) || !role}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await post<{ id: string; inviteUrl: string; emailed: boolean }>('/api/admin/users/invite', { email: f.email.trim(), fullName: f.fullName.trim(), roles: [role], teamIds: [] });
+              qc.invalidateQueries({ queryKey: ['users'] });
+              await onInvited(r.id);
+              if (r.emailed) {
+                toast(`Invitation emailed to ${f.email}`);
+                onClose();
+              } else setLink(r.inviteUrl);
+            } catch (e) {
+              toast((e as Error).message, true);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? 'Inviting…' : 'Invite and add'}
+        </button>
+      }
+    >
+      <div className="modal-body stack">
+        {error ? (
+          <p className="small" style={{ color: 'var(--bad)' }}>
+            Only workspace admins can invite people. Ask an admin to invite them (Settings → People), then add them here.
+          </p>
+        ) : (
+          <>
+            <label className="field">
+              Full name
+              <input value={f.fullName} onChange={(e) => setF({ ...f, fullName: e.target.value })} autoFocus />
+            </label>
+            <label className="field">
+              Email
+              <input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+            </label>
+            <label className="field">
+              Access in the workspace
+              <select value={role} onChange={(e) => setF({ ...f, role: e.target.value })}>
+                {choices.map((r) => (
+                  <option key={r.key} value={r.key}>
+                    {r.name ?? r.key}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="small muted" style={{ margin: 0 }}>
+              They get a link to set their password. Their role on this project (member, manager, viewer) and their rates are set in the team list.
+            </p>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }

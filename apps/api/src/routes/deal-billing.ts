@@ -1,4 +1,5 @@
 /** A deal's charges and setting up its billing; price changes on recurring invoices. */
+import { CURRENCIES } from '@synapse/shared';
 import { hasAdmin } from '@synapse/shared';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -27,8 +28,8 @@ function requireRecurring(c: { var: AppEnv['Variables'] }) {
 export const dealBillingRoutes = new Hono<AppEnv>()
   .get('/deals/:id/charges', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => dealCharges(rctx(c, tx), id(c)))))
   .put('/deals/:id/charges', async (c) => {
-    const b = z.object({ charges: z.array(chargeSchema).max(100) }).parse(await c.req.json());
-    await emit(c, await c.var.db.tx(scope(c), (tx) => saveDealCharges(rctx(c, tx), id(c), b.charges)));
+    const b = z.object({ charges: z.array(chargeSchema).max(100), currency: z.enum(CURRENCIES).nullish() }).parse(await c.req.json());
+    await emit(c, await c.var.db.tx(scope(c), (tx) => saveDealCharges(rctx(c, tx), id(c), b.charges, b.currency)));
     return c.json(await c.var.db.tx(scope(c, true), (tx) => dealCharges(rctx(c, tx), id(c))));
   })
   .post('/deals/:id/setup-billing', async (c) => {

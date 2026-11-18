@@ -73,7 +73,7 @@ describe('a deal with one-time and recurring charges', () => {
       ],
     });
     expect(r.status, JSON.stringify(r.json)).toBe(200);
-    expect(r.json.totals).toEqual({ oneTime: 12200, recurringMonthly: 3000, firstYearRecurring: 36000, amount: 48200 });
+    expect(r.json.totals).toMatchObject({ oneTime: 12200, recurringMonthly: 3000, firstYearRecurring: 36000, amount: 48200 });
     const deal = (await api('GET', `/api/v1/records/deal/${ids.deal}`)).json;
     expect(deal).toMatchObject({ amount: 48200, one_time_total: 12200, recurring_monthly: 3000, source: 'social_circle' });
     // only a won deal is set up for billing
@@ -115,6 +115,33 @@ describe('a deal with one-time and recurring charges', () => {
     expect(j1).toMatchObject({ grand_total: 1200, taxable_total: 1016.95, tax_inclusive: true });
     const view = (await api('GET', `/api/v1/deals/${ids.deal}/charges`)).json;
     expect(view.invoices.filter((i: any) => i.recurring_profile_id === ids.profile)).toHaveLength(2);
+  });
+});
+
+describe('a deal billed by the hour in dollars', () => {
+  it('values hourly work as rate × hours and sets up a time-billed project in the deal currency', async () => {
+    const acc = (await api('POST', '/api/v1/records/account', { name: 'MisticusMind, Inc.' })).json.id;
+    const d = await api('POST', '/api/v1/records/deal', { name: 'MisticusMind app build', account_id: acc, stage_id: ids.open });
+    const r = await api('PUT', `/api/v1/deals/${d.json.id}/charges`, {
+      currency: 'USD',
+      charges: [
+        { kind: 'hourly', name: 'Development', hsnSac: '998314', quantity: 120, unitPrice: 40, taxRate: 0 },
+        { kind: 'one_time', name: 'Discovery workshop', quantity: 1, unitPrice: 500, taxRate: 0 },
+      ],
+    });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json).toMatchObject({ currency: 'USD', totals: { oneTime: 500, hourly: 4800, hoursEstimated: 120, amount: 5300 } });
+    const deal = (await api('GET', `/api/v1/records/deal/${d.json.id}`)).json;
+    expect(deal).toMatchObject({ currency: 'USD' });
+    expect(Number(deal.amount)).toBe(5300);
+    expect((await api('PATCH', `/api/v1/records/deal/${d.json.id}`, { stage_id: ids.won })).status).toBe(200);
+    const s = await api('POST', `/api/v1/deals/${d.json.id}/setup-billing`, { autoIssue: false });
+    expect(s.status, JSON.stringify(s.json)).toBe(200);
+    const proj = (await api('GET', `/api/v1/records/project/${s.json.projectId}`)).json;
+    expect(proj).toMatchObject({ currency: 'USD', billing_method: 'time_project_rate', budget_type: 'hours' });
+    expect(Number(proj.project_rate)).toBe(40);
+    expect(Number(proj.budget_hours)).toBe(120);
+    expect((await api('GET', `/api/v1/records/invoice/${s.json.invoiceId}`)).json.currency).toBe('USD');
   });
 });
 

@@ -153,8 +153,8 @@ export async function setMembers(ctx: RecordCtx, id: string, members: { userId: 
   const { project } = await projectAccess(ctx, id, 'manage');
   const ids = [...new Set(members.map((m) => m.userId))];
   if (ids.length !== members.length) throw badRequest('Each person once');
-  const users = await ctx.tx.query<{ id: string }>(`select id from users where tenant_id = $1 and id = any($2::uuid[]) and status = 'active'`, [ctx.tenantId, ids]);
-  if (users.length !== ids.length) throw badRequest('Add active people from this workspace');
+  const users = await ctx.tx.query<{ id: string }>(`select id from users where tenant_id = $1 and id = any($2::uuid[]) and status in ('active', 'invited')`, [ctx.tenantId, ids]);
+  if (users.length !== ids.length) throw badRequest('Add people from this workspace (active or invited)');
   const before = await ctx.tx.query<{ user_id: string }>(`select user_id from project_members where tenant_id = $1 and project_id = $2`, [ctx.tenantId, id]);
   await ctx.tx.query(`delete from project_members where tenant_id = $1 and project_id = $2`, [ctx.tenantId, id]);
   for (const m of members)

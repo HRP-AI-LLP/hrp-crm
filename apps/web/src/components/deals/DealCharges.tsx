@@ -1,10 +1,11 @@
 /**
- * Deal → Charges & billing: one-time and recurring charges (each priced before or including GST), the
+ * Deal → Charges & billing, in the deal's currency: one-time, hourly (rate × estimated hours) and recurring charges (each priced before or including GST), the
  * deal's value from them, and — once won — setting up the project, the invoice for the one-time charges
  * and the recurring invoices; then the invoices raised for the deal and price changes on its recurring
  * invoices.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { CURRENCIES } from '@synapse/shared';
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { get, post, put } from '../../lib/api';
@@ -13,7 +14,7 @@ import { Empty, Modal, useToast } from '../ui';
 
 type Json = Record<string, any>;
 interface Charge {
-  kind: 'one_time' | 'recurring';
+  kind: 'one_time' | 'recurring' | 'hourly';
   name: string;
   hsnSac: string | null;
   quantity: number;
@@ -38,12 +39,15 @@ export function DealCharges({ dealId, canEdit }: { dealId: string; canEdit: bool
   const [busy, setBusy] = useState(false);
   const [setup, setSetup] = useState(false);
   const [change, setChange] = useState<Json | null>(null);
+  const [currency, setCurrency] = useState('INR');
   useEffect(() => {
     if (q.data) {
       setRows(q.data.charges);
+      setCurrency(q.data.currency ?? 'INR');
       setDirty(false);
     }
   }, [q.data]);
+  const m = (n: unknown) => money2(n, currency);
   if (q.isLoading || !q.data) return null;
   const d = q.data;
   const locked = !canEdit || !!d.setup;
@@ -58,7 +62,7 @@ export function DealCharges({ dealId, canEdit }: { dealId: string; canEdit: bool
   const save = async () => {
     setBusy(true);
     try {
-      await put(`/api/v1/deals/${dealId}/charges`, { charges: rows.filter((r) => r.name.trim()).map((r) => ({ ...r, hsnSac: r.hsnSac || null, quantity: Number(r.quantity), unitPrice: Number(r.unitPrice), taxRate: Number(r.taxRate), periods: r.periods ? Number(r.periods) : null, startDate: r.startDate || null })) });
+      await put(`/api/v1/deals/${dealId}/charges`, { currency, charges: rows.filter((r) => r.name.trim()).map((r) => ({ ...r, hsnSac: r.hsnSac || null, quantity: Number(r.quantity), unitPrice: Number(r.unitPrice), taxRate: Number(r.taxRate), periods: r.periods ? Number(r.periods) : null, startDate: r.startDate || null })) });
       toast('Charges saved; the deal amount follows them');
       refresh();
     } catch (e) {
@@ -69,6 +73,8 @@ export function DealCharges({ dealId, canEdit }: { dealId: string; canEdit: bool
   };
   const oneTime = r2(rows.filter((r) => r.kind === 'one_time').reduce((a, r) => a + taxable(r), 0));
   const months = { monthly: 1, quarterly: 3, half_yearly: 6, yearly: 12 } as const;
+  const hourly = r2(rows.filter((r) => r.kind === 'hourly').reduce((a, r) => a + taxable(r), 0));
+  const hours = r2(rows.filter((r) => r.kind === 'hourly').reduce((a, r) => a + Number(r.quantity || 0), 0));
   const monthly = r2(rows.filter((r) => r.kind === 'recurring').reduce((a, r) => a + taxable(r) / months[r.frequency ?? 'monthly'], 0));
 
   return (
@@ -76,6 +82,26 @@ export function DealCharges({ dealId, canEdit }: { dealId: string; canEdit: bool
       <div className="panel-head">
         <h2>Charges &amp; billing</h2>
         <div className="row">
+          {locked ? (
+            <span className="chip">{currency}</span>
+          ) : (
+            <label className="row small" style={{ gap: 6 }}>
+              Currency
+              <select
+                aria-label="Currency"
+                style={{ width: 'auto' }}
+                value={currency}
+                onChange={(e) => {
+                  setCurrency(e.target.value);
+                  setDirty(true);
+                }}
+              >
+                {CURRENCIES.map((c) => (
+                  <option key={c}>{c}</option>
+                ))}
+              </select>
+            </label>
+          )}
           {!d.setup && d.won && rows.length > 0 && canEdit && !dirty && (
             <button className="btn primary sm" onClick={() => setSetup(true)}>
               Set up billing
@@ -93,11 +119,11 @@ export function DealCharges({ dealId, canEdit }: { dealId: string; canEdit: bool
                 <tr>
                   <th>Charge</th>
                   <th style={{ width: 90 }}>SAC/HSN</th>
-                  <th style={{ width: 70 }} className="num">
-                    Qty
+                  <th style={{ width: 80 }} className="num">
+                    Qty / hours
                   </th>
-                  <th style={{ width: 120 }} className="num">
-                    Price
+                  <th style={{ width: 130 }} className="num">
+                    Price / rate ({currency})
                   </th>
                   <th style={{ width: 80 }}>GST %</th>
                   <th style={{ width: 110 }}>Price is</th>
@@ -108,10 +134,10 @@ export function DealCharges({ dealId, canEdit }: { dealId: string; canEdit: bool
               <tbody>
                 {rows.map((r, i) => (
                   <tr key={i}>
-                    <td>{locked ? <b>{r.name}</b> : <input aria-label="Charge" value={r.name} placeholder={r.kind === 'recurring' ? 'e.g. Monthly maintenance' : 'e.g. Website development'} onChange={(e) => edit(i, { name: e.target.value })} />}</td>
+                    <td>{locked ? <b>{r.name}</b> : <input aria-label="Charge" value={r.name} placeholder={r.kind === 'recurring' ? 'e.g. Monthly maintenance' : r.kind === 'hourly' ? 'e.g. Development (per hour)' : 'e.g. Website development'} onChange={(e) => edit(i, { name: e.target.value })} />}</td>
                     <td>{locked ? r.hsnSac || '—' : <input aria-label="SAC" value={r.hsnSac ?? ''} onChange={(e) => edit(i, { hsnSac: e.target.value })} />}</td>
-                    <td className="num">{locked ? r.quantity : <input className="num" aria-label="Quantity" value={r.quantity} onChange={(e) => edit(i, { quantity: e.target.value as unknown as number })} />}</td>
-                    <td className="num">{locked ? money2(r.unitPrice) : <input className="num" aria-label="Price" value={r.unitPrice} onChange={(e) => edit(i, { unitPrice: e.target.value as unknown as number })} />}</td>
+                    <td className="num">{locked ? `${r.quantity}${r.kind === 'hourly' ? ' h' : ''}` : <input className="num" aria-label={r.kind === 'hourly' ? 'Hours (estimate)' : 'Quantity'} title={r.kind === 'hourly' ? 'Hours (estimate)' : undefined} value={r.quantity} onChange={(e) => edit(i, { quantity: e.target.value as unknown as number })} />}</td>
+                     <td className="num">{locked ? `${m(r.unitPrice)}${r.kind === 'hourly' ? '/h' : ''}` : <input className="num" aria-label={r.kind === 'hourly' ? 'Rate per hour' : 'Price'} value={r.unitPrice} onChange={(e) => edit(i, { unitPrice: e.target.value as unknown as number })} />}</td>
                     <td>
                       {locked ? (
                         `${r.taxRate}%`
@@ -138,6 +164,8 @@ export function DealCharges({ dealId, canEdit }: { dealId: string; canEdit: bool
                     <td>
                       {r.kind === 'one_time' ? (
                         'Once'
+                      ) : r.kind === 'hourly' ? (
+                        <span className="small">Per hour, from approved timesheets</span>
                       ) : locked ? (
                         <span className="small">
                           {FREQ[r.frequency ?? 'monthly']}
@@ -177,6 +205,9 @@ export function DealCharges({ dealId, canEdit }: { dealId: string; canEdit: bool
               <button className="btn sm" onClick={() => { setRows((rs) => [...rs, blank('one_time')]); setDirty(true); }}>
                 + One-time charge
               </button>
+              <button className="btn sm" onClick={() => { setRows((rs) => [...rs, blank('hourly')]); setDirty(true); }}>
+                + Hourly charge
+              </button>
               <button className="btn sm" onClick={() => { setRows((rs) => [...rs, blank('recurring')]); setDirty(true); }}>
                 + Recurring charge
               </button>
@@ -189,10 +220,15 @@ export function DealCharges({ dealId, canEdit }: { dealId: string; canEdit: bool
           )}
           <div className="row small" style={{ gap: 16 }}>
             <span>
-              One-time <b>{money2(oneTime)}</b>
+              One-time <b>{m(oneTime)}</b>
             </span>
+            {hourly > 0 && (
+              <span>
+                Hourly <b>{m(hourly)}</b> ({hours} h estimated)
+              </span>
+            )}
             <span>
-              Recurring <b>{money2(monthly)}</b>/month
+              Recurring <b>{m(monthly)}</b>/month
             </span>
             <span className="muted">before GST</span>
           </div>
@@ -247,8 +283,8 @@ export function DealCharges({ dealId, canEdit }: { dealId: string; canEdit: bool
                     </td>
                     <td>{date(i.invoice_date)}</td>
                     <td>{i.status.replace(/_/g, ' ')}</td>
-                    <td className="num">{money2(i.grand_total)}</td>
-                    <td className="num">{money2(i.balance_due)}</td>
+                    <td className="num">{m(i.grand_total)}</td>
+                    <td className="num">{m(i.balance_due)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -301,7 +337,8 @@ function SetupModal({ dealId, charges, onClose, onDone }: { dealId: string; char
     >
       <div className="modal-body stack">
         <label className="row" style={{ gap: 8 }}>
-          <input type="checkbox" checked={f.project} onChange={(e) => setF({ ...f, project: e.target.checked })} />A fixed-price project for the work
+          <input type="checkbox" checked={f.project} onChange={(e) => setF({ ...f, project: e.target.checked })} />
+          {charges.some((c) => c.kind === 'hourly') ? 'A project billed by the hour (from approved timesheets) at the deal’s rate' : 'A fixed-price project for the work'}
         </label>
         {oneTime.length > 0 && (
           <label className="row" style={{ gap: 8 }}>

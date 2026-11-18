@@ -1,6 +1,7 @@
 /**
- * What a deal is worth, charge by charge: one-time charges (a website build, a domain) and recurring
- * ones (monthly maintenance). The deal shows the one-time total, the recurring amount per month and an
+ * What a deal is worth, charge by charge, in the deal's currency: one-time charges (a website build, a
+ * domain), hourly ones (rate per hour × estimated hours, billed from timesheets) and recurring ones
+ * (monthly maintenance). The deal shows the one-time total, the recurring amount per month and an
  * amount of one-time + the first year of recurring. Once won, "Set up billing" creates in one go:
  *
  *  - a fixed-price project for the work (when the projects app is on),
@@ -18,7 +19,7 @@ import { createRecord, loadRow, type RecordCtx, type RecordEvent, updateRecord }
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 export const chargeSchema = z.object({
-  kind: z.enum(['one_time', 'recurring']),
+  kind: z.enum(['one_time', 'recurring', 'hourly']),
   productId: z.string().uuid().nullish(),
   name: z.string().trim().min(1).max(200),
   description: z.string().max(2000).nullish(),
@@ -45,7 +46,7 @@ const taxable = (c: { quantity: number; unitPrice: number; taxRate: number; taxI
 interface ChargeRow {
   id: string;
   position: number;
-  kind: 'one_time' | 'recurring';
+  kind: 'one_time' | 'recurring' | 'hourly';
   product_id: string | null;
   name: string;
   description: string | null;
@@ -97,7 +98,7 @@ export async function dealCharges(ctx: RecordCtx, dealId: string) {
       where tenant_id = $1 and deal_id = $2 and deleted_at is null order by invoice_date nulls last, created_at`,
     [ctx.tenantId, dealId],
   );
-  return { charges, totals: totalsOf(charges), setup, invoices, won: await isWon(ctx, row) };
+  return { charges, currency: String(row.currency ?? 'INR'), totals: totalsOf(charges), setup, invoices, won: await isWon(ctx, row) };
 }
 
 function totalsOf(charges: Pick<Charge, 'kind' | 'quantity' | 'unitPrice' | 'taxRate' | 'taxInclusive' | 'frequency' | 'periods'>[]) {
@@ -106,7 +107,10 @@ function totalsOf(charges: Pick<Charge, 'kind' | 'quantity' | 'unitPrice' | 'tax
   const monthly = r2(rec.reduce((a, c) => a + taxable(c) / MONTHS[c.frequency ?? 'monthly'], 0));
   // the first year of recurring, or the whole term when it is shorter
   const firstYear = r2(rec.reduce((a, c) => a + taxable(c) * Math.min(c.periods ?? Infinity, 12 / MONTHS[c.frequency ?? 'monthly']), 0));
-  return { oneTime, recurringMonthly: monthly, firstYearRecurring: firstYear, amount: r2(oneTime + firstYear) };
+  // hourly work: rate × the hours estimated (billed later from approved time)
+  const hours = charges.filter((c) => c.kind === 'hourly');
+  const hourly = r2(hours.reduce((a, c) => a + taxable(c), 0));
+  return { oneTime, hourly, hoursEstimated: r2(hours.reduce((a, c) => a + c.quantity, 0)), recurringMonthly: monthly, firstYearRecurring: firstYear, amount: r2(oneTime + hourly + firstYear) };
 }
 
 async function isWon(ctx: RecordCtx, row: Record<string, unknown>) {
@@ -114,8 +118,12 @@ async function isWon(ctx: RecordCtx, row: Record<string, unknown>) {
   return st?.category === 'won';
 }
 
-export async function saveDealCharges(ctx: RecordCtx, dealId: string, input: ChargeInput[]): Promise<RecordEvent[]> {
-  await loadRow(ctx, 'deal', dealId, 'update', true);
+export async function saveDealCharges(ctx: RecordCtx, dealId: string, input: ChargeInput[], currency?: string | null): Promise<RecordEvent[]> {
+  const { row } = await loadRow(ctx, 'deal', dealId, 'update', true);
+  if (currency && currency !== row.currency) {
+    if (row.billing_setup_at) throw badRequest('Billing is set up: the currency can no longer change');
+    await updateRecord(ctx, 'deal', dealId, { currency });
+  }
   if (input.length > 100) throw badRequest('A deal can have at most 100 charges');
   for (const c of input) if (c.kind === 'recurring' && !c.frequency) throw badRequest(`Choose how often “${c.name}” is billed`);
   await ctx.tx.query(`delete from deal_charges where tenant_id = $1 and deal_id = $2`, [ctx.tenantId, dealId]);
@@ -127,7 +135,7 @@ export async function saveDealCharges(ctx: RecordCtx, dealId: string, input: Cha
       [ctx.tenantId, dealId, pos++, c.kind, c.productId ?? null, c.name, c.description ?? null, c.hsnSac ?? null, c.quantity, c.unitPrice, c.taxRate, c.taxInclusive, c.kind === 'recurring' ? c.frequency : null, c.startDate ?? null, c.kind === 'recurring' ? (c.periods ?? null) : null],
     );
   const t = totalsOf(input.map((c) => ({ ...c, frequency: c.frequency ?? null, periods: c.periods ?? null })));
-  await ctx.tx.query(`update deals set one_time_total = $3, recurring_monthly = $4 where tenant_id = $1 and id = $2`, [ctx.tenantId, dealId, input.length ? t.oneTime : null, input.length ? t.recurringMonthly : null]);
+  await ctx.tx.query(`update deals set one_time_total = $3, recurring_monthly = $4 where tenant_id = $1 and id = $2`, [ctx.tenantId, dealId, input.length ? r2(t.oneTime + t.hourly) : null, input.length ? t.recurringMonthly : null]);
   if (!input.length) return [];
   // the deal amount follows its charges (one-time + the first year of recurring)
   const r = await updateRecord(ctx, 'deal', dealId, { amount: t.amount });
@@ -170,8 +178,10 @@ export async function setupDealBilling(ctx: RecordCtx, dealId: string, opts: z.i
   const out: { projectId: string | null; invoiceId: string | null; profileIds: string[] } = { projectId: null, invoiceId: null, profileIds: [] };
   const oneTime = charges.filter((c) => c.kind === 'one_time');
   const recurring = charges.filter((c) => c.kind === 'recurring');
+  const hourly = charges.filter((c) => c.kind === 'hourly');
   const t = totalsOf(charges);
-  const base = { account_id: deal.account_id, contact_id: deal.contact_id ?? null, deal_id: dealId };
+  const currency = String(deal.currency ?? 'INR');
+  const base = { account_id: deal.account_id, contact_id: deal.contact_id ?? null, deal_id: dealId, currency };
 
   if (opts.project && apps.has('projects')) {
     const existing = await ctx.tx.one<{ id: string }>(`select id from projects where tenant_id = $1 and deal_id = $2 and deleted_at is null limit 1`, [ctx.tenantId, dealId]);
@@ -181,11 +191,15 @@ export async function setupDealBilling(ctx: RecordCtx, dealId: string, opts: z.i
         name: String(deal.name),
         account_id: deal.account_id,
         deal_id: dealId,
-        billing_method: 'fixed_price',
+        // hourly charges: billed from approved time at the deal's rate; otherwise a fixed price
+        billing_method: hourly.length ? 'time_project_rate' : 'fixed_price',
+        project_rate: hourly.length ? (hourly[0]!.taxInclusive ? r2(hourly[0]!.unitPrice / (1 + hourly[0]!.taxRate / 100)) : hourly[0]!.unitPrice) : null,
+        ...(hourly.length ? { budget_type: 'hours', budget_hours: t.hoursEstimated } : {}),
+        currency,
         fixed_fee: t.oneTime || null,
         start_date: new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10),
-        tax_rate: oneTime[0]?.taxRate ?? recurring[0]?.taxRate ?? 18,
-        hsn_sac: oneTime[0]?.hsnSac ?? recurring[0]?.hsnSac ?? null,
+        tax_rate: oneTime[0]?.taxRate ?? hourly[0]?.taxRate ?? recurring[0]?.taxRate ?? 18,
+        hsn_sac: oneTime[0]?.hsnSac ?? hourly[0]?.hsnSac ?? recurring[0]?.hsnSac ?? null,
       });
       events.push(...p.events);
       out.projectId = String(p.record.id);
