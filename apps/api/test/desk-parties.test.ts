@@ -179,6 +179,23 @@ describe('one receipt for several invoices, or for the work', () => {
   });
 });
 
+describe('a government payment less TDS and GST TDS', () => {
+  it('settles the invoice in full with both deductions', async () => {
+    const acc = (await api('POST', '/api/v1/records/account', { name: 'Central Warehousing Corporation, Regional Office Noida', account_type: 'government' })).json.id;
+    const inv = (await api('POST', '/api/v1/records/invoice', { name: '30% milestone', account_id: acc })).json.id;
+    await api('PUT', `/api/v1/invoices/${inv}/lines`, { lines: [{ name: 'Development - Data Conversion', quantity: 1, unitPrice: 150000, taxRate: 18 }] });
+    expect((await api('POST', `/api/v1/invoices/${inv}/issue`)).status).toBe(200);
+    const docs = (await api('GET', '/api/v1/books/desk/open-documents')).json;
+    expect(docs.invoices.find((i: any) => i.id === inv)).toMatchObject({ taxable: 150000, total: 177000, government: true });
+    const line = 'NEFT Cr-SBIN0004266-CENTRAL WAREHOUSING CORP-HRP AI LLP-SBIN326314469999';
+    expect((await api('POST', `/api/v1/books/bank-accounts/${ids.yes}/statement`, { toDesk: true, rows: [{ date: daysAgo(1), description: line, amount: 171000 }] })).status).toBe(200);
+    const p = await forLine(line);
+    const r = await api('POST', `/api/v1/books/desk/proposals/${p.id}`, { decision: 'approve', change: { kind: 'receipt', allocations: [{ invoiceId: inv, amount: 177000 }], tdsAmount: 3000, gstTdsAmount: 3000 } });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect((await api('GET', `/api/v1/invoices/${inv}`)).json.invoice).toMatchObject({ status: 'paid' });
+  });
+});
+
 describe('lines that are not customers or vendors', () => {
   it('fixed deposit, account check, UPI collections, refund', async () => {
     expect((await forLine(L.fd)).payload.accountId).toBe((await api('GET', '/api/v1/books/accounts')).json.find((a: any) => a.system_key === 'fixed_deposits').id);

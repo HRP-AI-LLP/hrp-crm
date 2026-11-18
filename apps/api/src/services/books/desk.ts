@@ -1126,6 +1126,7 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
         return { result: { paymentId: pl.paymentId }, events: [] };
       }
       const tds = r2(Number(pl.tdsAmount ?? 0));
+      const gstTds = r2(Number(pl.gstTdsAmount ?? 0));
       const wanted: { invoiceId: string; amount: number | null }[] = (pl.allocations as { invoiceId: string; amount: number }[] | null)?.length
         ? (pl.allocations as { invoiceId: string; amount: number }[])
         : pl.invoiceId
@@ -1133,7 +1134,7 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
           : [];
       const allocations: { invoiceId: string; amount: number }[] = [];
       let customer: string | null = (pl.customerId as string | null) ?? null;
-      let left = r2(amt + tds);
+      let left = r2(amt + tds + gstTds);
       for (const w of wanted) {
         const inv = await ctx.tx.one<{ balance_due: number; account_id: string; status: string; invoice_number: string | null }>(
           `select balance_due::float8 as balance_due, account_id, status, invoice_number from invoices where tenant_id = $1 and id = $2 and deleted_at is null`,
@@ -1149,13 +1150,14 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
       if (!customer) throw badRequest('Choose the customer');
       const r = await recordPayment(ctx, {
         accountId: customer,
-        amount: r2(amt + tds),
+        amount: r2(amt + tds + gstTds),
         date,
         mode: 'bank_transfer',
         reference: (t.reference ?? t.description).slice(0, 60),
         notes: `Recorded by the accounts desk from the bank line of ${date}${left > 0 ? `; ${left} kept as an advance` : ''}`,
         depositAccountId: gl,
         tdsAmount: tds,
+        gstTdsAmount: gstTds,
         ...(allocations.length ? { allocations } : {}),
       });
       // what the payment (or its unapplied part) is for
@@ -1361,6 +1363,8 @@ export const decideSchema = z.object({
       billId: z.string().uuid().nullish(),
       lineId: z.string().uuid().nullish(),
       tdsAmount: z.number().min(0).nullish(),
+      /** receipt: GST TDS deducted by a government buyer (2% of the taxable value) */
+      gstTdsAmount: z.number().min(0).nullish(),
       narration: z.string().max(500).nullish(),
     })
     .nullish(),
@@ -1414,6 +1418,7 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
               dealId: c.dealId ?? null,
               paymentId: c.paymentId ?? null,
               tdsAmount: c.tdsAmount ?? 0,
+              gstTdsAmount: c.gstTdsAmount ?? 0,
             }
           : c.kind === 'vendor_payment'
             ? { billId: c.billId }
@@ -2324,7 +2329,8 @@ export async function openDocuments(ctx: RecordCtx) {
   // every invoice raised or imported (open ones first), with what it is for
   const invoices = await ctx.tx.query(
     `select i.id, i.invoice_number as number, i.account_id, coalesce(a.name, i.buyer_name, '') as party, to_char(i.invoice_date, 'YYYY-MM-DD') as date, i.status, i.currency,
-            i.grand_total::float8 as total, i.balance_due::float8 as balance, coalesce(i.subject, i.name) as subject, p.name as project, d.name as deal, rp.name as recurring,
+            i.grand_total::float8 as total, i.balance_due::float8 as balance, i.taxable_total::float8 as taxable, (a.account_type = 'government') as government,
+            coalesce(i.subject, i.name) as subject, p.name as project, d.name as deal, rp.name as recurring,
             (select string_agg(pay.id::text || ':' || coalesce(pay.payment_number, ''), ',') from payment_allocations pa join payments pay on pay.tenant_id = pa.tenant_id and pay.id = pa.payment_id
               where pa.tenant_id = i.tenant_id and pa.invoice_id = i.id and pay.status <> 'void'
                 and not exists (select 1 from journal_lines l join journals j on j.tenant_id = l.tenant_id and j.id = l.journal_id
@@ -2340,8 +2346,14 @@ export async function openDocuments(ctx: RecordCtx) {
   const projects = await ctx.tx.query(`select id, name, account_id from projects where tenant_id = $1 and deleted_at is null order by name limit 500`, [ctx.tenantId]);
   const contracts = await ctx.tx.query(`select id, contract_number as number, name, account_id from service_contracts where tenant_id = $1 and status in ('active','draft') order by name limit 500`, [ctx.tenantId]);
   const deals = await ctx.tx.query(`select id, name, account_id from deals where tenant_id = $1 and deleted_at is null order by updated_at desc limit 500`, [ctx.tenantId]);
+  // invoices read from files but not yet approved into the books (Accounts desk → Import invoices)
+  const pending = await ctx.tx.one<{ n: number; customers: string | null }>(
+    `select count(*)::int as n, string_agg(distinct data -> 'customer' ->> 'name', ', ') as customers from doc_import_items where tenant_id = $1 and status in ('pending','failed')`,
+    [ctx.tenantId],
+  );
   return {
     invoices,
+    pendingImports: pending,
     bills: b.bills.map((x) => ({ id: x.id, number: x.bill_number ?? x.vendor_ref, party: x.vendor, date: x.bill_date, balance: x.balance_due })),
     projects,
     contracts,

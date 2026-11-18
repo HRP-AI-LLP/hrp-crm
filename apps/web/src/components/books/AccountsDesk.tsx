@@ -433,6 +433,7 @@ interface Receipt {
   /** what the unapplied money is for: 'project:<id>', 'contract:<id>', 'deal:<id>' */
   target: string;
   tds: string;
+  gstTds: string;
 }
 
 function receiptChange(rc: Receipt, docs: Json | undefined) {
@@ -447,6 +448,7 @@ function receiptChange(rc: Receipt, docs: Json | undefined) {
     allocations,
     customerId,
     tdsAmount: Number(rc.tds) || 0,
+    gstTdsAmount: Number(rc.gstTds) || 0,
     projectId: tt === 'project' ? tid : null,
     contractId: tt === 'contract' ? tid : null,
     dealId: tt === 'deal' ? tid : null,
@@ -463,13 +465,39 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
   const [showPaid, setShowPaid] = useState(false);
   const inv = (docs?.invoices ?? []) as Json[];
   const chosenCustomer = value.customerId || inv.find((x) => value.alloc[x.id] !== undefined)?.account_id || '';
+  // the same customer may be on file twice ("Food Corporation of India" and "Food Corporation of India, Zonal Office (North)")
+  const key = (n: string) =>
+    n
+      .toLowerCase()
+      .replace(/\b(the|of|and|ltd|limited|pvt|private|llp|india|inc)\b/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .split(' ')
+      .filter((w) => w.length >= 3)
+      .slice(0, 2)
+      .join(' ');
+  const chosenName = customers.find((c) => c.id === chosenCustomer)?.name ?? inv.find((x) => x.account_id === chosenCustomer)?.party ?? '';
   const match = (x: Json) => !q || `${x.number ?? ''} ${x.party} ${x.subject ?? ''} ${x.project ?? ''} ${x.deal ?? ''} ${x.recurring ?? ''}`.toLowerCase().includes(q.toLowerCase());
-  const mine = (x: Json) => !chosenCustomer || x.account_id === chosenCustomer;
+  const mine = (x: Json) => !chosenCustomer || x.account_id === chosenCustomer || (!!key(chosenName) && key(String(x.party)) === key(chosenName));
   const open = inv.filter((x) => ['issued', 'partially_paid'].includes(x.status) && x.balance > 0 && mine(x) && match(x));
   const paid = inv.filter((x) => x.status === 'paid' && x.unbanked && mine(x) && match(x));
   const drafts = inv.filter((x) => x.status === 'draft' && mine(x) && match(x));
   const applied = Object.entries(value.alloc).reduce((a, [id, v]) => a + (Number(v) || Number(inv.find((x) => x.id === id)?.balance ?? 0)), 0);
-  const total = amount + (Number(value.tds) || 0);
+  const total = amount + (Number(value.tds) || 0) + (Number(value.gstTds) || 0);
+  // short of the invoices by what a government buyer deducts: TDS (1%, 2% or 10%) and GST TDS (2%) on the taxable value
+  const picked = inv.filter((x) => value.alloc[x.id] !== undefined);
+  const due = picked.reduce((a, x) => a + x.balance, 0);
+  const taxable = picked.reduce((a, x) => a + (x.taxable ?? 0), 0);
+  const short = Math.round((due - amount) * 100) / 100;
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const fits: { label: string; tds: number; gst: number }[] = [];
+  if (short > 0.5 && taxable > 0)
+    for (const t of [0, 0.01, 0.02, 0.1])
+      for (const g of [0, 0.02]) {
+        const tds = r2(taxable * t);
+        const gst = r2(taxable * g);
+        if ((tds || gst) && Math.abs(tds + gst - short) <= 1) fits.push({ label: [tds ? `TDS ${t * 100}% (${money2(tds)})` : null, gst ? `GST TDS 2% (${money2(gst)})` : null].filter(Boolean).join(' + '), tds, gst });
+      }
   const rest = Math.round((total - applied) * 100) / 100;
   const toggle = (x: Json, on: boolean) => {
     const next = { ...value.alloc };
@@ -556,12 +584,33 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
           })}
         </details>
       )}
+      {fits.length > 0 && !value.paymentId && (
+        <div className="small" style={{ background: 'var(--panel-2, #f4f6fb)', padding: 8, borderRadius: 6 }}>
+          The bank line is {money2(short)} less than the invoice{picked.length > 1 ? 's' : ''}: that is exactly{' '}
+          {fits.map((f, i) => (
+            <button
+              key={i}
+              className="btn sm"
+              style={{ marginLeft: 4 }}
+              onClick={() => onChange({ ...value, tds: String(f.tds), gstTds: String(f.gst), alloc: Object.fromEntries(picked.map((x) => [x.id, String(x.balance)])) })}
+            >
+              {f.label} deducted
+            </button>
+          ))}
+        </div>
+      )}
+      {(docs?.pendingImports?.n ?? 0) > 0 && (
+        <div className="small" style={{ color: 'var(--warn)' }}>
+          {docs!.pendingImports.n} imported invoice(s){docs!.pendingImports.customers ? ` (${docs!.pendingImports.customers})` : ''} are still waiting for approval in Accounts desk → Import invoices: approve them to see them here.
+        </div>
+      )}
       {drafts.length > 0 && <div className="small muted">{drafts.length} draft invoice(s) are not shown: issue them first (Invoices) to apply money to them.</div>}
       {!value.paymentId && (
         <>
           <div className="small">
             Bank line {money2(amount)}
-            {Number(value.tds) ? ` + TDS ${money2(Number(value.tds))}` : ''} · applied to invoices {money2(applied)} ·{' '}
+            {Number(value.tds) ? ` + TDS ${money2(Number(value.tds))}` : ''}
+            {Number(value.gstTds) ? ` + GST TDS ${money2(Number(value.gstTds))}` : ''} · applied to invoices {money2(applied)} ·{' '}
             {rest > 0.004 ? <b>{money2(rest)} left as an advance</b> : rest < -0.004 ? <b style={{ color: 'var(--bad)' }}>{money2(-rest)} more than received</b> : 'all applied'}
           </div>
           {(rest > 0.004 || !Object.keys(value.alloc).length) && (
@@ -577,10 +626,16 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
               </select>
             </label>
           )}
-          <label className="field">
-            TDS deducted by the customer (if any)
-            <input type="number" min={0} step="0.01" value={value.tds} onChange={(e) => onChange({ ...value, tds: e.target.value })} />
-          </label>
+          <div className="grid2">
+            <label className="field">
+              TDS deducted by the customer
+              <input type="number" min={0} step="0.01" value={value.tds} onChange={(e) => onChange({ ...value, tds: e.target.value })} />
+            </label>
+            <label className="field">
+              GST TDS deducted (government buyers)
+              <input type="number" min={0} step="0.01" value={value.gstTds} onChange={(e) => onChange({ ...value, gstTds: e.target.value })} />
+            </label>
+          </div>
         </>
       )}
     </div>
@@ -620,7 +675,7 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
     personName: p.kind === 'new_party' && !p.payload?.partyId ? (p.payload.name ?? '') : '',
     personRole: 'partner',
   });
-  const [rc, setRc] = useState<Receipt>({ customerId: '', alloc: p.payload?.invoiceId ? { [p.payload.invoiceId]: '' } : {}, paymentId: '', target: '', tds: String(p.payload?.tdsAmount ?? 0) });
+  const [rc, setRc] = useState<Receipt>({ customerId: '', alloc: p.payload?.invoiceId ? { [p.payload.invoiceId]: '' } : {}, paymentId: '', target: '', tds: String(p.payload?.tdsAmount ?? 0), gstTds: '0' });
   const [rule, setRule] = useState(false);
   const [ruleText_, setRuleText] = useState(ruleText(p.description, p.counterparty));
   const [busy, setBusy] = useState(false);
