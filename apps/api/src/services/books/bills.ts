@@ -117,7 +117,7 @@ export async function recomputeBill(ctx: RecordCtx, id: string) {
   const tds = r2((taxable * tdsRate) / 100);
   await ctx.tx.query(
     `update bills set subtotal = $3, discount_total = $4, taxable_total = $5, cgst_total = $6, sgst_total = $7, igst_total = $8, tax_total = $9, round_off = $10, grand_total = $11,
-            tds_rate = $12, tds_amount = $13, supply_type = coalesce(nullif(supply_type, 'import'), $14), pos_code = $15, max_discount_pct = $16
+            tds_rate = $12, tds_amount = $13, supply_type = case when supply_type = 'import' then 'import' else coalesce(supply_type, $14) end, pos_code = $15, max_discount_pct = $16
       where tenant_id = $1 and id = $2`,
     [ctx.tenantId, id, subtotal, r2(subtotal - taxable), taxable, r2(cgst), r2(sgst), r2(igst), tax, r2(total - exact), total, tdsRate, tds, type, ours, Math.max(0, ...lines.map((l) => Number(l.discount_pct)))],
   );

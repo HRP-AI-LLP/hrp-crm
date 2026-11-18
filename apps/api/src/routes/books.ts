@@ -338,8 +338,19 @@ export const booksRoutes = new Hono<AppEnv>()
   })
   .post('/books/bank-accounts', async (c) => {
     requireAdmin(c);
-    const b = z.object({ name: z.string().trim().min(1).max(150), kind: z.enum(['bank', 'cash', 'credit_card', 'wallet']), bankName: z.string().max(120).nullish(), last4: z.string().regex(/^\d{4}$/).nullish(), ifsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/).nullish(), code: z.string().regex(/^[A-Za-z0-9.\-]{1,20}$/).nullish() }).parse(await c.req.json());
+    const b = z.object({ name: z.string().trim().min(1).max(150), kind: z.enum(['bank', 'cash', 'credit_card', 'wallet']), bankName: z.string().max(120).nullish(), last4: z.string().regex(/^\d{4}$/).nullish(), ifsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/).nullish(), code: z.string().regex(/^[A-Za-z0-9.\-]{1,20}$/).nullish() }).merge(bank.cardFields).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => bank.createBankAccount(rctx(c, tx), b)), 201);
+  })
+  .put('/books/bank-accounts/:id', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ bankName: z.string().max(120).nullish(), last4: z.string().regex(/^\d{4}$/).nullish(), ifsc: z.string().regex(/^[A-Z]{4}0[A-Z0-9]{6}$/).nullish() }).merge(bank.cardFields).parse(await c.req.json());
+    await c.var.db.tx(scope(c), (tx) => bank.updateBankAccount(rctx(c, tx), qUuid(c), b));
+    return c.json({ ok: true });
+  })
+  .post('/books/bank-accounts/:id/settle', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ amount: z.number().positive().max(1e10), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), note: z.string().max(300).nullish() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => bank.settlePersonalCard(rctx(c, tx), qUuid(c), b)));
   })
   .post('/books/bank-accounts/:id/statement', async (c) => {
     requireAdmin(c);

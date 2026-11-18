@@ -78,7 +78,12 @@ const words = (h: unknown) =>
     .filter(Boolean);
 
 /** Finds the header row and reads the lines below it. */
-export function linesFromRows(rows: unknown[][]): StatementLine[] {
+/**
+ * Card statements read the other way round: an amount with no sign is a purchase (what the card owes
+ * goes up, written as a minus here as for money leaving a bank account); "Cr", a minus or brackets mark
+ * a payment or refund to the card.
+ */
+export function linesFromRows(rows: unknown[][], opts: { card?: boolean } = {}): StatementLine[] {
   let hi = -1;
   for (let i = 0; i < Math.min(rows.length, 60); i++) {
     const ws = (rows[i] ?? []).map(words);
@@ -108,7 +113,12 @@ export function linesFromRows(rows: unknown[][]): StatementLine[] {
     const date = toIsoDate(r[cDate]);
     if (!date) continue;
     let amount = cAmt >= 0 ? num(r[cAmt]) : num(r[cCr]) - Math.abs(num(r[cDr]));
-    if (cAmt >= 0 && cType >= 0 && /^d/i.test(String(r[cType] ?? '').trim())) amount = -Math.abs(amount);
+    if (cAmt >= 0 && cType >= 0) amount = /^d/i.test(String(r[cType] ?? '').trim()) ? -Math.abs(amount) : opts.card && /^c/i.test(String(r[cType] ?? '').trim()) ? Math.abs(amount) : amount;
+    if (opts.card && cAmt >= 0 && cType < 0) {
+      const raw = String(r[cAmt] ?? '').trim();
+      const credit = typeof r[cAmt] === 'number' ? Number(r[cAmt]) < 0 : /\bcr\.?$/i.test(raw) || /^-|^\(.*\)$/.test(raw);
+      amount = credit ? Math.abs(amount) : -Math.abs(amount);
+    }
     if (!amount) continue;
     out.push({
       date,
@@ -125,23 +135,23 @@ import { pdfItems, rowsFromItems } from './statement-pdf';
 export { PdfPasswordError } from './statement-pdf';
 
 /** Reads a statement file (CSV, TSV, TXT, XLS, XLSX or PDF; a protected PDF needs its password). */
-export async function readStatementFile(file: File, opts: { password?: string } = {}): Promise<StatementLine[]> {
+export async function readStatementFile(file: File, opts: { password?: string; card?: boolean } = {}): Promise<StatementLine[]> {
   if (/\.pdf$/i.test(file.name) || file.type === 'application/pdf') {
     const pages = await pdfItems(await file.arrayBuffer(), opts.password);
     if (!pages.some((p) => p.some((i) => i.str.trim()))) throw new Error('This PDF has no text (a scanned statement); download the PDF, Excel or CSV statement from net banking instead');
-    return linesFromRows(rowsFromItems(pages));
+    return linesFromRows(rowsFromItems(pages), opts);
   }
   if (/\.(xlsx?|xlsm)$/i.test(file.name)) {
     const XLSX = await import('xlsx');
     const wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellDates: true });
     for (const name of wb.SheetNames) {
       const rows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name]!, { header: 1, raw: true, defval: '' });
-      const lines = linesFromRows(rows);
+      const lines = linesFromRows(rows, opts);
       if (lines.length) return lines;
     }
     return [];
   }
-  return linesFromRows(csvRows(await file.text()));
+  return linesFromRows(csvRows(await file.text()), opts);
 }
 
 /**

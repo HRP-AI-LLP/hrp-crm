@@ -7,6 +7,7 @@
  * excluded. Reconciling marks ledger lines as cleared up to a statement date and only completes
  * when the cleared balance equals the statement's closing balance.
  */
+import { z } from 'zod';
 import { badRequest, notFound } from '../../lib/errors';
 import { sha256Hex } from '../../lib/crypto';
 import type { RecordCtx } from '../records';
@@ -33,6 +34,8 @@ export async function listBankAccounts(ctx: RecordCtx) {
   );
   return ctx.tx.query(
     `select b.id, b.gl_account_id, b.kind, b.bank_name, b.account_last4, b.ifsc, b.is_active, b.last_statement_date, a.name, a.code,
+            b.holder, b.person_id, (select p.name from acct_persons p where p.tenant_id = b.tenant_id and p.id = b.person_id) as person_name, b.card_network,
+            b.credit_limit::float8 as credit_limit, b.statement_day, b.due_day, b.card_label,
             coalesce((select sum(l.debit - l.credit) from journal_lines l where l.tenant_id = b.tenant_id and l.account_id = b.gl_account_id and l.posted), 0)::float8 as book_balance,
             coalesce((select sum(l.debit - l.credit) from journal_lines l where l.tenant_id = b.tenant_id and l.account_id = b.gl_account_id and l.posted and l.reconciliation_id is not null), 0)::float8 as cleared_balance,
             (select count(*)::int from bank_transactions t where t.tenant_id = b.tenant_id and t.bank_account_id = b.id and t.status = 'unmatched') as unmatched,
@@ -44,15 +47,97 @@ export async function listBankAccounts(ctx: RecordCtx) {
   );
 }
 
-export async function createBankAccount(ctx: RecordCtx, input: { name: string; kind: 'bank' | 'cash' | 'credit_card' | 'wallet'; bankName?: string | null; last4?: string | null; ifsc?: string | null; code?: string | null }) {
+export const cardFields = z.object({
+  holder: z.enum(['company', 'personal']).optional(),
+  personId: z.string().uuid().nullish(),
+  network: z.enum(['visa', 'mastercard', 'rupay', 'amex', 'diners', 'discover', 'other']).nullish(),
+  creditLimit: z.number().min(0).max(1e10).nullish(),
+  statementDay: z.number().int().min(1).max(31).nullish(),
+  dueDay: z.number().int().min(1).max(31).nullish(),
+  label: z.string().trim().max(120).nullish(),
+});
+export type CardFields = z.infer<typeof cardFields>;
+
+async function checkHolder(ctx: RecordCtx, input: CardFields) {
+  if (input.holder === 'personal' && !input.personId) throw badRequest('A personal card belongs to a partner or director: choose whose');
+  if (input.personId && !(await ctx.tx.one(`select 1 from acct_persons where tenant_id = $1 and id = $2`, [ctx.tenantId, input.personId]))) throw badRequest('That person is not set up under Own accounts');
+}
+
+export async function createBankAccount(
+  ctx: RecordCtx,
+  input: { name: string; kind: 'bank' | 'cash' | 'credit_card' | 'wallet'; bankName?: string | null; last4?: string | null; ifsc?: string | null; code?: string | null } & CardFields,
+) {
   const subtype = input.kind === 'cash' ? 'cash' : input.kind === 'credit_card' ? 'credit_card' : 'bank';
   const type = input.kind === 'credit_card' ? 'liability' : 'asset';
+  await checkHolder(ctx, input);
   if (await ctx.tx.one(`select 1 from gl_accounts where tenant_id = $1 and lower(name) = lower($2)`, [ctx.tenantId, input.name])) throw badRequest('An account with this name already exists');
   const a = await ctx.tx.one<{ id: string }>(`insert into gl_accounts (tenant_id, code, name, type, subtype) values ($1,$2,$3,$4,$5) returning id`, [ctx.tenantId, input.code ?? null, input.name, type, subtype]);
-  const b = await ctx.tx.one<{ id: string }>(`insert into bank_accounts (tenant_id, gl_account_id, kind, bank_name, account_last4, ifsc) values ($1,$2,$3,$4,$5,$6) returning id`, [
-    ctx.tenantId, a!.id, input.kind, input.bankName ?? null, input.last4 ?? null, input.ifsc ?? null,
-  ]);
+  const b = await ctx.tx.one<{ id: string }>(
+    `insert into bank_accounts (tenant_id, gl_account_id, kind, bank_name, account_last4, ifsc, holder, person_id, card_network, credit_limit, statement_day, due_day, card_label)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
+    [
+      ctx.tenantId, a!.id, input.kind, input.bankName ?? null, input.last4 ?? null, input.ifsc ?? null, input.holder ?? 'company', input.personId ?? null, input.network ?? null,
+      input.creditLimit ?? null, input.statementDay ?? null, input.dueDay ?? null, input.label ?? null,
+    ],
+  );
   return { id: b!.id, glAccountId: a!.id };
+}
+
+/** A bank account or card's details (holder, last four digits, network, limit, statement and due days). */
+export async function updateBankAccount(ctx: RecordCtx, id: string, input: CardFields & { bankName?: string | null; last4?: string | null; ifsc?: string | null }) {
+  await checkHolder(ctx, input);
+  const r = await ctx.tx.one(
+    `update bank_accounts set bank_name = case when $3::boolean then $4 else bank_name end, account_last4 = case when $5::boolean then $6 else account_last4 end,
+            ifsc = case when $7::boolean then $8 else ifsc end, holder = coalesce($9, holder), person_id = case when $10::boolean then $11::uuid else person_id end,
+            card_network = case when $12::boolean then $13 else card_network end, credit_limit = case when $14::boolean then $15::numeric else credit_limit end,
+            statement_day = case when $16::boolean then $17::smallint else statement_day end, due_day = case when $18::boolean then $19::smallint else due_day end,
+            card_label = case when $20::boolean then $21 else card_label end
+      where tenant_id = $1 and id = $2 returning id`,
+    [
+      ctx.tenantId, id, input.bankName !== undefined, input.bankName ?? null, input.last4 !== undefined, input.last4 ?? null, input.ifsc !== undefined, input.ifsc ?? null, input.holder ?? null,
+      input.personId !== undefined, input.personId ?? null, input.network !== undefined, input.network ?? null, input.creditLimit !== undefined, input.creditLimit ?? null,
+      input.statementDay !== undefined, input.statementDay ?? null, input.dueDay !== undefined, input.dueDay ?? null, input.label !== undefined, input.label ?? null,
+    ],
+  );
+  if (!r) throw notFound('Account not found');
+  await ctx.tx.query(`update bank_accounts set person_id = null where tenant_id = $1 and id = $2 and holder = 'company'`, [ctx.tenantId, id]);
+}
+
+/** The card that paid, by the last four digits a receipt shows (cards first). */
+export async function cardByLast4(ctx: RecordCtx, last4: string | null | undefined) {
+  if (!last4 || !/^\d{4}$/.test(last4)) return null;
+  return ctx.tx.one<{ id: string; gl_account_id: string; name: string; holder: string; person_name: string | null }>(
+    `select b.id, b.gl_account_id, a.name, b.holder, (select p.name from acct_persons p where p.tenant_id = b.tenant_id and p.id = b.person_id) as person_name
+       from bank_accounts b join gl_accounts a on a.tenant_id = b.tenant_id and a.id = b.gl_account_id
+      where b.tenant_id = $1 and b.account_last4 = $2 and b.is_active order by (b.kind = 'credit_card') desc limit 1`,
+    [ctx.tenantId, last4],
+  );
+}
+
+/**
+ * A partner paid their personal card's bill themselves: what the business owes on the card becomes
+ * money the business owes that partner (their account), so the card's balance only shows what is unpaid.
+ */
+export async function settlePersonalCard(ctx: RecordCtx, id: string, input: { amount: number; date: string; note?: string | null }) {
+  const b = await ctx.tx.one<{ gl_account_id: string; holder: string; person_id: string | null; name: string }>(
+    `select b.gl_account_id, b.holder, b.person_id, a.name from bank_accounts b join gl_accounts a on a.tenant_id = b.tenant_id and a.id = b.gl_account_id where b.tenant_id = $1 and b.id = $2`,
+    [ctx.tenantId, id],
+  );
+  if (!b) throw notFound('Card not found');
+  if (b.holder !== 'personal' || !b.person_id) throw badRequest('Only a personal card is settled to its holder');
+  if (!(input.amount > 0)) throw badRequest('Enter the amount the holder paid');
+  const p = await ctx.tx.one<{ account_in: string; name: string }>(`select account_in, name from acct_persons where tenant_id = $1 and id = $2`, [ctx.tenantId, b.person_id]);
+  if (!p) throw badRequest('The card holder is no longer set up');
+  const jid = await postJournal(ctx.tx, ctx.tenantId, {
+    date: input.date,
+    sourceType: 'manual',
+    narration: input.note || `${p.name} paid the business spend on ${b.name}`,
+    lines: [
+      { accountId: b.gl_account_id, debit: input.amount, description: `Paid by ${p.name}` },
+      { accountId: p.account_in, credit: input.amount, description: `Card ${b.name}` },
+    ],
+  });
+  return { journalId: jid };
 }
 
 export interface StatementRow {

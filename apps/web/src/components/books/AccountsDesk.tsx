@@ -4,7 +4,7 @@
  * found, the month-end close, and where bank transactions come from (statements and live feeds).
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { del, get, patch, post, put } from '../../lib/api';
 import { date, money2 } from '../../lib/format';
@@ -1150,10 +1150,11 @@ function Sources() {
   const target = bankId || bankList[0]?.id || '';
   const refresh = () => qc.invalidateQueries({ queryKey: ['books'] });
 
-  const read = async (file: File, password?: string): Promise<StatementFile> => {
+  const isCard = bankList.find((b) => b.id === target)?.kind === 'credit_card';
+  const read = async (file: File, password?: string, card = isCard): Promise<StatementFile> => {
     try {
-      const lines = await readStatementFile(file, { password });
-      return lines.length ? { file, lines } : { file, error: 'No transactions found (no header row with Date, Narration and Debit / Credit or Amount)' };
+      const lines = await readStatementFile(file, { password, card });
+      return lines.length ? { file, lines, password, card } : { file, error: 'No transactions found (no header row with Date, Narration and Debit / Credit or Amount)' };
     } catch (e) {
       if (e instanceof PdfPasswordError) return { file, locked: true, error: e.wrong ? 'Wrong password, try again' : undefined };
       return { file, error: (e as Error).message };
@@ -1168,6 +1169,19 @@ function Sources() {
     setFiles((cur) => [...cur.filter((c) => !got.some((g) => g.file.name === c.file.name)), ...got]);
     setBusy(false);
   };
+  // a card's statement reads its amounts the other way round: read the files again when the account changes
+  useEffect(() => {
+    if (!files.some((f) => f.lines && !!f.card !== isCard)) return;
+    let live = true;
+    (async () => {
+      const again = await Promise.all(files.map((f) => (f.lines && !!f.card !== isCard ? read(f.file, f.password, isCard) : Promise.resolve(f))));
+      if (live) setFiles(again);
+    })();
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCard]);
   const unlock = async (f: StatementFile, password: string) => {
     const r = await read(f.file, password);
     setFiles((cur) => cur.map((c) => (c.file === f.file ? r : c)));
@@ -1416,6 +1430,8 @@ function Sources() {
 
 interface StatementFile {
   file: File;
+  password?: string;
+  card?: boolean;
   lines?: StatementLine[];
   locked?: boolean;
   error?: string;

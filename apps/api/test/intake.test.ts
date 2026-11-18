@@ -22,9 +22,10 @@ const VENDOR_GSTIN = '09ABCDE1234F1Z5';
 const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b)).replace(/.{76}/g, '$&\r\n');
 let invoicePdf: Uint8Array = new Uint8Array();
 
-function mail(o: { id: string; from: string; subject: string; html?: string; text?: string; pdf?: { name: string; bytes: Uint8Array }; date?: string }) {
+function mail(o: { id: string; from: string; subject: string; html?: string; text?: string; pdf?: { name: string; bytes: Uint8Array }; pdfs?: { name: string; bytes: Uint8Array }[]; date?: string }) {
   const head = [`Message-ID: <${o.id}>`, `Date: ${o.date ?? 'Tue, 17 Nov 2026 15:51:20 +0530'}`, `From: ${o.from}`, 'To: harsha.rani@hrpai.in', `Subject: ${o.subject}`, 'MIME-Version: 1.0'];
-  if (!o.pdf) return [...head, 'Content-Type: text/html; charset=utf-8', 'Content-Transfer-Encoding: quoted-printable', '', (o.html ?? '').replace(/=/g, '=3D'), ''].join('\r\n');
+  const files = o.pdfs ?? (o.pdf ? [o.pdf] : []);
+  if (!files.length) return [...head, 'Content-Type: text/html; charset=utf-8', 'Content-Transfer-Encoding: quoted-printable', '', (o.html ?? '').replace(/=/g, '=3D'), ''].join('\r\n');
   return [
     ...head,
     'Content-Type: multipart/mixed; boundary="XYZ"',
@@ -33,12 +34,7 @@ function mail(o: { id: string; from: string; subject: string; html?: string; tex
     'Content-Type: text/plain; charset=utf-8',
     '',
     o.text ?? 'Please find the invoice attached.',
-    '--XYZ',
-    `Content-Type: application/pdf; name="${o.pdf.name}"`,
-    'Content-Transfer-Encoding: base64',
-    `Content-Disposition: attachment; filename="${o.pdf.name}"`,
-    '',
-    b64(o.pdf.bytes),
+    ...files.flatMap((f) => ['--XYZ', `Content-Type: application/pdf; name="${f.name}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${f.name}"`, '', b64(f.bytes)]),
     '--XYZ--',
     '',
   ].join('\r\n');
@@ -412,5 +408,117 @@ describe('a followed bid read from GeM', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('a foreign invoice and its card receipt, approved', () => {
+  async function doc(rows: [string, string?][]) {
+    const d = await PDFDocument.create();
+    const p = d.addPage([595, 842]);
+    const f = await d.embedFont(StandardFonts.Helvetica);
+    rows.forEach(([a, b], i) => {
+      if (a) p.drawText(a, { x: 40, y: 800 - i * 18, size: 10, font: f });
+      if (b) p.drawText(b, { x: 330, y: 800 - i * 18, size: 10, font: f });
+    });
+    return d.save();
+  }
+  const head: [string, string?][] = [
+    ['Anthropic, PBC', 'Bill to'],
+    ['548 Market Street', 'HRP AI LLP'],
+    ['San Francisco, California 94104', 'Noida, Uttar Pradesh'],
+    ['United States', 'India'],
+    ['support@anthropic.com', `IN GST ${OWN_GSTIN}`],
+    ['India GST 9924USA29003OSI'],
+  ];
+  const items: [string, string?][] = [
+    ['Description    Qty    Unit price    Tax    Amount'],
+    ['Claude Max    1    $100.00    0%    $100.00'],
+    ['Nov 11 - Dec 11, 2026'],
+    ['Subtotal', '$100.00'],
+    ['Total', '$100.00'],
+  ];
+
+  it('reads the dollars, the full number, the date, the card; posts the bill under reverse charge and the payment through the card', async () => {
+    const invoice = await doc([['Invoice'], ['Invoice number', 'F13F9483-0019'], ['Date of issue', 'November 12, 2026'], ...head, ['$100.00 due November 12, 2026'], ...items, ['Amount due', '$100.00'], ['HSN Code: 998315']]);
+    const receipt = await doc([
+      ['Receipt'], ['Invoice number', 'F13F9483-0019'], ['Receipt number', '2910-9849-3879'], ['Date paid', 'November 12, 2026'], ['Payment method', 'Visa - 9814'], ...head,
+      ['$96.40 paid on November 12, 2026'], ...items, ['Applied balance', '-$3.60'], ['Amount paid', '$96.40'],
+    ]);
+    // the books are on, and the company's Visa card ending 9814 is set up
+    expect((await api('PUT', '/api/v1/books/settings', { enabled: true, booksOfRecord: 'synapse', startDate: '2026-04-01' })).status).toBe(200);
+    const card = await api('POST', '/api/v1/books/bank-accounts', { name: 'HDFC Visa 9814', kind: 'credit_card', bankName: 'HDFC Bank', last4: '9814', network: 'visa', creditLimit: 500000, statementDay: 18, dueDay: 7 });
+    expect(card.status, JSON.stringify(card.json)).toBe(201);
+    const banks = (await api('GET', '/api/v1/books/bank-accounts')).json as any[];
+    expect(banks.find((b) => b.id === card.json.id)).toMatchObject({ holder: 'company', card_network: 'visa', credit_limit: 500000, statement_day: 18, due_day: 7 });
+
+    messages.push({ uid: Math.max(...messages.map((m) => m.uid)) + 1, raw: mail({ id: 'rcpt-1@stripe.com', from: 'Anthropic, PBC <invoice+statements@mail.anthropic.com>', subject: 'Your receipt from Anthropic, PBC #2910-9849-3879', pdfs: [{ name: 'Invoice-F13F9483-0019.pdf', bytes: invoice }, { name: 'Receipt-2910-9849-3879.pdf', bytes: receipt }] }) });
+    expect((await api('POST', `/api/v1/intake/mailboxes/${ids.mb}/sync`)).json.taken).toBeGreaterThan(0);
+    const item = ((await api('GET', '/api/v1/intake/items?kind=docs')).json as any[]).find((i) => /Anthropic/.test(i.subject));
+    expect(item.attachments).toHaveLength(2);
+
+    const real = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any, init?: any) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (url.startsWith('https://api.frankfurter.dev/v1/2026-11-12?base=USD&symbols=INR')) return Response.json({ amount: 1, base: 'USD', date: '2026-11-12', rates: { INR: 94.04 } });
+      return real(input, init);
+    });
+    let p: any;
+    try {
+      const r = await api('POST', `/api/v1/intake/items/${item.id}/proposal`);
+      expect(r.status, JSON.stringify(r.json)).toBe(200);
+      p = r.json;
+    } finally {
+      spy.mockRestore();
+    }
+    expect(p).toMatchObject({
+      supplier: { name: 'Anthropic, PBC', foreign: true, taxId: '9924USA29003OSI', gstin: null },
+      number: 'F13F9483-0019', date: '2026-11-12', currency: 'USD', exchangeRate: 94.04, reverseCharge: true, supplyType: 'import', subtotal: 100, tax: 0,
+      paid: { on: '2026-11-12', amount: 96.4, appliedBalance: 3.6, card: { last4: '9814' }, through: { glId: card.json.glAccountId }, reference: '2910-9849-3879' },
+    });
+    expect(p.lines).toEqual([{ description: 'Claude Max (Nov 11 - Dec 11, 2026)', hsnSac: '998315', quantity: 1, unitPrice: 100, taxRate: 18 }]);
+    expect(p.files.map((f: any) => f.role).sort()).toEqual(['invoice', 'receipt']);
+
+    const software = (p.choices.accounts as any[]).find((a) => a.type === 'expense');
+    const a = await api('POST', `/api/v1/intake/items/${item.id}/approve`, {
+      vendorName: p.supplier.name, number: p.number, date: p.date, currency: 'USD', exchangeRate: 94.04, reverseCharge: true, importOfServices: true, accountId: software.id,
+      lines: p.lines, post: true, payment: { paidThroughId: p.paid.through.glId, date: p.paid.on, amount: 96.4, inrAmount: 9105.6, reference: p.paid.reference },
+    });
+    expect(a.status, JSON.stringify(a.json)).toBe(201);
+    expect(a.json.balanceLeft).toBe(3.6);
+    const bill = (await api('GET', `/api/v1/records/bill/${a.json.billId}`)).json;
+    expect(bill).toMatchObject({ vendor_ref: 'F13F9483-0019', currency: 'USD', reverse_charge: true, status: 'partially_paid' });
+    expect(JSON.stringify((await api('GET', `/api/v1/books/bills/${a.json.billId}`)).json)).toContain('"supply_type":"import"');
+    expect(Number(bill.grand_total)).toBe(100); // GST under reverse charge is not owed to the supplier
+    expect(Number(bill.igst_total)).toBe(18);
+    // GSTR-3B: $18 of IGST at 94.04 under reverse charge, paid in cash and taken back as credit
+    const g = (await api('GET', '/api/v1/books/reports/gstr-3b?month=2026-11')).json;
+    expect(g.inwardReverseCharge.igst).toBeCloseTo(1692.72, 2);
+    expect(g.reverseChargeCash.igst).toBeCloseTo(1692.72, 2);
+    // the card owes what was charged: ₹9,105.60 (96.40 at the card's 94.4565…)
+    const after = ((await api('GET', '/api/v1/books/bank-accounts')).json as any[]).find((b) => b.id === card.json.id);
+    expect(after.book_balance).toBeCloseTo(-9105.6, 2);
+    const files = (await api('GET', `/api/v1/files?object=bill&id=${a.json.billId}`)).json;
+    expect(JSON.stringify(files)).toContain('Receipt-2910-9849-3879.pdf');
+    // approved once only
+    expect((await api('POST', `/api/v1/intake/items/${item.id}/approve`, { vendorName: 'x x', date: '2026-11-12', lines: p.lines })).status).toBe(400);
+  });
+
+  it('a partner’s personal card: spend owed to the card, then settled to the partner', async () => {
+    const person = await api('POST', '/api/v1/books/desk/own/persons', { name: 'Prashant Srivastava', role: 'partner' });
+    expect(person.status, JSON.stringify(person.json)).toBeLessThan(300);
+    const pid = person.json.id ?? person.json.person?.id;
+    expect((await api('POST', '/api/v1/books/bank-accounts', { name: 'Prashant Amex', kind: 'credit_card', last4: '1005', holder: 'personal' })).status).toBe(400);
+    const c = await api('POST', '/api/v1/books/bank-accounts', { name: 'Prashant Amex 1005', kind: 'credit_card', last4: '1005', network: 'amex', holder: 'personal', personId: pid });
+    expect(c.status, JSON.stringify(c.json)).toBe(201);
+    const row = ((await api('GET', '/api/v1/books/bank-accounts')).json as any[]).find((b) => b.id === c.json.id);
+    expect(row).toMatchObject({ holder: 'personal', person_name: 'Prashant Srivastava' });
+    const s = await api('POST', `/api/v1/books/bank-accounts/${c.json.id}/settle`, { amount: 500, date: '2026-11-15' });
+    expect(s.status, JSON.stringify(s.json)).toBe(200);
+    expect(((await api('GET', '/api/v1/books/bank-accounts')).json as any[]).find((b) => b.id === c.json.id).book_balance).toBe(500);
+    // a company card cannot be settled to a person
+    const company = ((await api('GET', '/api/v1/books/bank-accounts')).json as any[]).find((b) => b.account_last4 === '9814');
+    expect((await api('POST', `/api/v1/books/bank-accounts/${company.id}/settle`, { amount: 1, date: '2026-11-15' })).status).toBe(400);
+    expect((await api('PUT', `/api/v1/books/bank-accounts/${company.id}`, { creditLimit: 600000, dueDay: 8 })).status).toBe(200);
+    expect(((await api('GET', '/api/v1/books/bank-accounts')).json as any[]).find((b) => b.id === company.id)).toMatchObject({ credit_limit: 600000, due_day: 8, statement_day: 18 });
   });
 });

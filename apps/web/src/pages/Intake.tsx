@@ -583,34 +583,9 @@ function Documents() {
 function ItemModal({ item, onClose }: { item: Json; onClose: () => void }) {
   const { data } = useQuery({ queryKey: ['intake', 'item', item.id], queryFn: () => get<Json>(`/api/v1/intake/items/${item.id}`) });
   const act = useAct([['intake']]);
-  const toast = useToast();
-  const nav = useNavigate();
   const [fileId, setFileId] = useState<string>(item.attachments?.[0]?.fileId ?? '');
-  const [busy, setBusy] = useState(false);
-  const [f, setF] = useState({ vendorName: '', number: '', date: '', taxable: '', taxRate: '' });
-  const read = data?.data?.reads?.[fileId] as Json | undefined;
-  useEffect(() => {
-    if (!read?.data) return;
-    setF({ vendorName: read.party?.name ?? item.from_name ?? '', number: read.data.number ?? '', date: read.data.date ?? '', taxable: read.data.taxable != null ? String(read.data.taxable) : '', taxRate: '' });
-  }, [read, item.from_name]);
   if (!data) return null;
   const att = (data.attachments as Json[]).find((a) => a.fileId === fileId);
-  const readIt = async () => {
-    if (!att) return;
-    setBusy(true);
-    try {
-      const res = await fetch(att.url);
-      const blob = await res.blob();
-      const parts = await readDocument(new File([blob], att.name, { type: att.contentType }));
-      const pages = parts.flatMap((p) => p.pages ?? []);
-      await act(() => post(`/api/v1/intake/items/${item.id}/read`, { fileId, pages }), 'Read');
-    } catch (e) {
-      toast((e as Error).message, true);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const d = read?.data;
   return (
     <Modal title={item.subject || '(no subject)'} onClose={onClose} wide>
       <div className="modal-body stack">
@@ -629,72 +604,13 @@ function ItemModal({ item, onClose }: { item: Json; onClose: () => void }) {
             </a>
           )}
         </div>
-        {att?.contentType === 'application/pdf' && !read && (
-          <button className="btn primary" disabled={busy} onClick={readIt}>
-            {busy ? 'Reading…' : 'Read this invoice'}
-          </button>
-        )}
-        {read?.scanned && <p className="small muted">{read.warnings?.[0]}</p>}
-        {(d || att?.contentType?.startsWith('image/')) && data.status !== 'done' && (
-          <>
-            {d && (
-              <div className="small">
-                Read: {d.number ? `invoice ${d.number}` : 'no number'} {d.date ? `of ${date(d.date)}` : ''} · taxable {d.taxable != null ? money2(d.taxable) : '—'} · GST {money2((d.cgst ?? 0) + (d.sgst ?? 0) + (d.igst ?? 0))} · total {d.total != null ? money2(d.total) : '—'}
-                {read?.party?.gstin && ` · supplier GSTIN ${read.party.gstin}`}
-                {read?.ours === false && <span className="chip warn" style={{ marginLeft: 6 }}>your GSTIN is not on it</span>}
-                {read?.confidence != null && <span className="muted"> · {Math.round(read.confidence * 100)}% sure</span>}
-              </div>
-            )}
-            <div className="grid2">
-              <label className="field">
-                Supplier
-                <input value={f.vendorName} onChange={(e) => setF({ ...f, vendorName: e.target.value })} placeholder="Found by GSTIN when on file" />
-              </label>
-              <label className="field">
-                Supplier's invoice no.
-                <input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} />
-              </label>
-              <label className="field">
-                Invoice date
-                <input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
-              </label>
-              <label className="field">
-                Taxable value (₹, if not read line by line)
-                <input inputMode="decimal" value={f.taxable} onChange={(e) => setF({ ...f, taxable: e.target.value })} />
-              </label>
-            </div>
-            <div className="row" style={{ gap: 6 }}>
-              <button
-                className="btn primary"
-                onClick={async () => {
-                  const r = await act(
-                    () =>
-                      post<Json>(`/api/v1/intake/items/${item.id}/bill`, {
-                        fileId,
-                        vendorName: f.vendorName.trim() || null,
-                        number: f.number.trim() || null,
-                        date: f.date || null,
-                        ...(f.taxable && (!d?.lines?.length || Number(f.taxable) !== d?.taxable) ? { taxable: Number(f.taxable) } : {}),
-                      }),
-                    'Draft bill made; check and post it',
-                  );
-                  if (r) nav(`/o/bill/${r.billId}`);
-                }}
-              >
-                Make a draft bill
-              </button>
-              <button className="btn" onClick={async () => (await act(() => post(`/api/v1/intake/items/${item.id}/status`, { status: 'ignored' }), 'Ignored')) !== null && onClose()}>
-                Not a bill — ignore
-              </button>
-            </div>
-          </>
-        )}
+        {data.status === 'new' && data.kind !== 'statement' && (data.attachments as Json[]).length > 0 && <ApproveMail id={item.id} onDone={onClose} />}
         {data.status === 'done' && data.link_object === 'bill' && (
           <p>
             <Link to={`/o/bill/${data.link_id}`}>Open the bill made from this mail</Link>
           </p>
         )}
-        {data.status === 'new' && (!att || data.kind === 'payment' || data.kind === 'statement') && (
+        {data.status === 'new' && (!att || data.kind === 'statement') && (
           <div className="row" style={{ gap: 6 }}>
             <button className="btn primary" onClick={async () => (await act(() => post(`/api/v1/intake/items/${item.id}/status`, { status: 'done' }), 'Marked done')) !== null && onClose()}>
               Done (recorded)
@@ -702,10 +618,16 @@ function ItemModal({ item, onClose }: { item: Json; onClose: () => void }) {
             <button className="btn" onClick={async () => (await act(() => post(`/api/v1/intake/items/${item.id}/status`, { status: 'ignored' }), 'Ignored')) !== null && onClose()}>
               Not the business’s — ignore
             </button>
-            {data.kind === 'payment' && (
+            {data.kind === 'statement' ? (
               <Link className="btn ghost" to="/books#desk">
-                Match it on the accounts desk
+                Import it on the accounts desk
               </Link>
+            ) : (
+              data.kind === 'payment' && (
+                <Link className="btn ghost" to="/books#desk">
+                  Match it on the accounts desk
+                </Link>
+              )
             )}
           </div>
         )}
@@ -722,6 +644,299 @@ function ItemModal({ item, onClose }: { item: Json; onClose: () => void }) {
         )}
       </div>
     </Modal>
+  );
+}
+
+const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'SGD', 'AUD', 'CAD', 'AED', 'JPY', 'CHF'];
+const num = (v: string) => (v.trim() === '' ? null : Number(v));
+
+/**
+ * Review and approve a mailed bill or receipt: everything read from its files (invoice and receipt
+ * together), editable; on approval the bill is posted (foreign currency at the day's rate, reverse
+ * charge for a supplier abroad) and the payment recorded through the card or bank that paid.
+ */
+function ApproveMail({ id, onDone }: { id: string; onDone: () => void }) {
+  const { data: p, error, isLoading } = useQuery({ queryKey: ['intake', 'proposal', id], queryFn: () => post<Json>(`/api/v1/intake/items/${id}/proposal`), staleTime: Infinity, retry: false });
+  const act = useAct([['intake'], ['books']]);
+  const nav = useNavigate();
+  const [f, setF] = useState<Json | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!p || f) return;
+    setF({
+      vendorName: p.supplier?.name ?? '',
+      vendorId: p.supplier?.vendorId ?? null,
+      gstin: p.supplier?.gstin ?? '',
+      number: p.number ?? '',
+      date: p.date ?? '',
+      currency: p.currency ?? 'INR',
+      exchangeRate: p.exchangeRate != null ? String(p.exchangeRate) : p.currency === 'INR' ? '1' : '',
+      importOfServices: !!p.supplier?.foreign,
+      reverseCharge: !!p.reverseCharge,
+      itcEligible: true,
+      accountId: '',
+      projectId: '',
+      lines: (p.lines?.length ? p.lines : [{ description: '', hsnSac: '', quantity: 1, unitPrice: 0, taxRate: 18 }]).map((l: Json) => ({ ...l, quantity: String(l.quantity), unitPrice: String(l.unitPrice), taxRate: String(l.taxRate), hsnSac: l.hsnSac ?? '' })),
+      paid: !!p.paid,
+      paidThroughId: p.paid?.through?.glId ?? '',
+      payDate: p.paid?.on ?? p.date ?? '',
+      payAmount: p.paid?.amount != null ? String(p.paid.amount) : '',
+      inrAmount: '',
+      reference: p.paid?.reference ?? '',
+    });
+  }, [p, f]);
+  if (isLoading) return <p className="small muted">Reading the files on this mail…</p>;
+  if (error) return <p className="small" style={{ color: 'var(--bad)' }}>{(error as Error).message}</p>;
+  if (!p || !f) return null;
+  const set = (x: Json) => setF({ ...f, ...x });
+  const setLine = (i: number, x: Json) => set({ lines: f.lines.map((l: Json, j: number) => (j === i ? { ...l, ...x } : l)) });
+  const foreignCur = f.currency !== 'INR';
+  const rate = foreignCur ? Number(f.exchangeRate) || 0 : 1;
+  const sub = f.lines.reduce((a: number, l: Json) => a + (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0), 0);
+  const gst = f.lines.reduce((a: number, l: Json) => a + ((Number(l.quantity) || 0) * (Number(l.unitPrice) || 0) * (Number(l.taxRate) || 0)) / 100, 0);
+  const cur = (n: number) => (foreignCur ? `${f.currency} ${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : money2(n));
+  const payFrom = (p.choices?.payFrom ?? []) as Json[];
+  const card = payFrom.find((b) => b.gl_account_id === f.paidThroughId);
+  const ok = f.vendorName.trim().length >= 2 && /^\d{4}-\d{2}-\d{2}$/.test(f.date) && (!foreignCur || rate > 0) && f.lines.every((l: Json) => l.description.trim() && Number(l.quantity) > 0) && (!f.paid || (f.paidThroughId && Number(f.payAmount) > 0 && f.payDate));
+  const approve = async (postIt: boolean) => {
+    setBusy(true);
+    const r = await act(
+      () =>
+        post<Json>(`/api/v1/intake/items/${id}/approve`, {
+          vendorId: f.vendorId,
+          vendorName: f.vendorName.trim(),
+          gstin: f.gstin?.trim() ? f.gstin.trim().toUpperCase() : null,
+          number: f.number.trim() || null,
+          date: f.date,
+          currency: f.currency,
+          exchangeRate: rate || 1,
+          reverseCharge: f.reverseCharge,
+          importOfServices: f.importOfServices,
+          itcEligible: f.itcEligible,
+          accountId: f.accountId || null,
+          projectId: f.projectId || null,
+          lines: f.lines.map((l: Json) => ({ description: l.description.trim(), hsnSac: l.hsnSac?.trim() || null, quantity: Number(l.quantity), unitPrice: Number(l.unitPrice) || 0, taxRate: Number(l.taxRate) || 0 })),
+          post: postIt,
+          payment:
+            postIt && f.paid
+              ? { paidThroughId: f.paidThroughId, date: f.payDate, amount: Number(f.payAmount), inrAmount: num(f.inrAmount), exchangeRate: foreignCur ? rate : null, reference: f.reference.trim() || null }
+              : null,
+        }),
+      (x: Json) => (postIt ? `Bill posted${x.paymentId ? ' and payment recorded' : ''}${x.balanceLeft ? ` — ${cur(x.balanceLeft)} still open on the bill` : ''}` : 'Draft bill made; check and post it'),
+    );
+    setBusy(false);
+    if (r) {
+      onDone();
+      nav(`/o/bill/${r.billId}`);
+    }
+  };
+  return (
+    <div className="panel stack" style={{ padding: 12 }}>
+      <div className="spread" style={{ flexWrap: 'wrap', gap: 6 }}>
+        <b>Review and approve</b>
+        <span className="small muted">
+          {p.files
+            .filter((x: Json) => x.role)
+            .map((x: Json) => `${x.role === 'invoice' ? 'Invoice' : 'Receipt'}: ${x.name}`)
+            .join(' · ') || 'Nothing could be read from the files (a scan?): fill it in below.'}
+          {p.confidence ? ` · ${Math.round(p.confidence * 100)}% sure` : ''}
+        </span>
+      </div>
+      <div className="grid2">
+        <label className="field">
+          Supplier
+          <input value={f.vendorName} onChange={(e) => set({ vendorName: e.target.value, vendorId: null })} />
+          <span className="small muted">
+            {f.vendorId ? 'Already a vendor' : 'Will be added as a vendor'}
+            {p.supplier?.foreign ? ` · abroad${p.supplier.country ? ` (${p.supplier.country})` : ''}` : ''}
+            {p.supplier?.taxId ? ` · tax id ${p.supplier.taxId}` : ''}
+          </span>
+        </label>
+        <label className="field">
+          Supplier GSTIN {p.supplier?.foreign && <span className="muted small">(none for a supplier abroad)</span>}
+          <input value={f.gstin} onChange={(e) => set({ gstin: e.target.value })} disabled={f.importOfServices} />
+        </label>
+        <label className="field">
+          Invoice no.
+          <input value={f.number} onChange={(e) => set({ number: e.target.value })} />
+        </label>
+        <label className="field">
+          Invoice date
+          <input type="date" value={f.date} onChange={(e) => set({ date: e.target.value })} />
+        </label>
+        <label className="field">
+          Currency
+          <select value={f.currency} onChange={(e) => set({ currency: e.target.value, exchangeRate: e.target.value === 'INR' ? '1' : f.exchangeRate })}>
+            {[...new Set([f.currency, ...CURRENCIES])].map((c) => (
+              <option key={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+        {foreignCur ? (
+          <label className="field">
+            ₹ per {f.currency}
+            <input inputMode="decimal" value={f.exchangeRate} onChange={(e) => set({ exchangeRate: e.target.value })} />
+            <span className="small muted">{p.exchangeRate && p.currency === f.currency ? `ECB reference rate of ${date(p.rateDate || f.date)}; change it to the RBI or your bank's rate if you use that` : 'Enter the rate'}</span>
+          </label>
+        ) : (
+          <span />
+        )}
+        <label className="field">
+          Expense account
+          <select value={f.accountId} onChange={(e) => set({ accountId: e.target.value })}>
+            <option value="">Purchases (default)</option>
+            {(p.choices?.accounts ?? [])
+              .filter((a: Json) => a.type === 'expense' || a.subtype === 'fixed_asset')
+              .map((a: Json) => (
+                <option key={a.id} value={a.id}>
+                  {a.code ? `${a.code} · ` : ''}
+                  {a.name}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label className="field">
+          Project
+          <select value={f.projectId} onChange={(e) => set({ projectId: e.target.value })}>
+            <option value="">None</option>
+            {(p.choices?.projects ?? []).map((x: Json) => (
+              <option key={x.id} value={x.id}>
+                {x.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="row small" style={{ gap: 16, flexWrap: 'wrap' }}>
+        <label className="row" style={{ gap: 4 }}>
+          <input type="checkbox" checked={f.importOfServices} onChange={(e) => set({ importOfServices: e.target.checked, reverseCharge: e.target.checked ? true : f.reverseCharge, gstin: e.target.checked ? '' : f.gstin })} />
+          Import of services (supplier abroad)
+        </label>
+        <label className="row" style={{ gap: 4 }}>
+          <input type="checkbox" checked={f.reverseCharge} onChange={(e) => set({ reverseCharge: e.target.checked })} />
+          Reverse charge: we pay the GST
+        </label>
+        <label className="row" style={{ gap: 4 }}>
+          <input type="checkbox" checked={f.itcEligible} onChange={(e) => set({ itcEligible: e.target.checked })} />
+          Input tax credit can be claimed
+        </label>
+      </div>
+      <table className="data">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>HSN/SAC</th>
+            <th className="num">Qty</th>
+            <th className="num">Price ({f.currency})</th>
+            <th className="num">GST %</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {f.lines.map((l: Json, i: number) => (
+            <tr key={i}>
+              <td>
+                <input value={l.description} onChange={(e) => setLine(i, { description: e.target.value })} />
+              </td>
+              <td style={{ width: 100 }}>
+                <input value={l.hsnSac} onChange={(e) => setLine(i, { hsnSac: e.target.value })} />
+              </td>
+              <td style={{ width: 70 }}>
+                <input inputMode="decimal" value={l.quantity} onChange={(e) => setLine(i, { quantity: e.target.value })} />
+              </td>
+              <td style={{ width: 120 }}>
+                <input inputMode="decimal" value={l.unitPrice} onChange={(e) => setLine(i, { unitPrice: e.target.value })} />
+              </td>
+              <td style={{ width: 70 }}>
+                <input inputMode="decimal" value={l.taxRate} onChange={(e) => setLine(i, { taxRate: e.target.value })} />
+              </td>
+              <td style={{ width: 30 }}>
+                {f.lines.length > 1 && (
+                  <button className="btn sm ghost" aria-label="Remove line" onClick={() => set({ lines: f.lines.filter((_: Json, j: number) => j !== i) })}>
+                    ×
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="spread small" style={{ flexWrap: 'wrap', gap: 6 }}>
+        <button className="btn sm ghost" onClick={() => set({ lines: [...f.lines, { description: '', hsnSac: '', quantity: '1', unitPrice: '0', taxRate: f.reverseCharge ? '18' : '18' }] })}>
+          + Line
+        </button>
+        <span>
+          Taxable {cur(sub)}
+          {foreignCur && rate ? ` = ${money2(sub * rate)}` : ''} · GST {cur(gst)}
+          {foreignCur && rate ? ` = ${money2(gst * rate)}` : ''}
+          {f.reverseCharge ? ' (reverse charge: paid by us, claimed back as ITC)' : ''} · <b>Payable to supplier {cur(f.reverseCharge ? sub : sub + gst)}</b>
+        </span>
+      </div>
+
+      <div className="panel" style={{ padding: 10 }}>
+        <label className="row" style={{ gap: 6 }}>
+          <input type="checkbox" checked={f.paid} onChange={(e) => set({ paid: e.target.checked })} />
+          <b>Already paid</b>
+          {p.paid?.card && (
+            <span className="small muted">
+              — {p.paid.card.network ?? 'card'} ••{p.paid.card.last4} on the receipt{p.paid.through ? `: ${p.paid.through.name}${p.paid.through.holder === 'personal' ? ` (personal card of ${p.paid.through.person})` : ''}` : ' — no card with these digits yet: add it under Books → Banking'}
+            </span>
+          )}
+        </label>
+        {f.paid && (
+          <div className="grid2" style={{ marginTop: 8 }}>
+            <label className="field">
+              Paid through
+              <select value={f.paidThroughId} onChange={(e) => set({ paidThroughId: e.target.value })}>
+                <option value="">Choose the card or bank…</option>
+                {payFrom.map((b) => (
+                  <option key={b.gl_account_id} value={b.gl_account_id}>
+                    {b.name}
+                    {b.account_last4 ? ` ••${b.account_last4}` : ''}
+                    {b.kind === 'credit_card' ? (b.holder === 'personal' ? ` (personal${b.person_name ? `: ${b.person_name}` : ''})` : ' (company card)') : ''}
+                  </option>
+                ))}
+              </select>
+              {card?.holder === 'personal' && <span className="small muted">Owed on the partner's card until you settle it to them.</span>}
+            </label>
+            <label className="field">
+              Paid on
+              <input type="date" value={f.payDate} onChange={(e) => set({ payDate: e.target.value })} />
+            </label>
+            <label className="field">
+              Amount paid ({f.currency})
+              <input inputMode="decimal" value={f.payAmount} onChange={(e) => set({ payAmount: e.target.value })} />
+              {p.paid?.appliedBalance ? <span className="small muted">{cur(p.paid.appliedBalance)} came from your balance with the supplier: it stays open on the bill until you settle it.</span> : null}
+            </label>
+            {foreignCur ? (
+              <label className="field">
+                Rupees charged (from the card / bank statement)
+                <input inputMode="decimal" value={f.inrAmount} onChange={(e) => set({ inrAmount: e.target.value })} placeholder={rate && Number(f.payAmount) ? `about ${money2(Number(f.payAmount) * rate)}` : ''} />
+                <span className="small muted">Gives the exact rate, so the statement line matches; the difference from the bill's rate is booked as exchange gain or loss.</span>
+              </label>
+            ) : (
+              <span />
+            )}
+            <label className="field">
+              Reference
+              <input value={f.reference} onChange={(e) => set({ reference: e.target.value })} />
+            </label>
+          </div>
+        )}
+      </div>
+
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+        <button className="btn primary" disabled={!ok || busy} onClick={() => approve(true)}>
+          {busy ? 'Saving…' : f.paid ? 'Approve: post the bill and record the payment' : 'Approve: post the bill'}
+        </button>
+        <button className="btn" disabled={!ok || busy} onClick={() => approve(false)}>
+          Make a draft bill only
+        </button>
+        <button className="btn ghost" onClick={async () => (await act(() => post(`/api/v1/intake/items/${id}/status`, { status: 'ignored' }), 'Ignored')) !== null && onDone()}>
+          Not the business's — ignore
+        </button>
+      </div>
+    </div>
   );
 }
 

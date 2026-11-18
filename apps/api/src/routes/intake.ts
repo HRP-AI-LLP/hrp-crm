@@ -8,6 +8,7 @@ import type { AppEnv } from '../env';
 import { notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enqueue, eventJobs } from '../services/jobs';
+import * as approve from '../services/intake/approve';
 import * as gem from '../services/intake/gem';
 import { fetchBidFromGem } from '../services/intake/gem-fetch';
 import * as ik from '../services/intake/intake';
@@ -70,6 +71,13 @@ export const intakeRoutes = new Hono<AppEnv>()
     const r = await c.var.db.tx(scope(c), (tx) => ik.billFromMail(rctx(c, tx), c.env, id(c), b));
     await emit(c, r.events);
     return c.json({ billId: r.billId, vendorId: r.vendorId, lines: r.lines }, 201);
+  })
+  .post('/intake/items/:id/proposal', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => approve.proposal(rctx(c, tx), c.env, id(c)))))
+  .post('/intake/items/:id/approve', async (c) => {
+    const b = approve.approveSchema.parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => approve.approveMail(rctx(c, tx), c.env, id(c), b));
+    await emit(c, r.events);
+    return c.json({ billId: r.billId, vendorId: r.vendorId, paymentId: r.paymentId, balanceLeft: r.balanceLeft }, 201);
   })
 
   /* ───── GeM bids ───── */

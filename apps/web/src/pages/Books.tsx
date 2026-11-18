@@ -280,6 +280,7 @@ function Banking() {
   const { data, refetch } = useQuery({ queryKey: ['books', 'bank-accounts'], queryFn: () => get<Json[]>('/api/v1/books/bank-accounts') });
   const [sel, setSel] = useState<string | null>(null);
   const [modal, setModal] = useState<null | 'new' | 'transfer' | 'rules'>(null);
+  const [card, setCard] = useState<Json | null>(null);
   if (!data) return <Spinner />;
   const acc = data.find((a) => a.id === sel) ?? null;
   if (acc) return <BankAccountView acc={acc} back={() => { setSel(null); refetch(); }} />;
@@ -314,8 +315,35 @@ function Banking() {
               <tr key={a.id} className="click" onClick={() => setSel(a.id)}>
                 <td>
                   <b>{a.name}</b> {a.account_last4 && <span className="muted small">••{a.account_last4}</span>}
+                  {a.kind === 'credit_card' && (
+                    <div className="small muted">
+                      {[
+                        a.holder === 'personal' ? `Personal card of ${a.person_name ?? 'a partner'}` : 'Company card',
+                        a.card_network ? a.card_network.toUpperCase() : null,
+                        a.credit_limit ? `limit ${money2(a.credit_limit)} (${money2(Math.max(0, a.credit_limit + (a.book_balance || 0)))} free)` : null,
+                        a.statement_day ? `statement on the ${a.statement_day}` : null,
+                        a.due_day ? `due on the ${a.due_day}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </div>
+                  )}
                 </td>
-                <td>{a.kind.replace('_', ' ')}</td>
+                <td>
+                  {a.kind.replace('_', ' ')}
+                  {(a.kind === 'credit_card' || a.kind === 'bank') && (
+                    <button
+                      className="btn sm ghost"
+                      style={{ marginLeft: 6 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setCard(a);
+                      }}
+                    >
+                      Details
+                    </button>
+                  )}
+                </td>
                 <td className="num">{money2(a.kind === 'credit_card' ? -a.book_balance || 0 : a.book_balance)}</td>
                 <td className="num">{a.statement_balance == null ? '—' : money2(a.statement_balance)}</td>
                 <td className="num">{money2(a.kind === 'credit_card' ? -a.cleared_balance || 0 : a.cleared_balance)}</td>
@@ -327,15 +355,95 @@ function Banking() {
         </table>
       </div>
       {modal === 'new' && <NewBankAccount onClose={() => setModal(null)} onDone={() => refetch()} />}
+      {card && <CardDetails acc={card} onClose={() => setCard(null)} onDone={() => refetch()} />}
       {modal === 'transfer' && <TransferModal accounts={data} onClose={() => setModal(null)} onDone={() => refetch()} />}
       {modal === 'rules' && <RulesModal accounts={data} onClose={() => setModal(null)} />}
     </div>
   );
 }
 
+const NETWORKS: [string, string][] = [
+  ['visa', 'Visa'],
+  ['mastercard', 'Mastercard'],
+  ['rupay', 'RuPay'],
+  ['amex', 'American Express'],
+  ['diners', 'Diners Club'],
+  ['discover', 'Discover'],
+  ['other', 'Other'],
+];
+
+/** Holder, network, limit and statement / due days of a card (shared by the add and details forms). */
+function CardFields({ f, set, persons }: { f: Json; set: (p: Json) => void; persons: Json[] }) {
+  return (
+    <>
+      <label className="field">
+        Whose card
+        <select value={f.holder} onChange={(e) => set({ holder: e.target.value })}>
+          <option value="company">The company's</option>
+          <option value="personal">A partner's / director's personal card</option>
+        </select>
+      </label>
+      {f.holder === 'personal' ? (
+        <label className="field">
+          Card holder
+          <select value={f.personId} onChange={(e) => set({ personId: e.target.value })}>
+            <option value="">Choose…</option>
+            {persons.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {!persons.length && <span className="small muted">Add partners and directors on the accounts desk → Own accounts first.</span>}
+        </label>
+      ) : (
+        <span />
+      )}
+      <label className="field">
+        Network
+        <select value={f.network} onChange={(e) => set({ network: e.target.value })}>
+          <option value="">—</option>
+          {NETWORKS.map(([k, l]) => (
+            <option key={k} value={k}>
+              {l}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field">
+        Credit limit (₹)
+        <input inputMode="decimal" value={f.creditLimit} onChange={(e) => set({ creditLimit: e.target.value })} />
+      </label>
+      <label className="field">
+        Statement day (of the month)
+        <input inputMode="numeric" value={f.statementDay} maxLength={2} onChange={(e) => set({ statementDay: e.target.value.replace(/\D/g, '') })} />
+      </label>
+      <label className="field">
+        Payment due day
+        <input inputMode="numeric" value={f.dueDay} maxLength={2} onChange={(e) => set({ dueDay: e.target.value.replace(/\D/g, '') })} />
+      </label>
+    </>
+  );
+}
+
+const cardBody = (f: Json) => ({
+  holder: f.holder,
+  personId: f.holder === 'personal' ? f.personId || null : null,
+  network: f.network || null,
+  creditLimit: f.creditLimit ? Number(f.creditLimit) : null,
+  statementDay: f.statementDay ? Number(f.statementDay) : null,
+  dueDay: f.dueDay ? Number(f.dueDay) : null,
+});
+
+function usePersons() {
+  const { data } = useQuery({ queryKey: ['books', 'own'], queryFn: () => get<Json>('/api/v1/books/desk/own') });
+  return ((data?.persons ?? []) as Json[]).filter((p) => p.is_active !== false);
+}
+
 function NewBankAccount({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const toast = useToast();
-  const [f, setF] = useState({ name: '', kind: 'bank', bankName: '', last4: '', ifsc: '' });
+  const persons = usePersons();
+  const [f, setF] = useState<Json>({ name: '', kind: 'bank', bankName: '', last4: '', ifsc: '', holder: 'company', personId: '', network: '', creditLimit: '', statementDay: '', dueDay: '' });
   return (
     <Modal
       title="Add bank, cash or card account"
@@ -343,10 +451,17 @@ function NewBankAccount({ onClose, onDone }: { onClose: () => void; onDone: () =
       footer={
         <button
           className="btn primary"
-          disabled={!f.name.trim()}
+          disabled={!f.name.trim() || (f.kind === 'credit_card' && f.holder === 'personal' && !f.personId)}
           onClick={async () => {
             try {
-              await post('/api/v1/books/bank-accounts', { name: f.name.trim(), kind: f.kind, bankName: f.bankName || null, last4: f.last4 || null, ifsc: f.ifsc.toUpperCase() || null });
+              await post('/api/v1/books/bank-accounts', {
+                name: f.name.trim(),
+                kind: f.kind,
+                bankName: f.bankName || null,
+                last4: f.last4 || null,
+                ifsc: f.ifsc.toUpperCase() || null,
+                ...(f.kind === 'credit_card' ? cardBody(f) : {}),
+              });
               toast('Account added');
               onDone();
               onClose();
@@ -362,7 +477,7 @@ function NewBankAccount({ onClose, onDone }: { onClose: () => void; onDone: () =
       <div className="modal-body grid2">
         <label className="field wide">
           Name in the books
-          <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="HDFC current account" autoFocus />
+          <input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder={f.kind === 'credit_card' ? 'HDFC Regalia 9814' : 'HDFC current account'} autoFocus />
         </label>
         <label className="field">
           Kind
@@ -374,18 +489,108 @@ function NewBankAccount({ onClose, onDone }: { onClose: () => void; onDone: () =
           </select>
         </label>
         <label className="field">
-          Bank
+          {f.kind === 'credit_card' ? 'Issuing bank' : 'Bank'}
+          <input value={f.bankName} onChange={(e) => setF({ ...f, bankName: e.target.value })} />
+        </label>
+        <label className="field">
+          Last 4 digits {f.kind === 'credit_card' && <span className="muted small">(receipts are matched to the card by these)</span>}
+          <input value={f.last4} maxLength={4} inputMode="numeric" onChange={(e) => setF({ ...f, last4: e.target.value.replace(/\D/g, '') })} />
+        </label>
+        {f.kind === 'credit_card' ? (
+          <CardFields f={f} set={(p) => setF({ ...f, ...p })} persons={persons} />
+        ) : (
+          <label className="field">
+            IFSC
+            <input value={f.ifsc} maxLength={11} onChange={(e) => setF({ ...f, ifsc: e.target.value })} />
+          </label>
+        )}
+      </div>
+      {f.kind === 'credit_card' && (
+        <p className="small muted" style={{ margin: '0 16px 12px' }}>
+          Spend on a personal card is still the business's: bills paid with it are owed to the card, and when the holder pays the card's bill you settle it to them (it becomes money the business owes them).
+        </p>
+      )}
+    </Modal>
+  );
+}
+
+function CardDetails({ acc, onClose, onDone }: { acc: Json; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const persons = usePersons();
+  const [f, setF] = useState<Json>({
+    bankName: acc.bank_name ?? '',
+    last4: acc.account_last4 ?? '',
+    holder: acc.holder ?? 'company',
+    personId: acc.person_id ?? '',
+    network: acc.card_network ?? '',
+    creditLimit: acc.credit_limit != null ? String(acc.credit_limit) : '',
+    statementDay: acc.statement_day ? String(acc.statement_day) : '',
+    dueDay: acc.due_day ? String(acc.due_day) : '',
+  });
+  const owed = acc.kind === 'credit_card' ? -(acc.book_balance || 0) : 0;
+  const [settle, setSettle] = useState({ amount: owed > 0 ? String(owed) : '', date: today() });
+  const card = acc.kind === 'credit_card';
+  return (
+    <Modal
+      title={acc.name}
+      onClose={onClose}
+      footer={
+        <button
+          className="btn primary"
+          onClick={async () => {
+            try {
+              await put(`/api/v1/books/bank-accounts/${acc.id}`, { bankName: f.bankName || null, last4: f.last4 || null, ...(card ? cardBody(f) : {}) });
+              toast('Saved');
+              onDone();
+              onClose();
+            } catch (e) {
+              toast((e as Error).message, true);
+            }
+          }}
+        >
+          Save
+        </button>
+      }
+    >
+      <div className="modal-body grid2">
+        <label className="field">
+          {card ? 'Issuing bank' : 'Bank'}
           <input value={f.bankName} onChange={(e) => setF({ ...f, bankName: e.target.value })} />
         </label>
         <label className="field">
           Last 4 digits
           <input value={f.last4} maxLength={4} inputMode="numeric" onChange={(e) => setF({ ...f, last4: e.target.value.replace(/\D/g, '') })} />
         </label>
-        <label className="field">
-          IFSC
-          <input value={f.ifsc} maxLength={11} onChange={(e) => setF({ ...f, ifsc: e.target.value })} />
-        </label>
+        {card && <CardFields f={f} set={(p) => setF({ ...f, ...p })} persons={persons} />}
       </div>
+      {card && acc.holder === 'personal' && (
+        <div className="panel" style={{ margin: '0 16px 12px', padding: 12 }}>
+          <b>{acc.person_name ?? 'The holder'} paid this card's bill</b>
+          <p className="small muted" style={{ margin: '4px 0 8px' }}>
+            The business owes {money2(Math.max(0, owed))} on this card. What the holder paid from their own pocket moves to their account (money the business owes them).
+          </p>
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+            <input inputMode="decimal" style={{ width: 140 }} value={settle.amount} onChange={(e) => setSettle({ ...settle, amount: e.target.value })} aria-label="Amount" />
+            <input type="date" style={{ width: 160 }} value={settle.date} onChange={(e) => setSettle({ ...settle, date: e.target.value })} aria-label="Date" />
+            <button
+              className="btn"
+              disabled={!(Number(settle.amount) > 0)}
+              onClick={async () => {
+                try {
+                  await post(`/api/v1/books/bank-accounts/${acc.id}/settle`, { amount: Number(settle.amount), date: settle.date });
+                  toast(`Moved to ${acc.person_name ?? 'the holder'}'s account`);
+                  onDone();
+                  onClose();
+                } catch (e) {
+                  toast((e as Error).message, true);
+                }
+              }}
+            >
+              Settle to {acc.person_name ?? 'holder'}
+            </button>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
@@ -574,7 +779,7 @@ function BankAccountView({ acc, back }: { acc: Json; back: () => void }) {
                   let password: string | undefined;
                   for (;;) {
                     try {
-                      read.push({ name: file.name, lines: await readStatementFile(file, { password }) });
+                      read.push({ name: file.name, lines: await readStatementFile(file, { password, card: acc.kind === 'credit_card' }) });
                       break;
                     } catch (err) {
                       if (err instanceof PdfPasswordError) {
