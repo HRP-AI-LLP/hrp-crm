@@ -285,6 +285,7 @@ export function Shell() {
       label: 'Plan',
       items: [
         { to: '/health', label: 'Business health', icon: 'heart' },
+        ...(apps.has('books') && me && hasAdmin(me.permissions, 'books') ? [{ to: '/books#compliance', label: 'Compliance', icon: 'stamp' }] : []),
         { to: '/calendar', label: 'Calendar', icon: 'calendar' },
         { to: '/forecast', label: 'Forecast', icon: 'trend' },
         { to: '/reports', label: 'Reports', icon: 'chart' },

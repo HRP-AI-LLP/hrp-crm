@@ -65,6 +65,11 @@ export async function today(ctx: RecordCtx) {
         order by b.due_date limit 6`,
       [t],
     );
+    out.compliance = await ctx.tx.query(
+      `select id, name, authority, to_char(due_date, 'YYYY-MM-DD') as due, (due_date - current_date)::int as days, status from compliance_items
+        where tenant_id = $1 and status in ('pending','in_progress') and due_date <= current_date + 14 order by due_date limit 8`,
+      [t],
+    );
     out.desk = await ctx.tx.one(
       `select (select count(*)::int from bank_transactions where tenant_id = $1 and status = 'unmatched') as bank_lines,
               (select count(*)::int from doc_import_items where tenant_id = $1 and status in ('pending','failed')) as imports,

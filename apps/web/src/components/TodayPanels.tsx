@@ -91,6 +91,7 @@ export function TodayPanels() {
   const overdue = data.overdue as Json[] | undefined;
   const bills = data.billsDue as Json[] | undefined;
   const desk = data.desk as Json | undefined;
+  const comp = data.compliance as Json[] | undefined;
   const deskItems = desk
     ? ([
         [desk.bank_lines, 'bank lines to match', '/books#banking'],
@@ -202,6 +203,29 @@ export function TodayPanels() {
                 <div className="meta">{x.number}</div>
               </div>
               <span className="amt">{money2(x.balance)}</span>
+            </div>
+          ))}
+        </Box>
+      )}
+      {comp && comp.length > 0 && (
+        <Box
+          title="Filings due"
+          icon="stamp"
+          action={
+            <Link to="/books#compliance" className="small">
+              Compliance →
+            </Link>
+          }
+        >
+          {comp.map((c) => (
+            <div className="attn" key={c.id}>
+              <span className={`pill ${c.days < 0 ? 'bad' : c.days <= 3 ? 'warn' : 'info'}`}>{c.days < 0 ? `${-c.days}d late` : c.days === 0 ? 'today' : `in ${c.days}d`}</span>
+              <div className="t">
+                <Link to="/books#compliance">{c.name}</Link>
+                <div className="meta">
+                  {c.authority} · due {c.due}
+                </div>
+              </div>
             </div>
           ))}
         </Box>

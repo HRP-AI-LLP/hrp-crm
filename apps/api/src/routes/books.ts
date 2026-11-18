@@ -36,6 +36,9 @@ import * as desk from '../services/books/desk';
 import * as docs from '../services/books/doc-import';
 import { attachSourceFiles, keepSourceFiles } from '../services/books/import-files';
 import * as dunning from '../services/books/dunning';
+import * as compliance from '../services/books/compliance';
+import * as payroll from '../services/books/payroll';
+import * as tdsr from '../services/books/tds-returns';
 import * as feeds from '../services/books/feeds';
 import * as g2b from '../services/books/gstr2b';
 import * as setup from '../services/books/setup';
@@ -88,6 +91,8 @@ const qDate = (c: { req: { query: (k: string) => string | undefined } }, k: stri
   if (!dateStr.safeParse(v).success) throw badRequest(`${k} must be a date (YYYY-MM-DD)`);
   return v;
 };
+const BOOKS_AUDIT_OBJECTS = ['invoice', 'invoice_line', 'payment', 'payment_allocation', 'bill', 'bill_line', 'vendor_payment', 'expense', 'journal', 'gl_account', 'bank_transaction', 'bank_rule',
+  'fixed_asset', 'books_config', 'security_deposit', 'service_contract', 'employee', 'payroll_run', 'payslip', 'tds_challan', 'compliance_item'];
 const qUuid = (c: { req: { param: (k: string) => string } }, k = 'id') => {
   const v = c.req.param(k);
   if (!uuid.safeParse(v).success) throw notFound();
@@ -471,6 +476,159 @@ export const booksRoutes = new Hono<AppEnv>()
     requireAdmin(c);
     const weeks = Math.min(26, Math.max(4, Number(c.req.query('weeks') ?? 13) || 13));
     return c.json(await c.var.db.tx(scope(c, true), (tx) => rep.cashForecast(rctx(c, tx), weeks)));
+  })
+  // ───── statutory compliance calendar ─────
+  .get('/books/compliance', async (c) => {
+    requireAdmin(c);
+    const from = c.req.query('from') ?? null;
+    const to = c.req.query('to') ?? null;
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => compliance.listItems(rctx(c, tx), { from, to })));
+  })
+  .post('/books/compliance/generate', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ fy: z.number().int().min(2015).max(2100).optional() }).parse(await c.req.json().catch(() => ({})));
+    return c.json(await c.var.db.tx(scope(c), (tx) => compliance.generateYear(rctx(c, tx), b.fy)));
+  })
+  .get('/books/compliance/settings', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => compliance.complianceSettings(rctx(c, tx))));
+  })
+  .put('/books/compliance/settings', async (c) => {
+    requireAdmin(c);
+    const b = compliance.complianceSettingsSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => compliance.saveComplianceSettings(rctx(c, tx), b)));
+  })
+  .post('/books/compliance/mark-past-filed', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) =>
+      tx.query(`update compliance_items set status = 'filed', notes = coalesce(notes, 'Filed before Synapse kept the calendar'), updated_at = now() where tenant_id = $1 and status in ('pending','in_progress') and due_date < $2::date returning id`, [c.var.tenant.id, b.before]),
+    );
+    return c.json({ updated: r.length });
+  })
+  .get('/books/compliance/llp-working', async (c) => {
+    requireAdmin(c);
+    const fy = z.coerce.number().int().min(2015).max(2100).parse(c.req.query('fy'));
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => compliance.llpWorking(rctx(c, tx), fy)));
+  })
+  .post('/books/compliance/items', async (c) => {
+    requireAdmin(c);
+    const b = compliance.customItemSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => compliance.addItem(rctx(c, tx), b)), 201);
+  })
+  .patch('/books/compliance/items/:id', async (c) => {
+    requireAdmin(c);
+    const b = compliance.itemUpdateSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => compliance.updateItem(rctx(c, tx), qUuid(c), b)));
+  })
+  .delete('/books/compliance/items/:id', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => compliance.deleteItem(rctx(c, tx), qUuid(c))));
+  })
+  // ───── payroll ─────
+  .get('/books/employees', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => payroll.listEmployees(rctx(c, tx))));
+  })
+  .post('/books/employees', async (c) => {
+    requireAdmin(c);
+    const b = payroll.employeeSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => payroll.saveEmployee(rctx(c, tx), null, b)), 201);
+  })
+  .put('/books/employees/:id', async (c) => {
+    requireAdmin(c);
+    const b = payroll.employeeSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => payroll.saveEmployee(rctx(c, tx), qUuid(c), b)));
+  })
+  .get('/books/payroll', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => payroll.listRuns(rctx(c, tx))));
+  })
+  .post('/books/payroll', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => payroll.createRun(rctx(c, tx), b.period)), 201);
+  })
+  .get('/books/payroll/:id', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => payroll.getRun(rctx(c, tx), qUuid(c))));
+  })
+  .delete('/books/payroll/:id', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => payroll.deleteRun(rctx(c, tx), qUuid(c))));
+  })
+  .put('/books/payroll/:id/slips/:slipId', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ paidDays: z.number().min(0).max(31), tds: z.number().min(0).nullish(), otherDeductions: z.number().min(0).default(0), note: z.string().max(500).nullish() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => payroll.updateSlip(rctx(c, tx), qUuid(c), qUuid(c, 'slipId'), b)));
+  })
+  .post('/books/payroll/:id/post', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => payroll.postRun(rctx(c, tx), qUuid(c))));
+  })
+  .post('/books/payroll/:id/reopen', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => payroll.reopenRun(rctx(c, tx), qUuid(c))));
+  })
+  .post('/books/payroll/:id/pay', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ bankAccountId: z.string().uuid(), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => payroll.payRun(rctx(c, tx), qUuid(c), b)));
+  })
+  // ───── TDS deposits and returns ─────
+  .get('/books/tds/challans', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => tdsr.listChallans(rctx(c, tx), c.req.query('from'), c.req.query('to'))));
+  })
+  .post('/books/tds/challans', async (c) => {
+    requireAdmin(c);
+    const b = tdsr.challanSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => tdsr.saveChallan(rctx(c, tx), b)), 201);
+  })
+  .delete('/books/tds/challans/:id', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => tdsr.deleteChallan(rctx(c, tx), qUuid(c))));
+  })
+  .get('/books/tds/return', async (c) => {
+    requireAdmin(c);
+    const q = z.object({ fy: z.coerce.number().int().min(2015).max(2100), q: z.coerce.number().int().min(1).max(4), form: z.enum(['26Q', '24Q']).default('26Q'), format: z.enum(['json', 'csv']).default('json') }).parse(c.req.query());
+    const r = await c.var.db.tx(scope(c, true), (tx) => tdsr.quarterReturn(rctx(c, tx), q.fy, q.q as 1 | 2 | 3 | 4, q.form));
+    if (q.format === 'csv') {
+      c.header('content-type', 'text/csv; charset=utf-8');
+      c.header('content-disposition', `attachment; filename="${q.form}-${r.fy}-${r.quarter}.csv"`);
+      return c.body(tdsr.returnCsv(r));
+    }
+    return c.json(r);
+  })
+  .get('/books/tds/form16a', async (c) => {
+    requireAdmin(c);
+    const q = z.object({ fy: z.coerce.number().int(), q: z.coerce.number().int().min(1).max(4) }).parse(c.req.query());
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => tdsr.form16aRegister(rctx(c, tx), q.fy, q.q as 1 | 2 | 3 | 4)));
+  })
+  // ───── the books' audit trail (every change to documents, lines, entries and bank lines) ─────
+  .get('/books/audit-trail', async (c) => {
+    requireAdmin(c);
+    const q = z
+      .object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), object: z.string().max(40).optional(), action: z.enum(['create', 'update', 'delete']).optional(), format: z.enum(['json', 'csv']).default('json'), limit: z.coerce.number().int().min(1).max(5000).default(300) })
+      .parse(c.req.query());
+    const objs = q.object ? [q.object] : BOOKS_AUDIT_OBJECTS;
+    const rows = await c.var.db.tx(scope(c, true), (tx) =>
+      tx.query<{ id: string; created_at: Date; action: string; object_key: string; record_id: string; actor: string | null; changes: unknown }>(
+        `select l.id, l.created_at, l.action, l.object_key, l.record_id, coalesce(u.full_name, 'System') as actor, l.changes
+           from audit_logs l left join users u on u.tenant_id = l.tenant_id and u.id = l.actor_id
+          where l.tenant_id = $1 and l.object_key = any($2::text[]) and l.created_at >= $3::date and l.created_at < $4::date + 1 and ($5::text is null or l.action = $5)
+          order by l.created_at desc limit $6`,
+        [c.var.tenant.id, objs, q.from ?? '2000-01-01', q.to ?? '2999-12-31', q.action ?? null, q.limit],
+      ),
+    );
+    if (q.format === 'csv') {
+      const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const body = [['When', 'Who', 'Action', 'Record type', 'Record id', 'Changes'].join(','), ...rows.map((r) => [new Date(r.created_at).toISOString(), r.actor, r.action, r.object_key, r.record_id, JSON.stringify(r.changes)].map(esc).join(','))].join('\n');
+      c.header('content-type', 'text/csv; charset=utf-8');
+      c.header('content-disposition', 'attachment; filename="books-audit-trail.csv"');
+      return c.body(body);
+    }
+    return c.json(rows);
   })
   .get('/books/reminders', async (c) => {
     requireAdmin(c);

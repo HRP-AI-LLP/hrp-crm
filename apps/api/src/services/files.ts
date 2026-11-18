@@ -6,7 +6,7 @@
  * Uploads are sniffed from their first bytes; the detected type wins over what the client claims,
  * and anything that could execute in a browser (HTML, SVG, scripts) is refused.
  */
-import { objectPerm } from '@synapse/shared';
+import { hasAdmin, objectPerm } from '@synapse/shared';
 import type { Env } from '../env';
 import { hmacSha256Hex, timingSafeEqual } from '../lib/crypto';
 import { ApiError, badRequest, forbidden, notFound } from '../lib/errors';
@@ -96,7 +96,16 @@ export const fileDto = (f: FileRow) => ({
   inline: INLINE_TYPES.has(f.content_type),
 });
 
+/** Files on things the books keep (filings, staff, payroll, challans): for the people who keep the books. */
+const BOOKS_OWNED: Record<string, string> = { compliance_item: 'compliance_items', employee: 'employees', payroll_run: 'payroll_runs', tds_challan: 'tds_challans' };
+
 async function assertRecordAccess(ctx: RecordCtx, objectKey: string, recordId: string, action: 'read' | 'update') {
+  const table = BOOKS_OWNED[objectKey];
+  if (table) {
+    if (!hasAdmin(ctx.principal.permissions, 'books')) throw forbidden();
+    if (!(await ctx.tx.one(`select 1 from ${table} where tenant_id = $1 and id = $2`, [ctx.tenantId, recordId]))) throw notFound();
+    return;
+  }
   if (action === 'update' && objectPerm(ctx.principal.permissions, objectKey).update === 'none') throw forbidden();
   await loadRow(ctx, objectKey, recordId, action);
 }

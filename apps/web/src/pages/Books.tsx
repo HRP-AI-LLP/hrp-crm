@@ -4,10 +4,14 @@
  */
 import { BooksDashboard } from '../components/books/BooksDashboard';
 import { ReminderSettings } from '../components/books/Reminders';
+import { Compliance } from '../components/books/Compliance';
+import { Payroll } from '../components/books/Payroll';
+import { TdsReturns } from '../components/books/TdsReturns';
+import { AuditTrail } from '../components/books/AuditTrail';
 import { hasAdmin } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { BarChart } from '../components/charts';
 import { useAct, VendorPaymentModal } from '../components/books/BookPanels';
 import { useApps, useMetaReady } from '../components/ops/OrderPanel';
@@ -41,16 +45,18 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 const SOURCE_LINK: Record<string, string> = { invoice: 'invoice', credit_note: 'invoice', write_off: 'invoice', payment: 'payment', bill: 'bill', vendor_credit: 'bill', vendor_payment: 'vendor_payment', expense: 'expense', reimbursement: 'expense' };
 
-type Tab = 'overview' | 'desk' | 'payables' | 'banking' | 'journals' | 'accounts' | 'reports' | 'recurring' | 'budgets' | 'assets' | 'deposits' | 'gst' | 'settings';
+type Tab = 'overview' | 'desk' | 'compliance' | 'payables' | 'banking' | 'payroll' | 'journals' | 'accounts' | 'reports' | 'recurring' | 'budgets' | 'assets' | 'deposits' | 'gst' | 'tds' | 'audit' | 'settings';
 const TABS: [Tab, string][] = [
-  ['overview', 'Overview'], ['desk', 'Accounts desk'], ['payables', 'Payables'], ['banking', 'Banking'], ['journals', 'Journals'], ['accounts', 'Chart of accounts'], ['reports', 'Reports'],
-  ['recurring', 'Recurring'], ['budgets', 'Budgets'], ['assets', 'Fixed assets'], ['deposits', 'Deposits & guarantees'], ['gst', 'GST & TDS'], ['settings', 'Settings'],
+  ['overview', 'Overview'], ['desk', 'Accounts desk'], ['compliance', 'Compliance'], ['payables', 'Payables'], ['banking', 'Banking'], ['payroll', 'Payroll'], ['journals', 'Journals'],
+  ['accounts', 'Chart of accounts'], ['reports', 'Reports'], ['recurring', 'Recurring'], ['budgets', 'Budgets'], ['assets', 'Fixed assets'], ['deposits', 'Deposits & guarantees'], ['gst', 'GST & TDS'],
+  ['tds', 'TDS returns'], ['audit', 'Audit trail'], ['settings', 'Settings'],
 ];
 
 export function BooksPage() {
   const { me } = useAuth();
   const apps = useApps();
   const metaReady = useMetaReady();
+  const loc = useLocation();
   const [tab, setTab] = useState<Tab>(() => {
     // "#gst:2026-06" opens GST & TDS on that month
     const [h, arg] = window.location.hash.slice(1).split(':');
@@ -62,6 +68,16 @@ export function BooksPage() {
       }
     return TABS.find(([k]) => k === h)?.[0] ?? 'overview';
   });
+  useEffect(() => {
+    const on = () => {
+      const h = window.location.hash.slice(1).split(':')[0];
+      const t = TABS.find(([k]) => k === h)?.[0];
+      if (t) setTab(t);
+    };
+    window.addEventListener('hashchange', on);
+    on();
+    return () => window.removeEventListener('hashchange', on);
+  }, [loc.key]);
   if (!me) return null;
   if (!apps.has('books')) return metaReady ? <Navigate to="/" replace /> : <Spinner />;
   if (!hasAdmin(me.permissions, 'books')) {
@@ -112,6 +128,10 @@ export function BooksPage() {
           {tab === 'assets' && <Assets />}
           {tab === 'deposits' && <Deposits />}
           {tab === 'gst' && <GstTds />}
+          {tab === 'compliance' && <Compliance />}
+          {tab === 'payroll' && <Payroll />}
+          {tab === 'tds' && <TdsReturns />}
+          {tab === 'audit' && <AuditTrail />}
           {tab === 'settings' && <Settings />}
         </div>
       </section>

@@ -187,7 +187,7 @@ async function orgFacts(ctx: RecordCtx) {
   const years = [fyNow - 3, fyNow - 2, fyNow - 1];
   const rows = await ctx.tx.query<{ fy: number; v: number }>(
     `select extract(year from invoice_date - interval '3 months')::int as fy, sum(case when doc_type = 'credit_note' then -taxable_total else taxable_total end)::float8 as v
-       from invoices where tenant_id = $1 and deleted_at is null and status not in ('draft','cancelled') and doc_type in ('invoice','credit_note')
+       from invoices where tenant_id = $1 and deleted_at is null and status not in ('draft','cancelled') and doc_type in ('tax_invoice','credit_note')
         and invoice_date >= $2::date and invoice_date < $3::date group by 1`,
     [ctx.tenantId, `${years[0]}-04-01`, `${fyNow}-04-01`],
   );
