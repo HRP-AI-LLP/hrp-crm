@@ -2343,9 +2343,20 @@ export async function openDocuments(ctx: RecordCtx) {
       order by case when i.status in ('issued','partially_paid') then 0 when i.status = 'draft' then 2 else 1 end, i.invoice_date desc nulls last limit 1500`,
     [ctx.tenantId],
   );
-  const projects = await ctx.tx.query(`select id, name, account_id from projects where tenant_id = $1 and deleted_at is null order by name limit 500`, [ctx.tenantId]);
-  const contracts = await ctx.tx.query(`select id, contract_number as number, name, account_id from service_contracts where tenant_id = $1 and status in ('active','draft') order by name limit 500`, [ctx.tenantId]);
-  const deals = await ctx.tx.query(`select id, name, account_id from deals where tenant_id = $1 and deleted_at is null order by updated_at desc limit 500`, [ctx.tenantId]);
+  // the work a receipt can be for, with its customer and how the pieces belong together (deal → project → contract)
+  const projects = await ctx.tx.query(
+    `select p.id, p.name, p.account_id, a.name as account, p.deal_id from projects p left join accounts a on a.tenant_id = p.tenant_id and a.id = p.account_id where p.tenant_id = $1 and p.deleted_at is null order by p.name limit 500`,
+    [ctx.tenantId],
+  );
+  const contracts = await ctx.tx.query(
+    `select c.id, c.contract_number as number, c.name, c.account_id, a.name as account, c.project_id from service_contracts c left join accounts a on a.tenant_id = c.tenant_id and a.id = c.account_id
+      where c.tenant_id = $1 and c.status in ('active','draft') order by c.name limit 500`,
+    [ctx.tenantId],
+  );
+  const deals = await ctx.tx.query(
+    `select d.id, d.name, d.account_id, a.name as account from deals d left join accounts a on a.tenant_id = d.tenant_id and a.id = d.account_id where d.tenant_id = $1 and d.deleted_at is null order by d.updated_at desc limit 500`,
+    [ctx.tenantId],
+  );
   // invoices read from files but not yet approved into the books (Accounts desk → Import invoices)
   const pending = await ctx.tx.one<{ n: number; customers: string | null }>(
     `select count(*)::int as n, string_agg(distinct data -> 'customer' ->> 'name', ', ') as customers from doc_import_items where tenant_id = $1 and status in ('pending','failed')`,

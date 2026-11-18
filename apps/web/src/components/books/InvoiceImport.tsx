@@ -67,10 +67,18 @@ export function InvoiceImport() {
         }
         let n = 0;
         const notes: string[] = [];
+        // a PDF with text goes to the server too: it is read there the same way as invoices that come by mail
+        let pdf: string | undefined;
+        if (!password && /\.pdf$/i.test(f.name) && f.size <= 15 * 1024 * 1024 && parts.some((x) => x.pages?.length)) {
+          const buf = new Uint8Array(await f.arrayBuffer());
+          let bin = '';
+          for (let k = 0; k < buf.length; k += 0x8000) bin += String.fromCharCode(...buf.subarray(k, k + 0x8000));
+          pdf = btoa(bin);
+        }
         for (const p of parts) {
           setP(i, p.images ? 'Reading the pictures with AI…' : 'Reading…');
           try {
-            const r = await post<Json>(`/api/v1/books/imports/${b.id}/files`, { fileName: p.name, pages: p.pages, rows: p.rows, images: p.images });
+            const r = await post<Json>(`/api/v1/books/imports/${b.id}/files`, { fileName: p.name, pages: p.pages, rows: p.rows, images: p.images, ...(pdf && p.pages ? { pdf } : {}) });
             n += r.invoices;
             if (r.note) notes.push(r.note);
           } catch (e) {
@@ -173,6 +181,25 @@ export function InvoiceImport() {
               </button>
             ))}
           </div>
+          {(filter === 'pending' || filter === 'failed') && count(filter) > 0 && (
+            <button
+              className="btn sm ghost"
+              disabled={busy}
+              title="Set aside everything waiting in this import, e.g. to import the files again"
+              onClick={async () => {
+                if (!window.confirm('Set aside every invoice still waiting in this import? Nothing is created; you can import the files again.')) return;
+                try {
+                  const r = await post<Json>('/api/v1/books/imports/reject-waiting', { importId: current });
+                  toast(`${r.rejected} set aside`);
+                  refresh();
+                } catch (e) {
+                  toast((e as Error).message, true);
+                }
+              }}
+            >
+              Discard all waiting
+            </button>
+          )}
           {(filter === 'pending' || filter === 'failed') && (
             <button className="btn sm primary" disabled={busy || !sel.size} onClick={() => approve([...sel])}>
               Approve selected{sel.size ? ` (${sel.size})` : ''}

@@ -440,8 +440,8 @@ function receiptChange(rc: Receipt, docs: Json | undefined) {
   if (rc.paymentId) return { kind: 'receipt', paymentId: rc.paymentId };
   const inv = (docs?.invoices ?? []) as Json[];
   const allocations = Object.entries(rc.alloc).map(([invoiceId, a]) => ({ invoiceId, amount: Number(a) || Number(inv.find((x) => x.id === invoiceId)?.balance ?? 0) })).filter((x) => x.amount > 0);
-  const [tt, tid] = rc.target.split(':');
-  const work = tid ? ((docs?.[tt === 'project' ? 'projects' : tt === 'contract' ? 'contracts' : 'deals'] ?? []) as Json[]).find((x) => x.id === tid) : null;
+  const parts = Object.fromEntries(rc.target.split('|').filter(Boolean).map((x) => x.split(':') as [string, string]));
+  const work = ([['projects', parts.project], ['contracts', parts.contract], ['deals', parts.deal]] as const).map(([k, id]) => (id ? ((docs?.[k] ?? []) as Json[]).find((x) => x.id === id) : null)).find(Boolean);
   const customerId = rc.customerId || (inv.find((x) => rc.alloc[x.id] !== undefined)?.account_id ?? work?.account_id ?? null);
   return {
     kind: 'receipt',
@@ -449,9 +449,9 @@ function receiptChange(rc: Receipt, docs: Json | undefined) {
     customerId,
     tdsAmount: Number(rc.tds) || 0,
     gstTdsAmount: Number(rc.gstTds) || 0,
-    projectId: tt === 'project' ? tid : null,
-    contractId: tt === 'contract' ? tid : null,
-    dealId: tt === 'deal' ? tid : null,
+    projectId: parts.project ?? null,
+    contractId: parts.contract ?? null,
+    dealId: parts.deal ?? null,
   };
 }
 
@@ -507,11 +507,33 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
     } else delete next[x.id];
     onChange({ ...value, alloc: next, paymentId: '', customerId: on ? x.account_id : value.customerId });
   };
-  const targets = [
-    ...((docs?.contracts ?? []) as Json[]).filter((c) => !chosenCustomer || c.account_id === chosenCustomer).map((c) => [`contract:${c.id}`, `Contract ${c.number} · ${c.name}`]),
-    ...((docs?.projects ?? []) as Json[]).filter((c) => !chosenCustomer || c.account_id === chosenCustomer).map((c) => [`project:${c.id}`, `Project · ${c.name}`]),
-    ...((docs?.deals ?? []) as Json[]).filter((c) => !chosenCustomer || c.account_id === chosenCustomer).map((c) => [`deal:${c.id}`, `Deal · ${c.name}`]),
-  ];
+  // the work, by customer: a deal with its project and contract is one engagement, not three choices
+  const deals = (docs?.deals ?? []) as Json[];
+  const projects = (docs?.projects ?? []) as Json[];
+  const contracts = (docs?.contracts ?? []) as Json[];
+  const inScope = (x: Json) => !chosenCustomer || x.account_id === chosenCustomer || (!!key(chosenName) && key(String(x.account ?? '')) === key(chosenName));
+  const groups = new Map<string, { label: string; options: [string, string][] }>();
+  const add = (acc: string, label: string, value: string, text: string) => {
+    const g = groups.get(acc) ?? { label, options: [] };
+    g.options.push([value, text]);
+    groups.set(acc, g);
+  };
+  const usedP = new Set<string>();
+  const usedC = new Set<string>();
+  for (const d of deals.filter(inScope)) {
+    const ps = projects.filter((p) => p.deal_id === d.id);
+    const cs = contracts.filter((c) => ps.some((p) => p.id === c.project_id));
+    ps.forEach((p) => usedP.add(p.id));
+    cs.forEach((c) => usedC.add(c.id));
+    const parts = [`deal:${d.id}`, ...ps.slice(0, 1).map((p) => `project:${p.id}`), ...cs.slice(0, 1).map((c) => `contract:${c.id}`)];
+    add(d.account_id, d.account ?? 'Customer', parts.join('|'), [d.name, ps[0] ? `project ${ps[0].name}` : null, cs[0] ? `contract ${cs[0].number}` : null].filter(Boolean).join(' · '));
+  }
+  for (const p of projects.filter((x) => !usedP.has(x.id) && inScope(x))) {
+    const cs = contracts.filter((c) => c.project_id === p.id);
+    cs.forEach((c) => usedC.add(c.id));
+    add(p.account_id, p.account ?? 'Customer', [`project:${p.id}`, ...cs.slice(0, 1).map((c) => `contract:${c.id}`)].join('|'), [`Project ${p.name}`, cs[0] ? `contract ${cs[0].number}` : null].filter(Boolean).join(' · '));
+  }
+  for (const c of contracts.filter((x) => !usedC.has(x.id) && inScope(x))) add(c.account_id, c.account ?? 'Customer', `contract:${c.id}`, `Contract ${c.number} · ${c.name}`);
   const cell = { padding: '4px 6px' };
   return (
     <div className="stack" style={{ gap: 8 }}>
@@ -618,10 +640,14 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
               {Object.keys(value.alloc).length ? 'The rest is an advance for' : 'No invoice yet? It is an advance for'}
               <select value={value.target} onChange={(e) => onChange({ ...value, target: e.target.value })}>
                 <option value="">{chosenCustomer ? 'The customer (not tied to any work)' : 'Choose the customer above, or the work below'}</option>
-                {targets.map(([k, l]) => (
-                  <option key={k} value={k}>
-                    {l}
-                  </option>
+                {[...groups.entries()].map(([acc, g]) => (
+                  <optgroup key={acc} label={g.label}>
+                    {g.options.map(([k, l]) => (
+                      <option key={k} value={k}>
+                        {l}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
               </select>
             </label>

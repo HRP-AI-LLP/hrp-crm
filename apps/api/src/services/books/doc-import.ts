@@ -21,6 +21,7 @@ import { badRequest, conflict, notFound } from '../../lib/errors';
 import { type AiCtx, guardedChat } from '../ai/features';
 import { extractJson } from '../ai/router';
 import { issueInvoice, recordPayment, saveInvoiceLines } from '../billing';
+import { pdfLines } from '../../lib/pdf-lines';
 import { createRecord, type RecordCtx, type RecordEvent } from '../records';
 import { bookReceiptFromBank } from './desk';
 import { assertBooksAdmin, r2 } from './ledger';
@@ -700,6 +701,8 @@ export const fileSchema = z.object({
   pages: z.array(z.string().max(60000)).max(300).optional(),
   rows: z.array(z.array(z.union([z.string().max(2000), z.number(), z.boolean(), z.null()])).max(200)).max(20000).optional(),
   images: z.array(z.object({ mime: z.enum(['image/png', 'image/jpeg', 'image/webp']), data: z.string().max(6_000_000) })).max(12).optional(),
+  /** the PDF itself (base64): read on the server, the same way mailed invoices are, when it has text */
+  pdf: z.string().max(22_000_000).optional(),
 });
 
 /** Reads one file into staged items: rules for text and sheets; AI when the rules aren't sure, and for pictures. */
@@ -712,6 +715,17 @@ export async function stageFile(deps: { run<T>(fn: (ctx: RecordCtx) => Promise<T
   type Read = { data: InvoiceData; confidence: number; warnings: string[]; engine: 'text' | 'sheet' | 'ai' | 'vision'; pages: string | null; raw: string | null };
   const out: Read[] = [];
   let note: string | null = null;
+  if (f.pdf) {
+    try {
+      const bin = atob(f.pdf.replace(/^data:[^,]+,/, ''));
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const pages = await pdfLines(bytes, 300);
+      if (pages?.some((pg) => pg.trim().length > 40)) f = { ...f, pages };
+    } catch {
+      /* the browser's reading stands */
+    }
+  }
   if (f.rows?.length) {
     for (const x of parseSheet(f.rows, own)) out.push({ ...x, engine: 'sheet', pages: `row ${x.rowsFrom}`, raw: null });
     if (!out.length) note = 'No invoice register found in the sheet (it needs a header row with an invoice number and a total / amount column)';
@@ -959,6 +973,16 @@ export async function approveItem(ctx: RecordCtx, id: string) {
     await ctx.tx.query(`update doc_import_items set status = 'failed', error = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, msg]);
     return { ok: false, error: msg, events: [] as RecordEvent[] };
   }
+}
+
+/** Sets aside every document still waiting (or failed) — to import the files again, say. */
+export async function rejectWaiting(ctx: RecordCtx, importId: string | null) {
+  await assertBooksAdmin(ctx);
+  const r = await ctx.tx.query(
+    `update doc_import_items set status = 'rejected', decided_by = app.current_user_id(), decided_at = now() where tenant_id = $1 and status in ('pending','failed') and ($2::uuid is null or import_id = $2) returning id`,
+    [ctx.tenantId, importId],
+  );
+  return { rejected: r.length };
 }
 
 export async function approveMany(ctx: RecordCtx, ids: string[]) {

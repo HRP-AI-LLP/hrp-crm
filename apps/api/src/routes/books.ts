@@ -772,6 +772,11 @@ export const booksRoutes = new Hono<AppEnv>()
     requireAdmin(c);
     return c.json(await c.var.db.tx(scope(c), (tx) => docs.rejectItem(rctx(c, tx), qUuid(c))));
   })
+  .post('/books/imports/reject-waiting', async (c) => {
+    requireAdmin(c);
+    const b = z.object({ importId: uuid.nullish() }).parse(await c.req.json().catch(() => ({})));
+    return c.json(await c.var.db.tx(scope(c), (tx) => docs.rejectWaiting(rctx(c, tx), b.importId ?? null)));
+  })
   .post('/books/imports/items/approve', async (c) => {
     requireAdmin(c);
     const b = z.object({ ids: z.array(uuid).min(1).max(500) }).parse(await c.req.json());
