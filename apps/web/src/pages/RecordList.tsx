@@ -48,6 +48,10 @@ export function RecordListPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dialog, setDialog] = useState<null | 'create' | 'filter' | 'columns' | 'bulk' | 'import' | 'save' | 'delete'>(null);
   const [exportMenu, setExportMenu] = useState(false);
+  // "New …" from the command palette opens the form straight away
+  useEffect(() => {
+    if (params.get('new') === '1') setDialog('create');
+  }, [object, params]);
   useEffect(() => {
     if (!exportMenu) return;
     const close = (e: MouseEvent) => !(e.target as Element).closest?.('.export-menu') && setExportMenu(false);

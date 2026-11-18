@@ -3,6 +3,7 @@
  * reports, recurring transactions, budgets, fixed assets, GST / TDS and settings.
  */
 import { BooksDashboard } from '../components/books/BooksDashboard';
+import { ReminderSettings } from '../components/books/Reminders';
 import { hasAdmin } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -2928,6 +2929,7 @@ function Settings() {
   };
   return (
     <div className="stack" style={{ maxWidth: 720 }}>
+      <ReminderSettings />
       <div className="panel" style={{ padding: 14 }}>
         <h3 style={{ marginTop: 0 }}>Books of record</h3>
         <div className="stack">

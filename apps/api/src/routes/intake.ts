@@ -117,7 +117,7 @@ export const intakeRoutes = new Hono<AppEnv>()
   })
   .get('/intake/gem-settings', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => gem.gemSettings(rctx(c, tx)))))
   .put('/intake/gem-settings', async (c) => {
-    const b = z.object({ defaultOwnerId: z.string().uuid().nullable(), applyToUnowned: z.boolean().optional() }).parse(await c.req.json());
+    const b = z.object({ defaultOwnerId: z.string().uuid().nullable(), applyToUnowned: z.boolean().optional(), keywords: z.array(z.string().trim().max(60)).max(50).optional(), alertUserIds: z.array(z.string().uuid()).max(20).optional() }).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => gem.saveGemSettings(rctx(c, tx), b)));
   })
   .post('/intake/gem/:id/fetch', async (c) => {

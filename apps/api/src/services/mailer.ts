@@ -29,12 +29,20 @@ export function actionEmail(opts: { heading: string; intro: string; cta: string;
   return { html, text };
 }
 
-export async function sendPlatformMail(env: Env, msg: { to: string; subject: string; html: string; text: string }): Promise<boolean> {
+export async function sendPlatformMail(env: Env, msg: { to: string; subject: string; html: string; text: string; replyTo?: string | null; cc?: string[]; fromName?: string | null }): Promise<boolean> {
   if (!env.RESEND_API_KEY) return false;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-    body: JSON.stringify({ from: env.MAIL_FROM ?? 'HRP Synapse <no-reply@hrpai.in>', to: [msg.to], subject: msg.subject, html: msg.html, text: msg.text }),
+    body: JSON.stringify({
+      from: msg.fromName ? `${msg.fromName.replace(/[<>"]/g, '')} <${(env.MAIL_FROM ?? 'no-reply@hrpai.in').replace(/^.*<|>.*$/g, '')}>` : (env.MAIL_FROM ?? 'HRP Synapse <no-reply@hrpai.in>'),
+      to: [msg.to],
+      ...(msg.cc?.length ? { cc: msg.cc } : {}),
+      ...(msg.replyTo ? { reply_to: msg.replyTo } : {}),
+      subject: msg.subject,
+      html: msg.html,
+      text: msg.text,
+    }),
   }).catch(() => null);
   if (!res?.ok) {
     console.error(JSON.stringify({ level: 'error', msg: 'platform mail failed', status: res?.status ?? 'network' }));

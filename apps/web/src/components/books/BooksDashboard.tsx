@@ -2,13 +2,15 @@
  * The Books overview: headline figures, the monthly income / expenses / profit chart, cash by
  * account, where the money went this year, who owes us and the bills to pay next.
  */
+import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
+import { get } from '../../lib/api';
 import { Link } from 'react-router-dom';
 import { money2 } from '../../lib/format';
 
 type Json = Record<string, any>;
 
-const C = { income: '#0f8dde', expense: '#f59e0b', net: '#0f172a', grid: 'var(--line)', axis: 'var(--ink-3)' };
+const C = { income: '#0f8dde', expense: '#f59e0b', net: 'var(--ink)', grid: 'var(--line)', axis: 'var(--ink-3)' };
 
 /** ₹ in Indian short form: 1.7L, 25K, 1.2Cr */
 export function inrShort(v: number) {
@@ -50,7 +52,7 @@ function TrendChart({ trend }: { trend: { month: string; income: number; expense
   const H = 280;
   const pad = { l: 56, r: 12, t: 14, b: 30 };
   const rows = trend.map((t) => ({ ...t, income: Number(t.income) || 0, expense: Number(t.expense) || 0, net: (Number(t.income) || 0) - (Number(t.expense) || 0) }));
-  const hi = Math.max(1, ...rows.flatMap((r) => [r.income, r.expense, r.net]));
+  const hi = Math.max(1000, ...rows.flatMap((r) => [r.income, r.expense, r.net]));
   const lo = Math.min(0, ...rows.map((r) => r.net));
   const step = niceStep(hi - lo);
   const top = Math.ceil(hi / step) * step;
@@ -99,7 +101,7 @@ function TrendChart({ trend }: { trend: { month: string; income: number; expense
           ))}
           <polyline fill="none" stroke={C.net} strokeWidth={2} points={rows.map((r, i) => `${cx(i)},${y(r.net)}`).join(' ')} pointerEvents="none" />
           {rows.map((r, i) => (
-            <circle key={r.month} cx={cx(i)} cy={y(r.net)} r={hover === i ? 4.5 : 3} fill={r.net < 0 ? 'var(--bad)' : 'var(--good)'} stroke="#fff" strokeWidth={1.5} pointerEvents="none" />
+            <circle key={r.month} cx={cx(i)} cy={y(r.net)} r={hover === i ? 4.5 : 3} fill={r.net < 0 ? 'var(--bad)' : 'var(--good)'} stroke="var(--surface)" strokeWidth={1.5} pointerEvents="none" />
           ))}
         </svg>
       )}
@@ -202,7 +204,9 @@ export function BooksDashboard({ data, go, fy }: { data: Json; go: (t: any) => v
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2.2fr) minmax(260px, 1fr)', gap: 14 }} className="books-dash-row">
-        <Panel title="Income, expenses and profit — last 12 months">{trend.length ? <TrendChart trend={trend} /> : <p className="muted">Nothing posted yet.</p>}</Panel>
+        <Panel title="Income, expenses and profit — last 12 months">
+          {trend.some((t) => t.income || t.expense) ? <TrendChart trend={trend} /> : <p className="muted small">Nothing posted to the ledger yet: income and expenses show here month by month once invoices, bills and bank lines are posted.</p>}
+        </Panel>
         <Panel
           title="Cash by account"
           action={
@@ -233,6 +237,8 @@ export function BooksDashboard({ data, go, fy }: { data: Json; go: (t: any) => v
           )}
         </Panel>
       </div>
+
+      <CashForecast />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 14 }}>
         <Panel title={`Where the money went · FY ${fy}`}>
@@ -313,5 +319,113 @@ export function BooksDashboard({ data, go, fy }: { data: Json; go: (t: any) => v
         </Panel>
       </div>
     </div>
+  );
+}
+
+/** The next 13 weeks: money expected in and out, and the bank balance it leaves. */
+function CashForecast() {
+  const { data } = useQuery({ queryKey: ['books', 'cash-forecast'], queryFn: () => get<Json>('/api/v1/books/cash-forecast?weeks=13'), staleTime: 300_000 });
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const [hover, setHover] = useState<number | null>(null);
+  if (!data) return null;
+  const weeks = data.weeks as { week: string; in: number; out: number; late: number; balance: number }[];
+  const H = 220;
+  const pad = { l: 56, r: 12, t: 12, b: 26 };
+  const hi = Math.max(1000, ...weeks.flatMap((w) => [w.in + w.late, w.out, w.balance]));
+  const lo = Math.min(0, ...weeks.map((w) => w.balance));
+  const step = niceStep(hi - lo);
+  const top = Math.ceil(hi / step) * step;
+  const bottom = Math.floor(lo / step) * step;
+  const ticks: number[] = [];
+  for (let v = bottom; v <= top + step / 2; v += step) ticks.push(v);
+  const iw = Math.max(0, width - pad.l - pad.r);
+  const ih = H - pad.t - pad.b;
+  const y = (v: number) => pad.t + ih - ((v - bottom) / (top - bottom || 1)) * ih;
+  const band = weeks.length ? iw / weeks.length : 0;
+  const bw = Math.min(16, band * 0.32);
+  const cx = (i: number) => pad.l + band * i + band / 2;
+  const low = data.lowest as { week: string; balance: number };
+  const end = weeks[weeks.length - 1];
+  const h = hover != null ? weeks[hover] : null;
+  return (
+    <Panel title="Cash forecast — next 13 weeks">
+      <div className="row small" style={{ gap: 18, flexWrap: 'wrap', marginBottom: 8, color: 'var(--ink-2)' }}>
+        <span>
+          Today <b>{money2(data.opening)}</b>
+        </span>
+        <span>
+          In 13 weeks <b style={{ color: (end?.balance ?? 0) < 0 ? 'var(--bad)' : undefined }}>{money2(end?.balance ?? 0)}</b>
+        </span>
+        <span>
+          Lowest <b style={{ color: low.balance < 0 ? 'var(--bad)' : undefined }}>{money2(low.balance)}</b> in the week of {low.week}
+        </span>
+        {data.late > 0 && <span>{money2(data.late)} of late invoices counted in week 1</span>}
+        {data.usualWeekly > 0 && <span className="muted">usual spending {inrShort(data.usualWeekly)}/week included</span>}
+      </div>
+      <div ref={ref} style={{ position: 'relative' }}>
+        <div className="row small" style={{ gap: 16, margin: '0 0 6px', color: 'var(--ink-2)' }}>
+          <span className="row" style={{ gap: 6 }}>
+            <i style={{ width: 10, height: 10, borderRadius: 2, background: '#059669', display: 'inline-block' }} /> Money in
+          </span>
+          <span className="row" style={{ gap: 6 }}>
+            <i style={{ width: 10, height: 10, borderRadius: 2, background: '#86efac', display: 'inline-block' }} /> Late invoices
+          </span>
+          <span className="row" style={{ gap: 6 }}>
+            <i style={{ width: 10, height: 10, borderRadius: 2, background: C.expense, display: 'inline-block' }} /> Money out
+          </span>
+          <span className="row" style={{ gap: 6 }}>
+            <i style={{ width: 14, height: 2, background: C.income, display: 'inline-block' }} /> Bank balance
+          </span>
+        </div>
+        {width > 0 && (
+          <svg width={width} height={H} role="img" aria-label="Cash forecast by week" onMouseLeave={() => setHover(null)}>
+            {ticks.map((v) => (
+              <g key={v}>
+                <line x1={pad.l} x2={width - pad.r} y1={y(v)} y2={y(v)} stroke={v === 0 ? 'var(--ink-3)' : 'var(--line)'} strokeDasharray={v === 0 ? undefined : '3 3'} />
+                <text x={pad.l - 8} y={y(v)} dy="0.32em" textAnchor="end" fontSize={11} fill="var(--ink-3)">
+                  {inrShort(v)}
+                </text>
+              </g>
+            ))}
+            {weeks.map((w, i) => (
+              <g key={w.week} onMouseEnter={() => setHover(i)}>
+                <rect x={pad.l + band * i} y={pad.t} width={band} height={ih} fill={hover === i ? 'var(--brand-50)' : 'transparent'} />
+                <rect x={cx(i) - bw - 1} y={y(w.in + w.late)} width={bw} height={Math.max(0, y(0) - y(w.late))} fill="#86efac" rx={2} />
+                <rect x={cx(i) - bw - 1} y={y(w.in)} width={bw} height={Math.max(0, y(0) - y(w.in))} fill="#059669" rx={2} />
+                <rect x={cx(i) + 1} y={y(w.out)} width={bw} height={Math.max(0, y(0) - y(w.out))} fill={C.expense} rx={2} />
+                {i % 2 === 0 && (
+                  <text x={cx(i)} y={H - 8} textAnchor="middle" fontSize={11} fill="var(--ink-3)">
+                    {new Date(`${w.week}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' })}
+                  </text>
+                )}
+              </g>
+            ))}
+            <polyline fill="none" stroke={C.income} strokeWidth={2} points={weeks.map((w, i) => `${cx(i)},${y(w.balance)}`).join(' ')} pointerEvents="none" />
+            {weeks.map((w, i) => (
+              <circle key={w.week} cx={cx(i)} cy={y(w.balance)} r={hover === i ? 4 : 2.5} fill={w.balance < 0 ? 'var(--bad)' : C.income} pointerEvents="none" />
+            ))}
+          </svg>
+        )}
+        {h && hover != null && (
+          <div className="small" style={{ position: 'absolute', top: 30, left: Math.min(Math.max(cx(hover) - 95, 0), Math.max(0, width - 190)), width: 190, pointerEvents: 'none', background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 8, boxShadow: 'var(--shadow-pop)', padding: '8px 10px' }}>
+            <b>Week of {h.week}</b>
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <span>In</span> {money2(h.in)}
+            </div>
+            {h.late > 0 && (
+              <div className="row" style={{ justifyContent: 'space-between' }}>
+                <span>Late invoices</span> {money2(h.late)}
+              </div>
+            )}
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <span>Out</span> {money2(h.out)}
+            </div>
+            <div className="row" style={{ justifyContent: 'space-between', borderTop: '1px solid var(--line)', marginTop: 4, paddingTop: 4 }}>
+              <span>Balance</span> <b style={{ color: h.balance < 0 ? 'var(--bad)' : undefined }}>{money2(h.balance)}</b>
+            </div>
+          </div>
+        )}
+      </div>
+    </Panel>
   );
 }

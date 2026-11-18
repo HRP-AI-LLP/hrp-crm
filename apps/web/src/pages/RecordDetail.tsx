@@ -16,6 +16,8 @@ import { dateTime, relative } from '../lib/format';
 import { useObject, usePipelines } from '../lib/hooks';
 import { TaskList } from './Tasks';
 import { DuplicateBanner, MergeModal, RelatedPanel } from '../components/RecordData';
+import { Customer360 } from '../components/Customer360';
+import { RemindButton } from '../components/books/Reminders';
 import { EmailComposer } from '../components/EmailComposer';
 import { placeCall, useIntegrationStatus } from '../components/MailboxPanel';
 import { ShareModal } from '../components/ShareModal';
@@ -221,6 +223,7 @@ export function RecordDetailPage() {
 
       {canEdit && <DuplicateBanner obj={obj} record={rec} />}
       {merging && <MergeModal obj={obj} master={rec} candidates={[]} onClose={() => setMerging(false)} />}
+      {object === 'account' && <Customer360 id={id} />}
       {object === 'quote' && (
         <div style={{ marginBottom: 20 }}>
           <ApprovalBar object={object} record={rec} canEdit={canEdit} />
@@ -256,6 +259,7 @@ export function RecordDetailPage() {
           {apps.has('books') && rec.doc_type === 'tax_invoice' && (
             <div className="row" style={{ justifyContent: 'flex-end', marginBottom: 8 }}>
               <MakeRecurring kind="invoice" rec={rec} />
+              {['issued', 'partially_paid'].includes(String(rec.status)) && <RemindButton invoiceId={id} />}
               {['issued', 'partially_paid'].includes(String(rec.status)) && <WriteOffButton invoice={rec} />}
             </div>
           )}

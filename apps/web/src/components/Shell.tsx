@@ -1,6 +1,6 @@
 import { hasAdmin } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { get, post } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -11,6 +11,9 @@ import { useMeta } from '../lib/hooks';
 import { Icon, Spinner } from './ui';
 import { useApprovalCount } from './Approvals';
 import { useOnline } from '../lib/outbox';
+import { CommandPalette, type Command, useCommandPaletteShortcut } from './CommandPalette';
+import { NI, OBJECT_ICON } from './NavIcons';
+import { useTheme } from '../lib/theme';
 
 const svg = (d: string) => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -191,7 +194,125 @@ export function Shell() {
   // people an admin named to manage the organisation profile reach it without the rest of Settings
   const orgQ = useQuery({ queryKey: ['organisation'], queryFn: () => get<Record<string, any>>('/api/v1/organisation'), enabled: !!me, staleTime: 300_000, retry: false });
   const orgManager = !!orgQ.data?.canManage;
+  const [palette, setPalette] = useState(false);
+  const openPalette = useCallback(() => setPalette(true), []);
+  useCommandPaletteShortcut(openPalette);
+  const [theme, setTheme] = useTheme();
+  const [closed, setClosed] = useState<Set<string>>(() => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('synapse.nav.closed') ?? '[]') as string[]);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggleGroup = (k: string) =>
+    setClosed((c) => {
+      const n = new Set(c);
+      if (n.has(k)) n.delete(k);
+      else n.add(k);
+      try {
+        localStorage.setItem('synapse.nav.closed', JSON.stringify([...n]));
+      } catch {
+        /* ignore */
+      }
+      return n;
+    });
   const admin = me && (can('organisation') || can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains') || can('privacy') || can('developers') || can('ai'));
+
+  // the sidebar, as data: drawn below and offered in the command palette
+  type Item = { to: string; label: string; icon: string; badge?: number | null; end?: boolean };
+  const groups: { key: string; label: string | null; items: Item[] }[] = [
+    {
+      key: 'top',
+      label: null,
+      items: [
+        { to: '/', label: 'Home', icon: 'home', end: true },
+        { to: '/copilot', label: 'Copilot', icon: 'spark', badge: copilot.data?.insights?.length || null },
+        { to: '/field', label: 'My day', icon: 'sun' },
+        { to: '/tasks', label: 'My tasks', icon: 'check' },
+      ],
+    },
+    {
+      key: 'sales',
+      label: 'Sales',
+      items: [
+        ...std.map((k) => objects.find((o) => o.key === k)).filter(Boolean).map((o) => ({ to: `/o/${o!.key}`, label: o!.plural, icon: OBJECT_ICON[o!.key] ?? 'file' })),
+        ...(objects.some((o) => o.key === 'deal') ? [{ to: '/pipeline/deal', label: 'Deal board', icon: 'board' }] : []),
+      ],
+    },
+    {
+      key: 'ops',
+      label: 'Operations',
+      items: [
+        ...opsObjects.map((o) => ({ to: `/o/${o.key}`, label: o.plural, icon: OBJECT_ICON[o.key] ?? 'file' })),
+        ...(apps.has('inventory') ? [{ to: '/inventory', label: 'Inventory', icon: 'box' }] : []),
+        ...(apps.has('delivery') ? [{ to: '/schedule', label: 'Field schedule', icon: 'calendar' }] : []),
+        ...(apps.has('billing') ? [{ to: '/billing', label: 'Billing & GST', icon: 'stamp' }] : []),
+        ...(apps.has('books') && me && hasAdmin(me.permissions, 'books') ? [{ to: '/books', label: 'Books', icon: 'book' }] : []),
+      ],
+    },
+    ...(apps.has('manufacturing')
+      ? [{ key: 'mfg', label: 'Manufacturing', items: [{ to: '/manufacturing', label: 'Production', icon: 'factory' }, { to: '/o/work_order', label: 'Work orders', icon: 'factory' }, { to: '/o/job_work', label: 'Job work', icon: 'wrench' }] }]
+      : []),
+    ...(apps.has('projects')
+      ? [
+          {
+            key: 'projects',
+            label: 'Projects',
+            items: [
+              { to: '/projects', label: 'Projects', icon: 'folder' },
+              { to: '/timesheet', label: 'Timesheet', icon: 'clock' },
+              { to: '/it/subscriptions', label: 'Subscriptions', icon: 'repeat' },
+              { to: '/it/contracts', label: 'Contracts', icon: 'contract' },
+              { to: '/it/products', label: 'Products & roadmap', icon: 'layers' },
+              { to: '/it/capacity', label: 'Capacity', icon: 'gauge' },
+            ],
+          },
+        ]
+      : []),
+    {
+      key: 'engage',
+      label: 'Engage',
+      items: [
+        { to: '/inbox', label: 'Inbox', icon: 'inbox', badge: inbox.data?.counts?.unread || null },
+        ...(can('campaigns') ? [{ to: '/campaigns', label: 'Campaigns', icon: 'megaphone' }] : []),
+        { to: '/intake/gem', label: 'GeM bids', icon: 'gavel' },
+        { to: '/intake/documents', label: 'Bills from mail', icon: 'mail' },
+      ],
+    },
+    {
+      key: 'plan',
+      label: 'Plan',
+      items: [
+        { to: '/health', label: 'Business health', icon: 'heart' },
+        { to: '/calendar', label: 'Calendar', icon: 'calendar' },
+        { to: '/forecast', label: 'Forecast', icon: 'trend' },
+        { to: '/reports', label: 'Reports', icon: 'chart' },
+        { to: '/dashboards', label: 'Dashboards', icon: 'grid' },
+        { to: '/approvals', label: 'Approvals', icon: 'stamp', badge: approvals.data?.pending || null },
+      ],
+    },
+    ...(custom.length ? [{ key: 'custom', label: 'Your objects', items: custom.map((o) => ({ to: `/o/${o.key}`, label: o.plural, icon: 'grid' })) }] : []),
+    {
+      key: 'assist',
+      label: 'Assist',
+      items: [
+        { to: '/knowledge', label: 'Knowledge base', icon: 'bulb' },
+        ...(can('developers') || can('channels') || can('users') ? [{ to: '/developers', label: 'Developers', icon: 'code' }] : []),
+        ...(admin || orgManager ? [{ to: '/organisation', label: 'Organisation', icon: 'org' }] : []),
+        ...(admin ? [{ to: '/settings', label: 'Settings', icon: 'gear' }] : []),
+      ],
+    },
+  ].filter((g) => g.items.length);
+  const commands: Command[] = [
+    ...groups.flatMap((g) => g.items.map((i) => ({ id: `go:${i.to}`, label: i.label, group: 'Go to' as const, icon: i.icon, to: i.to, hint: g.label ?? undefined }))),
+    ...objects
+      .filter((o) => [...std, ...opsKeys].includes(o.key))
+      .map((o) => ({ id: `new:${o.key}`, label: `New ${o.label.toLowerCase()}`, group: 'Create' as const, icon: 'plus', to: `/o/${o.key}?new=1`, keywords: `add create ${o.label}` })),
+    { id: 'act:theme', label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme', group: 'Actions', icon: theme === 'dark' ? 'sun' : 'moon', run: () => setTheme(theme === 'dark' ? 'light' : 'dark'), keywords: 'dark mode night appearance' },
+    { id: 'act:account', label: 'My account and security', group: 'Actions', icon: 'user', to: '/account' },
+    { id: 'act:out', label: 'Sign out', group: 'Actions', icon: 'arrow', run: () => logout() },
+  ];
 
   return (
     <div className="shell">
@@ -203,96 +324,26 @@ export function Shell() {
             <span>{me?.tenant.name}</span>
           </div>
         </div>
-        <NavLink to="/" end>
-          Home
-        </NavLink>
-        <NavLink to="/copilot">
-          Copilot{copilot.data?.insights?.length ? <span className="nav-badge">{copilot.data.insights.length}</span> : null}
-        </NavLink>
-        <NavLink to="/field">My day</NavLink>
-        <NavLink to="/tasks">My tasks</NavLink>
-        <div className="nav-group">
-          <div>Sales</div>
-          {std
-            .map((k) => objects.find((o) => o.key === k))
-            .filter(Boolean)
-            .map((o) => (
-              <NavLink key={o!.key} to={`/o/${o!.key}`}>
-                {o!.plural}
-              </NavLink>
-            ))}
-          {objects.some((o) => o.key === 'deal') && <NavLink to="/pipeline/deal">Deal board</NavLink>}
-        </div>
-        {(opsObjects.length > 0 || apps.has('inventory')) && (
-          <div className="nav-group">
-            <div>Operations</div>
-            {opsObjects.map((o) => (
-              <NavLink key={o.key} to={`/o/${o.key}`}>
-                {o.plural}
-              </NavLink>
-            ))}
-            {apps.has('inventory') && <NavLink to="/inventory">Inventory</NavLink>}
-            {apps.has('delivery') && <NavLink to="/schedule">Field schedule</NavLink>}
-            {apps.has('billing') && <NavLink to="/billing">Billing &amp; GST</NavLink>}
-            {apps.has('books') && me && hasAdmin(me.permissions, 'books') && <NavLink to="/books">Books</NavLink>}
-          </div>
-        )}
-        {apps.has('manufacturing') && (
-          <div className="nav-group">
-            <div>Manufacturing</div>
-            <NavLink to="/manufacturing">Production</NavLink>
-            <NavLink to="/o/work_order">Work orders</NavLink>
-            <NavLink to="/o/job_work">Job work</NavLink>
-          </div>
-        )}
-        {apps.has('projects') && (
-          <div className="nav-group">
-            <div>Projects</div>
-            <NavLink to="/projects">Projects</NavLink>
-            <NavLink to="/timesheet">Timesheet</NavLink>
-            <NavLink to="/it/subscriptions">Subscriptions</NavLink>
-            <NavLink to="/it/contracts">Contracts</NavLink>
-            <NavLink to="/it/products">Products & roadmap</NavLink>
-            <NavLink to="/it/capacity">Capacity</NavLink>
-          </div>
-        )}
-        <div className="nav-group">
-          <div>Engage</div>
-          <NavLink to="/inbox">
-            Inbox{inbox.data?.counts?.unread ? <span className="nav-badge">{inbox.data.counts.unread}</span> : null}
-          </NavLink>
-          {can('campaigns') && <NavLink to="/campaigns">Campaigns</NavLink>}
-          <NavLink to="/intake/gem">GeM bids</NavLink>
-          <NavLink to="/intake/documents">Bills from mail</NavLink>
-        </div>
-        <div className="nav-group">
-          <div>Plan</div>
-          <NavLink to="/health">Business health</NavLink>
-          <NavLink to="/calendar">Calendar</NavLink>
-          <NavLink to="/forecast">Forecast</NavLink>
-          <NavLink to="/reports">Reports</NavLink>
-          <NavLink to="/dashboards">Dashboards</NavLink>
-          <NavLink to="/approvals">
-            Approvals{approvals.data?.pending ? <span className="nav-badge">{approvals.data.pending}</span> : null}
-          </NavLink>
-        </div>
-        {custom.length > 0 && (
-          <div className="nav-group">
-            <div>Your objects</div>
-            {custom.map((o) => (
-              <NavLink key={o.key} to={`/o/${o.key}`}>
-                {o.plural}
+        <button className="nav-quick" onClick={() => setPalette(true)}>
+          <NI name="search" size={15} className="" /> Jump to… <kbd>Ctrl K</kbd>
+        </button>
+        {groups.map((g) => (
+          <div key={g.key} className={`nav-group${g.label && closed.has(g.key) ? ' closed' : ''}`} style={g.label ? undefined : { marginTop: 0 }}>
+            {g.label && (
+              <button className="ng-head" onClick={() => toggleGroup(g.key)} aria-expanded={!closed.has(g.key)}>
+                {g.label}
+                <NI name="chev" size={13} className="" />
+              </button>
+            )}
+            {g.items.map((i) => (
+              <NavLink key={i.to} to={i.to} end={i.end}>
+                <NI name={i.icon} />
+                {i.label}
+                {i.badge ? <span className="nav-badge">{i.badge}</span> : null}
               </NavLink>
             ))}
           </div>
-        )}
-        <div className="nav-group">
-          <div>Assist</div>
-          <NavLink to="/knowledge">Knowledge base</NavLink>
-          {(can('developers') || can('channels') || can('users')) && <NavLink to="/developers">Developers</NavLink>}
-          {!admin && orgManager && <NavLink to="/organisation">Organisation</NavLink>}
-          {admin && <NavLink to="/settings">Settings</NavLink>}
-        </div>
+        ))}
         <div className="nav-foot">
           <span className="avatar">{initials(me?.user.fullName ?? '')}</span>
           <div className="grow">
@@ -314,8 +365,12 @@ export function Shell() {
           <span className={`offline-pill${online ? '' : ' on'}`} role="status">
             {online ? '' : 'Offline'}
           </span>
+          <button className="icon-btn" title={theme === 'dark' ? 'Light theme' : 'Dark theme'} aria-label="Switch theme" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+            <NI name={theme === 'dark' ? 'sun' : 'moon'} size={18} className="" />
+          </button>
           <Notifications />
         </header>
+        {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
         <main className="content">
           <Suspense fallback={<Spinner />}>
             <Outlet />

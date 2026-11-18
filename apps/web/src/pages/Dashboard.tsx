@@ -9,6 +9,7 @@ import { useMeta } from '../lib/hooks';
 import { LeadInsights } from '../components/LeadInsights';
 import { RoleView } from '../components/RoleView';
 import { ServiceInsights } from '../components/ops/ServicePanels';
+import { TodayHero, TodayPanels } from '../components/TodayPanels';
 
 interface Stats {
   dealsByStage?: { stage_id: string; count: number; amount: number | null }[];
@@ -33,20 +34,8 @@ export function DashboardPage() {
   if (isLoading) return <Spinner />;
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h1>
-            {greet}, {me?.user.fullName.split(' ')[0]}
-          </h1>
-          <p>
-            {data?.tasks.overdue ? `${data.tasks.overdue} overdue and ` : ''}
-            {data?.tasks.due_today ?? 0} due today on your list.
-          </p>
-        </div>
-        <Link className="btn primary" to="/tasks">
-          Open my tasks
-        </Link>
-      </div>
+      <TodayHero name={me?.user.fullName.split(' ')[0] ?? ''} />
+      <TodayPanels />
 
       <RoleView />
 

@@ -493,3 +493,81 @@ export async function booksOverview(ctx: RecordCtx, today = new Date().toISOStri
     lastMonth: { income: lm.sections[0]!.total + lm.sections[3]!.total, expense: r2(lm.sections[1]!.total + lm.sections[2]!.total + lm.sections[4]!.total), net: lm.netProfit },
     banks, topSpend, owedBy, dueBills, year: { income: r2(fy.sections[0]!.total + fy.sections[3]!.total), expense: r2(fy.sections[1]!.total + fy.sections[2]!.total + fy.sections[4]!.total), net: fy.netProfit, grossMargin: fy.grossMargin }, cash: cash?.v ?? 0, receivables: ar, payables: ap, pending, trend };
 }
+
+/**
+ * Cash forecast: the money expected in and out over the next weeks — unpaid invoices by due date,
+ * recurring invoices, bills and expenses at their next dates, contract fees as they fall due, unpaid
+ * bills by due date, and the business's usual spending straight from the bank (the average of the last
+ * three months) spread evenly. Late invoices are shown in the first week but kept apart, as they may slip.
+ */
+export async function cashForecast(ctx: RecordCtx, weeks = 13, today = new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10)) {
+  const start = Date.parse(`${today}T00:00:00Z`);
+  const end = start + weeks * 7 * 86_400_000;
+  const wk = (d: string | null) => {
+    const t = d ? Date.parse(`${d}T00:00:00Z`) : start;
+    return Math.max(0, Math.floor((t - start) / (7 * 86_400_000)));
+  };
+  const rows = Array.from({ length: weeks }, (_, i) => ({ week: new Date(start + i * 7 * 86_400_000).toISOString().slice(0, 10), in: 0, out: 0, late: 0 }));
+  const add = (d: string | null, k: 'in' | 'out' | 'late', v: number) => {
+    const i = wk(d);
+    if (i < weeks && v > 0) rows[i]![k] = r2(rows[i]![k] + v);
+  };
+  const cash = await ctx.tx.one<{ v: number }>(
+    `select coalesce(sum(l.debit - l.credit), 0)::float8 as v from journal_lines l join gl_accounts a on a.tenant_id = l.tenant_id and a.id = l.account_id where l.tenant_id = $1 and l.posted and a.subtype in ('cash','bank')`,
+    [ctx.tenantId],
+  );
+  // money in
+  const inv = await ctx.tx.query<{ due: string | null; v: number }>(
+    `select to_char(coalesce(due_date, invoice_date + 30), 'YYYY-MM-DD') as due, (balance_due * coalesce(exchange_rate, 1))::float8 as v from invoices
+      where tenant_id = $1 and doc_type = 'tax_invoice' and status in ('issued','partially_paid') and deleted_at is null and balance_due > 0`,
+    [ctx.tenantId],
+  );
+  for (const x of inv) add(x.due, x.due && x.due < today ? 'late' : 'in', x.v);
+  const step = (d: string, f: string, every = 1) => {
+    const t = new Date(`${d}T00:00:00Z`);
+    if (f === 'weekly') t.setUTCDate(t.getUTCDate() + 7 * every);
+    else t.setUTCMonth(t.getUTCMonth() + every * ({ monthly: 1, quarterly: 3, half_yearly: 6, yearly: 12 }[f] ?? 1));
+    return t.toISOString().slice(0, 10);
+  };
+  const horizon = new Date(end).toISOString().slice(0, 10);
+  const rec = await ctx.tx.query<{ kind: string; frequency: string; every: number; next: string; end_date: string | null; v: number | null }>(
+    `select r.kind, r.frequency, r.every, to_char(r.next_date, 'YYYY-MM-DD') as next, to_char(r.end_date, 'YYYY-MM-DD') as end_date,
+            coalesce((select grand_total from invoices i where i.tenant_id = r.tenant_id and i.id = r.last_doc_id), (select grand_total from bills b where b.tenant_id = r.tenant_id and b.id = r.last_doc_id),
+                     (select amount from expenses e where e.tenant_id = r.tenant_id and e.id = r.last_doc_id))::float8 as v
+       from recurring_profiles r where r.tenant_id = $1 and r.status = 'active' and r.kind in ('invoice','bill','expense')`,
+    [ctx.tenantId],
+  );
+  for (const r of rec) {
+    if (!r.v) continue;
+    for (let d = r.next, n = 0; d < horizon && n < 60 && (!r.end_date || d <= r.end_date); d = step(d, r.frequency, r.every), n++) add(d, r.kind === 'invoice' ? 'in' : 'out', r.v);
+  }
+  const contracts = await ctx.tx.query<{ next: string; frequency: string; fee: number; tax: number; end_date: string | null }>(
+    `select to_char(next_invoice_date, 'YYYY-MM-DD') as next, billing_frequency as frequency, period_fee::float8 as fee, tax_rate::float8 as tax, to_char(end_date, 'YYYY-MM-DD') as end_date
+       from service_contracts where tenant_id = $1 and status = 'active' and next_invoice_date is not null and period_fee > 0 and billing_frequency in ('monthly','quarterly','half_yearly','yearly')`,
+    [ctx.tenantId],
+  );
+  // invoices raised on the date are paid about a month later
+  for (const c of contracts)
+    for (let d = c.next, n = 0; d < horizon && n < 30 && (!c.end_date || d <= c.end_date); d = step(d, c.frequency), n++) add(step(d, 'monthly'), 'in', c.fee * (1 + c.tax / 100));
+  // money out
+  const bills = await ctx.tx.query<{ due: string | null; v: number }>(
+    `select to_char(coalesce(due_date, bill_date + 30), 'YYYY-MM-DD') as due, (balance_due * coalesce(exchange_rate, 1))::float8 as v from bills
+      where tenant_id = $1 and doc_type = 'bill' and status in ('open','partially_paid') and deleted_at is null and balance_due > 0`,
+    [ctx.tenantId],
+  );
+  for (const b of bills) add(b.due && b.due < today ? today : b.due, 'out', b.v);
+  const usual = await ctx.tx.one<{ v: number }>(
+    `select coalesce(sum(l.debit - l.credit), 0)::float8 / 3 as v from journal_lines l join gl_accounts a on a.tenant_id = l.tenant_id and a.id = l.account_id
+       join journals j on j.tenant_id = l.tenant_id and j.id = l.journal_id
+      where l.tenant_id = $1 and l.posted and a.type = 'expense' and j.source_type in ('bank','expense') and l.entry_date >= ($2::date - 90) and l.entry_date < $2::date`,
+    [ctx.tenantId, today],
+  );
+  const weekly = r2(((usual?.v ?? 0) * 12) / 52);
+  if (weekly > 0) for (const r of rows) r.out = r2(r.out + weekly);
+  let bal = cash?.v ?? 0;
+  const series = rows.map((r) => {
+    bal = r2(bal + r.in - r.out);
+    return { ...r, balance: bal };
+  });
+  return { today, opening: cash?.v ?? 0, usualWeekly: weekly, late: r2(rows.reduce((t, r) => t + r.late, 0)), weeks: series, lowest: series.reduce((m, r) => (r.balance < m.balance ? r : m), series[0]!) };
+}

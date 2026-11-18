@@ -24,7 +24,7 @@ export function DigestsPanel() {
         <div>
           <h2>Email digests</h2>
           <p className="muted small" style={{ margin: 0 }}>
-            Business health, a dashboard or a report in the inbox. Each person gets the numbers they can see.
+            Business health, the books, a dashboard or a report in the inbox. Each person gets the numbers they can see.
           </p>
         </div>
         <button className="btn" onClick={() => setEdit({ name: 'Morning numbers', kind: 'health', targetId: null, frequency: 'daily', sendHour: 8, weekday: 1, monthday: 1, recipients: me ? [me.user.id] : [], isEnabled: true })}>
@@ -99,7 +99,7 @@ function DigestModal({ value, onClose }: { value: Json; onClose: () => void }) {
   const targets = f.kind === 'report' ? reports.data?.items : f.kind === 'dashboard' ? dashboards.data?.items : [];
   const save = async () => {
     try {
-      const body: Json = { ...f, targetId: f.kind === 'health' ? null : f.targetId, weekday: f.frequency === 'weekly' ? f.weekday : null, monthday: f.frequency === 'monthly' ? f.monthday : null };
+      const body: Json = { ...f, targetId: f.kind === 'health' || f.kind === 'books' ? null : f.targetId, weekday: f.frequency === 'weekly' ? f.weekday : null, monthday: f.frequency === 'monthly' ? f.monthday : null };
       delete body.id;
       if (f.id) await put(`/api/v1/digests/${f.id}`, body);
       else await post('/api/v1/digests', body);
@@ -115,7 +115,7 @@ function DigestModal({ value, onClose }: { value: Json; onClose: () => void }) {
       title={f.id ? 'Edit digest' : 'New digest'}
       onClose={onClose}
       footer={
-        <button className="btn primary" disabled={!f.name || !f.recipients.length || (f.kind !== 'health' && !f.targetId)} onClick={save}>
+        <button className="btn primary" disabled={!f.name || !f.recipients.length || (f.kind !== 'health' && f.kind !== 'books' && !f.targetId)} onClick={save}>
           Save
         </button>
       }
@@ -129,11 +129,12 @@ function DigestModal({ value, onClose }: { value: Json; onClose: () => void }) {
           What
           <select value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value, targetId: null })}>
             <option value="health">Business health</option>
+            <option value="books">The books: profit and loss, cash, money owed</option>
             <option value="dashboard">A dashboard</option>
             <option value="report">A report</option>
           </select>
         </label>
-        {f.kind !== 'health' ? (
+        {f.kind !== 'health' && f.kind !== 'books' ? (
           <label className="field">
             {f.kind === 'dashboard' ? 'Dashboard' : 'Report'}
             <select value={f.targetId ?? ''} onChange={(e) => setF({ ...f, targetId: e.target.value || null })}>
@@ -198,7 +199,7 @@ function DigestModal({ value, onClose }: { value: Json; onClose: () => void }) {
           ) : (
             <span className="muted small">You ({me?.user.email})</span>
           )}
-          {f.kind !== 'health' && targets?.find((t) => t.id === f.targetId && !t.is_shared) && f.recipients.some((r: string) => r !== me?.user.id) && <span className="small warn-text">This {f.kind} is private: only you will receive it. Share it first to send it to others.</span>}
+          {f.kind !== 'health' && f.kind !== 'books' && targets?.find((t) => t.id === f.targetId && !t.is_shared) && f.recipients.some((r: string) => r !== me?.user.id) && <span className="small warn-text">This {f.kind} is private: only you will receive it. Share it first to send it to others.</span>}
         </div>
         <label className="check wide">
           <input type="checkbox" checked={f.isEnabled} onChange={(e) => setF({ ...f, isEnabled: e.target.checked })} /> Active

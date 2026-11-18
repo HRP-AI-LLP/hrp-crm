@@ -35,6 +35,7 @@ import * as rep from '../services/books/reports';
 import * as desk from '../services/books/desk';
 import * as docs from '../services/books/doc-import';
 import { attachSourceFiles, keepSourceFiles } from '../services/books/import-files';
+import * as dunning from '../services/books/dunning';
 import * as feeds from '../services/books/feeds';
 import * as g2b from '../services/books/gstr2b';
 import * as setup from '../services/books/setup';
@@ -465,6 +466,28 @@ export const booksRoutes = new Hono<AppEnv>()
   .get('/books/overview', async (c) => {
     requireAdmin(c);
     return c.json(await c.var.db.tx(scope(c, true), (tx) => rep.booksOverview(rctx(c, tx))));
+  })
+  .get('/books/cash-forecast', async (c) => {
+    requireAdmin(c);
+    const weeks = Math.min(26, Math.max(4, Number(c.req.query('weeks') ?? 13) || 13));
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => rep.cashForecast(rctx(c, tx), weeks)));
+  })
+  .get('/books/reminders', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => dunning.reminderSettings(rctx(c, tx))));
+  })
+  .put('/books/reminders', async (c) => {
+    requireAdmin(c);
+    const b = dunning.reminderSettingsSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dunning.saveReminderSettings(rctx(c, tx), b)));
+  })
+  .get('/books/invoices/:id/reminders', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => dunning.remindersOf(rctx(c, tx), qUuid(c))));
+  })
+  .post('/books/invoices/:id/remind', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => dunning.remindNow(rctx(c, tx), c.env, qUuid(c))));
   })
   .get('/books/reports/:report', async (c) => {
     requireAdmin(c);

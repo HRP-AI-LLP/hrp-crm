@@ -4,6 +4,7 @@ import type { Db } from '../../lib/db';
 import { enabledApps } from '../apps';
 import { enqueue, eventJobs } from '../jobs';
 import { systemCtxFor } from '../system';
+import { reminderDailySweep } from './dunning';
 import { type DeskDeps, runDesk } from './desk';
 import { recurringSweep } from './setup';
 
@@ -15,6 +16,8 @@ export async function booksDailySweep(env: Env, db: Db, tenantId: string) {
     return { books: apps.has('books'), billing: apps.has('billing') };
   });
   if (!on.books && !on.billing) return { created: 0 };
+  // payment reminders to customers (only when the workspace turned them on)
+  await reminderDailySweep(env, db, tenantId).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'payment-reminders', tenant: tenantId, msg: (e as Error).message })));
   const r = await recurringSweep((fn) =>
     db.tx({ tenantId }, async (tx) => {
       const ctx = await systemCtxFor(env, tx, tenantId);

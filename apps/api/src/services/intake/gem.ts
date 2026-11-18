@@ -28,7 +28,7 @@ export function assertGem(ctx: RecordCtx, write = false) {
 const COLS = `b.id, b.bid_number, b.title, b.category, b.quantity::float8 as quantity, b.ministry, b.department, b.organisation, b.bid_date::text, b.start_at, b.end_at, b.opening_at,
   b.emd_amount::float8 as emd_amount, b.bid_value::float8 as bid_value, b.epbg_percent::float8 as epbg_percent, b.min_turnover::float8 as min_turnover, b.experience_years::float8 as experience_years,
   b.mse_exempt, b.startup_exempt, b.documents_required, b.bid_type, b.status, b.corrigenda, b.last_corrigendum_at, b.document_file_id, b.notes, b.owner_id, u.full_name as owner_name,
-  b.deal_id, b.gem_id::float8 as gem_id, b.details, b.files, b.fetched_at, b.fetch_error, b.created_at, b.updated_at`;
+  b.deal_id, b.gem_id::float8 as gem_id, b.details, b.files, b.fetched_at, b.fetch_error, b.matched_keywords, b.created_at, b.updated_at`;
 
 export async function listBids(ctx: RecordCtx, q: { status?: string | null; open?: boolean } = {}) {
   assertGem(ctx);
@@ -53,16 +53,61 @@ export async function defaultBidOwner(ctx: RecordCtx): Promise<string | null> {
 export async function gemSettings(ctx: RecordCtx) {
   assertGem(ctx);
   const t = await ctx.tx.one<{ g: any }>(`select settings -> 'gem' as g from tenants where id = $1`, [ctx.tenantId]);
-  return { defaultOwnerId: (t?.g?.defaultOwnerId as string | undefined) ?? null, effectiveOwnerId: await defaultBidOwner(ctx), canEdit: hasAdmin(ctx.principal.permissions, 'metadata') || ctx.principal.user.isOwner === true };
+  return {
+    defaultOwnerId: (t?.g?.defaultOwnerId as string | undefined) ?? null,
+    keywords: (t?.g?.keywords as string[] | undefined) ?? [],
+    alertUserIds: (t?.g?.alertUserIds as string[] | undefined) ?? [],
+    effectiveOwnerId: await defaultBidOwner(ctx),
+    canEdit: hasAdmin(ctx.principal.permissions, 'metadata') || ctx.principal.user.isOwner === true };
 }
 
 /** The admin picks who new bids go to; bids nobody owns yet go to them too. */
-export async function saveGemSettings(ctx: RecordCtx, input: { defaultOwnerId: string | null; applyToUnowned?: boolean }) {
+/** Which of the watched keywords a bid's title, category or buyer mentions. */
+export function keywordHits(keywords: string[], text: string) {
+  const t = text.toLowerCase();
+  return keywords.filter((k) => k.trim() && new RegExp(`(^|[^a-z0-9])${k.trim().toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i').test(t));
+}
+
+/** Marks a bid with the keywords it matches and tells the owner and the people watching. */
+export async function matchBidKeywords(ctx: RecordCtx, bidId: string, notify = true) {
+  const t = await ctx.tx.one<{ g: any }>(`select settings -> 'gem' as g from tenants where id = $1`, [ctx.tenantId]);
+  const keywords = ((t?.g?.keywords as string[] | undefined) ?? []).filter(Boolean);
+  const b = await ctx.tx.one<{ bid_number: string; title: string | null; category: string | null; ministry: string | null; department: string | null; organisation: string | null; owner_id: string | null; matched_keywords: string[] | null }>(
+    `select bid_number, title, category, ministry, department, organisation, owner_id, matched_keywords from gem_bids where tenant_id = $1 and id = $2`,
+    [ctx.tenantId, bidId],
+  );
+  if (!b) return [];
+  const hits = keywords.length ? keywordHits(keywords, [b.title, b.category, b.ministry, b.department, b.organisation].filter(Boolean).join(' · ')) : [];
+  const before = b.matched_keywords ?? [];
+  await ctx.tx.query(`update gem_bids set matched_keywords = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, bidId, hits.length ? hits : null]);
+  const fresh = hits.filter((h) => !before.includes(h));
+  if (notify && fresh.length) {
+    const to = new Set([...(b.owner_id ? [b.owner_id] : []), ...(((t?.g?.alertUserIds as string[] | undefined) ?? []))]);
+    for (const u of to)
+      await ctx.tx.query(`insert into notifications (tenant_id, user_id, kind, title, body, link) values ($1,$2,'gem',$3,$4,$5)`, [
+        ctx.tenantId, u, `GeM bid matches “${fresh.join('”, “')}”`.slice(0, 200), `${b.bid_number}${b.title ? ` · ${b.title}` : ''}`.slice(0, 500), `/intake/gem?bid=${bidId}`,
+      ]);
+  }
+  return hits;
+}
+
+export async function saveGemSettings(ctx: RecordCtx, input: { defaultOwnerId: string | null; applyToUnowned?: boolean; keywords?: string[]; alertUserIds?: string[] }) {
   if (!(hasAdmin(ctx.principal.permissions, 'metadata') || ctx.principal.user.isOwner)) throw forbidden('Only an admin sets who owns new GeM bids');
   if (input.defaultOwnerId && !(await ctx.tx.one(`select 1 from users where tenant_id = $1 and id = $2 and status = 'active'`, [ctx.tenantId, input.defaultOwnerId]))) throw badRequest('Choose an active user');
   await ctx.tx.query(`update tenants set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{gem}', coalesce(settings -> 'gem', '{}'::jsonb) || jsonb_build_object('defaultOwnerId', $2::text)) where id = $1`, [
     ctx.tenantId, input.defaultOwnerId,
   ]);
+  if (input.keywords !== undefined || input.alertUserIds !== undefined) {
+    const patch: Record<string, unknown> = {};
+    if (input.keywords !== undefined) patch.keywords = [...new Set(input.keywords.map((k) => k.trim()).filter(Boolean))].slice(0, 50);
+    if (input.alertUserIds !== undefined) patch.alertUserIds = input.alertUserIds.slice(0, 20);
+    await ctx.tx.query(`update tenants set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{gem}', coalesce(settings -> 'gem', '{}'::jsonb) || $2::jsonb) where id = $1`, [ctx.tenantId, JSON.stringify(patch)]);
+    // the open bids are matched again (quietly: only bids that arrive from now on send alerts)
+    if (input.keywords !== undefined) {
+      const open = await ctx.tx.query<{ id: string }>(`select id from gem_bids where tenant_id = $1 and status in ('new','reviewing','preparing') limit 500`, [ctx.tenantId]);
+      for (const o of open) await matchBidKeywords(ctx, o.id, false);
+    }
+  }
   let applied = 0;
   if (input.applyToUnowned !== false) {
     const owner = await defaultBidOwner(ctx);
@@ -128,7 +173,7 @@ export async function applyBidRead(ctx: RecordCtx, id: string, d: BidDocument, f
       ctx.tenantId, id, d.category, d.quantity, d.ministry, d.department, d.organisation, d.bidDate, d.endAt, d.openingAt, d.emdAmount, d.epbgPercent, d.minTurnover, d.experienceYears,
       d.mseExempt, d.startupExempt, jsonSafe(d.documentsRequired), d.bidType, fileId, jsonSafe(d.extra ?? {}), review, d.bidValue ?? null,
     ],
-  );
+  );  await matchBidKeywords(ctx, id);
 }
 
 /* ───────────── fit check and documents ───────────── */

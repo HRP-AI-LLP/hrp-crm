@@ -60,7 +60,7 @@ export const insightsAdminRoutes = new Hono<AppEnv>()
 const uuid = z.string().uuid();
 const scheduleSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  kind: z.enum(['health', 'dashboard', 'report']),
+  kind: z.enum(['health', 'dashboard', 'report', 'books']),
   targetId: uuid.nullish(),
   frequency: z.enum(['daily', 'weekly', 'monthly']),
   sendHour: z.number().int().min(0).max(23),
@@ -132,7 +132,7 @@ export const digestRoutes = new Hono<AppEnv>()
     return c.json(await sendSchedule(c.env, c.var.db, c.var.tenant.id, id, appOrigin(c.env, c.req.url)));
   })
   .get('/digests/preview', async (c) => {
-    const q = z.object({ kind: z.enum(['health', 'dashboard', 'report']), targetId: uuid.optional() }).parse(c.req.query());
+    const q = z.object({ kind: z.enum(['health', 'dashboard', 'report', 'books']), targetId: uuid.optional() }).parse(c.req.query());
     const html = await c.var.db.tx(scope(c, true), async (tx) => {
       await assertTarget(tx, c.var.tenant.id, c.var.principal.user.id, q.kind, q.targetId ?? null);
       return renderDigest(rctx(c, tx), { kind: q.kind, target_id: q.targetId ?? null, name: 'Preview' }, appOrigin(c.env, c.req.url));

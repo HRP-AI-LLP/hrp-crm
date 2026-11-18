@@ -26,7 +26,7 @@ import { type Integration, mailboxToken, ProviderError, providerFetch, readSecre
 import { createRecord, type RecordCtx, type RecordEvent } from '../records';
 import { systemCtxFor } from '../system';
 import { pdfText } from '../../lib/pdf-text';
-import { defaultBidOwner } from './gem';
+import { defaultBidOwner, matchBidKeywords } from './gem';
 import { readReceipt, whoseDocument } from './receipt';
 import { businessTerms, type BusinessTerms, classify, hasDocument, type IntakeKind, namesBusiness, parseCorrigendum, parseGemUpdate, parseNewBids } from './parse';
 
@@ -319,6 +319,7 @@ async function upsertBid(ctx: RecordCtx, bidNumber: string, fields: Record<strin
     `insert into gem_bids (tenant_id, bid_number, source_item_id${keys.map((k) => `, ${k}`).join('')}) values ($1,$2,$3${keys.map((_, i) => `,$${i + 4}`).join('')}) returning id`,
     [ctx.tenantId, bidNumber, itemId, ...keys.map((k) => fields[k])],
   );
+  await matchBidKeywords(ctx, r!.id);
   return { id: r!.id, created: true };
 }
 

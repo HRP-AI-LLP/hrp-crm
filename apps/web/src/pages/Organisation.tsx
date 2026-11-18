@@ -1220,7 +1220,7 @@ function PairedModal({ code, onClose }: { code: string; onClose: () => void }) {
         </p>
         {cmds.map((c) => (
           <div key={c} className="stack" style={{ gap: 6 }}>
-            <pre className="mono small" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: '#f1f5f9', padding: 10, borderRadius: 8, margin: 0 }}>
+            <pre className="mono small" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--line-2)', padding: 10, borderRadius: 8, margin: 0 }}>
               {c}
             </pre>
             <button className="btn sm" onClick={() => copy(c)}>

@@ -94,9 +94,42 @@ async function healthSection(ctx: RecordCtx, origin: string) {
   return table(`Business health · ${h.period.label}`, rows, `${origin}/health`);
 }
 
+/** The books: last month's profit and loss, this month so far, cash, money owed both ways. */
+async function booksSection(ctx: RecordCtx, origin: string) {
+  const { booksOverview, profitAndLoss } = await import('./books/reports');
+  let o;
+  try {
+    o = await booksOverview(ctx);
+  } catch {
+    return table('Books', [['Only the people who keep the books receive this digest', '']]);
+  }
+  const today = String(o.today).slice(0, 10);
+  const lmEnd = new Date(Date.parse(`${today.slice(0, 7)}-01T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+  const lm = await profitAndLoss(ctx, `${lmEnd.slice(0, 7)}-01`, lmEnd);
+  const month = new Date(`${lmEnd}T00:00:00Z`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const tone = (v: number) => (v < 0 ? 'bad' : 'good');
+  let html = table(`Profit and loss · ${month}`, [
+    ['Income', inr(lm.sections[0]!.total + lm.sections[3]!.total)],
+    ['Cost of sales and expenses', inr(lm.sections[1]!.total + lm.sections[2]!.total + lm.sections[4]!.total)],
+    ['Net profit', inr(lm.netProfit), tone(lm.netProfit)],
+    ...(lm.grossMargin != null ? ([['Gross margin', `${lm.grossMargin}%`]] as [string, string][]) : []),
+  ], `${origin}/books`);
+  html += table('Where things stand today', [
+    ['Cash and bank', inr(o.cash)],
+    ['Customers owe', inr(o.receivables?.v ?? 0)],
+    ['…of which overdue', inr(o.receivables?.overdue ?? 0), (o.receivables?.overdue ?? 0) > 0 ? 'warn' : undefined],
+    ['We owe vendors', inr(o.payables?.v ?? 0)],
+    [`Net profit this financial year`, inr(o.year.net), tone(o.year.net)],
+  ]);
+  if (o.owedBy?.length) html += table('Largest amounts to collect', o.owedBy.map((x: any) => [x.name, inr(x.v), x.overdue > 0 ? 'warn' : undefined]));
+  if (o.topSpend?.length) html += table('Where the money went this year', o.topSpend.slice(0, 6).map((x: any) => [x.name, inr(x.amount)]));
+  return html;
+}
+
 export async function renderDigest(ctx: RecordCtx, s: { kind: string; target_id: string | null; name: string }, origin: string) {
   let html = '';
   if (s.kind === 'health') html = await healthSection(ctx, origin);
+  else if (s.kind === 'books') html = await booksSection(ctx, origin);
   else if (s.kind === 'report' && s.target_id) html = await reportSection(ctx, s.target_id, origin);
   else if (s.kind === 'dashboard' && s.target_id) {
     const d = await ctx.tx.one<{ name: string; widgets: { reportId: string; title?: string }[] }>(`select name, widgets from dashboards where tenant_id = $1 and id = $2 and (is_shared or owner_id = $3)`, [ctx.tenantId, s.target_id, ctx.principal.user.id]);
@@ -184,7 +217,7 @@ export async function wakeDigests(env: Env) {
 }
 
 export async function assertTarget(tx: Tx, tenantId: string, userId: string, kind: string, targetId: string | null) {
-  if (kind === 'health') return;
+  if (kind === 'health' || kind === 'books') return;
   const table = kind === 'dashboard' ? 'dashboards' : 'reports';
   const r = await tx.one(`select 1 from ${table} where tenant_id = $1 and id = $2 and (is_shared or owner_id = $3)`, [tenantId, targetId, userId]);
   if (!r) throw badRequest(`Choose a ${kind} you can open`);

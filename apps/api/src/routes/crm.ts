@@ -17,6 +17,7 @@ import {
   updateRecord,
 } from '../services/records';
 import { noteReminder } from '../services/reminders';
+import { customer360, today as todayFor } from '../services/today';
 import { safeCtx } from './public';
 
 /** Metadata trimmed to what this user may see (hidden fields and unreadable objects removed). */
@@ -101,6 +102,11 @@ export const crmRoutes = new Hono<AppEnv>()
   })
 
   .get('/dashboard', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => dashboardStats(rctx(c, tx)))))
+  .get('/home/today', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => todayFor(rctx(c, tx)))))
+  .get('/accounts/:id/360', async (c) => {
+    const id = z.string().uuid().parse(c.req.param('id'));
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => customer360(rctx(c, tx), id)));
+  })
 
   .get('/users', async (c) => {
     const rows = await c.var.db.tx(scope(c, true), (tx) =>

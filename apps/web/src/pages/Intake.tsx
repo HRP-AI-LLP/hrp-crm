@@ -124,6 +124,7 @@ function GemBids() {
         <a className="btn sm ghost" href="https://bidplus.gem.gov.in/all-bids" target="_blank" rel="noreferrer noopener">
           GeM all bids ↗
         </a>
+        <WatchKeywords />
         <DefaultOwner />
       </div>
       {rows.length ? (
@@ -157,6 +158,11 @@ function GemBids() {
                 </td>
                 <td>
                   {b.title ?? b.category ?? <span className="muted">{b.fetch_error ? 'Could not read it from GeM yet' : 'Reading it from GeM…'}</span>}
+                  {(b.matched_keywords ?? []).map((k: string) => (
+                    <span key={k} className="pill info" style={{ marginLeft: 6 }} title="Matches a keyword you watch">
+                      ★ {k}
+                    </span>
+                  ))}
                   <div className="small muted">
                     {[b.quantity ? `Qty ${b.quantity}` : null, (b.files ?? []).filter((f: Json) => f.fileId).length ? `${(b.files ?? []).filter((f: Json) => f.fileId).length} document(s)` : null]
                       .filter(Boolean)
@@ -214,6 +220,71 @@ function GemBids() {
 }
 
 /** Who new GeM bids belong to (the admin chooses; otherwise the workspace owner). */
+/** The words the business watches GeM for: new bids that mention one are starred and announced. */
+function WatchKeywords() {
+  const { data } = useQuery({ queryKey: ['intake', 'gem-settings'], queryFn: () => get<Json>('/api/v1/intake/gem-settings') });
+  const { data: users } = useUsers();
+  const act = useAct([['intake']]);
+  const [open, setOpen] = useState(false);
+  const [words, setWords] = useState('');
+  const [who, setWho] = useState<string[]>([]);
+  if (!data) return null;
+  const n = (data.keywords ?? []).length;
+  return (
+    <>
+      <button
+        className="btn sm"
+        title="Bids that mention these words are starred, and you are told"
+        onClick={() => {
+          setWords((data.keywords ?? []).join('\n'));
+          setWho(data.alertUserIds ?? []);
+          setOpen(true);
+        }}
+      >
+        ★ Watch keywords{n ? ` (${n})` : ''}
+      </button>
+      {open && (
+        <Modal
+          title="Keywords to watch on GeM"
+          onClose={() => setOpen(false)}
+          footer={
+            data.canEdit ? (
+              <button
+                className="btn primary"
+                onClick={async () => {
+                  const r = await act(
+                    () => put<Json>('/api/v1/intake/gem-settings', { defaultOwnerId: data.defaultOwnerId ?? null, applyToUnowned: false, keywords: words.split(/[\n,]+/).map((w) => w.trim()).filter(Boolean), alertUserIds: who }),
+                    'Saved; open bids were matched again',
+                  );
+                  if (r) setOpen(false);
+                }}
+              >
+                Save
+              </button>
+            ) : undefined
+          }
+        >
+          <div className="modal-body" style={{ display: 'block' }}>
+            <p className="small muted" style={{ marginTop: 0 }}>
+              One per line (or separated by commas): products, services or buyers, e.g. <i>CCTV</i>, <i>data entry</i>, <i>software development</i>, <i>Food Corporation</i>. A new bid whose title, category or buyer mentions one is starred, and its owner and the people below get a notification.
+            </p>
+            <textarea rows={7} value={words} disabled={!data.canEdit} onChange={(e) => setWords(e.target.value)} placeholder={'CCTV\ndata entry\nAI'} />
+            <div className="small" style={{ fontWeight: 600, margin: '12px 0 6px' }}>Also tell</div>
+            <div className="row" style={{ flexWrap: 'wrap', gap: 12 }}>
+              {(users?.items ?? []).map((u) => (
+                <label key={u.id} className="row small" style={{ gap: 6 }}>
+                  <input type="checkbox" disabled={!data.canEdit} checked={who.includes(u.id)} onChange={(e) => setWho(e.target.checked ? [...who, u.id] : who.filter((x) => x !== u.id))} />
+                  {u.full_name}
+                </label>
+              ))}
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 function DefaultOwner() {
   const { data } = useQuery({ queryKey: ['intake', 'gem-settings'], queryFn: () => get<Json>('/api/v1/intake/gem-settings') });
   const { data: users } = useUsers();

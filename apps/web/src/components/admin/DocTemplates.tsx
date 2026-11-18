@@ -137,7 +137,7 @@ export function DocTemplatesTab() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14 }}>
           {list.map((t) => (
             <div key={t.id} className="panel" style={{ padding: 10 }}>
-              <div style={{ height: 300, overflow: 'hidden', border: '1px solid var(--line)', borderRadius: 6, background: '#f1f5f9', position: 'relative' }}>
+              <div style={{ height: 300, overflow: 'hidden', border: '1px solid var(--line)', borderRadius: 6, background: 'var(--line-2)', position: 'relative' }}>
                 {sample && (
                   <div style={{ transform: 'scale(0.31)', transformOrigin: 'top left', width: '210mm', pointerEvents: 'none' }}>
                     <TemplatedDocument doc={sample.doc} labels={sample.labels} template={t as DocTemplate} />
