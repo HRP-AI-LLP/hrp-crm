@@ -18,10 +18,11 @@ import type { Env } from '../env';
 import { decryptSecret, encryptSecret, hmacSha256Hex, randomToken } from '../lib/crypto';
 import { badRequest, conflict, forbidden, notFound } from '../lib/errors';
 import type forge from 'node-forge';
-import { certFromPem, certInfo, cmsDigestToSign, cmsWithSignature, embedCms, placeholders, preparePdf, readPfx, sha256Bytes, sha256DigestInfo, signPdf, verifyPdf } from '../lib/pdf-sign';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { bin, certFromPem, certInfo, cmsDigestToSign, cmsWithSignature, embedCms, placeBox, placeholders, preparePdf, readPfx, sha256Bytes, sha256DigestInfo, signPdf, type StampPosition, verifyPdf } from '../lib/pdf-sign';
 import { requireEncryptionKey } from './ai/tenant-providers';
-import { saveFile } from './files';
-import { assertOrgManager, canManageOrg, docHash, SIGNABLE, verifyCode } from './organisation';
+import { canChangeFileRecord, readFileBytes, saveFile, signedFileUrl } from './files';
+import { assertOrgManager, canManageOrg, docHash, listSignatures, SIGNABLE, verifyCode } from './organisation';
 import { loadRow, type RecordCtx } from './records';
 
 const b64ToBytes = (b64: string) => Uint8Array.from(atob(b64.replace(/^data:[^,]*,/, '')), (c) => c.charCodeAt(0));
@@ -338,3 +339,226 @@ export async function verifyUploadedPdf(ctx: RecordCtx, pdf: Uint8Array) {
 }
 
 export { bytesToB64 };
+
+/* ───────────────────────── signing any attached file ───────────────────────── */
+
+export const placementSchema = z.object({
+  page: z.union([z.enum(['first', 'last', 'all']), z.number().int().min(1).max(5000)]).default('last'),
+  position: z.enum(['bottom-right', 'bottom-left', 'bottom-center', 'top-right', 'top-left']).default('bottom-right'),
+});
+type Placement = z.infer<typeof placementSchema>;
+
+const isPdfBytes = (b: Uint8Array) => b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46;
+const isDigitallySigned = (b: Uint8Array) => bin(b).includes('/ByteRange');
+const baseName = (n: string) => n.replace(/\.[a-z0-9]{2,5}$/i, '').replace(/ - signed$/i, '');
+
+/** A photo (JPG / PNG) becomes a one-page A4 PDF so it can be signed. */
+async function imageToPdf(bytes: Uint8Array, type: string) {
+  const doc = await PDFDocument.create();
+  const img = type === 'image/png' ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+  const [W, H] = img.width > img.height ? [842, 595] : [595, 842];
+  const scale = Math.min((W - 48) / img.width, (H - 48) / img.height, 1);
+  const page = doc.addPage([W, H]);
+  page.drawImage(img, { x: (W - img.width * scale) / 2, y: (H - img.height * scale) / 2, width: img.width * scale, height: img.height * scale });
+  return doc.save();
+}
+
+/** The file as a PDF that can be signed (PDF, JPG or PNG; not one already carrying a digital signature). */
+async function signableFile(ctx: RecordCtx, env: Env, fileId: string) {
+  const { file, bytes } = await readFileBytes(ctx, env, fileId, 'update');
+  let pdf: Uint8Array;
+  if (isPdfBytes(bytes)) pdf = bytes;
+  else if (file.content_type === 'image/png' || file.content_type === 'image/jpeg') pdf = await imageToPdf(bytes, file.content_type);
+  else throw badRequest('Only PDFs and photos (JPG / PNG) can be signed here. Save Word, Excel or other files as PDF first.');
+  if (isDigitallySigned(pdf)) throw badRequest('This PDF already carries a digital signature: changing it would break that signature. Sign the original file instead, and add any signature image before the digital signature.');
+  return { file, pdf };
+}
+
+const pagesFor = (count: number, page: Placement['page']) => (page === 'all' ? [...Array(count).keys()] : page === 'first' ? [0] : page === 'last' ? [count - 1] : [Math.min(page, count) - 1]);
+const onePage = (count: number, page: Placement['page']) => (page === 'first' ? 0 : page === 'last' || page === 'all' ? count - 1 : Math.min(page, count) - 1);
+
+async function keepSigned(
+  ctx: RecordCtx,
+  env: Env,
+  file: { id: string; name: string; object_key: string; record_id: string },
+  signed: Uint8Array,
+  sig: { method: 'image' | 'dsc_pfx' | 'dsc_token'; signerName: string; designation?: string | null; image?: string | null; signatureId?: string | null; cert?: CertRow | null; code: string },
+) {
+  const out = await saveFile(ctx, env, { objectKey: file.object_key, recordId: file.record_id, name: `${baseName(file.name)} - signed.pdf`, bytes: signed, kind: 'document', description: `${sig.method === 'image' ? 'Signed' : 'Digitally signed'} by ${sig.signerName}` }, { system: true });
+  const hash = await sha256Bytes(signed);
+  const r = await ctx.tx.one<{ id: string; signed_at: Date }>(
+    `insert into document_signatures (tenant_id, object_key, record_id, signature_id, signer_name, designation, image, doc_hash, verify_code, signed_by, method, certificate_id, cert_subject, cert_serial, file_id, pdf_sha256)
+     values ($1,'file',$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$7) returning id, signed_at`,
+    [ctx.tenantId, file.id, sig.signatureId ?? null, sig.signerName, sig.designation ?? null, sig.image ?? null, hash, sig.code, ctx.principal.user.id, sig.method, sig.cert?.id ?? null, sig.cert?.subject ?? null, sig.cert?.serial ?? null, out.id],
+  );
+  await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,$3,$4)`, [
+    ctx.tenantId, `${file.name} ${sig.method === 'image' ? 'signed' : 'digitally signed'} by ${sig.signerName}`, file.object_key, file.record_id,
+  ]);
+  return { id: r!.id, fileId: out.id, verifyCode: sig.code, signedAt: r!.signed_at };
+}
+
+/** What can be done with a file: preview, sign with a saved signature, sign with a DSC; and who signed it already. */
+export async function fileSigning(ctx: RecordCtx, env: Env, fileId: string) {
+  const { file, bytes } = await readFileBytes(ctx, env, fileId, 'read');
+  const pdf = isPdfBytes(bytes);
+  const photo = file.content_type === 'image/png' || file.content_type === 'image/jpeg';
+  const canChange = await canChangeFileRecord(ctx, fileId);
+  let pages = photo ? 1 : 0;
+  if (pdf) pages = await PDFDocument.load(bytes, { updateMetadata: false, ignoreEncryption: true }).then((d) => d.getPageCount()).catch(() => 0);
+  const digitallySigned = pdf && isDigitallySigned(bytes);
+  // a signed copy carries the signatures of the copies it was made from (image first, then DSC…)
+  const chain = [fileId];
+  for (let i = 0; i < 8; i++) {
+    const up = await ctx.tx.one<{ record_id: string }>(`select record_id from document_signatures where tenant_id = $1 and object_key = 'file' and file_id = $2 limit 1`, [ctx.tenantId, chain[chain.length - 1]]);
+    if (!up || chain.includes(up.record_id)) break;
+    chain.push(up.record_id);
+  }
+  const own = await ctx.tx.query<{ id: string; record_id: string; signer_name: string; designation: string | null; image: string | null; method: string; signed_at: Date; verify_code: string; revoked_at: Date | null; revoke_reason: string | null; cert_subject: string | null; file_id: string | null }>(
+    `select id, record_id, signer_name, designation, image, method, signed_at, verify_code, revoked_at, revoke_reason, cert_subject, file_id from document_signatures
+      where tenant_id = $1 and object_key = 'file' and (record_id = $2 or file_id = any($3::uuid[])) order by signed_at`,
+    [ctx.tenantId, fileId, chain],
+  );
+  const signatures = [];
+  for (const r of own) {
+    signatures.push({
+      id: r.id, signerName: r.signer_name, designation: r.designation, image: r.image, method: r.method, signedAt: r.signed_at, verifyCode: r.verify_code, revoked: !!r.revoked_at, revokeReason: r.revoke_reason,
+      certSubject: r.cert_subject, fileId: r.file_id, isThisFile: r.file_id === fileId, fileUrl: r.file_id ? await signedFileUrl(env, ctx.tenantId, r.file_id, true).catch(() => null) : null,
+    });
+  }
+  let digital: { valid: boolean; reason: string | null; signer: string | null; issuer: string | null } | null = null;
+  if (digitallySigned) {
+    const v = verifyPdf(bytes);
+    digital = { valid: v.ok, reason: v.reason ?? null, signer: v.cert?.subject ?? null, issuer: v.cert?.issuer ?? null };
+  }
+  const me = ctx.principal.user.id;
+  const imageSigs = canChange ? ((await listSignatures(ctx)) as { id: string; signerName: string; designation: string | null; canSign: boolean; image: string }[]).filter((x) => x.canSign) : [];
+  const certs = canChange ? (await listCerts(ctx)).filter((c) => c.canSign && !c.expired) : [];
+  return {
+    file: { id: file.id, name: file.name, contentType: file.content_type, size: Number(file.size_bytes), objectKey: file.object_key, recordId: file.record_id, url: await signedFileUrl(env, ctx.tenantId, file.id, true), downloadUrl: await signedFileUrl(env, ctx.tenantId, file.id, false) },
+    preview: pdf ? 'pdf' : file.content_type.startsWith('image/') ? 'image' : file.content_type.startsWith('text/') || file.content_type === 'text/csv' ? 'text' : file.content_type.startsWith('video/') ? 'video' : 'none',
+    pages,
+    canChange,
+    canSign: canChange && (pdf || photo) && !digitallySigned,
+    whyNot: !canChange ? 'You cannot change the record this file is on' : !(pdf || photo) ? 'Only PDFs and photos can be signed — save it as PDF first' : digitallySigned ? 'Already digitally signed: changing it would break the signature' : null,
+    digital,
+    signatures,
+    imageSignatures: imageSigs.map((x) => ({ id: x.id, signerName: x.signerName, designation: x.designation, image: x.image })),
+    certificates: certs.map((c) => ({ id: c.id, kind: c.kind, subjectCn: c.subjectCn, validTo: c.validTo })),
+    signers: canChange ? await listSigners(ctx) : [],
+    me,
+  };
+}
+
+export const imageSignFileSchema = placementSchema.extend({ signatureId: z.string().uuid() });
+
+/** Puts a saved signature (image, name, date and verification code) on the file's pages; keeps a signed copy. */
+export async function signFileWithImage(ctx: RecordCtx, env: Env, fileId: string, input: z.infer<typeof imageSignFileSchema>, verifyBase: string | null) {
+  const { file, pdf } = await signableFile(ctx, env, fileId);
+  const sig = await ctx.tx.one<{ id: string; signer_name: string; designation: string | null; image: string; user_ids: string[] }>(`select id, signer_name, designation, image, user_ids from signatures where tenant_id = $1 and id = $2 and is_active`, [ctx.tenantId, input.signatureId]);
+  if (!sig) throw notFound('Signature not found');
+  if (!sig.user_ids.includes(ctx.principal.user.id)) throw forbidden(`Only ${sig.signer_name}'s named signers can use this signature`);
+  const doc = await PDFDocument.load(pdf, { updateMetadata: false });
+  const raw = b64ToBytes(sig.image);
+  const img = raw[0] === 0x89 ? await doc.embedPng(raw) : await doc.embedJpg(raw);
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const code = verifyCode();
+  const lines = [sig.designation, `Signed ${istNow()} IST`, verifyBase ? `Verify: ${verifyBase}/${code}` : `Verification code: ${code}`].filter(Boolean) as string[];
+  const size = 7;
+  const iw = 120;
+  const ih = Math.min(48, (img.height / img.width) * iw);
+  const w = Math.max(iw, bold.widthOfTextAtSize(sig.signer_name, 8.5), ...lines.map((t) => font.widthOfTextAtSize(t, size))) + 8;
+  const h = ih + 12 + lines.length * (size + 2) + 6;
+  for (const i of pagesFor(doc.getPageCount(), input.page)) {
+    const page = doc.getPage(i);
+    const { x, y } = placeBox(page.getWidth(), page.getHeight(), w, h, input.position as StampPosition);
+    page.drawImage(img, { x: x + 4, y: y + h - ih - 2, width: (img.width / img.height) * ih, height: ih });
+    page.drawLine({ start: { x: x + 4, y: y + h - ih - 4 }, end: { x: x + w - 4, y: y + h - ih - 4 }, thickness: 0.5, color: rgb(0.6, 0.65, 0.72) });
+    page.drawText(sig.signer_name, { x: x + 4, y: y + h - ih - 14, size: 8.5, font: bold, color: rgb(0.06, 0.09, 0.16) });
+    lines.forEach((t, k) => page.drawText(t, { x: x + 4, y: y + h - ih - 14 - (k + 1) * (size + 2), size, font, color: rgb(0.28, 0.33, 0.41) }));
+  }
+  const signed = await doc.save();
+  return keepSigned(ctx, env, file, signed, { method: 'image', signerName: sig.signer_name, designation: sig.designation, image: sig.image, signatureId: sig.id, code });
+}
+
+export const pfxSignFileSchema = placementSchema.extend({ certificateId: z.string().uuid(), location: z.string().max(120).nullish() });
+
+export async function signFileWithPfx(ctx: RecordCtx, env: Env, fileId: string, input: z.infer<typeof pfxSignFileSchema>, verifyBase: string | null) {
+  const { file, pdf } = await signableFile(ctx, env, fileId);
+  const c = await certFor(ctx, input.certificateId, 'pfx');
+  if (!c.pfx_enc || c.pfx_enc === 'removed' || !c.pass_enc) throw badRequest('This certificate was removed');
+  const key = requireEncryptionKey(env);
+  const signer = readPfx(b64ToBytes(await decryptSecret(key, c.pfx_enc, ctx.tenantId)), await decryptSecret(key, c.pass_enc, ctx.tenantId));
+  const code = verifyCode();
+  const pages = (await PDFDocument.load(pdf, { updateMetadata: false })).getPageCount();
+  const reason = `Signed: ${baseName(file.name)}`.slice(0, 120);
+  const signed = await signPdf(pdf, signer, {
+    name: c.subject_cn,
+    reason,
+    location: input.location ?? undefined,
+    stamp: { page: onePage(pages, input.page), position: input.position as StampPosition, text: [`Digitally signed by ${c.subject_cn}`, `Date: ${istNow()} IST`, `Reason: ${reason}`, verifyBase ? `Verify: ${verifyBase}/${code}` : `Verification code: ${code}`] },
+  });
+  const v = verifyPdf(signed);
+  if (!v.ok) throw new Error(`The signed PDF did not verify: ${v.reason}`);
+  return keepSigned(ctx, env, file, signed, { method: 'dsc_pfx', signerName: c.subject_cn, cert: c, signatureId: c.signature_id, code });
+}
+
+export const tokenPrepareFileSchema = placementSchema.extend({ certificateId: z.string().uuid(), signerId: z.string().uuid(), location: z.string().max(120).nullish() });
+
+export async function prepareFileTokenSign(ctx: RecordCtx, env: Env, fileId: string, input: z.infer<typeof tokenPrepareFileSchema>, verifyBase: string | null) {
+  const { file, pdf } = await signableFile(ctx, env, fileId);
+  const c = await certFor(ctx, input.certificateId, 'token');
+  if (!c.cert_pem) throw badRequest('This certificate has no copy of its public part: add it again from the token');
+  const cert = certFromPem(c.cert_pem);
+  if (!(cert.publicKey as forge.pki.rsa.PublicKey).n) throw badRequest('Only RSA certificates can sign here');
+  const s = await ctx.tx.one<{ secret_enc: string }>(`select secret_enc from dsc_signers where tenant_id = $1 and id = $2 and revoked_at is null`, [ctx.tenantId, input.signerId]);
+  if (!s) throw notFound('That signer is not paired with this workspace');
+  const secret = await decryptSecret(requireEncryptionKey(env), s.secret_enc, ctx.tenantId);
+  const code = verifyCode();
+  const reason = `Signed: ${baseName(file.name)}`.slice(0, 120);
+  const pages = (await PDFDocument.load(pdf, { updateMetadata: false })).getPageCount();
+  const prepared = await preparePdf(pdf, {
+    name: c.subject_cn,
+    reason,
+    location: input.location ?? undefined,
+    stamp: { page: onePage(pages, input.page), position: input.position as StampPosition, text: [`Digitally signed by ${c.subject_cn}`, `Date: ${istNow()} IST`, `Reason: ${reason}`, verifyBase ? `Verify: ${verifyBase}/${code}` : `Verification code: ${code}`] },
+  });
+  const signingTime = new Date(Math.floor(Date.now() / 1000) * 1000);
+  const digest = cmsDigestToSign(prepared.toSign, cert, signingTime);
+  const payload = { v: 2, t: ctx.tenantId, s: input.signerId, u: ctx.principal.user.id, o: 'file', r: fileId, c: c.thumbprint, d: toHex(digest), p: await sha256Bytes(prepared.pdf), st: signingTime.toISOString(), k: code, exp: Math.floor(Date.now() / 1000) + 600, reason };
+  const body = btoa(JSON.stringify(payload)).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+  const mac = await hmacSha256Hex(secret, body);
+  await ctx.tx.query(`update dsc_signers set last_used_at = now() where tenant_id = $1 and id = $2`, [ctx.tenantId, input.signerId]);
+  return { ticket: `${body}.${mac}`, prepared: bytesToB64(prepared.pdf), verifyCode: code };
+}
+
+export async function completeFileTokenSign(ctx: RecordCtx, env: Env, fileId: string, input: z.infer<typeof tokenCompleteSchema>) {
+  const [body, mac] = input.ticket.split('.');
+  if (!body || !mac) throw badRequest('Bad ticket');
+  const payload = JSON.parse(atob(body.replace(/-/g, '+').replace(/_/g, '/'))) as Record<string, any>;
+  if (payload.v !== 2 || payload.o !== 'file') throw badRequest('This ticket is not for a file: sign again');
+  if (payload.t !== ctx.tenantId || payload.r !== fileId || payload.u !== ctx.principal.user.id) throw forbidden('This ticket is for another file');
+  if (payload.exp < Date.now() / 1000 - 60) throw badRequest('The signing ticket expired: sign again');
+  const s = await ctx.tx.one<{ secret_enc: string }>(`select secret_enc from dsc_signers where tenant_id = $1 and id = $2 and revoked_at is null`, [ctx.tenantId, payload.s]);
+  if (!s) throw forbidden('That signer is no longer paired');
+  if ((await hmacSha256Hex(await decryptSecret(requireEncryptionKey(env), s.secret_enc, ctx.tenantId), body)) !== mac) throw forbidden('The ticket was not made by this workspace');
+  if (await ctx.tx.one(`select 1 from document_signatures where tenant_id = $1 and verify_code = $2`, [ctx.tenantId, payload.k])) throw conflict('This ticket was already used');
+  const { file } = await readFileBytes(ctx, env, fileId, 'update');
+  const c = await ctx.tx.one<CertRow>(`select * from dsc_certificates where tenant_id = $1 and thumbprint = $2 and is_active and kind = 'token'`, [ctx.tenantId, payload.c]);
+  if (!c?.cert_pem) throw notFound('The certificate is no longer registered');
+  const prepared = b64ToBytes(input.prepared);
+  if ((await sha256Bytes(prepared)) !== payload.p) throw badRequest('This is not the PDF that was prepared for signing');
+  const place = placeholders(prepared);
+  const cms = cmsWithSignature(place.toSign, certFromPem(c.cert_pem), new Date(payload.st), b64ToBytes(input.signature));
+  const signed = embedCms(place, cms);
+  const v = verifyPdf(signed);
+  if (!v.ok) throw badRequest(`The token's signature does not verify (${v.reason}). Is the right certificate chosen on the token?`);
+  if (v.cert?.thumbprint !== c.thumbprint || !v.coversWholeFile) throw forbidden('The signed PDF does not match the registered certificate');
+  return keepSigned(ctx, env, file, signed, { method: 'dsc_token', signerName: c.subject_cn, cert: c, signatureId: c.signature_id, code: String(payload.k) });
+}
+
+export async function revokeFileSignature(ctx: RecordCtx, env: Env, fileId: string, sigId: string, reason: string) {
+  await readFileBytes(ctx, env, fileId, 'update');
+  const r = await ctx.tx.one(`update document_signatures set revoked_at = now(), revoke_reason = $4 where tenant_id = $1 and object_key = 'file' and id = $3 and revoked_at is null and (record_id = $2 or file_id = $2 or file_id in (select record_id from document_signatures where tenant_id = $1 and file_id = $2)) returning id`, [ctx.tenantId, fileId, sigId, reason]);
+  if (!r) throw notFound();
+}

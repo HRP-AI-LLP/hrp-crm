@@ -85,7 +85,7 @@ export async function assertOwnerAccess(ctx: RecordCtx, owner: Owner) {
   if (!(await canManageOrg(ctx))) throw forbidden(owner.userId ? 'Only admins who manage users, and the organisation profile managers, see team members\' documents' : 'Only admins and the people they name can see the organisation\'s documents');
 }
 
-async function ownerOf(ctx: RecordCtx, id: string): Promise<Owner> {
+export async function ownerOf(ctx: RecordCtx, id: string): Promise<Owner> {
   const r = await ctx.tx.one<{ person_id: string | null; user_id: string | null }>(`select person_id, user_id from org_documents where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
   if (!r) throw notFound('No such document');
   return { personId: r.person_id, userId: r.user_id };

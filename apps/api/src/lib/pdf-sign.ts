@@ -71,25 +71,34 @@ export function readPfx(pfx: Uint8Array, password: string) {
   return { key, cert: mine, chain: certs.filter((c) => c !== mine) };
 }
 
+export type StampPosition = 'bottom-right' | 'bottom-left' | 'bottom-center' | 'top-right' | 'top-left';
 export interface Stamp {
   text: string[];
   /** last page by default */
   page?: number;
+  /** bottom-right by default */
+  position?: StampPosition;
+}
+
+/** Where a box of w × h goes on a page of pw × ph (24 pt from the edges). */
+export function placeBox(pw: number, ph: number, w: number, h: number, position: StampPosition = 'bottom-right', m = 24) {
+  const x = position.endsWith('left') ? m : position.endsWith('center') ? (pw - w) / 2 : pw - w - m;
+  const y = position.startsWith('top') ? ph - h - m : m;
+  return { x, y };
 }
 
 /** Adds the signature dictionary, field and (optionally) a visible text stamp; leaves room for the CMS. */
 export async function preparePdf(pdf: Uint8Array, meta: { name: string; reason: string; location?: string; contact?: string; stamp?: Stamp | null }) {
   const doc = await PDFDocument.load(pdf, { updateMetadata: false });
   const pages = doc.getPages();
-  const page = pages[meta.stamp?.page ?? pages.length - 1]!;
+  const page = pages[Math.min(Math.max(meta.stamp?.page ?? pages.length - 1, 0), pages.length - 1)]!;
   let rect = [0, 0, 0, 0];
   if (meta.stamp) {
     const font = await doc.embedFont(StandardFonts.Helvetica);
     const size = 7.5;
     const w = Math.max(...meta.stamp.text.map((t) => font.widthOfTextAtSize(t, size))) + 12;
     const h = meta.stamp.text.length * (size + 2.5) + 8;
-    const x = page.getWidth() - w - 24;
-    const y = 24;
+    const { x, y } = placeBox(page.getWidth(), page.getHeight(), w, h, meta.stamp.position);
     page.drawRectangle({ x, y, width: w, height: h, borderColor: rgb(0.03, 0.33, 0.57), borderWidth: 0.8, color: rgb(0.96, 0.98, 1) });
     meta.stamp.text.forEach((t, i) => page.drawText(t, { x: x + 6, y: y + h - 6 - (i + 1) * (size + 2.5) + 2.5, size, font, color: rgb(0.06, 0.09, 0.16) }));
     rect = [x, y, x + w, y + h];

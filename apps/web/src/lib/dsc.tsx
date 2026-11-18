@@ -100,3 +100,11 @@ export async function signWithToken(kind: string, id: string, certificateId: str
   const signed = await local<{ signature: string }>('/v1/sign', { ticket: prep.ticket, pin });
   return post<Json>(`/api/v1/documents/${kind}/${id}/dsc/token`, { ticket: prep.ticket, prepared: prep.prepared, signature: signed.signature });
 }
+
+/** USB token signing of an attached file (Synapse prepares the file's PDF; the signer here signs its digest). */
+export async function signFileWithToken(fileId: string, certificateId: string, pin: string, placement: { page: string | number; position: string }, me: { tenant: { id: string } }, paired: { id: string }[]) {
+  const signerId = await localSigner(me.tenant.id, paired);
+  const prep = await post<{ ticket: string; prepared: string }>(`/api/v1/files/${fileId}/dsc/token-prepare`, { certificateId, signerId, ...placement });
+  const signed = await local<{ signature: string }>('/v1/sign', { ticket: prep.ticket, pin });
+  return post<Json>(`/api/v1/files/${fileId}/dsc/token`, { ticket: prep.ticket, prepared: prep.prepared, signature: signed.signature });
+}

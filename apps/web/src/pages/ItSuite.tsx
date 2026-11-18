@@ -4,6 +4,7 @@
  * public roadmap) and resource capacity planning.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ViewSignButton } from '../components/DocumentViewer';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { SideTabs } from '../components/SideTabs';
@@ -2392,9 +2393,10 @@ function ContractDocuments({ id, deal, dealFiles }: { id: string; deal: Json | n
                     <span className="chip">{c}</span>
                   </td>
                   <td>
-                    <a href={f.url} target="_blank" rel="noreferrer">
-                      {f.name}
-                    </a>
+                    <ViewSignButton fileId={f.id} name={f.name} label={f.name} className="link-btn" />
+                  </td>
+                  <td>
+                    <ViewSignButton fileId={f.id} name={f.name} label="View / sign" />
                   </td>
                   <td className="small muted">{date(f.createdAt)}</td>
                   <td>
@@ -2435,9 +2437,7 @@ function DealFileLinks({ dealId }: { dealId: string }) {
   return (
     <>
       {(files.data?.items ?? []).map((f) => (
-        <a key={f.id} className="btn sm ghost" href={f.url} target="_blank" rel="noreferrer" style={{ marginLeft: 4 }}>
-          📄 {f.name}
-        </a>
+        <ViewSignButton key={f.id} fileId={f.id} name={f.name} label={`📄 ${f.name}`} className="btn sm ghost" />
       ))}
     </>
   );

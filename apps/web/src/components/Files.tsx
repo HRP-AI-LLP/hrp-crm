@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { del, get, upload } from '../lib/api';
 import { relative } from '../lib/format';
+import { DocumentViewer, ViewSignButton } from './DocumentViewer';
 import { Empty, Spinner, useToast } from './ui';
 
 export interface FileItem {
@@ -42,6 +43,7 @@ export function FilesPanel({ object, id, canEdit, kind, title }: { object: strin
   const [busy, setBusy] = useState(0);
   const [over, setOver] = useState(false);
   const { data, isLoading } = useFiles(object, id);
+  const [viewing, setViewing] = useState<string | null>(null);
 
   const send = async (files: FileList | File[]) => {
     const list = [...files];
@@ -104,9 +106,9 @@ export function FilesPanel({ object, id, canEdit, kind, title }: { object: strin
         <ul className="file-grid">
           {items.map((f) => (
             <li key={f.id} className="file-card">
-              <a href={f.url} target="_blank" rel="noopener" className="file-thumb" aria-label={`Open ${f.name}`}>
+              <button type="button" className="file-thumb" aria-label={`View ${f.name}`} onClick={() => setViewing(f.id)}>
                 {f.contentType.startsWith('image/') && f.contentType !== 'image/heic' ? <img src={f.url} alt="" loading="lazy" /> : <span className="file-ext">{(f.name.split('.').pop() ?? 'file').slice(0, 4).toUpperCase()}</span>}
-              </a>
+              </button>
               <div className="file-meta">
                 <a href={f.downloadUrl} className="file-name" title={f.name}>
                   {f.name}
@@ -116,6 +118,14 @@ export function FilesPanel({ object, id, canEdit, kind, title }: { object: strin
                   {f.uploaderName ? ` · ${f.uploaderName}` : ''}
                 </div>
                 {f.description && <div className="small">{f.description}</div>}
+                <div className="file-actions">
+                  <button type="button" className="btn sm" onClick={() => setViewing(f.id)}>
+                    View
+                  </button>
+                  {canEdit && (f.contentType === 'application/pdf' || f.contentType === 'image/png' || f.contentType === 'image/jpeg') && (
+                    <ViewSignButton fileId={f.id} name={f.name} label="Sign / DSC" />
+                  )}
+                </div>
               </div>
               {canEdit && (
                 <button
@@ -140,6 +150,7 @@ export function FilesPanel({ object, id, canEdit, kind, title }: { object: strin
       ) : (
         <Empty title="No files yet">{canEdit ? 'Drawings, site photos, signed documents and proofs live here.' : 'Nothing has been attached.'}</Empty>
       )}
+      {viewing && <DocumentViewer fileId={viewing} onClose={() => setViewing(null)} />}
     </div>
   );
 }

@@ -1,5 +1,6 @@
 /** The inside of a project: overview, tasks (list / board), Gantt, milestones, issues, time, billing, team. */
 import { SideTabs } from '../SideTabs';
+import { ViewSignButton } from '../DocumentViewer';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -855,7 +856,7 @@ function MilestoneModal({ m, who, onClose, onSave, projectId }: { m: Json; who: 
                   />
                 </label>
               </div>
-              {fileName && f.approvalFileId && <span className="small muted">📄 {fileName}</span>}
+              {fileName && f.approvalFileId && <ViewSignButton fileId={f.approvalFileId} name={fileName} label={`📄 ${fileName} — view`} className="link-btn small" />}
             </div>
             <div className="field">
               Approval email

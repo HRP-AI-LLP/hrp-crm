@@ -218,6 +218,29 @@ export const organisationRoutes = new Hono<AppEnv>()
     const b = dsc.tokenCompleteSchema.parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => dsc.completeTokenSign(rctx(c, tx), c.env, c.req.param('object'), id(c), b)));
   })
+  // any attached file: preview, sign with a saved signature, sign with a DSC
+  .get('/files/:id/signing', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => dsc.fileSigning(rctx(c, tx), c.env, id(c)))))
+  .post('/files/:id/sign-image', async (c) => {
+    const b = dsc.imageSignFileSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.signFileWithImage(rctx(c, tx), c.env, id(c), b, verifyBase(c))), 201);
+  })
+  .post('/files/:id/dsc/pfx', async (c) => {
+    const b = dsc.pfxSignFileSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.signFileWithPfx(rctx(c, tx), c.env, id(c), b, verifyBase(c))), 201);
+  })
+  .post('/files/:id/dsc/token-prepare', async (c) => {
+    const b = dsc.tokenPrepareFileSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.prepareFileTokenSign(rctx(c, tx), c.env, id(c), b, verifyBase(c))));
+  })
+  .post('/files/:id/dsc/token', async (c) => {
+    const b = dsc.tokenCompleteSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => dsc.completeFileTokenSign(rctx(c, tx), c.env, id(c), b)), 201);
+  })
+  .post('/files/:id/signatures/:sid/revoke', async (c) => {
+    const b = z.object({ reason: z.string().trim().min(3).max(500) }).parse(await c.req.json());
+    await c.var.db.tx(scope(c), (tx) => dsc.revokeFileSignature(rctx(c, tx), c.env, id(c), id(c, 'sid'), b.reason));
+    return c.json({ ok: true });
+  })
   // signing a document
   .get('/documents/:object/:id/signatures', async (c) => {
     return c.json(await c.var.db.tx(scope(c, true), (tx) => org.documentSignatures(rctx(c, tx), c.req.param('object'), id(c), c.env)));

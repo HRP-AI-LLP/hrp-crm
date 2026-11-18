@@ -3,6 +3,7 @@
  * invoices that arrived by mail (read and made into draft bills), and the mailboxes that are read.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ViewSignButton } from '../components/DocumentViewer';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
@@ -726,9 +727,7 @@ function ItemModal({ item, onClose }: { item: Json; onClose: () => void }) {
             </button>
           ))}
           {att && (
-            <a className="btn sm ghost" href={att.url} target="_blank" rel="noreferrer">
-              Open
-            </a>
+            <ViewSignButton fileId={att.fileId} name={att.name} label="View / sign" className="btn sm ghost" />
           )}
         </div>
         {data.status === 'new' && data.kind !== 'statement' && (data.attachments as Json[]).length > 0 && <ApproveMail id={item.id} onDone={onClose} />}

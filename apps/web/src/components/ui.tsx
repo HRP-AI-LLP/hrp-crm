@@ -30,7 +30,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 export const useToast = () => useContext(ToastCtx);
 
 // ------------------------------------------------------------------ modal
-export function Modal({ title, onClose, children, footer, wide }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+export function Modal({ title, onClose, children, footer, wide, xl }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean; xl?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   // the latest onClose, so the effect below runs once per opening: callers pass a new function on
   // every render, and re-running it on each keystroke moved the focus away from the field being typed in
@@ -57,7 +57,7 @@ export function Modal({ title, onClose, children, footer, wide }: { title: strin
   }, []);
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && close.current()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={ref} style={wide ? { width: 'min(860px, 100%)' } : undefined}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={ref} style={xl ? { width: 'min(1280px, 96vw)', maxHeight: '96vh' } : wide ? { width: 'min(860px, 100%)' } : undefined}>
         <div className="modal-head">
           <h2>{title}</h2>
           <button className="btn ghost sm" onClick={onClose} aria-label="Close">

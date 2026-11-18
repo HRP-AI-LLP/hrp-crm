@@ -4,6 +4,7 @@
  * numbers, dates and expiry. Visible to the profile's managers only.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { ViewSignButton } from './DocumentViewer';
 import { useRef, useState } from 'react';
 import { del, get, post, put, upload } from '../lib/api';
 import { date as fmtDate } from '../lib/format';
@@ -143,9 +144,7 @@ function DocRow({ doc, onEdit }: { doc: Json; onEdit: () => void }) {
       <td>
         {doc.file ? (
           <span className="row small" style={{ gap: 6 }}>
-            <a href={doc.file.url} target="_blank" rel="noreferrer">
-              View
-            </a>
+            <ViewSignButton fileId={doc.file.id} name={doc.file.name} label="View / sign" className="link-btn" />
             <a href={doc.file.downloadUrl}>Download</a>
           </span>
         ) : (
@@ -298,9 +297,7 @@ export function DocSlot({ kind, number, label = 'certificate' }: { kind: string;
       <input ref={input} type="file" hidden accept="image/*,application/pdf" onChange={(e) => e.target.files?.[0] && send(e.target.files[0])} />
       {doc?.file ? (
         <>
-          <a href={doc.file.url} target="_blank" rel="noreferrer">
-            📎 View {label}
-          </a>
+          <ViewSignButton fileId={doc.file.id} name={doc.file.name} label={`📎 View ${label}`} className="link-btn" />
           <button type="button" className="btn ghost sm" disabled={busy} onClick={() => input.current?.click()}>
             {busy ? 'Uploading…' : 'Replace'}
           </button>

@@ -315,6 +315,26 @@ export async function verifyByCode(ctx: RecordCtx, code: string) {
     [ctx.tenantId, code.toUpperCase()],
   );
   if (!r) return { found: false as const };
+  if (r.object_key === 'file') {
+    // a signed attachment: valid while the signed copy is kept and the signature is not withdrawn
+    const f = await ctx.tx.one<{ name: string; kept: boolean }>(
+      `select o.name, exists (select 1 from files s join document_signatures d on d.file_id = s.id where d.tenant_id = $1 and d.verify_code = $3 and s.deleted_at is null) as kept from files o where o.tenant_id = $1 and o.id = $2`,
+      [ctx.tenantId, r.record_id, code.toUpperCase()],
+    );
+    const company = (await orgSettings(ctx)).company;
+    return {
+      found: true as const,
+      issuer: company.legalName ?? null,
+      document: { type: 'file', number: f?.name ?? null, date: null, total: null, status: f ? 'kept' : 'deleted' },
+      signer: { name: r.signer_name, designation: r.designation },
+      method: r.method,
+      certificate: r.cert_subject ? { subject: r.cert_subject, serial: r.cert_serial } : null,
+      pdfSha256: r.pdf_sha256,
+      signedAt: r.signed_at,
+      valid: !!f?.kept && !r.revoked_at,
+      revoked: !!r.revoked_at,
+    };
+  }
   const s = SIGNABLE[r.object_key]!;
   const row = await readRowSystem(ctx, r.object_key, r.record_id);
   const company = (await orgSettings(ctx)).company;

@@ -6,6 +6,7 @@
  * Aadhaar is stored encrypted and shown as its last four digits; "Show" reveals it (and is audited).
  */
 import { useQuery } from '@tanstack/react-query';
+import { ViewSignButton } from './DocumentViewer';
 import { useEffect, useRef, useState } from 'react';
 import { get, post, put, upload } from '../lib/api';
 import { useToast } from './ui';
@@ -137,9 +138,7 @@ export function IdentitySection({ subject, id, value, onChange, showPan = true }
             <div key={kind} className="row small" style={{ gap: 8, flexWrap: 'wrap' }}>
               <span style={{ width: 180 }}>{label}</span>
               {d?.file ? (
-                <a href={d.file.url} target="_blank" rel="noreferrer">
-                  View {d.file.name}
-                </a>
+                <ViewSignButton fileId={d.file.id} name={d.file.name} label={`View ${d.file.name}`} className="link-btn" />
               ) : (
                 <span className="muted">No copy yet</span>
               )}

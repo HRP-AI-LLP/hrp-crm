@@ -108,6 +108,12 @@ async function assertRecordAccess(ctx: RecordCtx, objectKey: string, recordId: s
     if (!(await ctx.tx.one(`select 1 from service_contracts where tenant_id = $1 and id = $2`, [ctx.tenantId, recordId]))) throw notFound();
     return;
   }
+  // the organisation's own documents (PAN, GST, MSME…) and team members' documents
+  if (objectKey === 'organisation') {
+    const { assertOwnerAccess, ownerOf } = await import('./org-documents');
+    await assertOwnerAccess(ctx, await ownerOf(ctx, recordId));
+    return;
+  }
   const table = BOOKS_OWNED[objectKey];
   if (table) {
     if (!hasAdmin(ctx.principal.permissions, 'books') && !(objectKey === 'compliance_item' && hasAdmin(ctx.principal.permissions, 'compliance'))) throw forbidden();
@@ -184,6 +190,27 @@ export async function openFile(ctx: RecordCtx, env: Env, id: string) {
   const obj = await env.FILES.get(f.storage_key);
   if (!obj) throw notFound('The file content is missing');
   return { file: f, body: obj.body };
+}
+
+/** A file's row and bytes, for someone who may read (or change) the record it is on. */
+export async function readFileBytes(ctx: RecordCtx, env: Env, id: string, action: 'read' | 'update') {
+  if (!env.FILES) throw new StorageUnavailableError();
+  const f = await loadFile(ctx, id);
+  await assertRecordAccess(ctx, f.object_key, f.record_id, action);
+  const obj = await env.FILES.get(f.storage_key);
+  if (!obj) throw notFound('The file content is missing');
+  return { file: f, bytes: new Uint8Array(await new Response(obj.body).arrayBuffer()) };
+}
+
+/** Whether the person may change the record a file is on (to offer signing). */
+export async function canChangeFileRecord(ctx: RecordCtx, id: string) {
+  const f = await loadFile(ctx, id);
+  try {
+    await assertRecordAccess(ctx, f.object_key, f.record_id, 'update');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function deleteFile(ctx: RecordCtx, env: Env, id: string) {
