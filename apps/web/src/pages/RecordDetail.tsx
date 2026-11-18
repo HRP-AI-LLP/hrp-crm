@@ -17,6 +17,7 @@ import { useObject, usePipelines } from '../lib/hooks';
 import { TaskList } from './Tasks';
 import { DuplicateBanner, MergeModal, RelatedPanel } from '../components/RecordData';
 import { Customer360 } from '../components/Customer360';
+import { SideTabs } from '../components/SideTabs';
 import { RemindButton } from '../components/books/Reminders';
 import { EmailComposer } from '../components/EmailComposer';
 import { placeCall, useIntegrationStatus } from '../components/MailboxPanel';
@@ -318,14 +319,18 @@ export function RecordDetailPage() {
           {(object === 'lead' || object === 'contact') && <ConsentPanel object={object} id={id} />}
         </div>
 
-        <section className="panel">
-          <div className="tabs" role="tablist">
-            {(['timeline', ...(COPILOT_OBJECTS.includes(object) ? (['copilot'] as const) : []), 'related', 'files', 'tasks', 'ai'] as const).map((t) => (
-              <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}>
-                {t === 'timeline' ? 'Timeline' : t === 'copilot' ? 'Copilot' : t === 'related' ? 'Related' : t === 'files' ? 'Files' : t === 'tasks' ? 'Tasks' : 'Synapse AI'}
-              </button>
-            ))}
-          </div>
+        <SideTabs
+          id="record"
+          defaultOpen={false}
+          title="Activity"
+          value={tab}
+          onChange={setTab}
+          items={(['timeline', ...(COPILOT_OBJECTS.includes(object) ? (['copilot'] as const) : []), 'related', 'files', 'tasks', 'ai'] as const).map((t) => ({
+            key: t,
+            label: t === 'timeline' ? 'Timeline' : t === 'copilot' ? 'Copilot' : t === 'related' ? 'Related' : t === 'files' ? 'Files' : t === 'tasks' ? 'Tasks' : 'Synapse AI',
+            icon: t === 'timeline' ? 'clock' : t === 'copilot' ? 'spark' : t === 'related' ? 'layers' : t === 'files' ? 'folder' : t === 'tasks' ? 'check' : 'bulb',
+          }))}
+        >
           {tab === 'timeline' && <Timeline object={object} id={id} canLog={canEdit} />}
           {tab === 'related' && <RelatedPanel object={object} id={id} />}
           {tab === 'files' && <FilesPanel object={object} id={id} canEdit={canEdit} />}
@@ -336,7 +341,7 @@ export function RecordDetailPage() {
           )}
           {tab === 'ai' && <AiPanel object={object} id={id} insights={insights} />}
           {tab === 'copilot' && <CopilotPanel object={object} id={id} canEdit={canEdit} />}
-        </section>
+        </SideTabs>
       </div>
 
       {sharing && <ShareModal object={object} id={id} title={rec.title || obj.label} onClose={() => setSharing(false)} />}

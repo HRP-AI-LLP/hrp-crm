@@ -10,6 +10,7 @@ import { LeadInsights } from '../components/LeadInsights';
 import { RoleView } from '../components/RoleView';
 import { ServiceInsights } from '../components/ops/ServicePanels';
 import { TodayHero, TodayPanels } from '../components/TodayPanels';
+import { Chart } from '../components/charts';
 
 interface Stats {
   dealsByStage?: { stage_id: string; count: number; amount: number | null }[];
@@ -71,21 +72,16 @@ export function DashboardPage() {
             </Link>
           </div>
           <div className="panel-body">
-            {openStages.length === 0 && <Empty title="No deal pipeline yet" />}
-            {openStages.map((s) => {
-              const st = byStage.get(s.id);
-              return (
-                <div className="funnel-row" key={s.id}>
-                  <span>{s.label}</span>
-                  <div className="funnel-bar" aria-hidden="true">
-                    <div style={{ width: `${(Number(st?.amount ?? 0) / maxAmount) * 100}%`, background: s.color ?? undefined }} />
-                  </div>
-                  <span className="small" style={{ textAlign: 'right' }}>
-                    {moneyShort(st?.amount ?? 0)} · {st?.count ?? 0}
-                  </span>
-                </div>
-              );
-            })}
+            {openStages.length === 0 ? (
+              <Empty title="No deal pipeline yet" />
+            ) : (
+              <Chart
+                id="home-pipeline"
+                initial="hbar"
+                fmt={(n) => moneyShort(n)}
+                data={{ categories: openStages.map((st) => st.label), series: [{ label: 'Pipeline', values: openStages.map((st) => Number(byStage.get(st.id)?.amount ?? 0)) }] }}
+              />
+            )}
           </div>
         </section>
         <section className="panel">

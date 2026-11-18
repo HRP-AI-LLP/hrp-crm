@@ -14,6 +14,7 @@ import { date as fmtDate } from '../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
 import { del, get, post, put } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { SideTabs } from '../components/SideTabs';
 
 type Json = Record<string, any>;
 type Tab = 'profile' | 'contacts' | 'leaders' | 'people' | 'banks' | 'documents' | 'signatures' | 'dsc' | 'templates';
@@ -57,25 +58,24 @@ export function OrganisationTab() {
   return (
     <div className="stack">
       {!d.canManage && <div className="notice small">You can see the profile; changing it is for admins and the people they name.</div>}
-      <div className="tabs" role="tablist" style={{ padding: 0 }}>
-        {(
-          [
-            ['profile', 'Profile'],
-            ['contacts', 'Phones, emails & contacts'],
-            ['leaders', 'Leadership & key people'],
-            ['people', 'Partners & directors'],
-            ['banks', 'Bank accounts'],
-            ['documents', 'Documents'],
-            ['signatures', 'Signatures'],
-            ['dsc', 'Digital signatures (DSC)'],
-            ['templates', 'Document templates'],
-          ] as [Tab, string][]
-        ).map(([k, l]) => (
-          <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
-            {l}
-          </button>
-        ))}
-      </div>
+      <SideTabs
+        id="organisation"
+        title="Organisation"
+        value={tab}
+        onChange={setTab}
+        items={[
+          { key: 'profile', label: 'Profile', icon: 'building', group: 'Company' },
+          { key: 'contacts', label: 'Phones, emails & contacts', icon: 'mail', group: 'Company' },
+          { key: 'banks', label: 'Bank accounts', icon: 'wallet', group: 'Company' },
+          { key: 'leaders', label: 'Leadership & key people', icon: 'users', group: 'People' },
+          { key: 'people', label: 'Partners & directors', icon: 'user', group: 'People' },
+          { key: 'documents', label: 'Documents', icon: 'folder', group: 'Papers' },
+          { key: 'signatures', label: 'Signatures', icon: 'contract', group: 'Papers' },
+          { key: 'dsc', label: 'Digital signatures (DSC)', icon: 'stamp', group: 'Papers' },
+          { key: 'templates', label: 'Document templates', icon: 'file', group: 'Papers' },
+        ]}
+      >
+        <div className="panel-body">
       {tab === 'profile' && <Profile d={d} />}
       {tab === 'contacts' && <Contacts d={d} />}
       {tab === 'leaders' && <KeyPeople d={d} />}
@@ -85,6 +85,8 @@ export function OrganisationTab() {
       {tab === 'signatures' && <Signatures d={d} />}
       {tab === 'dsc' && <Dsc d={d} />}
       {tab === 'templates' && <DocTemplatesTab />}
+        </div>
+      </SideTabs>
     </div>
   );
 }

@@ -3,6 +3,7 @@
  * controller), the review queue where people approve, change or reject what they propose, what they
  * found, the month-end close, and where bank transactions come from (statements and live feeds).
  */
+import { SideTabs } from '../SideTabs';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -163,23 +164,22 @@ export function AccountsDesk({ go }: { go?: (tab: string) => void }) {
         ))}
       </div>
 
-      <div className="tabs" role="tablist" style={{ padding: 0 }}>
-        {(
-          [
-            ['queue', `Review queue${c.pending ? ` (${c.pending})` : ''}`],
-            ['findings', `Findings${c.findings ? ` (${c.findings})` : ''}`],
-            ['close', 'Month-end close'],
-            ['sources', 'Bank feeds & statements'],
-            ['own', 'Own accounts'],
-            ['invoices', 'Import invoices'],
-            ['activity', 'Activity'],
-          ] as [View, string][]
-        ).map(([k, l]) => (
-          <button key={k} role="tab" aria-selected={view === k} onClick={() => setView(k)}>
-            {l}
-          </button>
-        ))}
-      </div>
+      <SideTabs
+        id="desk"
+        title="Accounts desk"
+        panel={false}
+        value={view}
+        onChange={setView}
+        items={[
+          { key: 'queue', label: 'Review queue', icon: 'check', badge: c.pending || null, group: 'Review' },
+          { key: 'findings', label: 'Findings', icon: 'bulb', badge: c.findings || null, group: 'Review' },
+          { key: 'close', label: 'Month-end close', icon: 'calendar', group: 'Review' },
+          { key: 'sources', label: 'Bank feeds & statements', icon: 'wallet', group: 'Bring in' },
+          { key: 'invoices', label: 'Import invoices', icon: 'file', group: 'Bring in' },
+          { key: 'own', label: 'Own accounts', icon: 'users', group: 'Bring in' },
+          { key: 'activity', label: 'Activity', icon: 'clock', group: 'History' },
+        ] as { key: View; label: string; icon: string; badge?: number | null; group: string }[]}
+      >
       {view === 'queue' && <Queue />}
       {view === 'findings' && <Findings go={go} setView={setView} />}
       {view === 'close' && <Close last={data.lastClose} go={go} />}
@@ -187,6 +187,7 @@ export function AccountsDesk({ go }: { go?: (tab: string) => void }) {
       {view === 'own' && <OwnAccounts />}
       {view === 'invoices' && <InvoiceImport />}
       {view === 'activity' && <Activity />}
+      </SideTabs>
       {settings && <SettingsModal current={s} onClose={() => setSettings(false)} onSaved={refresh} />}
     </div>
   );

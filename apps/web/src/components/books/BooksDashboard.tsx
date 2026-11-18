@@ -7,10 +7,34 @@ import { useEffect, useRef, useState } from 'react';
 import { get } from '../../lib/api';
 import { Link } from 'react-router-dom';
 import { money2 } from '../../lib/format';
+import { Chart, COMBO_ICON, KIND_OPTIONS, KindSwitch, type ChartKind } from '../charts';
+
+type View = 'combo' | ChartKind;
+function useView(id: string, initial: View): [View, (v: View) => void] {
+  const [v, setV] = useState<View>(() => {
+    try {
+      return (localStorage.getItem(`synapse.chart.${id}`) as View | null) ?? initial;
+    } catch {
+      return initial;
+    }
+  });
+  return [
+    v,
+    (n: View) => {
+      setV(n);
+      try {
+        localStorage.setItem(`synapse.chart.${id}`, n);
+      } catch {
+        /* ignore */
+      }
+    },
+  ];
+}
+const viewOptions = (combo: string, kinds: ChartKind[]) => [{ key: 'combo' as View, label: combo, icon: COMBO_ICON }, ...KIND_OPTIONS(kinds).map((o) => ({ ...o, key: o.key as View }))];
 
 type Json = Record<string, any>;
 
-const C = { income: '#0f8dde', expense: '#f59e0b', net: 'var(--ink)', grid: 'var(--line)', axis: 'var(--ink-3)' };
+const C = { income: 'var(--series-1)', expense: 'var(--series-2)', net: 'var(--ink)', grid: 'var(--line)', axis: 'var(--ink-3)' };
 
 /** ₹ in Indian short form: 1.7L, 25K, 1.2Cr */
 export function inrShort(v: number) {
@@ -115,10 +139,18 @@ function TrendChart({ trend }: { trend: { month: string; income: number; expense
         >
           <b>{monthLabel(h.month)}</b>
           <div className="row" style={{ justifyContent: 'space-between' }}>
-            <span style={{ color: C.income }}>Income</span> {money2(h.income)}
+            <span>
+              <i style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: C.income, marginRight: 6 }} />
+              Income
+            </span>{' '}
+            {money2(h.income)}
           </div>
           <div className="row" style={{ justifyContent: 'space-between' }}>
-            <span style={{ color: '#b45309' }}>Expenses</span> {money2(h.expense)}
+            <span>
+              <i style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: C.expense, marginRight: 6 }} />
+              Expenses
+            </span>{' '}
+            {money2(h.expense)}
           </div>
           <div className="row" style={{ justifyContent: 'space-between', borderTop: '1px solid var(--line)', marginTop: 4, paddingTop: 4 }}>
             <span>Profit</span> <b style={{ color: h.net < 0 ? 'var(--bad)' : 'var(--good)' }}>{money2(h.net)}</b>
@@ -180,6 +212,7 @@ export function BooksDashboard({ data, go, fy }: { data: Json; go: (t: any) => v
   const bills = (data.dueBills ?? []) as Json[];
   const today = String(data.today ?? '').slice(0, 10);
   const lm = data.lastMonth ?? { income: 0, expense: 0, net: 0 };
+  const [trendView, setTrendView] = useView('books-trend', 'combo');
   return (
     <div className="stack" style={{ gap: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
@@ -204,8 +237,26 @@ export function BooksDashboard({ data, go, fy }: { data: Json; go: (t: any) => v
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2.2fr) minmax(260px, 1fr)', gap: 14 }} className="books-dash-row">
-        <Panel title="Income, expenses and profit — last 12 months">
-          {trend.some((t) => t.income || t.expense) ? <TrendChart trend={trend} /> : <p className="muted small">Nothing posted to the ledger yet: income and expenses show here month by month once invoices, bills and bank lines are posted.</p>}
+        <Panel title="Income, expenses and profit — last 12 months" action={<KindSwitch options={viewOptions('Bars with the profit line', ['bar', 'line', 'area', 'stacked', 'table'])} value={trendView} onChange={setTrendView} />}>
+          {!trend.some((t) => t.income || t.expense) ? (
+            <p className="muted small">Nothing posted to the ledger yet: income and expenses show here month by month once invoices, bills and bank lines are posted.</p>
+          ) : trendView === 'combo' ? (
+            <TrendChart trend={trend} />
+          ) : (
+            <Chart
+              switcher={false}
+              initial={trendView}
+              height={280}
+              fmt={inrShort}
+              data={{
+                categories: trend.map((t) => monthLabel(t.month)),
+                series:
+                  trendView === 'stacked'
+                    ? [{ label: 'Income', values: trend.map((t) => t.income) }, { label: 'Expenses', values: trend.map((t) => t.expense) }]
+                    : [{ label: 'Income', values: trend.map((t) => t.income) }, { label: 'Expenses', values: trend.map((t) => t.expense) }, { label: 'Profit', values: trend.map((t) => t.income - t.expense) }],
+              }}
+            />
+          )}
         </Panel>
         <Panel
           title="Cash by account"
@@ -245,19 +296,7 @@ export function BooksDashboard({ data, go, fy }: { data: Json; go: (t: any) => v
           {!spend.length ? (
             <p className="muted small">No expenses posted this year.</p>
           ) : (
-            <div style={{ display: 'grid', gap: 10 }}>
-              {spend.map((x) => (
-                <div key={x.name}>
-                  <div className="row small" style={{ justifyContent: 'space-between', gap: 8 }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{x.name}</span>
-                    <b style={{ fontVariantNumeric: 'tabular-nums' }}>{money2(x.amount)}</b>
-                  </div>
-                  <div style={{ height: 6, background: 'var(--line-2)', borderRadius: 3, marginTop: 4 }}>
-                    <div style={{ width: `${(x.amount / spendMax) * 100}%`, height: '100%', background: C.expense, borderRadius: 3 }} />
-                  </div>
-                </div>
-              ))}
-            </div>
+            <Chart id="books-spend" initial="hbar" fmt={inrShort} data={{ categories: spend.map((x) => x.name), series: [{ label: 'Spent', values: spend.map((x) => x.amount) }] }} />
           )}
         </Panel>
         <Panel title="Who owes you">
@@ -327,6 +366,7 @@ function CashForecast() {
   const { data } = useQuery({ queryKey: ['books', 'cash-forecast'], queryFn: () => get<Json>('/api/v1/books/cash-forecast?weeks=13'), staleTime: 300_000 });
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
+  const [view, setView] = useView('books-forecast', 'combo');
   if (!data) return null;
   const weeks = data.weeks as { week: string; in: number; out: number; late: number; balance: number }[];
   const H = 220;
@@ -348,7 +388,7 @@ function CashForecast() {
   const end = weeks[weeks.length - 1];
   const h = hover != null ? weeks[hover] : null;
   return (
-    <Panel title="Cash forecast — next 13 weeks">
+    <Panel title="Cash forecast — next 13 weeks" action={<KindSwitch options={viewOptions('Bars with the balance line', ['line', 'bar', 'table'])} value={view} onChange={setView} />}>
       <div className="row small" style={{ gap: 18, flexWrap: 'wrap', marginBottom: 8, color: 'var(--ink-2)' }}>
         <span>
           Today <b>{money2(data.opening)}</b>
@@ -362,13 +402,25 @@ function CashForecast() {
         {data.late > 0 && <span>{money2(data.late)} of late invoices counted in week 1</span>}
         {data.usualWeekly > 0 && <span className="muted">usual spending {inrShort(data.usualWeekly)}/week included</span>}
       </div>
-      <div ref={ref} style={{ position: 'relative' }}>
+      {view !== 'combo' && (
+        <Chart
+          switcher={false}
+          initial={view as ChartKind}
+          height={240}
+          fmt={inrShort}
+          data={{
+            categories: weeks.map((w) => new Date(`${w.week}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' })),
+            series: view === 'line' ? [{ label: 'Bank balance', values: weeks.map((w) => w.balance) }] : [{ label: 'Money in', values: weeks.map((w) => w.in + w.late) }, { label: 'Money out', values: weeks.map((w) => w.out) }, { label: 'Bank balance', values: weeks.map((w) => w.balance) }],
+          }}
+        />
+      )}
+      <div ref={ref} style={{ position: 'relative', display: view === 'combo' ? undefined : 'none' }}>
         <div className="row small" style={{ gap: 16, margin: '0 0 6px', color: 'var(--ink-2)' }}>
           <span className="row" style={{ gap: 6 }}>
-            <i style={{ width: 10, height: 10, borderRadius: 2, background: '#059669', display: 'inline-block' }} /> Money in
+            <i style={{ width: 10, height: 10, borderRadius: 2, background: 'var(--series-3)', display: 'inline-block' }} /> Money in
           </span>
           <span className="row" style={{ gap: 6 }}>
-            <i style={{ width: 10, height: 10, borderRadius: 2, background: '#86efac', display: 'inline-block' }} /> Late invoices
+            <i style={{ width: 10, height: 10, borderRadius: 2, background: 'color-mix(in srgb, var(--series-3) 45%, transparent)', display: 'inline-block' }} /> Late invoices
           </span>
           <span className="row" style={{ gap: 6 }}>
             <i style={{ width: 10, height: 10, borderRadius: 2, background: C.expense, display: 'inline-block' }} /> Money out
@@ -390,8 +442,8 @@ function CashForecast() {
             {weeks.map((w, i) => (
               <g key={w.week} onMouseEnter={() => setHover(i)}>
                 <rect x={pad.l + band * i} y={pad.t} width={band} height={ih} fill={hover === i ? 'var(--brand-50)' : 'transparent'} />
-                <rect x={cx(i) - bw - 1} y={y(w.in + w.late)} width={bw} height={Math.max(0, y(0) - y(w.late))} fill="#86efac" rx={2} />
-                <rect x={cx(i) - bw - 1} y={y(w.in)} width={bw} height={Math.max(0, y(0) - y(w.in))} fill="#059669" rx={2} />
+                <rect x={cx(i) - bw - 1} y={y(w.in + w.late)} width={bw} height={Math.max(0, y(0) - y(w.late))} fill="color-mix(in srgb, var(--series-3) 45%, transparent)" rx={2} />
+                <rect x={cx(i) - bw - 1} y={y(w.in)} width={bw} height={Math.max(0, y(0) - y(w.in))} fill="var(--series-3)" rx={2} />
                 <rect x={cx(i) + 1} y={y(w.out)} width={bw} height={Math.max(0, y(0) - y(w.out))} fill={C.expense} rx={2} />
                 {i % 2 === 0 && (
                   <text x={cx(i)} y={H - 8} textAnchor="middle" fontSize={11} fill="var(--ink-3)">

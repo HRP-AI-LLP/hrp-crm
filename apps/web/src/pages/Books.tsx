@@ -3,6 +3,7 @@
  * reports, recurring transactions, budgets, fixed assets, GST / TDS and settings.
  */
 import { BooksDashboard } from '../components/books/BooksDashboard';
+import { SideTabs } from '../components/SideTabs';
 import { ReminderSettings } from '../components/books/Reminders';
 import { Compliance } from '../components/books/Compliance';
 import { Payroll } from '../components/books/Payroll';
@@ -51,6 +52,19 @@ const TABS: [Tab, string][] = [
   ['accounts', 'Chart of accounts'], ['reports', 'Reports'], ['recurring', 'Recurring'], ['budgets', 'Budgets'], ['assets', 'Fixed assets'], ['deposits', 'Deposits & guarantees'], ['gst', 'GST & TDS'],
   ['tds', 'TDS returns'], ['audit', 'Audit trail'], ['settings', 'Settings'],
 ];
+
+/** The Books menu, grouped down the left of the page. */
+const BOOK_GROUPS: { label: string; items: Tab[] }[] = [
+  { label: 'Daily work', items: ['overview', 'desk', 'banking', 'payables'] },
+  { label: 'Compliance', items: ['compliance', 'gst', 'tds'] },
+  { label: 'Accounting', items: ['journals', 'accounts', 'recurring', 'budgets', 'assets', 'deposits', 'payroll'] },
+  { label: 'Reports', items: ['reports', 'audit'] },
+  { label: 'Setup', items: ['settings'] },
+];
+const BOOK_ICON: Record<Tab, string> = {
+  overview: 'gauge', desk: 'spark', banking: 'wallet', payables: 'receipt', compliance: 'stamp', gst: 'file', tds: 'rupee', journals: 'book', accounts: 'layers',
+  recurring: 'repeat', budgets: 'target', assets: 'building', deposits: 'folder', payroll: 'users', reports: 'chart', audit: 'clock', settings: 'gear',
+};
 
 export function BooksPage() {
   const { me } = useAuth();
@@ -110,14 +124,14 @@ export function BooksPage() {
           </Link>
         </div>
       </div>
-      <section className="panel">
-        <div className="tabs" role="tablist">
-          {tabs.map(([k, l]) => (
-            <button key={k} role="tab" aria-selected={tab === k} onClick={() => go(k)}>
-              {l}
-            </button>
-          ))}
-        </div>
+      <SideTabs
+        id="books"
+        title="Books"
+        value={tab}
+        onChange={go}
+        items={BOOK_GROUPS.flatMap((g) => g.items.filter((k) => tabs.some(([t]) => t === k)).map((k) => ({ key: k, label: tabs.find(([t]) => t === k)![1], icon: BOOK_ICON[k], group: g.label })))}
+      >
+
         <div className="panel-body">
           {tab === 'overview' && <Overview go={go} />}
           {tab === 'desk' && <AccountsDesk go={(t) => go(t as Tab)} />}
@@ -137,7 +151,7 @@ export function BooksPage() {
           {tab === 'audit' && <AuditTrail />}
           {tab === 'settings' && <Settings />}
         </div>
-      </section>
+      </SideTabs>
     </>
   );
 }

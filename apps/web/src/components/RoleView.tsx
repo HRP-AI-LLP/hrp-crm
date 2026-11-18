@@ -1,3 +1,4 @@
+import { Chart } from './charts';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -46,47 +47,16 @@ function fmt(v: unknown, f: Format = 'text') {
   }
 }
 
-/** Two-series monthly bars (e.g. booked vs collected). */
+/** Two series by month (e.g. booked vs collected), in any chart form. */
 function Bars({ s }: { s: NonNullable<NonNullable<Home['data']>['series']> }) {
-  const max = Math.max(1, ...s.points.flatMap((p) => [p.a, p.b]));
-  const W = 560;
-  const H = 160;
-  const slot = W / s.points.length;
-  const bw = Math.min(26, slot / 3);
-  return (
-    <figure className="role-chart">
-      <svg viewBox={`0 0 ${W} ${H + 22}`} role="img" aria-label={`${s.label} by month`}>
-        {s.points.map((p, i) => {
-          const x = i * slot + slot / 2;
-          const ha = (p.a / max) * H;
-          const hb = (p.b / max) * H;
-          const m = new Date(`${p.period}-01T00:00:00`).toLocaleDateString([], { month: 'short' });
-          return (
-            <g key={p.period}>
-              <rect x={x - bw - 2} y={H - ha} width={bw} height={ha} rx={3} className="bar-a">
-                <title>{`${m} — ${s.a}: ${money(p.a)}`}</title>
-              </rect>
-              <rect x={x + 2} y={H - hb} width={bw} height={hb} rx={3} className="bar-b">
-                <title>{`${m} — ${s.b}: ${money(p.b)}`}</title>
-              </rect>
-              <text x={x} y={H + 16} textAnchor="middle">
-                {m}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-      <figcaption className="legend-inline small">
-        <span>
-          <i className="bar-a" /> {s.a}
-        </span>
-        <span>
-          <i className="bar-b" /> {s.b}
-        </span>
-        <span className="muted">max {moneyShort(max)}</span>
-      </figcaption>
-    </figure>
-  );
+  const data = {
+    categories: s.points.map((p) => new Date(`${p.period}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })),
+    series: [
+      { label: s.a, values: s.points.map((p) => Number(p.a) || 0) },
+      { label: s.b, values: s.points.map((p) => Number(p.b) || 0) },
+    ],
+  };
+  return <Chart data={data} fmt={(n) => moneyShort(n)} initial="bar" id={`role-${s.label}`} height={240} />;
 }
 
 /** Role dashboards: the figures an owner, sales head, ops, stores or service lead checks each morning. */

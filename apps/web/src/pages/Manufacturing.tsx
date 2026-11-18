@@ -2,6 +2,7 @@
  * Manufacturing: production overview, bills of materials, work centres, MRP, lots and expiry,
  * quality checks, job work (ITC-04) and production reports.
  */
+import { SideTabs } from '../components/SideTabs';
 import { hasAdmin } from '@synapse/shared';
 import { useQuery } from '@tanstack/react-query';
 import { type ReactNode, useState } from 'react';
@@ -20,6 +21,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const monthStart = () => `${today().slice(0, 7)}-01`;
 
 type Tab = 'overview' | 'boms' | 'centers' | 'mrp' | 'lots' | 'quality' | 'jobwork' | 'reports';
+const MFG_ICON: Record<string, string> = { overview: 'gauge', boms: 'layers', centers: 'factory', mrp: 'calendar', lots: 'box', quality: 'check', jobwork: 'wrench', reports: 'chart' };
 const TABS: [Tab, string, boolean][] = [
   ['overview', 'Overview', false],
   ['boms', 'Bills of materials', false],
@@ -75,14 +77,13 @@ export function ManufacturingPage() {
           </Link>
         </div>
       </div>
-      <section className="panel">
-        <div className="tabs" role="tablist">
-          {TABS.filter(([, , needsAdmin]) => admin || !needsAdmin).map(([k, l]) => (
-            <button key={k} role="tab" aria-selected={tab === k} onClick={() => go(k)}>
-              {l}
-            </button>
-          ))}
-        </div>
+      <SideTabs
+        id="manufacturing"
+        title="Manufacturing"
+        value={tab}
+        onChange={go}
+        items={TABS.filter(([, , needsAdmin]) => admin || !needsAdmin).map(([k, l]) => ({ key: k, label: l, icon: MFG_ICON[k] }))}
+      >
         <div className="panel-body">
           {tab === 'overview' && <Overview go={go} />}
           {tab === 'boms' && <Boms admin={admin} />}
@@ -93,7 +94,7 @@ export function ManufacturingPage() {
           {tab === 'jobwork' && <JobWorkReport />}
           {tab === 'reports' && <Reports />}
         </div>
-      </section>
+      </SideTabs>
     </>
   );
 }

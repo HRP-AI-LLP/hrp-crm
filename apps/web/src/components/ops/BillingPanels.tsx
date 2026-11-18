@@ -1,3 +1,4 @@
+import { SideTabs } from '../SideTabs';
 import { hasAdmin, type RecordDto } from '@synapse/shared';
 import { useAuth } from '../../lib/auth';
 import { useApps } from './OrderPanel';
@@ -629,25 +630,22 @@ export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
           <p>Receivables, GST returns and accounting exports.</p>
         </div>
       </div>
-      <section className="panel">
-        <div className="tabs" role="tablist">
-          {(
-            [
-              ['ar', 'Receivables'],
-              ['gst', 'GST returns'],
-              ['portal', 'GST portal'],
-              ['deposits', 'Deposits & guarantees'],
-              ['tally', 'Tally'],
-              ['settings', 'Settings'],
-            ] as const
-          )
-            .filter(([k]) => k === 'ar' || isAccounts)
-            .map(([k, l]) => (
-              <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
-                {l}
-              </button>
-            ))}
-        </div>
+      <SideTabs
+        id="billing"
+        title="Billing"
+        value={tab}
+        onChange={setTab}
+        items={(
+          [
+            { key: 'ar', label: 'Receivables', icon: 'rupee', group: 'Money' },
+            { key: 'deposits', label: 'Deposits & guarantees', icon: 'folder', group: 'Money' },
+            { key: 'gst', label: 'GST returns', icon: 'stamp', group: 'GST' },
+            { key: 'portal', label: 'GST portal', icon: 'org', group: 'GST' },
+            { key: 'tally', label: 'Tally', icon: 'repeat', group: 'Setup' },
+            { key: 'settings', label: 'Settings', icon: 'gear', group: 'Setup' },
+          ] as const
+        ).filter((x) => x.key === 'ar' || isAccounts).map((x) => ({ ...x }))}
+      >
         {tab === 'ar' && <Receivables />}
         {tab === 'gst' && <GstReturns />}
         {tab === 'portal' && <GstPortal />}
@@ -664,7 +662,7 @@ export function BillingPage({ isAccounts }: { isAccounts: boolean }) {
           </>
         )}
         {tab === 'settings' && <BillingSettingsForm />}
-      </section>
+      </SideTabs>
     </>
   );
 }

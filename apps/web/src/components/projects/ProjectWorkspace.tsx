@@ -1,4 +1,5 @@
 /** The inside of a project: overview, tasks (list / board), Gantt, milestones, issues, time, billing, team. */
+import { SideTabs } from '../SideTabs';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -37,6 +38,8 @@ function useAct(keys: unknown[][]) {
 
 type Tab = 'overview' | 'tasks' | 'agile' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'issues' | 'time' | 'billing' | 'team';
 
+const PROJECT_ICON: Record<string, string> = { overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
+
 export function ProjectWorkspace({ id }: { id: string }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`) });
   const [tab, setTab] = useState<Tab>('overview');
@@ -49,14 +52,14 @@ export function ProjectWorkspace({ id }: { id: string }) {
     ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'],
   ];
   return (
-    <section className="panel" style={{ marginBottom: 20 }}>
-      <div className="tabs" role="tablist">
-        {tabs.map(([k, l]) => (
-          <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}>
-            {l}
-          </button>
-        ))}
-      </div>
+    <div style={{ marginBottom: 20 }}>
+    <SideTabs
+      id="project"
+      title="Project"
+      value={tab}
+      onChange={setTab}
+      items={tabs.map(([k, l]) => ({ key: k, label: l, icon: PROJECT_ICON[k], group: ['overview', 'tasks', 'agile', 'releases', 'gantt'].includes(k) ? 'Work' : ['milestones', 'changes', 'issues'].includes(k) ? 'Delivery' : 'People & money' }))}
+    >
       <div className="panel-body">
         {tab === 'overview' && <Overview id={id} data={data} />}
         {tab === 'tasks' && <Tasks id={id} data={data} member={member} manage={manage} />}
@@ -70,7 +73,8 @@ export function ProjectWorkspace({ id }: { id: string }) {
         {tab === 'billing' && manage && <Billing id={id} />}
         {tab === 'team' && <Team id={id} data={data} manage={manage} />}
       </div>
-    </section>
+    </SideTabs>
+    </div>
   );
 }
 
