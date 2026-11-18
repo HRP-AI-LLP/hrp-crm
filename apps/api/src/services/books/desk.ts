@@ -2358,10 +2358,27 @@ export async function openDocuments(ctx: RecordCtx) {
     [ctx.tenantId],
   );
   // invoices read from files but not yet approved into the books (Accounts desk → Import invoices)
-  const pending = await ctx.tx.one<{ n: number; customers: string | null }>(
-    `select count(*)::int as n, string_agg(distinct data -> 'customer' ->> 'name', ', ') as customers from doc_import_items where tenant_id = $1 and status in ('pending','failed')`,
+  const waiting = await ctx.tx.query<{ id: string; status: string; data: any; plan: any; error: string | null }>(
+    `select id, status, data, plan, error from doc_import_items where tenant_id = $1 and status in ('pending','failed') order by data ->> 'date' desc nulls last limit 200`,
     [ctx.tenantId],
   );
+  const pending = {
+    n: waiting.length,
+    customers: [...new Set(waiting.map((w) => w.data?.customer?.name).filter(Boolean))].join(', ') || null,
+    items: waiting.map((w) => ({
+      id: w.id,
+      status: w.status,
+      error: w.error,
+      number: w.data?.number ?? null,
+      date: w.data?.date ?? null,
+      readCustomer: w.data?.customer?.name ?? null,
+      customerId: w.plan?.customer?.id ?? null,
+      total: w.plan?.invoice?.total ?? w.data?.total ?? null,
+      paid: w.data?.paid?.status ?? null,
+      duplicate: !!w.plan?.invoice?.duplicate,
+      choices: w.plan?.choices ?? {},
+    })),
+  };
   return {
     invoices,
     pendingImports: pending,

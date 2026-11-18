@@ -621,11 +621,7 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
           ))}
         </div>
       )}
-      {(docs?.pendingImports?.n ?? 0) > 0 && (
-        <div className="small" style={{ color: 'var(--warn)' }}>
-          {docs!.pendingImports.n} imported invoice(s){docs!.pendingImports.customers ? ` (${docs!.pendingImports.customers})` : ''} are still waiting for approval in Accounts desk → Import invoices: approve them to see them here.
-        </div>
-      )}
+      {(docs?.pendingImports?.n ?? 0) > 0 && <WaitingImports items={docs!.pendingImports.items ?? []} customers={customers} />}
       {drafts.length > 0 && <div className="small muted">{drafts.length} draft invoice(s) are not shown: issue them first (Invoices) to apply money to them.</div>}
       {!value.paymentId && (
         <>
@@ -665,6 +661,74 @@ function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: numb
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Invoices read from imported files but not yet in the books: approved here (with the customer
+ * corrected when the reading got it wrong), they become invoices this bank line can pay.
+ */
+function WaitingImports({ items, customers }: { items: Json[]; customers: Json[] }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [cust, setCust] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const approve = async (x: Json) => {
+    const customerId = cust[x.id] ?? x.customerId ?? '';
+    setBusy(x.id);
+    try {
+      if (customerId !== (x.customerId ?? '')) await patch(`/api/v1/books/imports/items/${x.id}`, { choices: { ...x.choices, customerId: customerId || null } });
+      const r = await post<Json>('/api/v1/books/imports/items/approve', { ids: [x.id] });
+      const bad = (r.results as Json[]).find((y) => !y.ok);
+      if (bad) toast(bad.error, true);
+      else toast(`${x.number ?? 'Invoice'} is in the books`);
+      qc.invalidateQueries({ queryKey: ['books'] });
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <details open style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 8 }}>
+      <summary className="small">
+        <b>Imported invoices not in the books yet ({items.length})</b> — approve them here (correct the customer if it was misread), then tick them above
+      </summary>
+      <table className="data small" style={{ margin: '6px 0 0' }}>
+        <tbody>
+          {items.map((x) => (
+            <tr key={x.id}>
+              <td>
+                {x.number ?? '—'}
+                <div className="muted">{x.date ?? ''}</div>
+              </td>
+              <td style={{ minWidth: 200 }}>
+                <select value={cust[x.id] ?? x.customerId ?? ''} onChange={(e) => setCust({ ...cust, [x.id]: e.target.value })} aria-label="Customer">
+                  <option value="">New customer: {x.readCustomer ?? '—'}</option>
+                  {customers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                {x.error && <div style={{ color: 'var(--bad)' }}>{x.error}</div>}
+              </td>
+              <td className="num">{x.total != null ? money2(x.total) : '—'}</td>
+              <td>{x.paid === 'paid' ? 'paid' : x.paid === 'partial' ? 'part paid' : 'unpaid'}</td>
+              <td>
+                {x.duplicate ? (
+                  <span className="muted">already in the books</span>
+                ) : (
+                  <button className="btn sm" disabled={busy === x.id} onClick={() => approve(x)}>
+                    {busy === x.id ? '…' : 'Approve'}
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
   );
 }
 
