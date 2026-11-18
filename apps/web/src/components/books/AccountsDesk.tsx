@@ -424,6 +424,169 @@ function Queue() {
   );
 }
 
+interface Receipt {
+  customerId: string;
+  /** invoice id → amount applied ('' = its balance) */
+  alloc: Record<string, string>;
+  /** a receipt already recorded (invoice imported as paid) that this bank line is the money of */
+  paymentId: string;
+  /** what the unapplied money is for: 'project:<id>', 'contract:<id>', 'deal:<id>' */
+  target: string;
+  tds: string;
+}
+
+function receiptChange(rc: Receipt, docs: Json | undefined) {
+  if (rc.paymentId) return { kind: 'receipt', paymentId: rc.paymentId };
+  const inv = (docs?.invoices ?? []) as Json[];
+  const allocations = Object.entries(rc.alloc).map(([invoiceId, a]) => ({ invoiceId, amount: Number(a) || Number(inv.find((x) => x.id === invoiceId)?.balance ?? 0) })).filter((x) => x.amount > 0);
+  const [tt, tid] = rc.target.split(':');
+  const work = tid ? ((docs?.[tt === 'project' ? 'projects' : tt === 'contract' ? 'contracts' : 'deals'] ?? []) as Json[]).find((x) => x.id === tid) : null;
+  const customerId = rc.customerId || (inv.find((x) => rc.alloc[x.id] !== undefined)?.account_id ?? work?.account_id ?? null);
+  return {
+    kind: 'receipt',
+    allocations,
+    customerId,
+    tdsAmount: Number(rc.tds) || 0,
+    projectId: tt === 'project' ? tid : null,
+    contractId: tt === 'contract' ? tid : null,
+    dealId: tt === 'deal' ? tid : null,
+  };
+}
+
+/**
+ * Money received: for one or more invoices of a customer (open ones, with the amount for each), for the
+ * receipt already recorded of an invoice imported as paid, or as an advance for a project, contract
+ * (monthly maintenance…) or deal; part for invoices and the rest as an advance works too.
+ */
+function ReceiptFor({ amount, docs, customers, value, onChange }: { amount: number; docs: Json | undefined; customers: Json[]; value: Receipt; onChange: (r: Receipt) => void }) {
+  const [q, setQ] = useState('');
+  const [showPaid, setShowPaid] = useState(false);
+  const inv = (docs?.invoices ?? []) as Json[];
+  const chosenCustomer = value.customerId || inv.find((x) => value.alloc[x.id] !== undefined)?.account_id || '';
+  const match = (x: Json) => !q || `${x.number ?? ''} ${x.party} ${x.subject ?? ''} ${x.project ?? ''} ${x.deal ?? ''} ${x.recurring ?? ''}`.toLowerCase().includes(q.toLowerCase());
+  const mine = (x: Json) => !chosenCustomer || x.account_id === chosenCustomer;
+  const open = inv.filter((x) => ['issued', 'partially_paid'].includes(x.status) && x.balance > 0 && mine(x) && match(x));
+  const paid = inv.filter((x) => x.status === 'paid' && x.unbanked && mine(x) && match(x));
+  const drafts = inv.filter((x) => x.status === 'draft' && mine(x) && match(x));
+  const applied = Object.entries(value.alloc).reduce((a, [id, v]) => a + (Number(v) || Number(inv.find((x) => x.id === id)?.balance ?? 0)), 0);
+  const total = amount + (Number(value.tds) || 0);
+  const rest = Math.round((total - applied) * 100) / 100;
+  const toggle = (x: Json, on: boolean) => {
+    const next = { ...value.alloc };
+    if (on) {
+      const room = Math.max(0, Math.round((total - applied) * 100) / 100);
+      next[x.id] = String(Math.min(x.balance, room || x.balance));
+    } else delete next[x.id];
+    onChange({ ...value, alloc: next, paymentId: '', customerId: on ? x.account_id : value.customerId });
+  };
+  const targets = [
+    ...((docs?.contracts ?? []) as Json[]).filter((c) => !chosenCustomer || c.account_id === chosenCustomer).map((c) => [`contract:${c.id}`, `Contract ${c.number} · ${c.name}`]),
+    ...((docs?.projects ?? []) as Json[]).filter((c) => !chosenCustomer || c.account_id === chosenCustomer).map((c) => [`project:${c.id}`, `Project · ${c.name}`]),
+    ...((docs?.deals ?? []) as Json[]).filter((c) => !chosenCustomer || c.account_id === chosenCustomer).map((c) => [`deal:${c.id}`, `Deal · ${c.name}`]),
+  ];
+  const cell = { padding: '4px 6px' };
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+        <select value={chosenCustomer} onChange={(e) => onChange({ ...value, customerId: e.target.value, alloc: {}, paymentId: '', target: '' })} style={{ maxWidth: 260 }} aria-label="Customer">
+          <option value="">All customers</option>
+          {customers.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <input placeholder="Search number, project, maintenance…" value={q} onChange={(e) => setQ(e.target.value)} style={{ maxWidth: 260 }} />
+      </div>
+      <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 8 }}>
+        <table className="data small" style={{ margin: 0 }}>
+          <thead>
+            <tr>
+              <th />
+              <th>Invoice</th>
+              <th>Customer</th>
+              <th>For</th>
+              <th className="num">Balance</th>
+              <th className="num">Apply</th>
+            </tr>
+          </thead>
+          <tbody>
+            {open.map((x) => {
+              const on = value.alloc[x.id] !== undefined;
+              return (
+                <tr key={x.id}>
+                  <td style={cell}>
+                    <input type="checkbox" checked={on} onChange={(e) => toggle(x, e.target.checked)} aria-label={`Apply to ${x.number}`} />
+                  </td>
+                  <td style={cell}>
+                    {x.number}
+                    <div className="muted">{x.date}</div>
+                  </td>
+                  <td style={cell}>{x.party}</td>
+                  <td style={cell}>{[x.recurring ? `🔁 ${x.recurring}` : null, x.project ? `Project: ${x.project}` : null, x.deal && !x.recurring ? `Deal: ${x.deal}` : null, !x.project && !x.recurring ? x.subject : null].filter(Boolean).join(' · ')}</td>
+                  <td style={cell} className="num">
+                    {money2(x.balance, x.currency ?? 'INR')}
+                  </td>
+                  <td style={{ ...cell, width: 110 }}>{on && <input className="num" value={value.alloc[x.id]} onChange={(e) => onChange({ ...value, alloc: { ...value.alloc, [x.id]: e.target.value } })} />}</td>
+                </tr>
+              );
+            })}
+            {!open.length && (
+              <tr>
+                <td colSpan={6} className="muted" style={cell}>
+                  No open invoices{chosenCustomer ? ' for this customer' : ''}
+                  {q ? ' matching the search' : ''}.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {paid.length > 0 && (
+        <details open={showPaid} onToggle={(e) => setShowPaid((e.target as HTMLDetailsElement).open)}>
+          <summary className="small">Invoices already marked paid whose money is not matched to a bank line yet ({paid.length})</summary>
+          {paid.map((x) => {
+            const pid = String(x.unbanked).split(',')[0]!.split(':')[0]!;
+            return (
+              <label key={x.id} className="row small" style={{ gap: 6 }}>
+                <input type="radio" name="paid-receipt" checked={value.paymentId === pid} onChange={() => onChange({ ...value, paymentId: pid, alloc: {}, target: '' })} />
+                {x.number} · {x.party} · {money2(x.total, x.currency ?? 'INR')} · {x.date} — this bank line is its money
+              </label>
+            );
+          })}
+        </details>
+      )}
+      {drafts.length > 0 && <div className="small muted">{drafts.length} draft invoice(s) are not shown: issue them first (Invoices) to apply money to them.</div>}
+      {!value.paymentId && (
+        <>
+          <div className="small">
+            Bank line {money2(amount)}
+            {Number(value.tds) ? ` + TDS ${money2(Number(value.tds))}` : ''} · applied to invoices {money2(applied)} ·{' '}
+            {rest > 0.004 ? <b>{money2(rest)} left as an advance</b> : rest < -0.004 ? <b style={{ color: 'var(--bad)' }}>{money2(-rest)} more than received</b> : 'all applied'}
+          </div>
+          {(rest > 0.004 || !Object.keys(value.alloc).length) && (
+            <label className="field">
+              {Object.keys(value.alloc).length ? 'The rest is an advance for' : 'No invoice yet? It is an advance for'}
+              <select value={value.target} onChange={(e) => onChange({ ...value, target: e.target.value })}>
+                <option value="">{chosenCustomer ? 'The customer (not tied to any work)' : 'Choose the customer above, or the work below'}</option>
+                {targets.map(([k, l]) => (
+                  <option key={k} value={k}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="field">
+            TDS deducted by the customer (if any)
+            <input type="number" min={0} step="0.01" value={value.tds} onChange={(e) => onChange({ ...value, tds: e.target.value })} />
+          </label>
+        </>
+      )}
+    </div>
+  );
+}
+
 /** a short default for "remember as a rule": the narration's first distinctive words */
 const ruleText = (description: string, counterparty?: string | null) =>
   (counterparty && counterparty.length >= 3 ? counterparty : description)
@@ -457,6 +620,7 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
     personName: p.kind === 'new_party' && !p.payload?.partyId ? (p.payload.name ?? '') : '',
     personRole: 'partner',
   });
+  const [rc, setRc] = useState<Receipt>({ customerId: '', alloc: p.payload?.invoiceId ? { [p.payload.invoiceId]: '' } : {}, paymentId: '', target: '', tds: String(p.payload?.tdsAmount ?? 0) });
   const [rule, setRule] = useState(false);
   const [ruleText_, setRuleText] = useState(ruleText(p.description, p.counterparty));
   const [busy, setBusy] = useState(false);
@@ -472,7 +636,7 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
         kind === 'categorize'
           ? { kind, accountId: f.accountId || null, partyType: needsParty ? (acc.subtype === 'accounts_payable' ? 'vendor' : 'customer') : null, partyId: needsParty ? f.partyId || null : null, narration: f.narration || null }
           : kind === 'receipt'
-            ? { kind, invoiceId: f.invoiceId || null, tdsAmount: Number(f.tdsAmount) || 0 }
+            ? receiptChange(rc, docs.data)
             : kind === 'vendor_payment'
               ? { kind, billId: f.billId || null }
               : kind === 'new_party'
@@ -577,25 +741,7 @@ function ChangeModal({ p, onClose, onDone }: { p: Json; onClose: () => void; onD
             </label>
           </>
         )}
-        {kind === 'receipt' && (
-          <>
-            <label className="field">
-              Invoice
-              <select value={f.invoiceId} onChange={(e) => setF({ ...f, invoiceId: e.target.value })}>
-                <option value="">Choose the invoice</option>
-                {(docs.data?.invoices ?? []).map((i: Json) => (
-                  <option key={i.id} value={i.id}>
-                    {i.number} · {i.party} · balance {money2(i.balance)}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              TDS deducted by the customer (if any)
-              <input type="number" min={0} step="0.01" value={f.tdsAmount} onChange={(e) => setF({ ...f, tdsAmount: e.target.value })} />
-            </label>
-          </>
-        )}
+        {kind === 'receipt' && <ReceiptFor amount={Math.abs(p.amount)} docs={docs.data} customers={customers.data?.items ?? []} value={rc} onChange={setRc} />}
         {kind === 'vendor_payment' && (
           <label className="field">
             Bill

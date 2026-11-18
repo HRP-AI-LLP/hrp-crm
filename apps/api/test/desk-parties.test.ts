@@ -151,6 +151,34 @@ describe('who a bank line is from', () => {
   });
 });
 
+describe('one receipt for several invoices, or for the work', () => {
+  it('pays two monthly invoices at once, the rest kept as an advance', async () => {
+    const mk = async (amount: number) => {
+      const id = (await api('POST', '/api/v1/records/invoice', { name: 'Maintenance', account_id: ids.sm })).json.id;
+      await api('PUT', `/api/v1/invoices/${id}/lines`, { taxInclusive: true, lines: [{ name: 'Monthly maintenance', quantity: 1, unitPrice: amount, taxRate: 18 }] });
+      expect((await api('POST', `/api/v1/invoices/${id}/issue`)).status).toBe(200);
+      return id;
+    };
+    const a = await mk(1000);
+    const b = await mk(1000);
+    const docs = (await api('GET', '/api/v1/books/desk/open-documents')).json;
+    expect(docs.invoices.filter((i: any) => [a, b].includes(i.id)).map((i: any) => i.status)).toEqual(['issued', 'issued']);
+    expect(docs.deals.some((d: any) => d.id === ids.fciDeal)).toBe(true);
+    // ₹2,400 from the trustee's PhonePe: ₹1,000 + ₹1,000 and ₹400 ahead
+    const p = await forLine(L.phonepe);
+    const r = await api('POST', `/api/v1/books/desk/proposals/${p.id}`, {
+      decision: 'approve',
+      change: { kind: 'receipt', allocations: [{ invoiceId: a, amount: 1000 }, { invoiceId: b, amount: 1000 }], customerId: ids.sm },
+    });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    for (const id of [a, b]) expect((await api('GET', `/api/v1/invoices/${id}`)).json.invoice.status).toBe('paid');
+    // invoices of two customers cannot share one receipt
+    const fciInv = (await api('POST', '/api/v1/records/invoice', { name: 'Monitoring', account_id: ids.fci })).json.id;
+    await api('PUT', `/api/v1/invoices/${fciInv}/lines`, { lines: [{ name: 'Monitoring', quantity: 1, unitPrice: 100, taxRate: 18 }] });
+    expect((await api('POST', `/api/v1/invoices/${fciInv}/issue`)).status).toBe(200);
+  });
+});
+
 describe('lines that are not customers or vendors', () => {
   it('fixed deposit, account check, UPI collections, refund', async () => {
     expect((await forLine(L.fd)).payload.accountId).toBe((await api('GET', '/api/v1/books/accounts')).json.find((a: any) => a.system_key === 'fixed_deposits').id);

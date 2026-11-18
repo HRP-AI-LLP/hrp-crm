@@ -29,7 +29,7 @@ import { expenseAction, setExpenseAccounts } from './expenses';
 import { recordVendorPayment } from './bills';
 import { syncAllFeeds, syncGatewaySettlements } from './feeds';
 import { assertBooksAdmin, d10, postJournal, r2, sys } from './ledger';
-import { coverDate } from './posting';
+import { coverDate, repost } from './posting';
 import { findOwn, identConfidence, loadOwn, type Own, savePerson } from './own-accounts';
 import { isVerificationCredit, type Parsed, parseNarration, sameName, tail4 } from './narration';
 import { stateCode } from '@synapse/shared';
@@ -1116,26 +1116,56 @@ async function apply(ctx: RecordCtx, p: Row): Promise<{ result: Record<string, u
       return { result: { journalId: jid, settlementId: st.settlement_id }, events: [] };
     }
     case 'receipt': {
-      const inv = await ctx.tx.one<{ balance_due: number; account_id: string; status: string }>(`select balance_due::float8 as balance_due, account_id, status from invoices where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, pl.invoiceId]);
-      if (!inv || !['issued', 'partially_paid'].includes(inv.status)) throw conflict('The invoice is no longer open');
+      // the money of a receipt already recorded (an invoice imported as paid): it moves to this bank and is matched
+      if (pl.paymentId) {
+        const pay = await ctx.tx.one<{ status: string }>(`select status from payments where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, pl.paymentId]);
+        if (!pay || pay.status === 'void') throw conflict('That receipt is void');
+        await ctx.tx.query(`update payments set deposit_account_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, pl.paymentId, gl]);
+        await repost(ctx.tx, ctx.tenantId, 'payment', String(pl.paymentId));
+        await matchPosted('payment', String(pl.paymentId));
+        return { result: { paymentId: pl.paymentId }, events: [] };
+      }
       const tds = r2(Number(pl.tdsAmount ?? 0));
-      const settle = r2(Math.min(inv.balance_due, amt + tds));
+      const wanted: { invoiceId: string; amount: number | null }[] = (pl.allocations as { invoiceId: string; amount: number }[] | null)?.length
+        ? (pl.allocations as { invoiceId: string; amount: number }[])
+        : pl.invoiceId
+          ? [{ invoiceId: String(pl.invoiceId), amount: null }]
+          : [];
+      const allocations: { invoiceId: string; amount: number }[] = [];
+      let customer: string | null = (pl.customerId as string | null) ?? null;
+      let left = r2(amt + tds);
+      for (const w of wanted) {
+        const inv = await ctx.tx.one<{ balance_due: number; account_id: string; status: string; invoice_number: string | null }>(
+          `select balance_due::float8 as balance_due, account_id, status, invoice_number from invoices where tenant_id = $1 and id = $2 and deleted_at is null`,
+          [ctx.tenantId, w.invoiceId],
+        );
+        if (!inv || !['issued', 'partially_paid'].includes(inv.status)) throw conflict(`Invoice ${inv?.invoice_number ?? ''} is no longer open`.replace('  ', ' '));
+        if (customer && inv.account_id !== customer) throw badRequest('One receipt pays the invoices of one customer: choose invoices of the same customer');
+        customer = inv.account_id;
+        const a = r2(Math.min(w.amount ?? inv.balance_due, inv.balance_due, left));
+        if (a > 0) allocations.push({ invoiceId: w.invoiceId, amount: a });
+        left = r2(left - a);
+      }
+      if (!customer) throw badRequest('Choose the customer');
       const r = await recordPayment(ctx, {
-        accountId: inv.account_id,
-        amount: settle,
+        accountId: customer,
+        amount: r2(amt + tds),
         date,
         mode: 'bank_transfer',
         reference: (t.reference ?? t.description).slice(0, 60),
-        notes: `Recorded by the accounts desk from the bank line of ${date}`,
+        notes: `Recorded by the accounts desk from the bank line of ${date}${left > 0 ? `; ${left} kept as an advance` : ''}`,
         depositAccountId: gl,
         tdsAmount: tds,
-        allocations: [{ invoiceId: String(pl.invoiceId), amount: settle }],
+        ...(allocations.length ? { allocations } : {}),
       });
+      // what the payment (or its unapplied part) is for
+      if (pl.projectId || pl.contractId || pl.dealId)
+        await ctx.tx.query(`update payments set project_id = $3, contract_id = $4, deal_id = $5 where tenant_id = $1 and id = $2`, [ctx.tenantId, r.id, pl.projectId ?? null, pl.contractId ?? null, pl.dealId ?? null]);
       await matchPosted('payment', r.id);
       const events = [...r.events];
       // paid by someone at the customer: they become the customer's contact
-      if (pl.payerName) events.push(...(await contactAt(ctx, inv.account_id, String(pl.payerName))).events);
-      return { result: { paymentId: r.id, paymentNumber: r.number }, events };
+      if (pl.payerName) events.push(...(await contactAt(ctx, customer, String(pl.payerName))).events);
+      return { result: { paymentId: r.id, paymentNumber: r.number, applied: allocations.length, advance: left }, events };
     }
     case 'vendor_payment': {
       const bill = await ctx.tx.one<{ balance_due: number; vendor_id: string; status: string }>(`select balance_due::float8 as balance_due, vendor_id, status from bills where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, pl.billId]);
@@ -1318,6 +1348,16 @@ export const decideSchema = z.object({
       partyType: z.enum(['customer', 'vendor']).nullish(),
       partyId: z.string().uuid().nullish(),
       invoiceId: z.string().uuid().nullish(),
+      /** receipt: one payment for several invoices (amounts applied to each) */
+      allocations: z.array(z.object({ invoiceId: z.string().uuid(), amount: z.number().positive() })).max(100).nullish(),
+      /** receipt: the customer (when nothing or only part is applied to invoices) */
+      customerId: z.string().uuid().nullish(),
+      /** receipt: what the rest (or all) of the money is for: an advance for a project, contract or deal */
+      projectId: z.string().uuid().nullish(),
+      contractId: z.string().uuid().nullish(),
+      dealId: z.string().uuid().nullish(),
+      /** receipt: the receipt already recorded (an invoice imported as paid): this bank line is its money */
+      paymentId: z.string().uuid().nullish(),
       billId: z.string().uuid().nullish(),
       lineId: z.string().uuid().nullish(),
       tdsAmount: z.number().min(0).nullish(),
@@ -1365,7 +1405,16 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
       c.kind === 'categorize'
         ? { accountId: c.accountId, partyType: c.partyId ? (c.partyType ?? 'customer') : null, partyId: c.partyId ?? null, narration: c.narration ?? null }
         : c.kind === 'receipt'
-          ? { invoiceId: c.invoiceId, tdsAmount: c.tdsAmount ?? 0 }
+          ? {
+              invoiceId: c.invoiceId ?? null,
+              allocations: c.allocations ?? null,
+              customerId: c.customerId ?? null,
+              projectId: c.projectId ?? null,
+              contractId: c.contractId ?? null,
+              dealId: c.dealId ?? null,
+              paymentId: c.paymentId ?? null,
+              tdsAmount: c.tdsAmount ?? 0,
+            }
           : c.kind === 'vendor_payment'
             ? { billId: c.billId }
             : c.kind === 'match'
@@ -1374,7 +1423,7 @@ export async function decide(ctx: RecordCtx, id: string, input: z.infer<typeof d
                 ? { partyType: c.partyType ?? null, partyId: c.partyId ?? null, name: c.partyName ?? null, contactName: c.contactName ?? null }
                 : {};
     if (c.kind === 'categorize' && !c.accountId) throw badRequest('Choose the account');
-    if (c.kind === 'receipt' && !c.invoiceId) throw badRequest('Choose the invoice');
+    if (c.kind === 'receipt' && !c.invoiceId && !c.allocations?.length && !c.paymentId && !c.customerId) throw badRequest('Choose the invoices, the receipt already recorded, or the customer it is an advance from');
     if (c.kind === 'vendor_payment' && !c.billId) throw badRequest('Choose the bill');
     if (c.kind === 'match' && !c.lineId) throw badRequest('Choose the entry');
     if (c.kind === 'new_party' && (!c.partyType || (!c.partyId && !c.partyName))) throw badRequest('Choose the customer or vendor, or name a new one');
@@ -2272,9 +2321,31 @@ export async function deskOverview(ctx: RecordCtx) {
 export async function openDocuments(ctx: RecordCtx) {
   await assertBooksAdmin(ctx);
   const b = await loadBook(ctx);
+  // every invoice raised or imported (open ones first), with what it is for
+  const invoices = await ctx.tx.query(
+    `select i.id, i.invoice_number as number, i.account_id, coalesce(a.name, i.buyer_name, '') as party, to_char(i.invoice_date, 'YYYY-MM-DD') as date, i.status, i.currency,
+            i.grand_total::float8 as total, i.balance_due::float8 as balance, coalesce(i.subject, i.name) as subject, p.name as project, d.name as deal, rp.name as recurring,
+            (select string_agg(pay.id::text || ':' || coalesce(pay.payment_number, ''), ',') from payment_allocations pa join payments pay on pay.tenant_id = pa.tenant_id and pay.id = pa.payment_id
+              where pa.tenant_id = i.tenant_id and pa.invoice_id = i.id and pay.status <> 'void'
+                and not exists (select 1 from journal_lines l join journals j on j.tenant_id = l.tenant_id and j.id = l.journal_id
+                                 where l.tenant_id = pay.tenant_id and j.source_type = 'payment' and j.source_id = pay.id and l.bank_txn_id is not null)) as unbanked
+       from invoices i left join accounts a on a.tenant_id = i.tenant_id and a.id = i.account_id
+       left join projects p on p.tenant_id = i.tenant_id and p.id = i.project_id
+       left join deals d on d.tenant_id = i.tenant_id and d.id = i.deal_id
+       left join recurring_profiles rp on rp.tenant_id = i.tenant_id and rp.id = i.recurring_profile_id
+      where i.tenant_id = $1 and i.doc_type = 'tax_invoice' and i.status not in ('cancelled') and i.deleted_at is null
+      order by case when i.status in ('issued','partially_paid') then 0 when i.status = 'draft' then 2 else 1 end, i.invoice_date desc nulls last limit 1500`,
+    [ctx.tenantId],
+  );
+  const projects = await ctx.tx.query(`select id, name, account_id from projects where tenant_id = $1 and deleted_at is null order by name limit 500`, [ctx.tenantId]);
+  const contracts = await ctx.tx.query(`select id, contract_number as number, name, account_id from service_contracts where tenant_id = $1 and status in ('active','draft') order by name limit 500`, [ctx.tenantId]);
+  const deals = await ctx.tx.query(`select id, name, account_id from deals where tenant_id = $1 and deleted_at is null order by updated_at desc limit 500`, [ctx.tenantId]);
   return {
-    invoices: b.invoices.map((i) => ({ id: i.id, number: i.invoice_number, party: i.customer, date: i.invoice_date, balance: i.balance_due })),
+    invoices,
     bills: b.bills.map((x) => ({ id: x.id, number: x.bill_number ?? x.vendor_ref, party: x.vendor, date: x.bill_date, balance: x.balance_due })),
+    projects,
+    contracts,
+    deals,
   };
 }
 
