@@ -2,7 +2,8 @@
 import { SideTabs } from '../SideTabs';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { uploadFile } from '../Files';
 import { del, get, patch, post, put } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { date, money2 } from '../../lib/format';
@@ -693,7 +694,8 @@ function Milestones({ id, data, manage }: { id: string; data: Json; manage: bool
                   {m.acceptance_ref ? <div className="muted">{m.acceptance_ref}</div> : null}
                 </td>
                 <td>
-                  <span className={`chip ${m.status === 'done' ? 'good' : ''}`}>{m.status}</span> {m.invoice_id && <span className="chip info">invoiced</span>}
+                  <span className={`chip ${m.status === 'done' ? 'good' : m.status === 'in_progress' ? 'info' : ''}`}>{m.status === 'in_progress' ? 'in progress' : m.status}</span> {m.invoice_id && <span className="chip info">invoiced</span>}
+                  {m.status === 'done' && (m.approval_file_id || m.approval_activity_id) ? <span className="chip good" title="Customer approval on record">✓ approved</span> : null}
                 </td>
               </tr>
             ))}
@@ -702,6 +704,7 @@ function Milestones({ id, data, manage }: { id: string; data: Json; manage: bool
       )}
       {edit && (
         <MilestoneModal
+          projectId={id}
           m={edit}
           who={people(data)}
           onClose={() => setEdit(null)}
@@ -719,14 +722,26 @@ function Milestones({ id, data, manage }: { id: string; data: Json; manage: bool
   );
 }
 
-function MilestoneModal({ m, who, onClose, onSave }: { m: Json; who: Map<string, string>; onClose: () => void; onSave: (b: Json, remove?: boolean) => void }) {
+function MilestoneModal({ m, who, onClose, onSave, projectId }: { m: Json; who: Map<string, string>; onClose: () => void; onSave: (b: Json, remove?: boolean) => void; projectId: string }) {
   const [f, setF] = useState({
     name: m.name ?? '', startDate: d10(m.start_date), dueDate: d10(m.due_date), amount: m.amount ?? '', ownerId: m.owner_id ?? '', status: m.status ?? 'open',
-    acceptedOn: d10(m.accepted_on), acceptanceRef: m.acceptance_ref ?? '',
+    acceptedOn: d10(m.accepted_on), acceptanceRef: m.acceptance_ref ?? '', approvalFileId: m.approval_file_id ?? '', approvalActivityId: m.approval_activity_id ?? '', approvalNote: m.approval_note ?? '',
   });
+  const qc = useQueryClient();
+  const toast = useToast();
+  const detail = useQuery({ queryKey: ['milestone', m.id], queryFn: () => get<Json>(`/api/v1/projects/${projectId}/milestones/${m.id}`), enabled: !!m.id });
+  const files = useQuery({ queryKey: ['files', 'project', projectId], queryFn: () => get<{ items: Json[] }>(`/api/v1/files?object=project&id=${projectId}`) });
+  const [mails, setMails] = useState<{ scan: boolean; q: string } | null>(null);
+  const [reading, setReading] = useState<Json | null>(null);
+  const [busy, setBusy] = useState(false);
+  const det = detail.data?.milestone;
+  const hasProof = !!(f.approvalFileId || f.approvalActivityId);
+  const closing = f.status === 'done' && m.status !== 'done';
+  const fileName = (files.data?.items ?? []).find((x) => x.id === f.approvalFileId)?.name ?? det?.approval_file_name;
   return (
     <Modal
       title={m.id ? m.name : 'New milestone'}
+      wide
       onClose={onClose}
       footer={
         <>
@@ -735,10 +750,15 @@ function MilestoneModal({ m, who, onClose, onSave }: { m: Json; who: Map<string,
               Delete
             </button>
           )}
-          <button className="btn primary" disabled={!f.name.trim()} onClick={() =>
+          <button
+            className="btn primary"
+            disabled={!f.name.trim() || (closing && !hasProof)}
+            title={closing && !hasProof ? "Attach the customer's approval letter or link their email first" : undefined}
+            onClick={() =>
               onSave({
                 name: f.name.trim(), startDate: f.startDate || null, dueDate: f.dueDate || null, amount: f.amount === '' ? null : Number(f.amount), ownerId: f.ownerId || null, status: f.status,
                 acceptedOn: f.acceptedOn || null, acceptanceRef: f.acceptanceRef.trim() || null,
+                approvalFileId: f.approvalFileId || null, approvalActivityId: f.approvalActivityId || null, approvalNote: f.approvalNote.trim() || null,
               })
             }
           >
@@ -775,26 +795,293 @@ function MilestoneModal({ m, who, onClose, onSave }: { m: Json; who: Map<string,
             ))}
           </select>
         </label>
-        <label className="field">
+        <div className="field wide">
           Status
-          <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })}>
-            <option value="open">Open</option>
-            <option value="done">Done</option>
-          </select>
-        </label>
-        <label className="field">
-          Accepted by the customer on
-          <input type="date" value={f.acceptedOn} onChange={(e) => setF({ ...f, acceptedOn: e.target.value })} />
-        </label>
-        <label className="field">
-          Acceptance ref. (CRAC / inspection / completion certificate)
-          <input value={f.acceptanceRef} maxLength={100} onChange={(e) => setF({ ...f, acceptanceRef: e.target.value })} placeholder="e.g. GeM CRAC number" />
-        </label>
+          <div className="row" style={{ gap: 6 }}>
+            {[
+              ['open', 'Open'],
+              ['in_progress', 'In progress'],
+              ['done', 'Done (customer approved)'],
+            ].map(([k, l]) => (
+              <button key={k} type="button" className={`btn sm${f.status === k ? ' primary' : ''}`} onClick={() => setF({ ...f, status: k! })}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="wide panel" style={{ padding: 10, borderColor: closing && !hasProof ? 'var(--warn)' : undefined }}>
+          <div className="spread">
+            <b>Customer's approval</b>
+            {hasProof ? <span className="chip good">on record</span> : <span className="chip warn">needed to mark done</span>}
+          </div>
+          <p className="small muted" style={{ margin: '4px 0 8px' }}>
+            Attach their approval letter / completion certificate, or link the email in which they approved it.
+          </p>
+          <div className="grid2">
+            <div className="field">
+              Approval letter
+              <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+                <select value={f.approvalFileId} onChange={(e) => setF({ ...f, approvalFileId: e.target.value })} style={{ minWidth: 0 }}>
+                  <option value="">— none —</option>
+                  {(files.data?.items ?? []).map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name}
+                    </option>
+                  ))}
+                </select>
+                <label className="btn sm">
+                  {busy ? 'Uploading…' : 'Upload'}
+                  <input
+                    type="file"
+                    hidden
+                    accept="application/pdf,image/*,.docx,.eml,.msg"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      if (!file) return;
+                      setBusy(true);
+                      try {
+                        const up = await uploadFile('project', projectId, file, 'proof', `Approval — ${f.name}`);
+                        qc.invalidateQueries({ queryKey: ['files', 'project', projectId] });
+                        setF((x) => ({ ...x, approvalFileId: up.id }));
+                        toast('Approval letter attached');
+                      } catch (err) {
+                        toast((err as Error).message, true);
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+              {fileName && f.approvalFileId && <span className="small muted">📄 {fileName}</span>}
+            </div>
+            <div className="field">
+              Approval email
+              {f.approvalActivityId ? (
+                <div className="row small" style={{ gap: 6 }}>
+                  <span>✉️ {mailSubject(f.approvalActivityId, det)}</span>
+                  <button type="button" className="btn sm ghost" onClick={() => setReading({ id: f.approvalActivityId, fromDetail: true })}>
+                    Read
+                  </button>
+                  <button type="button" className="btn sm ghost" onClick={() => setF({ ...f, approvalActivityId: '' })}>
+                    Unlink
+                  </button>
+                </div>
+              ) : (
+                <div className="row" style={{ gap: 6 }}>
+                  <button type="button" className="btn sm primary" onClick={() => setMails({ scan: true, q: '' })}>
+                    Scan emails for approvals
+                  </button>
+                  <button type="button" className="btn sm" onClick={() => setMails({ scan: false, q: '' })}>
+                    Browse emails
+                  </button>
+                </div>
+              )}
+            </div>
+            <label className="field">
+              Accepted by the customer on
+              <input type="date" value={f.acceptedOn} onChange={(e) => setF({ ...f, acceptedOn: e.target.value })} />
+            </label>
+            <label className="field">
+              Acceptance ref. (CRAC / inspection / completion certificate)
+              <input value={f.acceptanceRef} maxLength={100} onChange={(e) => setF({ ...f, acceptanceRef: e.target.value })} placeholder="e.g. GeM CRAC number" />
+            </label>
+            <label className="field wide">
+              Note
+              <input value={f.approvalNote} maxLength={2000} onChange={(e) => setF({ ...f, approvalNote: e.target.value })} placeholder="Who approved, any conditions…" />
+            </label>
+          </div>
+          {det?.approved_at && (
+            <p className="small muted" style={{ margin: '6px 0 0' }}>
+              Closed by {det.approved_by_name ?? '—'} on {date(det.approved_at)}.
+            </p>
+          )}
+        </div>
+        {m.id && m.status === 'done' && <MilestoneLinks projectId={projectId} milestoneId={m.id} links={detail.data?.links ?? []} />}
         <p className="small muted wide" style={{ margin: 0 }}>
           The acceptance reference and date are printed under the milestone line on its invoice.
         </p>
       </div>
+      {mails && (
+        <ApprovalMailPicker
+          projectId={projectId}
+          milestoneId={m.id ?? null}
+          scan={mails.scan}
+          onClose={() => setMails(null)}
+          onRead={(x) => setReading(x)}
+          onPick={(x) => {
+            setF((v) => ({ ...v, approvalActivityId: x.id, acceptedOn: v.acceptedOn || String(x.occurred_at).slice(0, 10) }));
+            pickedMails.set(x.id, x.subject ?? '(no subject)');
+            setMails(null);
+          }}
+        />
+      )}
+      {reading && <ReadMail mail={reading} projectId={projectId} onClose={() => setReading(null)} />}
     </Modal>
+  );
+}
+
+const pickedMails = new Map<string, string>();
+const mailSubject = (id: string, det: Json | undefined) => pickedMails.get(id) ?? (det?.approval_activity_id === id ? det.approval_email_subject : null) ?? 'Linked email';
+
+function ApprovalMailPicker({ projectId, milestoneId, scan: scan0, onClose, onPick, onRead }: { projectId: string; milestoneId: string | null; scan: boolean; onClose: () => void; onPick: (x: Json) => void; onRead: (x: Json) => void }) {
+  const [scan, setScan] = useState(scan0);
+  const [q, setQ] = useState('');
+  const [term, setTerm] = useState('');
+  const { data, isFetching } = useQuery({
+    queryKey: ['approval-emails', projectId, milestoneId, scan, term],
+    queryFn: () => get<{ items: Json[]; mailboxConnected: boolean }>(`/api/v1/projects/${projectId}/approval-emails?scan=${scan ? 1 : 0}${milestoneId ? `&milestone=${milestoneId}` : ''}${term ? `&q=${encodeURIComponent(term)}` : ''}`),
+  });
+  return (
+    <Modal title={scan ? 'Emails that look like an approval' : "The customer's emails"} wide onClose={onClose}>
+      <div className="modal-body stack">
+        <div className="row" style={{ gap: 6 }}>
+          <input placeholder="Search subject and text…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && setTerm(q.trim())} />
+          <button className="btn sm" onClick={() => setTerm(q.trim())}>
+            Search
+          </button>
+          <label className="check-row" style={{ whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={scan} onChange={(e) => setScan(e.target.checked)} /> Only approvals
+          </label>
+        </div>
+        {data && !data.mailboxConnected && <p className="notice small">Connect your Gmail or Outlook (Settings → Integrations) so customer emails sync here automatically. Emails logged by hand also appear.</p>}
+        {isFetching && !data ? <Spinner /> : null}
+        {data && !data.items.length && <p className="muted small">No {scan ? 'approval-looking ' : ''}emails from this customer yet.</p>}
+        {(data?.items ?? []).map((x) => (
+          <div key={x.id} className="panel" style={{ padding: 10 }}>
+            <div className="spread" style={{ gap: 8 }}>
+              <div style={{ minWidth: 0 }}>
+                <b>{x.subject ?? '(no subject)'}</b> {x.looksLikeApproval && <span className="chip good">looks like approval</span>}
+                <div className="muted small">
+                  {x.direction === 'in' ? 'From the customer' : 'Sent by us'}
+                  {x.from ? ` · ${x.from}` : ''} · {date(x.occurred_at)}
+                </div>
+                <div className="small" style={{ marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                  {String(x.body ?? '').slice(0, 300)}
+                </div>
+              </div>
+              <div className="row" style={{ gap: 4, flexShrink: 0 }}>
+                <button className="btn sm" onClick={() => onRead(x)}>
+                  Read
+                </button>
+                <button className="btn sm primary" onClick={() => onPick(x)}>
+                  Use as approval
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function ReadMail({ mail, projectId, onClose }: { mail: Json; projectId: string; onClose: () => void }) {
+  // a linked email is read back from the milestone's project emails
+  const { data } = useQuery({
+    queryKey: ['approval-emails', projectId, 'all'],
+    queryFn: () => get<{ items: Json[] }>(`/api/v1/projects/${projectId}/approval-emails?scan=0`),
+    enabled: !mail.body,
+  });
+  const m = mail.body ? mail : (data?.items ?? []).find((x) => x.id === mail.id);
+  return (
+    <Modal title={m?.subject ?? 'Email'} wide onClose={onClose}>
+      <div className="modal-body">
+        {!m ? (
+          <Spinner />
+        ) : (
+          <>
+            <div className="muted small" style={{ marginBottom: 8 }}>
+              {m.direction === 'in' ? 'From the customer' : 'Sent by us'}
+              {m.from ? ` · ${m.from}` : ''} · {date(m.occurred_at)}
+            </div>
+            <div className="pre-wrap" style={{ maxHeight: '60vh', overflow: 'auto' }}>
+              {m.body ?? ''}
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+const LINK_KINDS: [string, string, string][] = [
+  ['invoice', 'Invoices', 'invoice'],
+  ['payment', 'Receipts', 'payment'],
+  ['bill', 'Vendor bills', 'bill'],
+  ['vendor_payment', 'Vendor payments', 'vendor_payment'],
+];
+
+function MilestoneLinks({ projectId, milestoneId, links }: { projectId: string; milestoneId: string; links: Json[] }) {
+  const [kind, setKind] = useState<string | null>(null);
+  const qc = useQueryClient();
+  const toast = useToast();
+  const cand = useQuery({ queryKey: ['ms-cand', projectId, kind], queryFn: () => get<{ items: Json[] }>(`/api/v1/projects/${projectId}/milestone-candidates?kind=${kind}`), enabled: !!kind });
+  const link = async (k: string, targetId: string, on: boolean) => {
+    try {
+      await put(`/api/v1/projects/${projectId}/milestones/${milestoneId}/links`, { kind: k, targetId, on });
+      qc.invalidateQueries({ queryKey: ['milestone', milestoneId] });
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
+  const linked = new Set(links.map((l) => `${l.kind}:${l.id}`));
+  return (
+    <div className="wide panel" style={{ padding: 10 }}>
+      <div className="spread">
+        <b>Invoices and payments for this milestone</b>
+        <div className="row" style={{ gap: 4 }}>
+          {LINK_KINDS.map(([k, l]) => (
+            <button key={k} type="button" className={`btn sm${kind === k ? ' primary' : ''}`} onClick={() => setKind(kind === k ? null : k)}>
+              + {l}
+            </button>
+          ))}
+        </div>
+      </div>
+      {links.length > 0 ? (
+        <table className="data" style={{ marginTop: 6 }}>
+          <tbody>
+            {links.map((l) => (
+              <tr key={`${l.kind}:${l.id}`}>
+                <td>{LINK_KINDS.find((x) => x[0] === l.kind)?.[1].replace(/s$/, '')}</td>
+                <td>
+                  <Link to={`/o/${l.kind}/${l.id}`}>{l.number ?? 'Draft'}</Link>
+                </td>
+                <td>{date(l.date)}</td>
+                <td className="num">{money2(l.amount)}</td>
+                <td>{l.status}</td>
+                <td>
+                  <button type="button" className="btn sm ghost" onClick={() => link(l.kind, l.id, false)}>
+                    Unlink
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="muted small" style={{ margin: '6px 0 0' }}>
+          Nothing linked yet.
+        </p>
+      )}
+      {kind && (
+        <div style={{ marginTop: 8, maxHeight: 220, overflow: 'auto' }}>
+          {(cand.data?.items ?? []).filter((x) => !linked.has(`${kind}:${x.id}`)).map((x) => (
+            <div key={x.id} className="spread small" style={{ padding: '4px 0', borderBottom: '1px solid var(--line)' }}>
+              <span>
+                {x.number ?? 'Draft'} · {date(x.date)} · {money2(x.amount)} · {x.status}
+              </span>
+              <button type="button" className="btn sm" onClick={() => link(kind, x.id, true)}>
+                Link
+              </button>
+            </div>
+          ))}
+          {cand.data && !cand.data.items.length && <p className="muted small">None found for this project or customer.</p>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1315,7 +1602,7 @@ function InvitePerson({ onClose, onInvited }: { onClose: () => void; onInvited: 
   const toast = useToast();
   const qc = useQueryClient();
   const { data: roles, error } = useQuery({ queryKey: ['admin-roles'], queryFn: () => get<{ items: Json[] }>('/api/admin/roles'), retry: false });
-  const [f, setF] = useState({ fullName: '', email: '', role: '' });
+  const [f, setF] = useState({ fullName: '', email: '', role: '', invite: true });
   const [busy, setBusy] = useState(false);
   const [link, setLink] = useState<string | null>(null);
   const choices = (roles?.items ?? []).filter((r) => r.key !== 'admin');
@@ -1339,14 +1626,18 @@ function InvitePerson({ onClose, onInvited }: { onClose: () => void; onInvited: 
       footer={
         <button
           className="btn primary"
-          disabled={busy || !f.fullName.trim() || !/^\S+@\S+\.\S+$/.test(f.email) || !role}
+          disabled={busy || !f.fullName.trim() || (f.email.trim() !== '' && !/^\S+@\S+\.\S+$/.test(f.email.trim())) || !role}
           onClick={async () => {
             setBusy(true);
             try {
-              const r = await post<{ id: string; inviteUrl: string; emailed: boolean }>('/api/admin/users/invite', { email: f.email.trim(), fullName: f.fullName.trim(), roles: [role], teamIds: [] });
+              const onboard = f.invite && !!f.email.trim();
+              const r = await post<{ id: string; inviteUrl: string | null; emailed: boolean }>('/api/admin/users/invite', { email: f.email.trim() || null, fullName: f.fullName.trim(), roles: [role], teamIds: [], invite: onboard });
               qc.invalidateQueries({ queryKey: ['users'] });
               await onInvited(r.id);
-              if (r.emailed) {
+              if (!r.inviteUrl) {
+                toast(`${f.fullName.trim()} added to the team. Give them a login later from Settings → People.`);
+                onClose();
+              } else if (r.emailed) {
                 toast(`Invitation emailed to ${f.email}`);
                 onClose();
               } else setLink(r.inviteUrl);
@@ -1357,7 +1648,7 @@ function InvitePerson({ onClose, onInvited }: { onClose: () => void; onInvited: 
             }
           }}
         >
-          {busy ? 'Inviting…' : 'Invite and add'}
+          {busy ? 'Adding…' : f.invite && f.email.trim() ? 'Add and invite' : 'Add to team'}
         </button>
       }
     >
@@ -1373,8 +1664,12 @@ function InvitePerson({ onClose, onInvited }: { onClose: () => void; onInvited: 
               <input value={f.fullName} onChange={(e) => setF({ ...f, fullName: e.target.value })} autoFocus />
             </label>
             <label className="field">
-              Email
+              Email <span className="muted small">(optional)</span>
               <input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+            </label>
+            <label className="check-row">
+              <input type="checkbox" checked={f.invite && !!f.email.trim()} disabled={!f.email.trim()} onChange={(e) => setF({ ...f, invite: e.target.checked })} />
+              Give them a login now (send the invitation)
             </label>
             <label className="field">
               Access in the workspace
@@ -1387,7 +1682,7 @@ function InvitePerson({ onClose, onInvited }: { onClose: () => void; onInvited: 
               </select>
             </label>
             <p className="small muted" style={{ margin: 0 }}>
-              They get a link to set their password. Their role on this project (member, manager, viewer) and their rates are set in the team list.
+              Without an email they join the team as a profile (time, tasks and rates work); add the email and onboard them to the CRM any time from Settings → People. Their role on this project (member, manager, viewer) and their rates are set in the team list.
             </p>
           </>
         )}

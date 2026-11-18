@@ -4,7 +4,8 @@
  * and stacks above the content on a phone.
  */
 import type { ReactNode } from 'react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { NI } from './NavIcons';
 
 export interface SideItem<K extends string> {
@@ -15,7 +16,31 @@ export interface SideItem<K extends string> {
   badge?: number | string | null;
 }
 
-export function SideTabs<K extends string>({ id, title, items, value, onChange, children, panel = true, defaultOpen = true }: { id: string; title: string; items: SideItem<K>[]; value: K; onChange: (k: K) => void; children: ReactNode; panel?: boolean; defaultOpen?: boolean }) {
+export function SideTabs<K extends string>({ id, title, items, value, onChange: change, children, panel = true, defaultOpen = true, sync = true }: { id: string; title: string; items: SideItem<K>[]; value: K; onChange: (k: K) => void; children: ReactNode; panel?: boolean; defaultOpen?: boolean; sync?: boolean }) {
+  // the section is in the address (?s_<id>=…), so Back and Forward step through sections too
+  const [params, setParams] = useSearchParams();
+  const param = `s_${id}`;
+  const fromUrl = params.get(param) as K | null;
+  const first = useRef(true);
+  useEffect(() => {
+    if (!sync) return;
+    if (fromUrl && fromUrl !== value && items.some((i) => i.key === fromUrl)) change(fromUrl);
+    else if (!fromUrl && !first.current && value !== items[0]?.key) change(items[0]!.key);
+    first.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromUrl]);
+  const onChange = (k: K) => {
+    change(k);
+    if (sync && k !== fromUrl)
+      setParams(
+        (p) => {
+          const n = new URLSearchParams(p);
+          n.set(param, k);
+          return n;
+        },
+        { preventScrollReset: true },
+      );
+  };
   const key = `synapse.side.${id}`;
   const [open, setOpen] = useState(() => {
     try {

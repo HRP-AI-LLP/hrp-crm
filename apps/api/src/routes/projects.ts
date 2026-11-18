@@ -46,10 +46,13 @@ const milestoneSchema = z.object({
   dueDate: dateStr.nullish(),
   amount: z.number().min(0).max(1e12).nullish(),
   ownerId: uuid.nullish(),
-  status: z.enum(['open', 'done']).optional(),
+  status: z.enum(['open', 'in_progress', 'done']).optional(),
   position: z.number().int().min(0).max(100000).optional(),
   acceptedOn: dateStr.nullish(),
   acceptanceRef: z.string().trim().max(100).nullish(),
+  approvalFileId: uuid.nullish(),
+  approvalActivityId: uuid.nullish(),
+  approvalNote: z.string().trim().max(2000).nullish(),
 });
 const taskSchema = z
   .object({
@@ -131,6 +134,19 @@ export const projectRoutes = new Hono<AppEnv>()
   .put('/projects/:id/milestones/:mid', async (c) => {
     const b = milestoneSchema.parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => pj.saveMilestone(rctx(c, tx), id(c), id(c, 'mid'), b)));
+  })
+  .get('/projects/:id/milestones/:mid', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pj.milestoneDetail(rctx(c, tx), id(c), id(c, 'mid')))))
+  .get('/projects/:id/milestone-candidates', async (c) => {
+    const kind = z.enum(['invoice', 'payment', 'bill', 'vendor_payment']).parse(c.req.query('kind'));
+    return c.json({ items: await c.var.db.tx(scope(c, true), (tx) => pj.milestoneCandidates(rctx(c, tx), id(c), kind)) });
+  })
+  .put('/projects/:id/milestones/:mid/links', async (c) => {
+    const b = z.object({ kind: z.enum(['invoice', 'payment', 'bill', 'vendor_payment']), targetId: uuid, on: z.boolean() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => pj.linkMilestone(rctx(c, tx), id(c), id(c, 'mid'), b.kind, b.targetId, b.on)));
+  })
+  .get('/projects/:id/approval-emails', async (c) => {
+    const q = z.object({ milestone: uuid.optional(), q: z.string().max(200).optional(), scan: z.enum(['1', '0']).optional() }).parse(c.req.query());
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => pj.approvalEmails(rctx(c, tx), id(c), { milestoneId: q.milestone ?? null, search: q.q ?? null, scan: q.scan === '1' })));
   })
   .delete('/projects/:id/milestones/:mid', async (c) => {
     await c.var.db.tx(scope(c), (tx) => pj.deleteMilestone(rctx(c, tx), id(c), id(c, 'mid')));

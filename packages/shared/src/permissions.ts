@@ -19,7 +19,7 @@ import { z } from 'zod';
 export const ACCESS_LEVELS = ['none', 'own', 'team', 'all'] as const;
 export type Access = (typeof ACCESS_LEVELS)[number];
 export type FieldAccess = 'hidden' | 'read' | 'edit';
-export const ADMIN_AREAS = ['users', 'roles', 'metadata', 'modules', 'workflows', 'domains', 'audit', 'channels', 'ai', 'operations', 'billing', 'privacy', 'developers', 'campaigns', 'books', 'projects', 'manufacturing', 'organisation', 'compliance'] as const;
+export const ADMIN_AREAS = ['users', 'roles', 'metadata', 'modules', 'workflows', 'domains', 'audit', 'channels', 'ai', 'operations', 'billing', 'privacy', 'developers', 'campaigns', 'books', 'projects', 'manufacturing', 'organisation', 'compliance', 'margins', 'credit', 'pricing', 'channel', 'quality', 'vault', 'analytics'] as const;
 export type AdminArea = (typeof ADMIN_AREAS)[number];
 
 export interface ObjectPerm {
@@ -141,3 +141,46 @@ export function resolveConditionValue(value: Condition['value'], user: { id: str
   }
   return value;
 }
+
+/**
+ * What the role editor shows: every admin area and feature switch, grouped by module, in plain words.
+ * Feature switches are stored in the role's `admin` list like the admin areas.
+ */
+export const PERMISSION_GROUPS: { key: string; label: string; items: { key: AdminArea; label: string; help: string }[] }[] = [
+  { key: 'workspace', label: 'Workspace administration', items: [
+    { key: 'users', label: 'Users', help: 'Invite, deactivate and reset people' },
+    { key: 'roles', label: 'Roles & permissions', help: 'Create and change roles (this screen)' },
+    { key: 'metadata', label: 'Fields & objects', help: 'Custom fields, objects, layouts and picklists' },
+    { key: 'modules', label: 'Apps & modules', help: 'Switch apps and modules on or off' },
+    { key: 'workflows', label: 'Automation', help: 'Workflows, assignment rules and approvals' },
+    { key: 'domains', label: 'Domains & branding', help: 'Custom domains and email sending' },
+    { key: 'audit', label: 'Audit log', help: 'See who changed what' },
+    { key: 'privacy', label: 'Privacy & data', help: 'Privacy requests, retention, exports' },
+    { key: 'developers', label: 'Developers & connectors', help: 'API keys, webhooks, Teams / Slack / Jira / ERP connectors' },
+    { key: 'organisation', label: 'Organisation profile', help: 'Company details, key people, documents' },
+  ] },
+  { key: 'sales', label: 'Sales & channel', items: [
+    { key: 'campaigns', label: 'Campaigns & sequences', help: 'Email campaigns and follow-up sequences' },
+    { key: 'channels', label: 'Messaging channels', help: 'WhatsApp, web chat and lead forms' },
+    { key: 'pricing', label: 'Price lists & rebates', help: 'Customer price lists, quantity tiers, rebate agreements' },
+    { key: 'channel', label: 'Dealers & schemes', help: 'Dealer schemes, incentives and the dealer portal' },
+    { key: 'analytics', label: 'Sales analytics', help: 'Company-wide sales, win/loss and dealer reports' },
+    { key: 'ai', label: 'AI assistant settings', help: 'AI models, knowledge base, copilots' },
+  ] },
+  { key: 'finance', label: 'Finance', items: [
+    { key: 'billing', label: 'Billing', help: 'Invoices, payments, GST settings' },
+    { key: 'books', label: 'Books', help: 'Ledger, banks, bills, reports, closing' },
+    { key: 'compliance', label: 'Compliance', help: 'Filing calendar, TDS, the CA portal' },
+    { key: 'credit', label: 'Approve credit', help: 'Let orders through over a credit limit or hold' },
+    { key: 'margins', label: 'See costs & margins', help: 'Customer profitability, quote margins, cost prices' },
+  ] },
+  { key: 'operations', label: 'Operations & manufacturing', items: [
+    { key: 'operations', label: 'Operations', help: 'Inventory, purchasing, deliveries, installations' },
+    { key: 'manufacturing', label: 'Manufacturing', help: 'BOMs, work orders, planning, job work' },
+    { key: 'quality', label: 'Quality & CAPA', help: 'Complaints, root cause and corrective actions, warranties' },
+  ] },
+  { key: 'delivery', label: 'Projects & IT services', items: [
+    { key: 'projects', label: 'Projects & IT suite', help: 'Projects, contracts, subscriptions, client assets' },
+    { key: 'vault', label: 'Reveal client credentials', help: 'Open passwords kept in the client vault (every reveal is logged)' },
+  ] },
+];

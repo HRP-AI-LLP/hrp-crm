@@ -2,6 +2,8 @@
  * Job processor shared by the Queue consumer and the inline (waitUntil) fallback.
  */
 import { fieldAccess, mergePermissions, storageFor, type TenantMeta } from '@synapse/shared';
+import { chatAlerts } from './industry/connectors';
+import { onDealWon } from './industry/deal-contract';
 import type { Env, Principal, TenantInfo } from '../env';
 import { hmacSha256Hex } from '../lib/crypto';
 import { backupStep } from './backup';
@@ -48,6 +50,14 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
       case 'record.event': {
         const followUps = await runWorkflows(env, db, base, job.event, null);
         followUps.push(...(await outboundWebhookJobs(env, db, sc, job, base)));
+        // a won IT / software deal opens its contract
+        if (job.event.objectKey === 'deal' && (job.event.kind === 'stage_changed' || (job.event.changes as Record<string, unknown> | undefined)?.stage_id)) {
+          await onDealWon(env, db, tenant.id, job.event.recordId).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'deal-contract', tenant: tenant.id, msg: (e as Error).message })));
+        }
+        // Teams / Slack / Google Chat alerts the workspace asked for
+        await chatAlerts(env, db, tenant.id, env.APP_HOST ? `https://${env.APP_HOST}` : null, job.event).catch((e) =>
+          console.error(JSON.stringify({ level: 'error', job: 'chat-alerts', tenant: tenant.id, msg: (e as Error).message })),
+        );
         // new leads are scored automatically (cheap rule-based score even without AI keys)
         if (job.event.objectKey === 'lead' && job.event.kind === 'created') followUps.push({ type: 'ai.score_lead', tenantId: tenant.id, leadId: job.event.recordId });
         await enqueue(env, waiter, followUps);

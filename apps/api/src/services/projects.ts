@@ -121,7 +121,7 @@ export async function getProject(ctx: RecordCtx, id: string) {
   );
   const showRates = level === 'manage';
   const milestones = await ctx.tx.query(
-    `select id, name, start_date, due_date, status, amount::float8 as amount, invoice_id, owner_id, position, accepted_on, acceptance_ref,
+    `select id, name, start_date, due_date, status, amount::float8 as amount, invoice_id, owner_id, position, accepted_on, acceptance_ref, approval_file_id, approval_activity_id, approval_note, approved_at,
             (select count(*)::int from project_tasks t where t.tenant_id = m.tenant_id and t.milestone_id = m.id) as tasks,
             (select count(*)::int from project_tasks t where t.tenant_id = m.tenant_id and t.milestone_id = m.id and t.status = 'done') as done
        from project_milestones m where tenant_id = $1 and project_id = $2 order by position, due_date nulls last`,
@@ -153,7 +153,7 @@ export async function setMembers(ctx: RecordCtx, id: string, members: { userId: 
   const { project } = await projectAccess(ctx, id, 'manage');
   const ids = [...new Set(members.map((m) => m.userId))];
   if (ids.length !== members.length) throw badRequest('Each person once');
-  const users = await ctx.tx.query<{ id: string }>(`select id from users where tenant_id = $1 and id = any($2::uuid[]) and status in ('active', 'invited')`, [ctx.tenantId, ids]);
+  const users = await ctx.tx.query<{ id: string }>(`select id from users where tenant_id = $1 and id = any($2::uuid[]) and status in ('active', 'invited', 'profile')`, [ctx.tenantId, ids]);
   if (users.length !== ids.length) throw badRequest('Add people from this workspace (active or invited)');
   const before = await ctx.tx.query<{ user_id: string }>(`select user_id from project_members where tenant_id = $1 and project_id = $2`, [ctx.tenantId, id]);
   await ctx.tx.query(`delete from project_members where tenant_id = $1 and project_id = $2`, [ctx.tenantId, id]);
@@ -229,38 +229,165 @@ export interface MilestoneInput {
   dueDate?: string | null;
   amount?: number | null;
   ownerId?: string | null;
-  status?: 'open' | 'done';
+  status?: 'open' | 'in_progress' | 'done';
   position?: number;
   /** acceptance by the customer: e.g. GeM CRAC, inspection or completion certificate */
   acceptedOn?: string | null;
   acceptanceRef?: string | null;
+  /** the customer's approval: a letter (a file on the project) and/or their email (an activity) */
+  approvalFileId?: string | null;
+  approvalActivityId?: string | null;
+  approvalNote?: string | null;
+}
+
+/** Checks the approval evidence points at this project's file / an email from this customer. */
+async function checkEvidence(ctx: RecordCtx, project: Record<string, any>, fileId: string | null | undefined, activityId: string | null | undefined) {
+  if (fileId && !(await ctx.tx.one(`select 1 from files where tenant_id = $1 and id = $2 and deleted_at is null and object_key = 'project' and record_id = $3`, [ctx.tenantId, fileId, project.id]))) {
+    throw badRequest('The approval letter must be a file on this project');
+  }
+  if (activityId && !(await ctx.tx.one(`select 1 from activities where tenant_id = $1 and id = $2 and kind = 'email'`, [ctx.tenantId, activityId]))) throw badRequest('That email was not found');
 }
 
 export async function saveMilestone(ctx: RecordCtx, projectId: string, id: string | null, input: MilestoneInput) {
   const { project } = await projectAccess(ctx, projectId, 'manage');
   if (input.ownerId && !(await workers(ctx.tx, ctx.tenantId, project)).has(input.ownerId)) throw badRequest('The milestone owner must be on the project');
   if (input.startDate && input.dueDate && input.dueDate < input.startDate) throw badRequest('The due date is before the start');
+  await checkEvidence(ctx, project, input.approvalFileId, input.approvalActivityId);
+  const ev = input.approvalFileId !== undefined || input.approvalActivityId !== undefined || input.approvalNote !== undefined;
   if (id) {
-    const cur = await ctx.tx.one<{ invoice_id: string | null; amount: string | null }>(`select invoice_id, amount from project_milestones where tenant_id = $1 and id = $2 and project_id = $3`, [ctx.tenantId, id, projectId]);
+    const cur = await ctx.tx.one<{ invoice_id: string | null; amount: string | null; status: string; approval_file_id: string | null; approval_activity_id: string | null; accepted_on: string | null }>(
+      `select invoice_id, amount, status, approval_file_id, approval_activity_id, accepted_on::text from project_milestones where tenant_id = $1 and id = $2 and project_id = $3`,
+      [ctx.tenantId, id, projectId],
+    );
     if (!cur) throw notFound('Milestone not found');
     if (cur.invoice_id && input.amount !== undefined && Number(input.amount ?? 0) !== Number(cur.amount ?? 0)) throw badRequest('This milestone is invoiced; its amount cannot change');
+    // closing needs the customer's approval on record: their letter or their email
+    if (input.status === 'done' && cur.status !== 'done') {
+      const file = input.approvalFileId !== undefined ? input.approvalFileId : cur.approval_file_id;
+      const mail = input.approvalActivityId !== undefined ? input.approvalActivityId : cur.approval_activity_id;
+      if (!file && !mail) throw badRequest('Attach the customer\'s approval letter or link their approval email before marking the milestone done');
+    }
+    const acceptedOn = input.status === 'done' && cur.status !== 'done' && !(input.acceptedOn ?? cur.accepted_on) ? new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10) : undefined;
     await ctx.tx.query(
       `update project_milestones set name = $4, start_date = $5, due_date = $6, amount = $7, owner_id = $8, status = coalesce($9, status), position = coalesce($10, position),
-              completed_at = case when $9 = 'done' and status <> 'done' then now() when $9 = 'open' then null else completed_at end,
-              accepted_on = case when $11 then $12::date else accepted_on end, acceptance_ref = case when $11 then $13 else acceptance_ref end
+              completed_at = case when $9 = 'done' and status <> 'done' then now() when $9 in ('open','in_progress') then null else completed_at end,
+              accepted_on = case when $11 then $12::date else accepted_on end, acceptance_ref = case when $11 then $13 else acceptance_ref end,
+              approval_file_id = case when $14 then $15::uuid else approval_file_id end, approval_activity_id = case when $14 then $16::uuid else approval_activity_id end,
+              approval_note = case when $14 then $17 else approval_note end,
+              approved_by = case when $9 = 'done' and status <> 'done' then $18::uuid when $9 in ('open','in_progress') then null else approved_by end,
+              approved_at = case when $9 = 'done' and status <> 'done' then now() when $9 in ('open','in_progress') then null else approved_at end
         where tenant_id = $1 and id = $2 and project_id = $3`,
       [
         ctx.tenantId, id, projectId, input.name, input.startDate ?? null, input.dueDate ?? null, input.amount ?? null, input.ownerId ?? null, input.status ?? null, input.position ?? null,
-        input.acceptedOn !== undefined || input.acceptanceRef !== undefined, input.acceptedOn ?? null, input.acceptanceRef ?? null,
+        input.acceptedOn !== undefined || input.acceptanceRef !== undefined || acceptedOn !== undefined, input.acceptedOn ?? acceptedOn ?? cur.accepted_on ?? null, input.acceptanceRef ?? null,
+        ev, input.approvalFileId !== undefined ? input.approvalFileId : cur.approval_file_id, input.approvalActivityId !== undefined ? input.approvalActivityId : cur.approval_activity_id, input.approvalNote ?? null,
+        ctx.principal.user.id,
       ],
     );
     return { id };
   }
+  if (input.status === 'done' && !input.approvalFileId && !input.approvalActivityId) throw badRequest('Attach the customer\'s approval letter or link their approval email before marking the milestone done');
   return ctx.tx.one<{ id: string }>(
-    `insert into project_milestones (tenant_id, project_id, name, start_date, due_date, amount, owner_id, position, accepted_on, acceptance_ref) values ($1,$2,$3,$4,$5,$6,$7,
-       coalesce($8, (select coalesce(max(position), 0) + 1 from project_milestones where tenant_id = $1 and project_id = $2)), $9, $10) returning id`,
-    [ctx.tenantId, projectId, input.name, input.startDate ?? null, input.dueDate ?? null, input.amount ?? null, input.ownerId ?? null, input.position ?? null, input.acceptedOn ?? null, input.acceptanceRef ?? null],
+    `insert into project_milestones (tenant_id, project_id, name, start_date, due_date, amount, owner_id, position, accepted_on, acceptance_ref, status, approval_file_id, approval_activity_id, approval_note, completed_at, approved_by, approved_at)
+     values ($1,$2,$3,$4,$5,$6,$7, coalesce($8, (select coalesce(max(position), 0) + 1 from project_milestones where tenant_id = $1 and project_id = $2)), $9, $10, coalesce($11, 'open'), $12, $13, $14,
+             case when $11 = 'done' then now() end, case when $11 = 'done' then $15::uuid end, case when $11 = 'done' then now() end) returning id`,
+    [
+      ctx.tenantId, projectId, input.name, input.startDate ?? null, input.dueDate ?? null, input.amount ?? null, input.ownerId ?? null, input.position ?? null, input.acceptedOn ?? null, input.acceptanceRef ?? null,
+      input.status ?? null, input.approvalFileId ?? null, input.approvalActivityId ?? null, input.approvalNote ?? null, ctx.principal.user.id,
+    ],
   );
+}
+
+/* ── milestone approval evidence and the money it produced ── */
+
+const LINK_TABLE = { invoice: 'invoices', payment: 'payments', bill: 'bills', vendor_payment: 'vendor_payments' } as const;
+export type MilestoneLinkKind = keyof typeof LINK_TABLE;
+
+/** One milestone with its approval (letter / email) and linked invoices, receipts, bills and vendor payments. */
+export async function milestoneDetail(ctx: RecordCtx, projectId: string, id: string) {
+  await projectAccess(ctx, projectId);
+  const m = await ctx.tx.one<Record<string, any>>(
+    `select m.*, f.name as approval_file_name, a.subject as approval_email_subject, a.occurred_at as approval_email_at, a.metadata ->> 'from' as approval_email_from, u.full_name as approved_by_name
+       from project_milestones m left join files f on f.tenant_id = m.tenant_id and f.id = m.approval_file_id
+       left join activities a on a.tenant_id = m.tenant_id and a.id = m.approval_activity_id left join users u on u.tenant_id = m.tenant_id and u.id = m.approved_by
+      where m.tenant_id = $1 and m.id = $2 and m.project_id = $3`,
+    [ctx.tenantId, id, projectId],
+  );
+  if (!m) throw notFound('Milestone not found');
+  const links = await ctx.tx.query(
+    `select l.kind, l.target_id as id, l.linked_at,
+            coalesce(i.invoice_number, p.payment_number, b.bill_number, vp.payment_number) as number,
+            coalesce(i.invoice_date, p.payment_date, b.bill_date, vp.payment_date)::text as date,
+            coalesce(i.grand_total, p.amount, b.grand_total, vp.amount)::float8 as amount,
+            coalesce(i.status, p.status, b.status, vp.status) as status
+       from milestone_links l
+       left join invoices i on l.kind = 'invoice' and i.tenant_id = l.tenant_id and i.id = l.target_id
+       left join payments p on l.kind = 'payment' and p.tenant_id = l.tenant_id and p.id = l.target_id
+       left join bills b on l.kind = 'bill' and b.tenant_id = l.tenant_id and b.id = l.target_id
+       left join vendor_payments vp on l.kind = 'vendor_payment' and vp.tenant_id = l.tenant_id and vp.id = l.target_id
+      where l.tenant_id = $1 and l.milestone_id = $2 order by l.kind, date`,
+    [ctx.tenantId, id],
+  );
+  return { milestone: m, links };
+}
+
+/** Invoices, receipts, bills and vendor payments that could belong to the milestone (this project or its customer). */
+export async function milestoneCandidates(ctx: RecordCtx, projectId: string, kind: MilestoneLinkKind) {
+  const { project } = await projectAccess(ctx, projectId);
+  const sql = {
+    invoice: `select id, invoice_number as number, invoice_date::text as date, grand_total::float8 as amount, status from invoices where tenant_id = $1 and deleted_at is null and status <> 'cancelled' and doc_type <> 'proforma' and (project_id = $2 or account_id = $3) order by invoice_date desc limit 100`,
+    payment: `select id, payment_number as number, payment_date::text as date, amount::float8 as amount, status from payments where tenant_id = $1 and deleted_at is null and status <> 'void' and (project_id = $2 or account_id = $3) order by payment_date desc limit 100`,
+    bill: `select id, bill_number as number, bill_date::text as date, grand_total::float8 as amount, status from bills where tenant_id = $1 and deleted_at is null and status <> 'void' and (project_id = $2 or exists (select 1 from bill_lines l where l.tenant_id = bills.tenant_id and l.order_id = bills.id and (l.project_id = $2 or l.billable_account_id = $3))) order by bill_date desc limit 100`,
+    vendor_payment: `select id, payment_number as number, payment_date::text as date, amount::float8 as amount, status from vendor_payments where tenant_id = $1 and deleted_at is null and status <> 'void' order by payment_date desc limit 100`,
+  }[kind];
+  return ctx.tx.query(sql, [ctx.tenantId, projectId, project.account_id ?? null]);
+}
+
+export async function linkMilestone(ctx: RecordCtx, projectId: string, id: string, kind: MilestoneLinkKind, targetId: string, on: boolean) {
+  await projectAccess(ctx, projectId, 'manage');
+  const m = await ctx.tx.one<{ status: string }>(`select status from project_milestones where tenant_id = $1 and id = $2 and project_id = $3`, [ctx.tenantId, id, projectId]);
+  if (!m) throw notFound('Milestone not found');
+  if (on) {
+    if (m.status !== 'done') throw badRequest('Mark the milestone done (with the customer\'s approval) before linking invoices and payments');
+    if (!(await ctx.tx.one(`select 1 from ${LINK_TABLE[kind]} where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, targetId]))) throw notFound('Document not found');
+    await ctx.tx.query(`insert into milestone_links (tenant_id, milestone_id, kind, target_id) values ($1,$2,$3,$4) on conflict do nothing`, [ctx.tenantId, id, kind, targetId]);
+  } else await ctx.tx.query(`delete from milestone_links where tenant_id = $1 and milestone_id = $2 and kind = $3 and target_id = $4`, [ctx.tenantId, id, kind, targetId]);
+  return { ok: true };
+}
+
+/**
+ * Emails to read for an approval: what the mailbox sync logged against the project's customer, its
+ * contacts or the project, newest first. scan = only ones that read like an approval (approved,
+ * accepted, completion, CRAC, sign-off…) or mention the milestone.
+ */
+export async function approvalEmails(ctx: RecordCtx, projectId: string, q: { milestoneId?: string | null; search?: string | null; scan?: boolean }) {
+  const { project } = await projectAccess(ctx, projectId);
+  const ms = q.milestoneId ? await ctx.tx.one<{ name: string }>(`select name from project_milestones where tenant_id = $1 and id = $2`, [ctx.tenantId, q.milestoneId]) : null;
+  const rows = await ctx.tx.query<{ id: string; subject: string | null; body: string | null; direction: string | null; occurred_at: string; from: string | null; related_object: string; related_id: string }>(
+    `select a.id, a.subject, left(a.body, 20000) as body, a.direction, a.occurred_at, a.metadata ->> 'from' as from, a.related_object, a.related_id
+       from activities a
+      where a.tenant_id = $1 and a.kind = 'email'
+        and ((a.related_object = 'project' and a.related_id = $2)
+          or ($3::uuid is not null and a.related_object = 'account' and a.related_id = $3)
+          or ($3::uuid is not null and a.related_object = 'contact' and a.related_id in (select id from contacts where tenant_id = $1 and account_id = $3))
+          or ($3::uuid is not null and a.related_object = 'deal' and a.related_id in (select id from deals where tenant_id = $1 and account_id = $3)))
+        and ($4::text is null or a.subject ilike '%' || $4 || '%' or a.body ilike '%' || $4 || '%')
+      order by a.occurred_at desc limit 200`,
+    [ctx.tenantId, projectId, project.account_id ?? null, q.search?.trim() || null],
+  );
+  const words = /\b(approv|accept|sign[- ]?off|signed off|complet|crac|inspection|certif|go[- ]?ahead|satisf|confirm)/i;
+  const name = ms?.name?.toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 3) ?? [];
+  const scored = rows.map((r) => {
+    const text = `${r.subject ?? ''} ${r.body ?? ''}`;
+    let score = 0;
+    if (words.test(r.subject ?? '')) score += 3;
+    if (words.test(r.body ?? '')) score += 2;
+    if (r.direction === 'in') score += 1;
+    for (const w of name) if (text.toLowerCase().includes(w)) score += 1;
+    return { ...r, body: r.body, score, looksLikeApproval: score >= 3 };
+  });
+  const list = q.scan ? scored.filter((r) => r.score >= 3).sort((a, b) => b.score - a.score) : scored;
+  return { items: list.slice(0, 100), mailboxConnected: !!(await ctx.tx.one(`select 1 from integrations where tenant_id = $1 and provider in ('google','microsoft') and status = 'active' and user_id is not null limit 1`, [ctx.tenantId])) };
 }
 
 export async function deleteMilestone(ctx: RecordCtx, projectId: string, id: string) {

@@ -9,7 +9,7 @@ import { b64url, decryptSecret, encryptSecret, hmacSha256Hex, timingSafeEqual } 
 import type { Tx } from '../lib/db';
 import { badRequest, notFound } from '../lib/errors';
 
-export type Provider = 'google' | 'microsoft' | 'razorpay' | 'exotel' | 'meta_leads' | 'google_leads';
+export type Provider = 'google' | 'microsoft' | 'razorpay' | 'exotel' | 'meta_leads' | 'google_leads' | 'tally' | 'teams' | 'slack' | 'gchat' | 'jira' | 'azure_devops' | 'asana' | 'dynamics_bc' | 'sap_b1' | 'netsuite';
 export type OAuthProvider = 'google' | 'microsoft' | 'meta';
 
 export interface Integration {

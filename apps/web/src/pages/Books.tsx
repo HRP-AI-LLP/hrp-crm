@@ -89,11 +89,15 @@ export function BooksPage() {
     const on = () => {
       const h = window.location.hash.slice(1).split(':')[0];
       const t = TABS.find(([k]) => k === h)?.[0];
-      if (t) setTab(t);
+      setTab(t ?? 'overview');
     };
     window.addEventListener('hashchange', on);
+    window.addEventListener('popstate', on);
     on();
-    return () => window.removeEventListener('hashchange', on);
+    return () => {
+      window.removeEventListener('hashchange', on);
+      window.removeEventListener('popstate', on);
+    };
   }, [loc.key]);
   if (!me) return null;
   if (!apps.has('books')) return metaReady ? <Navigate to="/" replace /> : <Spinner />;
@@ -106,7 +110,7 @@ export function BooksPage() {
   }
   const go = (t: Tab) => {
     setTab(t);
-    window.history.replaceState(null, '', `#${t}`);
+    if (window.location.hash !== `#${t}`) window.history.pushState(null, '', `#${t}`);
   };
   return (
     <>
@@ -125,6 +129,7 @@ export function BooksPage() {
         </div>
       </div>
       <SideTabs
+        sync={false}
         id="books"
         title="Books"
         value={tab}

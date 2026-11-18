@@ -5,6 +5,7 @@ import { Link, useParams } from 'react-router-dom';
 import { Empty, ScoreRing, Spinner, useToast } from '../components/ui';
 import { get, patch } from '../lib/api';
 import { moneyShort } from '../lib/format';
+import { LossModal } from '../components/industry/RecordPanels';
 import { useObject, usePipelines } from '../lib/hooks';
 
 export function PipelinePage() {
@@ -18,6 +19,7 @@ export function PipelinePage() {
   const toast = useToast();
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
+  const [losing, setLosing] = useState<string | null>(null);
   const key = ['board', object, pipe?.id];
   const { data, isLoading } = useQuery({
     queryKey: key,
@@ -31,6 +33,11 @@ export function PipelinePage() {
   const move = async (recordId: string, stageId: string) => {
     const rec = data?.items.find((r) => r.id === recordId);
     if (!rec || rec.stage_id === stageId) return;
+    // a deal dropped on a lost stage asks why (loss reason, competitor) first
+    if (object === 'deal' && pipe.stages.find((s) => s.id === stageId)?.category === 'lost') {
+      setLosing(recordId);
+      return;
+    }
     // optimistic move
     qc.setQueryData<{ items: RecordDto[] }>(key, (d) => (d ? { items: d.items.map((r) => (r.id === recordId ? { ...r, stage_id: stageId } : r)) } : d));
     try {
@@ -44,6 +51,7 @@ export function PipelinePage() {
 
   return (
     <>
+      {losing && <LossModal dealId={losing} onClose={() => setLosing(null)} onDone={() => qc.invalidateQueries({ queryKey: key })} />}
       <div className="page-head">
         <div>
           <h1>{obj.label} board</h1>

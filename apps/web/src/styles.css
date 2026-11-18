@@ -1208,8 +1208,7 @@ input:hover:not(:focus):not(:disabled), select:hover:not(:focus):not(:disabled),
 :root[data-theme='dark'] img { opacity: .95; }
 :root[data-theme='dark'] .brand-mark { background: #e5edf6; }
 .topbar .search { flex: 1; max-width: 520px; }
-.topbar .icon-btn { margin-left: auto; }
-.topbar .icon-btn + * { margin-left: 0; }
+.topbar .icon-btn.push { margin-left: auto; }
 :root[data-theme='dark'] .nav a { color: #cbd5e1; }
 :root[data-theme='dark'] .nav a:hover, :root[data-theme='dark'] .nav a.active { color: #fff; }
 :root[data-theme='dark'] .nav-foot a { color: #fff; }
@@ -1296,3 +1295,48 @@ input:hover:not(:focus):not(:disabled), select:hover:not(:focus):not(:disabled),
 .side-badge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--brand-100); color: var(--brand-800); font-size: 11px; font-weight: 700; display: inline-grid; place-items: center; }
 .side-current { display: none; }
 @media (max-width: 860px) { .side-layout.collapsed .side-current { display: inline; } }
+
+/* main menu folded to icons */
+.shell.rail { grid-template-columns: 64px 1fr; }
+.shell.rail .nav { padding: 12px 8px; overflow-x: hidden; }
+.shell.rail .nav .brand div, .shell.rail .nav .nl, .shell.rail .nav-badge, .shell.rail .nav-quick span, .shell.rail .nav-quick kbd, .shell.rail .nav-foot .grow { display: none; }
+.shell.rail .nav a { justify-content: center; padding: 9px 0; }
+.shell.rail .nav .brand { justify-content: center; }
+.shell.rail .nav-group > button.ng-head { justify-content: center; padding: 4px 0; font-size: 0; height: 10px; border-top: 1px solid rgba(255,255,255,.08); border-radius: 0; }
+.shell.rail .nav-group > button.ng-head svg { display: none; }
+.shell.rail .nav-group.closed > a { display: flex; }
+.shell.rail .nav-quick { justify-content: center; padding: 8px 0; }
+.shell.rail .nav-foot { justify-content: center; }
+.nav a { position: relative; }
+@media (max-width: 900px) { .desktop-only { display: none !important; } }
+/* back / forward and the trail of pages */
+.trail { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.trail .icon-btn:disabled { opacity: .35; cursor: default; }
+.trail .flip { transform: rotate(180deg); }
+.trail-crumbs { display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; margin-left: 4px; font-size: 12.5px; }
+.trail-crumbs button { all: unset; cursor: pointer; color: var(--ink-3); padding: 3px 6px; border-radius: 6px; white-space: nowrap; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.trail-crumbs button:hover { background: var(--surface-2); color: var(--ink); }
+.trail-crumbs button::after { content: '›'; margin-left: 8px; color: var(--line-strong); }
+.trail-crumbs .here { color: var(--ink); font-weight: 600; padding: 3px 6px; white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1200px) { .trail-crumbs { display: none; } }
+.topbar .search { max-width: 420px; }
+.check-row { display: flex; gap: 8px; align-items: center; font-size: 13px; margin: 4px 0; }
+
+/* ───── role permission matrix ───── */
+.perm-matrix td, .perm-matrix th { padding: 5px 8px; vertical-align: middle; }
+.perm-matrix .perm-group td { background: var(--surface-2); border-top: 1px solid var(--line); }
+.perm-sel { width: auto; min-width: 74px; padding: 3px 6px; font-size: 12.5px; }
+.perm-sel.lv-all { color: var(--good, #059669); font-weight: 600; }
+.perm-sel.lv-none { color: var(--ink-3); }
+.perm-areas { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+.perm-area { padding: 8px 12px 10px; margin: 0; border: 1px solid var(--line); }
+.perm-area legend { padding: 0 4px; }
+.perm-item { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 13px; cursor: pointer; }
+.perm-item input { margin-top: 3px; }
+.perm-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 16px; }
+.perm-field { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; padding: 2px 0; }
+.perm-field .seg button { padding: 2px 8px; font-size: 12px; }
+.good-text { color: var(--good, #059669); }
+.warn-text { color: var(--warn, #b45309); }
+.notice.warn { border-color: var(--warn, #f59e0b); background: color-mix(in srgb, var(--warn, #f59e0b) 10%, transparent); }
+.seg button[aria-checked='true'], .seg button.on { background: var(--brand-700); color: #fff; }

@@ -34,7 +34,7 @@ export interface ContractInput {
   ownerId?: string | null;
 }
 
-const C_COLS = `c.id, c.contract_number, c.name, c.account_id, a.name as account_name, c.project_id, p.name as project_name, c.kind, c.status, c.start_date::text, c.end_date::text,
+const C_COLS = `c.id, c.deal_id, c.contract_number, c.name, c.account_id, a.name as account_name, c.project_id, p.name as project_name, c.kind, c.status, c.start_date::text, c.end_date::text,
   c.value::float8 as value, c.billing_frequency, c.period_fee::float8 as period_fee, c.hours_per_period::float8 as hours_per_period, c.overage_rate::float8 as overage_rate,
   c.sla_response_hours::float8 as sla_response_hours, c.sla_resolution_hours::float8 as sla_resolution_hours, c.auto_renew, c.renewal_notice_days,
   c.next_invoice_date::text, c.tax_rate::float8 as tax_rate, c.hsn_sac, c.terms, c.owner_id, u.full_name as owner_name, c.terminated_at::text, c.created_at,
@@ -98,7 +98,12 @@ export async function getContract(ctx: RecordCtx, id: string) {
     `select count(*)::int as n, count(*) filter (where status in ('resolved','closed'))::int as resolved from tickets where tenant_id = $1 and account_id = $2 and created_at::date between $3::date and $4::date and deleted_at is null`,
     [ctx.tenantId, c.account_id, p.start, p.end],
   );
-  return { contract: c, invoices, tickets: tickets[0] };
+  // the deal it came from, and the documents kept on that deal (bid, award…)
+  const deal = c.deal_id ? await ctx.tx.one(`select id, name, bid_number, amount::float8 as amount, closed_at from deals where tenant_id = $1 and id = $2`, [ctx.tenantId, c.deal_id]) : null;
+  const dealFiles = c.deal_id
+    ? await ctx.tx.query(`select id, name, size_bytes, content_type, description, created_at from files where tenant_id = $1 and object_key = 'deal' and record_id = $2 and deleted_at is null order by created_at desc limit 100`, [ctx.tenantId, c.deal_id])
+    : [];
+  return { contract: c, invoices, tickets: tickets[0], deal, dealFiles };
 }
 
 async function checkRefs(ctx: RecordCtx, input: ContractInput) {

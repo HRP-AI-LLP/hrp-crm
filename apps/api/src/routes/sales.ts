@@ -181,7 +181,7 @@ export const salesRoutes = new Hono<AppEnv>()
       items: await c.var.db.tx(scope(c, true), (tx) =>
         tx.query(
           `select p.id as product_id, p.name, p.sku, p.unit, p.tax_rate::float8 as tax_rate, p.hsn_sac, p.list_price::float8 as list_price, p.is_active, e.unit_price::float8 as unit_price
-             from products p left join price_book_entries e on e.tenant_id = p.tenant_id and e.product_id = p.id and e.price_book_id = $2
+             from products p left join price_book_entries e on e.tenant_id = p.tenant_id and e.product_id = p.id and e.price_book_id = $2 and e.min_qty = 1
             where p.tenant_id = $1 and p.deleted_at is null order by p.name limit 2000`,
           [c.var.tenant.id, uuid.parse(c.req.param('id'))],
         ),
@@ -216,11 +216,11 @@ export const salesRoutes = new Hono<AppEnv>()
     const b = z.object({ entries: z.array(z.object({ productId: uuid, unitPrice: z.number().min(0).max(1e12).nullable() })).max(2000) }).parse(await c.req.json());
     await c.var.db.tx(scope(c), async (tx) => {
       for (const e of b.entries) {
-        if (e.unitPrice === null) await tx.query(`delete from price_book_entries where tenant_id = $1 and price_book_id = $2 and product_id = $3`, [c.var.tenant.id, c.req.param('id'), e.productId]);
+        if (e.unitPrice === null) await tx.query(`delete from price_book_entries where tenant_id = $1 and price_book_id = $2 and product_id = $3 and min_qty = 1`, [c.var.tenant.id, c.req.param('id'), e.productId]);
         else
           await tx.query(
             `insert into price_book_entries (tenant_id, price_book_id, product_id, unit_price) values ($1,$2,$3,$4)
-             on conflict (tenant_id, price_book_id, product_id) do update set unit_price = excluded.unit_price`,
+             on conflict (tenant_id, price_book_id, product_id, min_qty) do update set unit_price = excluded.unit_price`,
             [c.var.tenant.id, uuid.parse(c.req.param('id')), e.productId, e.unitPrice],
           );
       }

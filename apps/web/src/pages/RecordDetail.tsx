@@ -38,6 +38,8 @@ import { JobWorkPanel, WorkOrderPanel } from '../components/mfg/MfgPanels';
 import { RecordDeposits } from '../components/books/Deposits';
 import { DealCharges } from '../components/deals/DealCharges';
 import { SignaturesPanel } from '../components/SignaturesPanel';
+import { AccountPanels, DealActions, LossModal, OrderPanels, ProjectTracker, QuotePanels, TicketPanels } from '../components/industry/RecordPanels';
+import { EnrolButton } from './SalesOps';
 
 /** Mirrors the API: documents that drive stock, tax or customer commitments are deleted only in these states. */
 const DELETABLE_IN: Record<string, string[]> = {
@@ -88,6 +90,7 @@ export function RecordDetailPage() {
   const [scheduling, setScheduling] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [merging, setMerging] = useState(false);
+  const [losing, setLosing] = useState(false);
   const pipelines = usePipelines(object);
   const apps = useApps();
   const key = ['record', object, id];
@@ -118,6 +121,7 @@ export function RecordDetailPage() {
   const canEdit = perm?.update !== 'none';
   const pipeline = pipelines.find((p) => p.id === rec.pipeline_id);
   const stageIdx = pipeline?.stages.findIndex((s) => s.id === rec.stage_id) ?? -1;
+  const stageCat = stageIdx >= 0 ? pipeline!.stages[stageIdx]!.category : null;
   const byKey = new Map(obj.fields.map((f) => [f.key, f]));
   const values = rec as Record<string, unknown>;
   const sections = resolveLayout(obj)
@@ -195,6 +199,8 @@ export function RecordDetailPage() {
               Convert to order
             </button>
           )}
+          {object === 'deal' && <DealActions id={id} rec={rec} canEdit={canEdit} lost={stageCat === 'lost'} won={stageCat === 'won'} />}
+          {(object === 'lead' || object === 'contact') && canEdit && <EnrolButton object={object} recordId={id} />}
           {object === 'lead' && !rec.converted_at && canEdit && (
             <button className="btn primary" onClick={() => setConverting(true)}>
               Convert lead
@@ -225,12 +231,15 @@ export function RecordDetailPage() {
       {canEdit && <DuplicateBanner obj={obj} record={rec} />}
       {merging && <MergeModal obj={obj} master={rec} candidates={[]} onClose={() => setMerging(false)} />}
       {object === 'account' && <Customer360 id={id} />}
+      {object === 'account' && <AccountPanels id={id} rec={rec} apps={apps} />}
+      {losing && <LossModal dealId={id} onClose={() => setLosing(false)} onDone={() => qc.invalidateQueries({ queryKey: ['record', object, id] })} />}
       {object === 'quote' && (
         <div style={{ marginBottom: 20 }}>
           <ApprovalBar object={object} record={rec} canEdit={canEdit} />
           <div style={{ marginBottom: 10 }}>
             <QuoteRevisions quoteId={id} />
           </div>
+          <QuotePanels id={id} rec={rec} canEdit={canEdit} />
           <QuoteEditor quoteId={id} canEdit={canEdit} />
           <SignaturesPanel object="quote" id={id} signable={rec.status !== "superseded"} />
         </div>
@@ -239,6 +248,7 @@ export function RecordDetailPage() {
       {object === 'sales_order' && (
         <>
           <ApprovalBar object={object} record={rec} canEdit={canEdit} />
+          <OrderPanels id={id} rec={rec} canEdit={canEdit} />
           <OrderPanel orderId={id} canEdit={canEdit} />
           <SignaturesPanel object="sales_order" id={id} signable={rec.status !== 'cancelled'} />
         </>
@@ -254,6 +264,7 @@ export function RecordDetailPage() {
       {object === 'shipment' && <ShipmentPanel id={id} canEdit={canEdit} />}
       {object === 'installation' && <InstallationPanel id={id} canEdit={canEdit} />}
       {object === 'ticket' && <TicketBar ticket={rec} canEdit={canEdit} />}
+      {object === 'ticket' && <TicketPanels id={id} rec={rec} canEdit={canEdit} />}
       {object === 'invoice' && (
         <>
           <ApprovalBar object={object} record={rec} canEdit={canEdit} />
@@ -280,6 +291,7 @@ export function RecordDetailPage() {
       {(object === 'deal' || object === 'project') && apps.has('billing') && me && (hasAdmin(me.permissions, 'books') || hasAdmin(me.permissions, 'billing')) && (
         <RecordDeposits object={object} rec={rec as Record<string, unknown>} />
       )}
+      {object === 'project' && apps.has('projects') && <ProjectTracker id={id} rec={rec} />}
       {object === 'project' && apps.has('projects') && <ProjectWorkspace id={id} />}
       {object === 'work_order' && apps.has('manufacturing') && <WorkOrderPanel id={id} canEdit={canEdit} />}
       {object === 'job_work' && apps.has('manufacturing') && <JobWorkPanel id={id} canEdit={canEdit} />}
@@ -297,7 +309,7 @@ export function RecordDetailPage() {
                 className={`${i < stageIdx ? 'done' : ''} ${i === stageIdx ? 'current' : ''} ${s.category}`}
                 aria-pressed={i === stageIdx}
                 disabled={!canEdit || save.isPending}
-                onClick={() => i !== stageIdx && save.mutate({ stage_id: s.id })}
+                onClick={() => i !== stageIdx && (object === 'deal' && s.category === 'lost' ? setLosing(true) : save.mutate({ stage_id: s.id }))}
                 title={`${s.label} · ${s.probability}%`}
               >
                 {s.label}

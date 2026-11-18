@@ -17,10 +17,11 @@ export interface ObjectStorage {
 }
 
 export const LEAD_SOURCES = ['website', 'whatsapp', 'instagram', 'facebook', 'google_ads', 'phone_call', 'walk_in', 'referral', 'architect', 'interior_designer', 'dealer', 'campaign', 'event', 'cold_call', 'partner', 'gem', 'tender', 'manual', 'other'];
-export const ACCOUNT_TYPES = ['customer', 'prospect', 'architect', 'interior_designer', 'dealer', 'builder', 'partner', 'government', 'ngo', 'other'];
+export const ACCOUNT_TYPES = ['customer', 'prospect', 'architect', 'interior_designer', 'dealer', 'distributor', 'builder', 'partner', 'government', 'ngo', 'other'];
 export const APPROVAL_STATUSES = ['not_required', 'required', 'pending', 'approved', 'rejected'] as const;
 const INDUSTRIES = ['technology', 'finance', 'healthcare', 'real_estate', 'retail', 'manufacturing', 'education', 'services', 'other'];
-export const QUOTE_STATUSES = ['draft', 'sent', 'accepted', 'rejected', 'expired', 'superseded'] as const;
+export const LOSS_REASONS = ['price', 'competitor', 'features', 'timing', 'budget', 'no_decision', 'relationship', 'delivery_time', 'lost_contact', 'other'];
+export const QUOTE_STATUSES = ['rfq', 'draft', 'sent', 'accepted', 'rejected', 'expired', 'superseded'] as const;
 export const FORECAST_CATEGORIES = ['pipeline', 'best_case', 'commit', 'omitted'] as const;
 export const ORDER_STATUSES = ['draft', 'confirmed', 'in_production', 'ready', 'dispatched', 'delivered', 'installed', 'completed', 'cancelled'] as const;
 export const PO_STATUSES = ['draft', 'sent', 'partially_received', 'received', 'closed', 'cancelled'] as const;
@@ -98,6 +99,11 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'pincode', label: 'PIN code', type: 'text', standard: true },
     owner,
     { key: 'payment_terms', label: 'Payment terms', type: 'picklist', standard: true, helpText: 'Default for this customer\'s invoices', options: { choices: choices(PAYMENT_TERMS) } },
+    { key: 'parent_account_id', label: 'Parent company', type: 'lookup', standard: true, options: { lookupObject: 'account' }, helpText: 'Group company this account belongs to (plants, branches, subsidiaries)' },
+    { key: 'credit_limit', label: 'Credit limit', type: 'currency', standard: true, options: { min: 0 }, helpText: 'Orders that take unpaid invoices and open orders past this need approval' },
+    { key: 'credit_hold', label: 'Credit hold', type: 'boolean', standard: true, helpText: 'Every new order needs credit approval' },
+    { key: 'territory', label: 'Territory', type: 'picklist', standard: true, indexed: true, options: { addable: true, choices: [] } },
+    { key: 'dealer_tier', label: 'Dealer tier', type: 'picklist', standard: true, options: { addable: true, choices: choices(['platinum', 'gold', 'silver', 'bronze']) }, helpText: 'For dealers and distributors: decides schemes' },
   ],
   deal: [
     { key: 'name', label: 'Deal name', type: 'text', standard: true, required: true },
@@ -121,6 +127,9 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'referred_by_id', label: 'Referred by (architect / dealer)', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
     { key: 'last_activity_at', label: 'Last activity', type: 'datetime', standard: true, readOnly: true },
     { key: 'forecast_category', label: 'Forecast category', type: 'picklist', standard: true, helpText: 'Leave empty to follow the stage probability', options: { choices: choices(FORECAST_CATEGORIES) } },
+    { key: 'loss_reason', label: 'Loss reason', type: 'picklist', standard: true, indexed: true, options: { addable: true, choices: choices(LOSS_REASONS) } },
+    { key: 'lost_to', label: 'Lost to (competitor)', type: 'text', standard: true, options: { maxLength: 120 } },
+    { key: 'loss_note', label: 'What we learned', type: 'textarea', standard: true },
     owner,
   ],
   product: [
@@ -148,6 +157,10 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'cost_price', label: 'Cost price', type: 'currency', standard: true, options: { min: 0 } },
     { key: 'mrp', label: 'MRP', type: 'currency', standard: true, options: { min: 0 } },
     { key: 'barcode', label: 'Barcode', type: 'text', standard: true },
+    { key: 'warranty_months', label: 'Warranty (months)', type: 'number', standard: true, options: { min: 0, max: 240 }, helpText: 'A warranty starts for the customer when the order is delivered' },
+    { key: 'is_spare', label: 'Spare part', type: 'boolean', standard: true },
+    { key: 'spare_for_id', label: 'Spare for', type: 'lookup', standard: true, options: { lookupObject: 'product' } },
+    { key: 'specifications', label: 'Technical specifications', type: 'textarea', standard: true },
     { key: 'description', label: 'Description', type: 'textarea', standard: true },
     { key: 'is_active', label: 'Active', type: 'boolean', standard: true },
     owner,
@@ -160,6 +173,10 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'account_id', label: 'Account', type: 'lookup', standard: true, options: { lookupObject: 'account' } },
     { key: 'contact_id', label: 'Contact', type: 'lookup', standard: true, options: { lookupObject: 'contact' } },
     { key: 'valid_until', label: 'Valid until', type: 'date', standard: true },
+    { key: 'rfq_number', label: 'Customer RFQ no.', type: 'text', standard: true, indexed: true, options: { maxLength: 80 } },
+    { key: 'rfq_received_on', label: 'RFQ received on', type: 'date', standard: true },
+    { key: 'rfq_due_on', label: 'Quote due by', type: 'date', standard: true },
+    { key: 'customer_ref', label: 'Customer reference', type: 'text', standard: true, options: { maxLength: 120 } },
     { key: 'tax_inclusive', label: 'Prices include GST', type: 'boolean', standard: true, helpText: 'Line prices are what the customer pays; the taxable value is worked back from them' },
     { key: 'currency', label: 'Currency', type: 'picklist', standard: true, options: { choices: currencyChoices() } },
     { key: 'subtotal', label: 'Subtotal', type: 'currency', standard: true, readOnly: true },

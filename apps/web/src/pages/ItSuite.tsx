@@ -5,7 +5,10 @@
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import { Link, NavLink, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { SideTabs } from '../components/SideTabs';
+import { ClientAssets, ClientVault, TechDocs } from '../components/industry/ClientIt';
+import { uploadFile, useFiles } from '../components/Files';
 import { BarChart } from '../components/charts';
 import { LookupPicker } from '../components/fields';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
@@ -48,36 +51,52 @@ function useAct(keys: unknown[][]) {
   };
 }
 
-const SECTIONS: [string, string][] = [
-  ['subscriptions', 'Subscriptions'],
-  ['contracts', 'Contracts'],
-  ['products', 'Products & roadmap'],
-  ['capacity', 'Capacity'],
+type Section = 'subscriptions' | 'contracts' | 'products' | 'capacity' | 'assets' | 'vault' | 'docs';
+const SECTIONS: { key: Section; label: string; icon: string; group: string }[] = [
+  { key: 'contracts', label: 'Contracts', icon: 'contract', group: 'Commercial' },
+  { key: 'subscriptions', label: 'Subscriptions', icon: 'repeat', group: 'Commercial' },
+  { key: 'products', label: 'Products & roadmap', icon: 'layers', group: 'Delivery' },
+  { key: 'capacity', label: 'Capacity', icon: 'users', group: 'Delivery' },
+  { key: 'assets', label: 'Client assets', icon: 'box', group: 'Client IT' },
+  { key: 'vault', label: 'Credentials vault', icon: 'wallet', group: 'Client IT' },
+  { key: 'docs', label: 'Tech docs & runbooks', icon: 'book', group: 'Client IT' },
 ];
 
 export function ItSuitePage() {
   const { section = 'subscriptions' } = useParams();
+  const nav = useNavigate();
+  const sec = (SECTIONS.some((s) => s.key === section) ? section : 'subscriptions') as Section;
   return (
     <div>
       <div className="page-head">
         <div>
-          <h1>{SECTIONS.find((s) => s[0] === section)?.[1] ?? 'IT services'}</h1>
+          <h1>IT services</h1>
           <p className="muted small" style={{ margin: 0 }}>
-            Software services, consulting, SaaS subscriptions and product management
+            Contracts, SaaS subscriptions, product management, capacity, and the IT you run for clients
           </p>
         </div>
       </div>
-      <nav className="viewbar" aria-label="IT sections" style={{ marginBottom: 12 }}>
-        {SECTIONS.map(([k, l]) => (
-          <NavLink key={k} to={`/it/${k}`} className={({ isActive }) => `btn sm${isActive ? ' primary' : ' ghost'}`}>
-            {l}
-          </NavLink>
-        ))}
-      </nav>
-      {section === 'subscriptions' && <Subscriptions />}
-      {section === 'contracts' && <Contracts />}
-      {section === 'products' && <Products />}
-      {section === 'capacity' && <Capacity />}
+      <SideTabs id="it" title="IT services" items={SECTIONS} value={sec} onChange={(k) => nav(`/it/${k}`)} sync={false} panel={false}>
+        {sec === 'subscriptions' && <Subscriptions />}
+        {sec === 'contracts' && <Contracts />}
+        {sec === 'products' && <Products />}
+        {sec === 'capacity' && <Capacity />}
+        {sec === 'assets' && (
+          <div className="panel" style={{ padding: 14 }}>
+            <ClientAssets />
+          </div>
+        )}
+        {sec === 'vault' && (
+          <div className="panel" style={{ padding: 14 }}>
+            <ClientVault />
+          </div>
+        )}
+        {sec === 'docs' && (
+          <div className="panel" style={{ padding: 14 }}>
+            <TechDocs />
+          </div>
+        )}
+      </SideTabs>
     </div>
   );
 }
@@ -755,7 +774,12 @@ function Contracts() {
   });
   const act = useAct([['it']]);
   const [edit, setEdit] = useState<Json | null>(null);
-  const [open, setOpen] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
+  const [open, setOpenState] = useState<string | null>(params.get('contract'));
+  const setOpen = (v: string | null) => {
+    setOpenState(v);
+    if (!v && params.get('contract')) setParams((p) => { const n = new URLSearchParams(p); n.delete('contract'); return n; }, { replace: true });
+  };
   const [upload, setUpload] = useState(false);
   const rows = list.data ?? [];
   const active = rows.filter((c) => c.status === 'active');
@@ -1244,6 +1268,7 @@ function ContractView({ id, onClose, onEdit }: { id: string; onClose: () => void
             ))}
           </div>
         )}
+        <ContractDocuments id={id} deal={data.deal} dealFiles={data.dealFiles ?? []} />
         <div className="small">
           <span className={`chip ${C_CLS[c.status] ?? ''}`}>{c.status}</span> {KINDS[c.kind]} for <b>{c.account_name}</b>
           {c.project_name && <> · project {c.project_name}</>} · {date(c.start_date)} – {c.end_date ? date(c.end_date) : 'open-ended'} · {FREQ[c.billing_frequency]}
@@ -2307,5 +2332,113 @@ function AllocationModal({ a, people, projects, onClose, onSave }: { a: Json; pe
         </label>
       </div>
     </Modal>
+  );
+}
+
+/* ───────────────────────── contract documents ───────────────────────── */
+
+const DOC_CATS = ['Bid document', 'Award / LoA / PO', 'Contract', 'SOW', 'NDA', 'MSA', 'Work order', 'Amendment', 'Completion certificate', 'Invoice support', 'Other'];
+
+function ContractDocuments({ id, deal, dealFiles }: { id: string; deal: Json | null; dealFiles: Json[] }) {
+  const files = useFiles('service_contract', id);
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [cat, setCat] = useState('SOW');
+  const [busy, setBusy] = useState(false);
+  const items = files.data?.items ?? [];
+  return (
+    <div className="panel" style={{ padding: 10 }}>
+      <div className="spread" style={{ flexWrap: 'wrap', gap: 6 }}>
+        <b>Documents</b>
+        <div className="row" style={{ gap: 6 }}>
+          <select value={cat} onChange={(e) => setCat(e.target.value)} style={{ width: 'auto' }} aria-label="Document type">
+            {DOC_CATS.map((x) => (
+              <option key={x}>{x}</option>
+            ))}
+          </select>
+          <label className={`btn sm primary${busy ? ' disabled' : ''}`}>
+            {busy ? 'Uploading…' : 'Upload'}
+            <input
+              type="file"
+              multiple
+              hidden
+              onChange={async (e) => {
+                const list = [...(e.target.files ?? [])];
+                e.target.value = '';
+                if (!list.length) return;
+                setBusy(true);
+                try {
+                  for (const f of list) await uploadFile('service_contract', id, f, 'document', cat);
+                  toast(`${list.length} document${list.length > 1 ? 's' : ''} added`);
+                  qc.invalidateQueries({ queryKey: ['files', 'service_contract', id] });
+                } catch (err) {
+                  toast((err as Error).message, true);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            />
+          </label>
+        </div>
+      </div>
+      {files.data && !files.data.enabled && <p className="muted small">File storage is not set up on this server.</p>}
+      {items.length > 0 ? (
+        <table className="data" style={{ marginTop: 6 }}>
+          <tbody>
+            {DOC_CATS.flatMap((c) => items.filter((f) => (f.description ?? 'Other').split(' — ')[0] === c || (c === 'Other' && !DOC_CATS.includes((f.description ?? '').split(' — ')[0]!))).map((f) => ({ c, f })))
+              .map(({ c, f }) => (
+                <tr key={f.id}>
+                  <td style={{ width: 170 }}>
+                    <span className="chip">{c}</span>
+                  </td>
+                  <td>
+                    <a href={f.url} target="_blank" rel="noreferrer">
+                      {f.name}
+                    </a>
+                  </td>
+                  <td className="small muted">{date(f.createdAt)}</td>
+                  <td>
+                    <button
+                      className="btn sm ghost"
+                      onClick={async () => {
+                        if (!window.confirm(`Remove ${f.name}?`)) return;
+                        await del(`/api/v1/files/${f.id}`);
+                        qc.invalidateQueries({ queryKey: ['files', 'service_contract', id] });
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="muted small" style={{ margin: '6px 0 0' }}>
+          Upload the bid, award letter, SOW, NDA and anything else for this contract.
+        </p>
+      )}
+      {deal && (
+        <div className="small" style={{ marginTop: 8 }}>
+          From the deal <Link to={`/o/deal/${deal.id}`}>{deal.name}</Link>
+          {deal.bid_number ? ` (bid ${deal.bid_number})` : ''}
+          {dealFiles.length > 0 && ':'}
+          {dealFiles.length > 0 && <DealFileLinks dealId={deal.id} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DealFileLinks({ dealId }: { dealId: string }) {
+  const files = useFiles('deal', dealId);
+  return (
+    <>
+      {(files.data?.items ?? []).map((f) => (
+        <a key={f.id} className="btn sm ghost" href={f.url} target="_blank" rel="noreferrer" style={{ marginLeft: 4 }}>
+          📄 {f.name}
+        </a>
+      ))}
+    </>
   );
 }

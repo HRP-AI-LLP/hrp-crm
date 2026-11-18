@@ -200,7 +200,7 @@ export async function markSent(ctx: RecordCtx, id: string): Promise<{ token: str
   const token = (row.share_token as string | null) ?? randomToken(24);
   if (!row.share_token) await ctx.tx.query(`update quotes set share_token = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, token]);
   let events: RecordEvent[] = [];
-  if (row.status === 'draft') events = (await updateRecord(ctx, 'quote', id, { status: 'sent' })).events;
+  if (row.status === 'draft' || row.status === 'rfq') events = (await updateRecord(ctx, 'quote', id, { status: 'sent' })).events;
   else await ctx.tx.query(`update quotes set updated_at = now() where tenant_id = $1 and id = $2`, [ctx.tenantId, id]); // keeps the public route in sync
   return { token, events };
 }
@@ -242,7 +242,7 @@ export async function syncDealAmount(ctx: RecordCtx, id: string) {
  */
 export async function reviseQuote(ctx: RecordCtx, id: string): Promise<{ id: string; events: RecordEvent[] }> {
   const { row } = await loadRow(ctx, 'quote', id, 'update', true);
-  if (row.status === 'draft') throw badRequest('Draft quotes can be edited directly.');
+  if (row.status === 'draft' || row.status === 'rfq') throw badRequest('Draft quotes can be edited directly.');
   if (row.status === 'accepted') throw badRequest('Accepted quotes cannot be revised. Convert it to an order, or create a new quote.');
   if (row.status === 'superseded') throw badRequest('A newer revision already exists.');
   const rootId = (row.root_id as string | null) ?? id;

@@ -14,6 +14,7 @@ import { useOnline } from '../lib/outbox';
 import { CommandPalette, type Command, useCommandPaletteShortcut } from './CommandPalette';
 import { NI, OBJECT_ICON } from './NavIcons';
 import { useTheme } from '../lib/theme';
+import { NavTrail } from './NavTrail';
 
 const svg = (d: string) => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -201,6 +202,31 @@ export function Shell() {
   const orgQ = useQuery({ queryKey: ['organisation'], queryFn: () => get<Record<string, any>>('/api/v1/organisation'), enabled: !!me, staleTime: 300_000, retry: false });
   const orgManager = !!orgQ.data?.canManage;
   const [palette, setPalette] = useState(false);
+  // the main menu folds to icons (remembered)
+  const [rail, setRail] = useState(() => {
+    try {
+      return localStorage.getItem('synapse.nav.rail') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleRail = () =>
+    setRail((r) => {
+      try {
+        localStorage.setItem('synapse.nav.rail', r ? '0' : '1');
+      } catch {
+        /* ignore */
+      }
+      return !r;
+    });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.altKey && e.key === 'ArrowLeft') window.history.back();
+      if (e.altKey && e.key === 'ArrowRight') window.history.forward();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const openPalette = useCallback(() => setPalette(true), []);
   useCommandPaletteShortcut(openPalette);
   const [theme, setTheme] = useTheme();
@@ -244,6 +270,7 @@ export function Shell() {
       items: [
         ...std.map((k) => objects.find((o) => o.key === k)).filter(Boolean).map((o) => ({ to: `/o/${o!.key}`, label: o!.plural, icon: OBJECT_ICON[o!.key] ?? 'file' })),
         ...(objects.some((o) => o.key === 'deal') ? [{ to: '/pipeline/deal', label: 'Deal board', icon: 'board' }] : []),
+        { to: '/sales-ops', label: 'Sales operations', icon: 'trend' },
       ],
     },
     {
@@ -253,6 +280,7 @@ export function Shell() {
         ...opsObjects.map((o) => ({ to: `/o/${o.key}`, label: o.plural, icon: OBJECT_ICON[o.key] ?? 'file' })),
         ...(apps.has('inventory') ? [{ to: '/inventory', label: 'Inventory', icon: 'box' }] : []),
         ...(apps.has('delivery') ? [{ to: '/schedule', label: 'Field schedule', icon: 'calendar' }] : []),
+        ...(apps.has('service') ? [{ to: '/after-sales', label: 'After-sales', icon: 'wrench' }] : []),
         ...(apps.has('billing') ? [{ to: '/billing', label: 'Billing & GST', icon: 'stamp' }] : []),
         ...(apps.has('books') && me && hasAdmin(me.permissions, 'books') ? [{ to: '/books', label: 'Books', icon: 'book' }] : []),
       ],
@@ -272,6 +300,7 @@ export function Shell() {
               { to: '/it/contracts', label: 'Contracts', icon: 'contract' },
               { to: '/it/products', label: 'Products & roadmap', icon: 'layers' },
               { to: '/it/capacity', label: 'Capacity', icon: 'gauge' },
+              { to: '/it/assets', label: 'Client IT', icon: 'box' },
             ],
           },
         ]
@@ -337,7 +366,7 @@ export function Shell() {
   ];
 
   return (
-    <div className="shell">
+    <div className={`shell${rail ? ' rail' : ''}`}>
       <nav className={`nav${navOpen ? ' open' : ''}`} aria-label="Main">
         <div className="brand">
           <span className="brand-mark"><img src="/logo-mark.png" alt="HRP AI" /></span>
@@ -347,7 +376,7 @@ export function Shell() {
           </div>
         </div>
         <button className="nav-quick" onClick={() => setPalette(true)}>
-          <NI name="search" size={15} className="" /> Jump to… <kbd>Ctrl K</kbd>
+          <NI name="search" size={15} className="" /> <span>Jump to…</span> <kbd>Ctrl K</kbd>
         </button>
         {groups.map((g) => (
           <div key={g.key} className={`nav-group${g.label && closed.has(g.key) ? ' closed' : ''}`} style={g.label ? undefined : { marginTop: 0 }}>
@@ -358,9 +387,9 @@ export function Shell() {
               </button>
             )}
             {g.items.map((i) => (
-              <NavLink key={i.to} to={i.to} end={i.end}>
+              <NavLink key={i.to} to={i.to} end={i.end} title={rail ? i.label : undefined}>
                 <NI name={i.icon} />
-                {i.label}
+                <span className="nl">{i.label}</span>
                 {i.badge ? <span className="nav-badge">{i.badge}</span> : null}
               </NavLink>
             ))}
@@ -383,11 +412,15 @@ export function Shell() {
           <button className="btn ghost sm mobile-only" onClick={() => setNavOpen((v) => !v)} aria-label="Menu">
             <Icon.menu />
           </button>
+          <button className="icon-btn desktop-only" onClick={toggleRail} title={rail ? 'Show the menu' : 'Collapse the menu'} aria-label="Menu" aria-expanded={!rail}>
+            <NI name="menu" size={18} className="" />
+          </button>
+          <NavTrail />
           <GlobalSearch />
           <span className={`offline-pill${online ? '' : ' on'}`} role="status">
             {online ? '' : 'Offline'}
           </span>
-          <button className="icon-btn" title={theme === 'dark' ? 'Light theme' : 'Dark theme'} aria-label="Switch theme" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+          <button className="icon-btn push" title={theme === 'dark' ? 'Light theme' : 'Dark theme'} aria-label="Switch theme" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
             <NI name={theme === 'dark' ? 'sun' : 'moon'} size={18} className="" />
           </button>
           <Notifications />

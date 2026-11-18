@@ -41,6 +41,10 @@ const JobConfirmPage = page(() => import('./pages/CustomerPages'), 'JobConfirmPa
 const TicketStatusPage = page(() => import('./pages/CustomerPages'), 'TicketStatusPage');
 const ProjectPortalPage = page(() => import('./pages/CustomerPages'), 'ProjectPortalPage');
 const PublicRoadmapPage = page(() => import('./pages/CustomerPages'), 'PublicRoadmapPage');
+const SalesOpsPage = page(() => import('./pages/SalesOps'), 'SalesOpsPage');
+const AfterSalesPage = page(() => import('./pages/AfterSales'), 'AfterSalesPage');
+const DealerPortalPage = page(() => import('./pages/PublicIndustry'), 'DealerPortalPage');
+const HelpCentrePage = page(() => import('./pages/PublicIndustry'), 'HelpCentrePage');
 const ItSuitePage = page(() => import('./pages/ItSuite'), 'ItSuitePage');
 const IntakePage = page(() => import('./pages/Intake'), 'IntakePage');
 const PaidPage = page(() => import('./pages/CustomerPages'), 'PaidPage');
@@ -91,6 +95,8 @@ export function App() {
       <Route path="/t/:token" element={<TicketStatusPage />} />
       <Route path="/portal/:token" element={<ProjectPortalPage />} />
       <Route path="/roadmap/:token" element={<PublicRoadmapPage />} />
+      <Route path="/dealer/:token" element={<DealerPortalPage />} />
+      <Route path="/help/:token" element={<HelpCentrePage />} />
       <Route path="/paid" element={<PaidPage />} />
       <Route path="/privacy/verify/:token" element={<PrivacyVerifyPage />} />
       <Route path="/privacy/status/:token" element={<PrivacyStatusPage />} />
@@ -161,6 +167,8 @@ export function App() {
         <Route path="copilot" element={<CopilotPage />} />
         <Route path="developers" element={<DevelopersPage />} />
         <Route path="campaigns" element={<CampaignsPage />} />
+        <Route path="sales-ops" element={<SalesOpsPage />} />
+        <Route path="after-sales" element={<AfterSalesPage />} />
         <Route path="campaigns/:id" element={<CampaignsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>

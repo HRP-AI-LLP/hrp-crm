@@ -1,4 +1,7 @@
 import type { FieldDef } from '@synapse/shared';
+import type { RolePermissions } from '@synapse/shared';
+import { RoleEditor } from '../components/admin/RoleEditor';
+import { ConnectorsTab } from '../components/admin/Connectors';
 import { IntegrationsTab } from '../components/admin/IntegrationsAdmin';
 import { PrivacyTab } from '../components/admin/PrivacyAdmin';
 import { SolutionsPanel } from '../components/admin/SolutionsAdmin';
@@ -57,6 +60,7 @@ const GROUPS: [string, [string, string, string][]][] = [
   ['Connect', [
     ['ai', 'AI models', 'ai'],
     ['integrations', 'Integrations', 'channels'],
+    ['connectors', 'Connectors (Teams, Jira, ERP)', 'developers'],
     ['channels', 'Channels', 'channels'],
     ['apikeys', 'API keys', 'users'],
     ['domains', 'Domains', 'domains'],
@@ -142,6 +146,7 @@ export function SettingsPage() {
           {tab === 'service' && <ServiceSettingsTab />}
           {tab === 'forms' && <FormsTab />}
           {tab === 'integrations' && <IntegrationsTab />}
+          {tab === 'connectors' && <ConnectorsTab />}
           {tab === 'channels' && <ChannelsTab />}
           {tab === 'domains' && <DomainsTab />}
           {tab === 'audit' && <AuditTab />}
@@ -410,7 +415,7 @@ function PipelinesTab() {
 function RolesTab() {
   const run = useRun();
   const { data, isLoading } = useQuery({ queryKey: ['admin-roles'], queryFn: () => get<{ items: Json[] }>('/api/admin/roles') });
-  const [edit, setEdit] = useState<{ id?: string; key: string; name: string; json: string } | null>(null);
+  const [edit, setEdit] = useState<{ id?: string; key: string; name: string; perms: RolePermissions; json: string; advanced: boolean } | null>(null);
   if (isLoading) return <Spinner />;
   return (
     <div className="stack">
@@ -418,7 +423,10 @@ function RolesTab() {
         <p className="muted" style={{ margin: 0 }}>
           Record access: none, own, team (you and your direct reports) or all. Fields can be hidden or read-only per role, and conditions like <code>{'{"field":"city","op":"eq","value":"$user.region"}'}</code> limit rows by user attributes.
         </p>
-        <button className="btn primary" onClick={() => setEdit({ key: '', name: '', json: JSON.stringify({ objects: { '*': { read: 'all', create: true, update: 'own', delete: 'none' } }, fields: {}, conditions: {} }, null, 2) })}>
+        <button className="btn primary" onClick={() => {
+            const perms: RolePermissions = { objects: { '*': { read: 'all', create: true, update: 'own', delete: 'none' } }, fields: {}, conditions: {}, admin: [] };
+            setEdit({ key: '', name: '', perms, json: JSON.stringify(perms, null, 2), advanced: false });
+          }}>
           New role
         </button>
       </div>
@@ -433,7 +441,7 @@ function RolesTab() {
               <td className="muted">{r.user_count} users</td>
               <td>
                 {r.key !== 'admin' && (
-                  <button className="btn sm" onClick={() => setEdit({ id: r.id, key: r.key, name: r.name, json: JSON.stringify(r.permissions, null, 2) })}>
+                  <button className="btn sm" onClick={() => setEdit({ id: r.id, key: r.key, name: r.name, perms: r.permissions as RolePermissions, json: JSON.stringify(r.permissions, null, 2), advanced: false })}>
                     Edit access
                   </button>
                 )}
@@ -451,12 +459,14 @@ function RolesTab() {
             <button
               className="btn primary"
               onClick={async () => {
-                let permissions: unknown;
-                try {
-                  permissions = JSON.parse(edit.json);
-                } catch {
-                  window.alert('Permissions must be valid JSON');
-                  return;
+                let permissions: unknown = edit.perms;
+                if (edit.advanced) {
+                  try {
+                    permissions = JSON.parse(edit.json);
+                  } catch {
+                    window.alert('Permissions must be valid JSON');
+                    return;
+                  }
                 }
                 const ok = edit.id
                   ? await run(() => patch(`/api/admin/roles/${edit.id}`, { name: edit.name, permissions }), 'Role saved', [['admin-roles']])
@@ -477,10 +487,33 @@ function RolesTab() {
               Key
               <input value={edit.key} disabled={!!edit.id} onChange={(e) => setEdit({ ...edit, key: e.target.value })} />
             </label>
-            <label className="field wide">
-              Permissions
-              <textarea value={edit.json} onChange={(e) => setEdit({ ...edit, json: e.target.value })} style={{ minHeight: 300, fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 12.5 }} spellCheck={false} />
-            </label>
+            <div className="wide" style={{ gridColumn: '1 / -1' }}>
+            <div className="spread" style={{ margin: '10px 0 6px' }}>
+              <b>Permissions</b>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={edit.advanced}
+                  onChange={(e) => {
+                    if (e.target.checked) setEdit({ ...edit, advanced: true, json: JSON.stringify(edit.perms, null, 2) });
+                    else {
+                      try {
+                        setEdit({ ...edit, advanced: false, perms: JSON.parse(edit.json) });
+                      } catch {
+                        window.alert('Fix the JSON first');
+                      }
+                    }
+                  }}
+                />{' '}
+                Advanced (JSON, with row conditions)
+              </label>
+            </div>
+            {edit.advanced ? (
+              <textarea value={edit.json} onChange={(e) => setEdit({ ...edit, json: e.target.value })} style={{ minHeight: 300, width: '100%', fontFamily: 'ui-monospace, Consolas, monospace', fontSize: 12.5 }} spellCheck={false} />
+            ) : (
+              <RoleEditor value={edit.perms} onChange={(perms) => setEdit({ ...edit, perms })} />
+            )}
+            </div>
           </div>
         </Modal>
       )}

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { get, patch, post } from '../../lib/api';
+import { get, patch, post, put } from '../../lib/api';
 import { relative } from '../../lib/format';
 import { blankIdentity, IdentitySection, persistIdentity, type IdentityValues } from '../IdentitySection';
 import { Modal, Spinner, useToast } from '../ui';
@@ -39,7 +39,7 @@ export function PeopleTab() {
   const { data: roles } = useQuery({ queryKey: ['admin-roles'], queryFn: () => get<{ items: Json[] }>('/api/admin/roles') });
   const { data: teams } = useQuery({ queryKey: ['admin-teams'], queryFn: () => get<{ items: Json[] }>('/api/admin/teams') });
   const { data: sec } = useQuery({ queryKey: ['admin-security'], queryFn: () => get<{ mailer: boolean }>('/api/admin/security') });
-  const [inv, setInv] = useState<{ email: string; fullName: string; role: string; teamIds: string[] } | null>(null);
+  const [inv, setInv] = useState<{ email: string; fullName: string; role: string; teamIds: string[]; invite: boolean } | null>(null);
   const [link, setLink] = useState<{ title: string; intro: string; url: string } | null>(null);
   const [idv, setIdv] = useState<IdentityValues>(blankIdentity());
   const [idFor, setIdFor] = useState<Json | null>(null);
@@ -80,8 +80,8 @@ export function PeopleTab() {
         <p className="muted small" style={{ margin: 0 }}>
           {sec?.mailer ? 'Invitations and reset links are emailed.' : 'Email is not configured, so you will get a link to share for invitations and password resets.'} Attributes like region or branch drive attribute-based access.
         </p>
-        <button className="btn primary" onClick={() => setInv({ email: '', fullName: '', role: 'sales_rep', teamIds: [] })}>
-          Invite people
+        <button className="btn primary" onClick={() => setInv({ email: '', fullName: '', role: 'sales_rep', teamIds: [], invite: true })}>
+          Add people
         </button>
       </div>
       <div className="table-wrap">
@@ -100,9 +100,9 @@ export function PeopleTab() {
             {data?.items.map((u) => (
               <tr key={u.id} className={u.status === 'disabled' ? 'muted-row' : undefined}>
                 <td>
-                  <b>{u.full_name}</b> {u.is_owner && <span className="chip">owner</span>} {u.status === 'invited' && <span className="chip">invited</span>} {u.status === 'disabled' && <span className="chip bad">disabled</span>}
+                  <b>{u.full_name}</b> {u.is_owner && <span className="chip">owner</span>} {u.status === 'invited' && <span className="chip">invited</span>} {u.status === 'profile' && <span className="chip warn">no login yet</span>} {u.status === 'disabled' && <span className="chip bad">disabled</span>}
                   <div className="muted small">
-                    {u.email} · {u.last_login_at ? `signed in ${relative(u.last_login_at)}` : 'never signed in'}
+                    {u.email ?? 'No email yet'} · {u.status === 'profile' ? 'not onboarded to the CRM' : u.last_login_at ? `signed in ${relative(u.last_login_at)}` : 'never signed in'}
                   </div>
                 </td>
                 <td>
@@ -142,6 +142,24 @@ export function PeopleTab() {
                   </button>
                   {menu?.id === u.id && (
                     <div className="menu" role="menu" style={{ position: 'fixed', top: menu!.top, right: menu!.right }} onClick={(e) => e.stopPropagation()}>
+                      {(u.status === 'profile' || u.status === 'invited') && (
+                        <button role="menuitem" onClick={async () => {
+                          setMenu(null);
+                          const email = window.prompt(`Email for ${u.full_name}`, u.email ?? '');
+                          if (email === null) return;
+                          await act(() => put(`/api/admin/users/${u.id}/email`, { email: email.trim() || null }), 'Email saved');
+                        }}>
+                          {u.email ? 'Change email' : 'Add email'}
+                        </button>
+                      )}
+                      {u.status === 'profile' && u.email && (
+                        <button role="menuitem" onClick={async () => {
+                          const r = (await act(() => post<{ inviteUrl: string; emailed: boolean }>(`/api/admin/users/${u.id}/invite-link`), 'Invitation created')) as { inviteUrl: string; emailed: boolean } | null;
+                          if (r && !r.emailed) setLink({ title: 'Invitation link', intro: `Send this link to ${u.full_name}. It is valid for 7 days.`, url: r.inviteUrl });
+                        }}>
+                          Onboard to the CRM (send invitation)
+                        </button>
+                      )}
                       {u.status === 'invited' && (
                         <button role="menuitem" onClick={async () => {
                           const r = (await act(() => post<{ inviteUrl: string; emailed: boolean }>(`/api/admin/users/${u.id}/invite-link`), 'New invitation created')) as { inviteUrl: string; emailed: boolean } | null;
@@ -215,7 +233,7 @@ export function PeopleTab() {
       </div>
       {inv && (
         <Modal
-          title="Invite people"
+          title="Add someone to the team"
           wide
           onClose={() => {
             setInv(null);
@@ -224,9 +242,10 @@ export function PeopleTab() {
           footer={
             <button
               className="btn primary"
-              disabled={!/@/.test(inv.email) || !inv.fullName.trim()}
+              disabled={!inv.fullName.trim() || (inv.email.trim() !== '' && !/^\S+@\S+\.\S+$/.test(inv.email.trim()))}
               onClick={async () => {
-                const r = (await act(() => post<{ id: string; inviteUrl: string; emailed: boolean }>('/api/admin/users/invite', { email: inv.email, fullName: inv.fullName, roles: [inv.role], teamIds: inv.teamIds }), 'Invitation created')) as { id: string; inviteUrl: string; emailed: boolean } | null;
+                const onboard = inv.invite && !!inv.email.trim();
+                const r = (await act(() => post<{ id: string; inviteUrl: string | null; emailed: boolean }>('/api/admin/users/invite', { email: inv.email.trim() || null, fullName: inv.fullName, roles: [inv.role], teamIds: inv.teamIds, invite: onboard }), onboard ? 'Invitation created' : `${inv.fullName} added to the team`)) as { id: string; inviteUrl: string | null; emailed: boolean } | null;
                 if (!r) return;
                 const filled = idv.pan || idv.aadhaar || idv.uan || idv.pfNumber || Object.values(idv.files).some(Boolean);
                 if (filled && r.id) await persistIdentity('user', r.id, idv, { includePan: true }).catch((e) => toast(`Invited ${inv.fullName}, but the ID details were not saved: ${(e as Error).message}`, true));
@@ -234,11 +253,12 @@ export function PeopleTab() {
                 qc.invalidateQueries({ queryKey: ['users'] });
                 qc.invalidateQueries({ queryKey: ['admin-teams'] });
                 setInv(null);
+                if (!r.inviteUrl) return;
                 if (r.emailed) toast(`Invitation emailed to ${inv.email}`);
                 else setLink({ title: 'Invitation link', intro: `Send this link to ${inv.fullName}. It is valid for 7 days.`, url: r.inviteUrl });
               }}
             >
-              {sec?.mailer ? 'Send invitation' : 'Create invitation link'}
+              {!(inv.invite && inv.email.trim()) ? 'Add to team' : sec?.mailer ? 'Add and send invitation' : 'Add and create invitation link'}
             </button>
           }
         >
@@ -248,8 +268,12 @@ export function PeopleTab() {
               <input value={inv.fullName} onChange={(e) => setInv({ ...inv, fullName: e.target.value })} autoFocus />
             </label>
             <label className="field">
-              Work email
+              Work email <span className="muted small">(optional — add it later to give them a login)</span>
               <input type="email" value={inv.email} onChange={(e) => setInv({ ...inv, email: e.target.value })} />
+            </label>
+            <label className="check-row">
+              <input type="checkbox" checked={inv.invite && !!inv.email.trim()} disabled={!inv.email.trim()} onChange={(e) => setInv({ ...inv, invite: e.target.checked })} />
+              Give them a login now (send the invitation)
             </label>
             <label className="field">
               Role

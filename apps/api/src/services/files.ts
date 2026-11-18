@@ -100,6 +100,14 @@ export const fileDto = (f: FileRow) => ({
 const BOOKS_OWNED: Record<string, string> = { compliance_item: 'compliance_items', employee: 'employees', payroll_run: 'payroll_runs', tds_challan: 'tds_challans' };
 
 async function assertRecordAccess(ctx: RecordCtx, objectKey: string, recordId: string, action: 'read' | 'update') {
+  // contract documents (bid, award, SOW, NDA…): contract managers keep them; people who see customers read them
+  if (objectKey === 'service_contract') {
+    const p = ctx.principal.permissions;
+    const manager = hasAdmin(p, 'projects') || hasAdmin(p, 'billing') || hasAdmin(p, 'books');
+    if (!manager && (action === 'update' || objectPerm(p, 'account').read === 'none')) throw forbidden();
+    if (!(await ctx.tx.one(`select 1 from service_contracts where tenant_id = $1 and id = $2`, [ctx.tenantId, recordId]))) throw notFound();
+    return;
+  }
   const table = BOOKS_OWNED[objectKey];
   if (table) {
     if (!hasAdmin(ctx.principal.permissions, 'books') && !(objectKey === 'compliance_item' && hasAdmin(ctx.principal.permissions, 'compliance'))) throw forbidden();

@@ -82,9 +82,25 @@ describe('a GeM contract with FCI', () => {
     const m = await api('POST', `/api/v1/projects/${ids.project}/milestones`, { name: 'Phase 1: sensors installed at 10 depots', amount: 400000, dueDate: today });
     expect(m.status, JSON.stringify(m.json)).toBe(201);
     ids.ms = m.json.id;
+    // closing needs the customer's approval: without it, refused
+    const noProof = await api('PUT', `/api/v1/projects/${ids.project}/milestones/${ids.ms}`, { name: 'Phase 1: sensors installed at 10 depots', amount: 400000, dueDate: today, status: 'done', acceptedOn: today, acceptanceRef: 'CRAC 4411' });
+    expect(noProof.status).toBe(400);
+    expect(noProof.json.error.message).toMatch(/approval/i);
+    // in progress is fine
+    expect((await api('PUT', `/api/v1/projects/${ids.project}/milestones/${ids.ms}`, { name: 'Phase 1: sensors installed at 10 depots', amount: 400000, dueDate: today, status: 'in_progress' })).status).toBe(200);
+    // the customer's approval email (as the mailbox sync logs it) is found by the scan and linked
+    const mail = await api('POST', `/api/v1/records/account/${ids.fci}/activities`, { kind: 'email', direction: 'in', subject: 'Phase 1 approved — CRAC issued', body: 'Dear Sir, the sensors installed at 10 depots are accepted. CRAC 4411 is issued.' });
+    expect(mail.status, JSON.stringify(mail.json)).toBe(201);
+    const scan = await api('GET', `/api/v1/projects/${ids.project}/approval-emails?milestone=${ids.ms}&scan=1`);
+    expect(scan.status, JSON.stringify(scan.json)).toBe(200);
+    expect(scan.json.items[0].id).toBe(mail.json.id);
+    expect(scan.json.items[0].looksLikeApproval).toBe(true);
     expect(
-      (await api('PUT', `/api/v1/projects/${ids.project}/milestones/${ids.ms}`, { name: 'Phase 1: sensors installed at 10 depots', amount: 400000, dueDate: today, status: 'done', acceptedOn: today, acceptanceRef: 'CRAC 4411' })).status,
+      (await api('PUT', `/api/v1/projects/${ids.project}/milestones/${ids.ms}`, { name: 'Phase 1: sensors installed at 10 depots', amount: 400000, dueDate: today, status: 'done', acceptedOn: today, acceptanceRef: 'CRAC 4411', approvalActivityId: mail.json.id })).status,
     ).toBe(200);
+    const md = await api('GET', `/api/v1/projects/${ids.project}/milestones/${ids.ms}`);
+    expect(md.json.milestone.approval_email_subject).toBe('Phase 1 approved — CRAC issued');
+    expect(md.json.milestone.approved_by).toBeTruthy();
     const inv = await api('POST', `/api/v1/projects/${ids.project}/invoice`, { milestoneIds: [ids.ms] });
     expect(inv.status, JSON.stringify(inv.json)).toBe(201);
     ids.invoice = inv.json.id;

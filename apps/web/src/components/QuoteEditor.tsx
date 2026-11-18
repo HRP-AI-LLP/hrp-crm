@@ -87,7 +87,7 @@ export function QuoteEditor({ quoteId, canEdit }: { quoteId: string; canEdit: bo
   const calc = useMemo(() => computeLines(lines, inclusive), [lines, inclusive]);
   if (!data) return null;
   const q = data.quote;
-  const locked = q.status !== 'draft' || !canEdit;
+  const locked = (q.status !== 'draft' && q.status !== 'rfq') || !canEdit;
   const cur = String(q.currency ?? 'INR');
   const intra = intraState(data.company.state, billTo.state);
 

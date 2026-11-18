@@ -130,30 +130,66 @@ export const securityRoutes = new Hono<AppEnv>()
 
   // ------------------------------------------------------------------ invitations, reset links, MFA reset, sign-out
   .post('/users/invite', requireAdmin('users'), async (c) => {
+    // email is optional: without one (or with invite off) the person is added to the team now and
+    // given a login later
     const b = z
-      .object({ email: z.string().trim().toLowerCase().pipe(z.email()), fullName: z.string().trim().min(1).max(120), roles: z.array(z.string()).min(1).default(['sales_rep']), managerId: uuid.nullish(), teamIds: z.array(uuid).max(20).default([]) })
+      .object({
+        email: z.string().trim().toLowerCase().pipe(z.email()).nullish().or(z.literal('').transform(() => null)),
+        fullName: z.string().trim().min(1).max(120),
+        phone: z.string().trim().regex(/^\+?[0-9 ()-]{6,20}$/, 'Use digits, e.g. +91 98100 00000').nullish().or(z.literal('').transform(() => null)),
+        roles: z.array(z.string()).min(1).default(['sales_rep']),
+        managerId: uuid.nullish(),
+        teamIds: z.array(uuid).max(20).default([]),
+        invite: z.boolean().default(true),
+      })
       .parse(await c.req.json());
+    const onboard = b.invite && !!b.email;
     const r = await c.var.db.tx(scope(c), async (tx) => {
-      const exists = await tx.one(`select 1 from users where tenant_id = $1 and lower(email) = $2`, [c.var.tenant.id, b.email]);
-      if (exists) throw conflict('Someone with this email is already in the workspace');
-      const u = await tx.one<{ id: string }>(`insert into users (tenant_id, email, full_name, status, manager_id) values ($1,$2,$3,'invited',$4) returning id`, [c.var.tenant.id, b.email, b.fullName, b.managerId ?? null]);
+      if (b.email) {
+        const exists = await tx.one(`select 1 from users where tenant_id = $1 and lower(email) = $2`, [c.var.tenant.id, b.email]);
+        if (exists) throw conflict('Someone with this email is already in the workspace');
+      }
+      const u = await tx.one<{ id: string }>(`insert into users (tenant_id, email, full_name, status, manager_id, phone) values ($1,$2,$3,$4,$5,$6) returning id`, [
+        c.var.tenant.id, b.email ?? null, b.fullName, onboard ? 'invited' : 'profile', b.managerId ?? null, b.phone ?? null,
+      ]);
       const roles = await tx.query<{ id: string }>(`select id from roles where tenant_id = $1 and key = any($2)`, [c.var.tenant.id, b.roles]);
       if (roles.length !== b.roles.length) throw badRequest('Unknown role');
       for (const role of roles) await tx.query(`insert into user_roles (tenant_id, user_id, role_id) values ($1,$2,$3)`, [c.var.tenant.id, u!.id, role.id]);
       for (const t of b.teamIds) await tx.query(`insert into team_members (tenant_id, team_id, user_id) values ($1,$2,$3) on conflict do nothing`, [c.var.tenant.id, t, u!.id]);
-      return { id: u!.id, token: await createUserToken(tx, c.var.tenant.id, u!.id, 'invite', 7 * 86_400) };
+      return { id: u!.id, token: onboard ? await createUserToken(tx, c.var.tenant.id, u!.id, 'invite', 7 * 86_400) : null };
     });
-    const sent = await sendInvite(c, { email: b.email, full_name: b.fullName }, r.token);
-    return c.json({ id: r.id, inviteUrl: sent.url, emailed: sent.emailed }, 201);
+    if (!r.token) return c.json({ id: r.id, inviteUrl: null, emailed: false, onboarded: false }, 201);
+    const sent = await sendInvite(c, { email: b.email!, full_name: b.fullName }, r.token);
+    return c.json({ id: r.id, inviteUrl: sent.url, emailed: sent.emailed, onboarded: true }, 201);
+  })
+  /** Sets or corrects the email of someone who has not joined yet. */
+  .put('/users/:id/email', requireAdmin('users'), async (c) => {
+    const id = uuid.parse(c.req.param('id'));
+    const b = z.object({ email: z.string().trim().toLowerCase().pipe(z.email()).nullable() }).parse(await c.req.json());
+    await c.var.db.tx(scope(c), async (tx) => {
+      const u = await tx.one<{ status: string }>(`select status from users where tenant_id = $1 and id = $2`, [c.var.tenant.id, id]);
+      if (!u) throw notFound();
+      if (u.status === 'active' || u.status === 'disabled') throw badRequest('People who have joined change their email from their own profile');
+      if (b.email && (await tx.one(`select 1 from users where tenant_id = $1 and lower(email) = $2 and id <> $3`, [c.var.tenant.id, b.email, id]))) throw conflict('Someone with this email is already in the workspace');
+      if (!b.email && u.status === 'invited') throw badRequest('An invited person needs an email');
+      await tx.query(`update users set email = $3 where tenant_id = $1 and id = $2`, [c.var.tenant.id, id, b.email]);
+      // a changed address voids links sent to the old one
+      await tx.query(`update user_tokens set used_at = now() where tenant_id = $1 and user_id = $2 and kind = 'invite' and used_at is null`, [c.var.tenant.id, id]);
+    });
+    return c.json({ ok: true });
   })
   .post('/users/:id/invite-link', requireAdmin('users'), async (c) => {
     const id = uuid.parse(c.req.param('id'));
     const r = await c.var.db.tx(scope(c), async (tx) => {
-      const u = await tx.one<{ email: string; full_name: string; status: string }>(`select email, full_name, status from users where tenant_id = $1 and id = $2`, [c.var.tenant.id, id]);
+      const u = await tx.one<{ email: string | null; full_name: string; status: string }>(`select email, full_name, status from users where tenant_id = $1 and id = $2`, [c.var.tenant.id, id]);
       if (!u) throw notFound();
-      if (u.status !== 'invited') throw badRequest('This person has already joined');
-      return { u, token: await createUserToken(tx, c.var.tenant.id, id, 'invite', 7 * 86_400) };
+      if (u.status !== 'invited' && u.status !== 'profile') throw badRequest('This person has already joined');
+      if (!u.email) throw badRequest('Add their email first, then send the invitation');
+      // onboarding a team member who was added without a login
+      if (u.status === 'profile') await tx.query(`update users set status = 'invited' where tenant_id = $1 and id = $2`, [c.var.tenant.id, id]);
+      return { u: { email: u.email, full_name: u.full_name }, token: await createUserToken(tx, c.var.tenant.id, id, 'invite', 7 * 86_400) };
     });
+    await invalidatePrincipal(c.env, c.var.tenant, id).catch(() => undefined);
     const sent = await sendInvite(c, r.u, r.token);
     return c.json({ inviteUrl: sent.url, emailed: sent.emailed });
   })

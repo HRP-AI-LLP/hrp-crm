@@ -4,6 +4,8 @@
  * milestones. Deliveries and invoices (other apps) update the same order.
  */
 import { badRequest, conflict, notFound } from '../lib/errors';
+import { startWarranties } from './industry/aftersales';
+import { assertCredit } from './industry/core';
 import { assertApproved, reevaluate } from './approvals';
 import { moveStock } from './inventory';
 import { LINE_DOCS, readLines, replaceLines } from './lines';
@@ -128,6 +130,7 @@ export async function confirmOrder(ctx: RecordCtx, id: string): Promise<RecordEv
   if (!lines.length) throw badRequest('Add at least one line before confirming');
   if (row.approval_status === 'not_required' || row.approval_status === 'required') row.approval_status = await reevaluate(ctx, 'sales_order', id);
   assertApproved(row, 'order');
+  await assertCredit(ctx, row);
   const label = `Order ${row.order_number}`;
   if (row.warehouse_id) {
     for (const l of lines) {
@@ -285,6 +288,8 @@ export async function refreshFulfilment(ctx: RecordCtx, id: string, deliveredCon
   if (!t) return [];
   const fs = Number(t.d) <= 0 ? 'unfulfilled' : Number(t.d) + 1e-9 >= Number(t.q) ? 'delivered' : 'partially_delivered';
   await ctx.tx.query(`update sales_orders set fulfilment_status = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, fs]);
+  // products with a warranty start it for the customer when they are delivered
+  if (fs === 'delivered' && deliveredConfirmed) await startWarranties(ctx.tx, ctx.tenantId, id);
   if (fs === 'delivered' && deliveredConfirmed && ['confirmed', 'in_production', 'ready', 'dispatched'].includes(t.status)) return setStatus(ctx, id, t.status, 'delivered');
   return [];
 }

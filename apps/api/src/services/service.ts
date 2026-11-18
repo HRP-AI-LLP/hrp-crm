@@ -3,6 +3,7 @@
  * Ticket SLA clocks themselves are set in hooks.ts when tickets are created or re-prioritised.
  */
 import type { Tx } from '../lib/db';
+import { escalateTickets } from './industry/aftersales';
 import { ApiError, badRequest, notFound } from '../lib/errors';
 import type { RecordCtx, RecordEvent } from './records';
 import { Params, visibilityWhere } from './records';
@@ -38,7 +39,10 @@ export async function sweepSla(tx: Tx, tenantId: string): Promise<Date | null> {
        from tickets where tenant_id = $1 and deleted_at is null and breach_notified_at is null and resolved_at is null`,
     [tenantId],
   );
-  return next?.t ?? null;
+  // escalation matrix: breached tickets climb level by level
+  const esc = await escalateTickets(tx, tenantId);
+  const a = next?.t ? new Date(next.t) : null;
+  return a && esc ? (a < esc ? a : esc) : (a ?? esc);
 }
 
 /** Service dashboard numbers (permission-scoped like any list). */
