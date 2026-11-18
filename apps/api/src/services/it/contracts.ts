@@ -16,11 +16,11 @@ export interface ContractInput {
   name: string;
   accountId: string;
   projectId?: string | null;
-  kind: 'retainer' | 'amc' | 'time_materials' | 'fixed_bid' | 'support' | 'enterprise_licence';
+  kind: 'retainer' | 'amc' | 'time_materials' | 'fixed_bid' | 'support' | 'enterprise_licence' | 'nda' | 'msa' | 'other';
   startDate: string;
   endDate?: string | null;
   value?: number;
-  billingFrequency: 'monthly' | 'quarterly' | 'half_yearly' | 'yearly' | 'milestone' | 'one_time';
+  billingFrequency: 'monthly' | 'quarterly' | 'half_yearly' | 'yearly' | 'milestone' | 'one_time' | 'none';
   periodFee?: number | null;
   hoursPerPeriod?: number | null;
   overageRate?: number | null;
@@ -37,7 +37,9 @@ export interface ContractInput {
 const C_COLS = `c.id, c.contract_number, c.name, c.account_id, a.name as account_name, c.project_id, p.name as project_name, c.kind, c.status, c.start_date::text, c.end_date::text,
   c.value::float8 as value, c.billing_frequency, c.period_fee::float8 as period_fee, c.hours_per_period::float8 as hours_per_period, c.overage_rate::float8 as overage_rate,
   c.sla_response_hours::float8 as sla_response_hours, c.sla_resolution_hours::float8 as sla_resolution_hours, c.auto_renew, c.renewal_notice_days,
-  c.next_invoice_date::text, c.tax_rate::float8 as tax_rate, c.hsn_sac, c.terms, c.owner_id, u.full_name as owner_name, c.terminated_at::text, c.created_at`;
+  c.next_invoice_date::text, c.tax_rate::float8 as tax_rate, c.hsn_sac, c.terms, c.owner_id, u.full_name as owner_name, c.terminated_at::text, c.created_at,
+  c.doc_type, c.parent_id, (select x.contract_number from service_contracts x where x.tenant_id = c.tenant_id and x.id = c.parent_id) as parent_number, c.currency, c.signed_on::text,
+  c.client_ref, c.governing_law, c.payment_terms_days, c.notice_days, c.source, c.summary`;
 const C_FROM = `service_contracts c join accounts a on a.tenant_id = c.tenant_id and a.id = c.account_id
   left join projects p on p.tenant_id = c.tenant_id and p.id = c.project_id left join users u on u.tenant_id = c.tenant_id and u.id = c.owner_id`;
 

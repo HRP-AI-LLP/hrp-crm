@@ -9,6 +9,7 @@ import { notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import * as ag from '../services/it/agile';
+import * as ci from '../services/it/contract-import';
 import * as ct from '../services/it/contracts';
 import * as pm from '../services/it/product';
 import * as ss from '../services/it/saas';
@@ -60,11 +61,11 @@ const contractSchema = z.object({
   name: z.string().trim().min(1).max(200),
   accountId: uuid,
   projectId: uuid.nullish(),
-  kind: z.enum(['retainer', 'amc', 'time_materials', 'fixed_bid', 'support', 'enterprise_licence']),
+  kind: z.enum(['retainer', 'amc', 'time_materials', 'fixed_bid', 'support', 'enterprise_licence', 'nda', 'msa', 'other']),
   startDate: dateStr,
   endDate: dateStr.nullish(),
   value: money.optional(),
-  billingFrequency: z.enum(['monthly', 'quarterly', 'half_yearly', 'yearly', 'milestone', 'one_time']),
+  billingFrequency: z.enum(['monthly', 'quarterly', 'half_yearly', 'yearly', 'milestone', 'one_time', 'none']),
   periodFee: money.nullish(),
   hoursPerPeriod: z.number().min(0).max(100000).nullish(),
   overageRate: money.nullish(),
@@ -242,7 +243,26 @@ export const itRoutes = new Hono<AppEnv>()
   .get('/it/contracts', async (c) =>
     c.json(await c.var.db.tx(scope(c, true), (tx) => ct.listContracts(rctx(c, tx), { accountId: c.req.query('account') || null, status: c.req.query('status') || null, projectId: c.req.query('project') || null }))),
   )
-  .get('/it/contracts/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => ct.getContract(rctx(c, tx), id(c)))))
+  .get('/it/contracts/:id', async (c) =>
+    c.json(
+      await c.var.db.tx(scope(c, true), async (tx) => ({ ...(await ct.getContract(rctx(c, tx), id(c))), files: await ci.contractFiles(rctx(c, tx), c.env, id(c)) })),
+    ),
+  )
+  // existing contracts (NDA, MSA, SoW…): read the uploaded files, then save what was checked
+  .post('/it/contracts/read', async (c) => {
+    const b = ci.uploadSchema.parse(await c.req.json());
+    const deps = {
+      run: <T,>(fn: (ctx: RecordCtx) => Promise<T>) => c.var.db.tx(scope(c), (tx) => fn(rctx(c, tx))),
+      ai: { env: c.env, db: c.var.db, tenantId: c.var.tenant.id, userId: c.var.principal.user.id, requestId: c.var.requestId, meta: c.var.meta },
+    };
+    return c.json(await ci.readUploaded(deps, b));
+  })
+  .post('/it/contracts/upload', async (c) => {
+    const b = ci.saveSchema.parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => ci.saveUploaded(rctx(c, tx), c.env, b));
+    await emit(c, r.events);
+    return c.json({ id: r.id, number: r.number, status: r.status, accountId: r.accountId, projectId: r.projectId, nextInvoiceDate: r.nextInvoiceDate, files: r.files }, 201);
+  })
   .post('/it/contracts', async (c) => {
     const b = contractSchema.parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => ct.saveContract(rctx(c, tx), null, b)), 201);

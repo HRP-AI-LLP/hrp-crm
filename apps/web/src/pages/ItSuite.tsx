@@ -721,7 +721,11 @@ const KINDS: Record<string, string> = {
   fixed_bid: 'Fixed bid / SOW',
   support: 'Support',
   enterprise_licence: 'Enterprise licence',
+  nda: 'NDA',
+  msa: 'MSA (master agreement)',
+  other: 'Other agreement',
 };
+const DOC_TYPES: Record<string, string> = { nda: 'NDA', msa: 'MSA', sow: 'Statement of work', agreement: 'Agreement', amendment: 'Amendment / addendum', purchase_order: 'Purchase order', other: 'Other' };
 const FREQ: Record<string, string> = {
   monthly: 'Monthly',
   quarterly: 'Quarterly',
@@ -729,6 +733,7 @@ const FREQ: Record<string, string> = {
   yearly: 'Yearly',
   milestone: 'By milestone',
   one_time: 'One time',
+  none: 'Not billed',
 };
 const MONTHLY: Record<string, number> = {
   monthly: 1,
@@ -751,6 +756,7 @@ function Contracts() {
   const act = useAct([['it']]);
   const [edit, setEdit] = useState<Json | null>(null);
   const [open, setOpen] = useState<string | null>(null);
+  const [upload, setUpload] = useState(false);
   const rows = list.data ?? [];
   const active = rows.filter((c) => c.status === 'active');
   return (
@@ -778,6 +784,9 @@ function Contracts() {
       <div className="row" style={{ gap: 6 }}>
         <button className="btn primary" onClick={() => setEdit({})}>
           + Contract
+        </button>
+        <button className="btn" onClick={() => setUpload(true)}>
+          ⤒ Add existing contracts (NDA, MSA, SoW…)
         </button>
         <button className="btn" onClick={() => act(() => post<Json>('/api/v1/it/contracts-run'), 'Contract billing is up to date')}>
           Bill what is due
@@ -808,7 +817,10 @@ function Contracts() {
                     {c.project_name && <div className="small muted">{c.project_name}</div>}
                   </td>
                   <td>{c.account_name}</td>
-                  <td>{KINDS[c.kind]}</td>
+                  <td>
+                    {KINDS[c.kind]}
+                    {c.doc_type && <div className="small muted">{DOC_TYPES[c.doc_type] ?? c.doc_type}</div>}
+                  </td>
                   <td>
                     <span className={`chip ${C_CLS[c.status] ?? ''}`}>{c.status}</span> {c.renewal_due && <span className="chip warn">renew</span>}
                   </td>
@@ -827,7 +839,7 @@ function Contracts() {
                   >
                     {c.hours_per_period != null ? `${c.hours_used} / ${c.hours_per_period}` : c.hours_used || '—'}
                   </td>
-                  <td className="num">{inr(c.value)}</td>
+                  <td className="num">{money2(c.value, c.currency ?? 'INR')}</td>
                 </tr>
               ))}
             </tbody>
@@ -844,6 +856,326 @@ function Contracts() {
         />
       )}
       {open && <ContractView id={open} onClose={() => setOpen(null)} onEdit={(c) => (setOpen(null), setEdit(c))} />}
+      {upload && <UploadContracts onClose={() => setUpload(false)} />}
+    </div>
+  );
+}
+
+const toB64 = async (f: File) => {
+  const buf = new Uint8Array(await f.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  return btoa(bin);
+};
+
+/**
+ * Existing signed contracts: the files are read (NDA, MSA, SoW, AMC, agreement, PO) and each becomes a
+ * contract to check and save, with the client, a project and milestones for a SoW, and the documents kept.
+ */
+function UploadContracts({ onClose }: { onClose: () => void }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [files, setFiles] = useState<{ name: string; data: string }[]>([]);
+  const [res, setRes] = useState<Json | null>(null);
+  const [saved, setSaved] = useState<Record<number, Json>>({});
+  const read = async (list: FileList | null) => {
+    if (!list?.length) return;
+    setBusy(true);
+    try {
+      const fs = await Promise.all(Array.from(list).slice(0, 10).map(async (f) => ({ name: f.name, data: await toB64(f) })));
+      setFiles(fs);
+      setRes(await post<Json>('/api/v1/it/contracts/read', { files: fs }));
+      setSaved({});
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const parents = [...((res?.contracts ?? []) as Json[]).filter((c) => ['msa', 'agreement'].includes(c.doc_type) || c.kind === 'msa'), ...Object.values(saved).filter((x) => ['msa', 'agreement'].includes(x.docType))];
+  return (
+    <Modal title="Add existing contracts" onClose={onClose} wide>
+      <div className="modal-body stack">
+        <p className="small muted" style={{ margin: 0 }}>
+          Upload the signed copies (PDF or Word): NDAs, MSAs, statements of work, AMCs, service agreements, POs. Each is read for the client, dates, value, currency, billing,
+          notice and renewal; check what was read and save. The documents are kept with the contract; a SoW can get its project and milestones.
+        </p>
+        <label className="btn primary" style={{ cursor: 'pointer', alignSelf: 'flex-start' }}>
+          {busy ? 'Reading…' : res ? 'Choose other files' : 'Choose files'}
+          <input type="file" multiple accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden disabled={busy} onChange={(e) => read(e.target.files)} />
+        </label>
+        {res &&
+          (res.docs as Json[]).map((d, i) =>
+            saved[i] ? (
+              <div key={i} className="panel small" style={{ padding: 10 }}>
+                ✓ <b>{d.name}</b> saved as {saved[i].number} ({saved[i].status}){saved[i].projectId ? ' with its project' : ''}
+                {saved[i].nextInvoiceDate ? `; billed here from ${date(saved[i].nextInvoiceDate)}` : ''}
+              </div>
+            ) : (
+              <ContractDraft
+                key={i}
+                doc={d}
+                file={files[i]!}
+                res={res}
+                parents={parents}
+                onSaved={(x) => {
+                  setSaved((s) => ({ ...s, [i]: x }));
+                  qc.invalidateQueries({ queryKey: ['it'] });
+                }}
+              />
+            ),
+          )}
+      </div>
+    </Modal>
+  );
+}
+
+function ContractDraft({ doc, file, res, parents, onSaved }: { doc: Json; file: { name: string; data: string }; res: Json; parents: Json[]; onSaved: (x: Json) => void }) {
+  const toast = useToast();
+  const r = (doc.read ?? {}) as Json;
+  const [busy, setBusy] = useState(false);
+  const [f, setF] = useState<Json>({
+    name: r.projectName || r.title || file.name.replace(/\.[a-z]+$/i, ''),
+    docType: r.docType ?? 'agreement',
+    kind: r.kind ?? 'other',
+    accountId: res.account?.id ?? '',
+    newAccountName: res.account ? '' : (r.client ?? res.client ?? ''),
+    startDate: r.effectiveDate ?? '',
+    endDate: r.endDate ?? '',
+    signedOn: r.signedOn ?? '',
+    currency: r.currency ?? 'INR',
+    value: r.value ?? '',
+    billingFrequency: r.billingFrequency ?? 'none',
+    periodFee: r.periodFee ?? '',
+    hourlyRate: r.hourlyRate ?? '',
+    hoursPerPeriod: r.hoursPerPeriod ?? '',
+    paymentTermsDays: r.paymentTermsDays ?? '',
+    noticeDays: r.noticeDays ?? '',
+    autoRenew: !!r.autoRenew,
+    governingLaw: r.governingLaw ?? '',
+    clientRef: r.clientRef ?? '',
+    summary: r.summary ?? '',
+    parentId: '',
+    projectId: '',
+    newProject: r.docType === 'sow',
+    billFrom: '',
+    taxRate: r.currency && r.currency !== 'INR' ? 0 : 18,
+  });
+  const set = (k: string) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const billed = f.billingFrequency !== 'none' && !['nda', 'msa', 'other'].includes(f.kind);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const x = await post<Json>('/api/v1/it/contracts/upload', {
+        files: [file],
+        accountId: f.accountId || null,
+        newAccountName: f.accountId ? null : f.newAccountName.trim() || null,
+        name: f.name.trim(),
+        docType: f.docType,
+        kind: f.kind,
+        startDate: f.startDate,
+        endDate: f.endDate || null,
+        signedOn: f.signedOn || null,
+        currency: f.currency,
+        value: num(f.value),
+        billingFrequency: billed ? f.billingFrequency : 'none',
+        periodFee: num(f.periodFee),
+        hourlyRate: num(f.hourlyRate),
+        hoursPerPeriod: num(f.hoursPerPeriod),
+        paymentTermsDays: num(f.paymentTermsDays),
+        noticeDays: num(f.noticeDays),
+        autoRenew: f.autoRenew,
+        governingLaw: f.governingLaw.trim() || null,
+        clientRef: f.clientRef.trim() || null,
+        summary: f.summary.trim() || null,
+        parentId: f.parentId || null,
+        projectId: f.projectId || null,
+        newProject: !f.projectId && f.newProject,
+        milestones: f.newProject && !f.projectId ? (r.milestones ?? []) : [],
+        billFrom: f.billFrom || null,
+        taxRate: Number(f.taxRate) || 0,
+        extracted: r,
+      });
+      toast(`Saved as ${x.number}`);
+      onSaved({ ...x, docType: f.docType, contract_number: x.number, name: f.name });
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="panel stack" style={{ padding: 12 }}>
+      <div className="spread" style={{ flexWrap: 'wrap' }}>
+        <b>📄 {doc.name}</b>
+        <span className="small muted">
+          {doc.read ? `Read ${doc.read.engine === 'ai' ? 'by the AI model' : 'by rules'}` : ''}
+          {doc.note ? ` · ${doc.note}` : ''}
+        </span>
+      </div>
+      <div className="grid2">
+        <label className="field">
+          Contract name
+          <input value={f.name} onChange={set('name')} />
+        </label>
+        <label className="field">
+          Document
+          <select value={f.docType} onChange={set('docType')}>
+            {Object.entries(DOC_TYPES).map(([k, l]) => (
+              <option key={k} value={k}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          Client
+          {f.accountId ? (
+            <LookupPicker id={`up-acc-${file.name}`} objectKey="account" value={f.accountId} onChange={(v) => setF({ ...f, accountId: String(v ?? '') })} />
+          ) : (
+            <span className="row" style={{ gap: 6 }}>
+              <input value={f.newAccountName} onChange={set('newAccountName')} placeholder="New client's name" />
+              <LookupPicker id={`up-acc2-${file.name}`} objectKey="account" value="" onChange={(v) => setF({ ...f, accountId: String(v ?? '') })} />
+            </span>
+          )}
+          {!f.accountId && <span className="small muted">Will be added as a new client (or pick an existing one)</span>}
+          {r.parties?.length > 0 && <span className="small muted">Parties: {r.parties.join(' · ')}</span>}
+        </label>
+        <label className="field">
+          Contract type (billing)
+          <select value={f.kind} onChange={set('kind')}>
+            {Object.entries(KINDS).map(([k, l]) => (
+              <option key={k} value={k}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          Starts
+          <input type="date" value={f.startDate} onChange={set('startDate')} />
+        </label>
+        <label className="field">
+          Ends
+          <input type="date" value={f.endDate} onChange={set('endDate')} />
+        </label>
+        <label className="field">
+          Signed on
+          <input type="date" value={f.signedOn} onChange={set('signedOn')} />
+        </label>
+        <label className="field">
+          Their reference (agreement / SOW / PO no.)
+          <input value={f.clientRef} onChange={set('clientRef')} />
+        </label>
+        <label className="field">
+          Currency
+          <select value={f.currency} onChange={set('currency')}>
+            {['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY', 'CHF'].map((c) => (
+              <option key={c}>{c}</option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          Total value ({f.currency})
+          <input inputMode="decimal" value={f.value} onChange={set('value')} />
+        </label>
+        {!['nda', 'msa', 'other'].includes(f.kind) && (
+          <>
+            <label className="field">
+              Billing
+              <select value={f.billingFrequency} onChange={set('billingFrequency')}>
+                {Object.entries(FREQ).map(([k, l]) => (
+                  <option key={k} value={k}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              Fee per period ({f.currency})
+              <input inputMode="decimal" value={f.periodFee} onChange={set('periodFee')} />
+            </label>
+            <label className="field">
+              Hourly rate ({f.currency})
+              <input inputMode="decimal" value={f.hourlyRate} onChange={set('hourlyRate')} />
+            </label>
+            <label className="field">
+              Hours included per period
+              <input inputMode="decimal" value={f.hoursPerPeriod} onChange={set('hoursPerPeriod')} />
+            </label>
+            <label className="field">
+              GST %
+              <input inputMode="decimal" value={f.taxRate} onChange={set('taxRate')} />
+            </label>
+            <label className="field">
+              Bill here from (earlier periods were billed elsewhere)
+              <input type="date" value={f.billFrom} onChange={set('billFrom')} />
+              <span className="small muted">Empty: from the next period</span>
+            </label>
+          </>
+        )}
+        <label className="field">
+          Payment terms (days)
+          <input inputMode="numeric" value={f.paymentTermsDays} onChange={set('paymentTermsDays')} />
+        </label>
+        <label className="field">
+          Notice period (days)
+          <input inputMode="numeric" value={f.noticeDays} onChange={set('noticeDays')} />
+        </label>
+        <label className="field">
+          Governing law
+          <input value={f.governingLaw} onChange={set('governingLaw')} />
+        </label>
+        {parents.length > 0 && f.docType !== 'msa' && (
+          <label className="field">
+            Under the MSA / agreement
+            <select value={f.parentId} onChange={set('parentId')}>
+              <option value="">—</option>
+              {parents.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.contract_number} · {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label className="field">
+          Project
+          <select value={f.projectId} onChange={set('projectId')}>
+            <option value="">{f.newProject ? 'A new project for it' : 'None'}</option>
+            {(res.projects ?? []).map((p: Json) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {!f.projectId && (
+            <label className="row small" style={{ gap: 4 }}>
+              <input type="checkbox" checked={f.newProject} onChange={(e) => setF({ ...f, newProject: e.target.checked })} />
+              Create a project{r.milestones?.length ? ` with its ${r.milestones.length} milestone(s)` : ''}
+            </label>
+          )}
+        </label>
+        <label className="row small" style={{ gap: 6 }}>
+          <input type="checkbox" checked={f.autoRenew} onChange={(e) => setF({ ...f, autoRenew: e.target.checked })} />
+          Renews automatically
+        </label>
+      </div>
+      {r.milestones?.length > 0 && (
+        <div className="small">
+          Milestones: {r.milestones.map((m: Json) => `${m.name}${m.amount ? ` ${money2(m.amount, f.currency)}` : ''}${m.due ? ` by ${date(m.due)}` : ''}`).join(' · ')}
+        </div>
+      )}
+      <label className="field">
+        Summary
+        <textarea rows={2} value={f.summary} onChange={set('summary')} />
+      </label>
+      <div>
+        <button className="btn primary" disabled={busy || !f.name.trim() || !f.startDate || (!f.accountId && !f.newAccountName.trim())} onClick={save}>
+          {busy ? 'Saving…' : 'Save this contract'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -860,10 +1192,30 @@ function ContractView({ id, onClose, onEdit }: { id: string; onClose: () => void
   return (
     <Modal title={`${c.contract_number} · ${c.name}`} onClose={onClose} wide>
       <div className="modal-body stack">
+        {(c.doc_type || c.client_ref || c.summary) && (
+          <div className="small">
+            {c.doc_type && <span className="chip">{DOC_TYPES[c.doc_type] ?? c.doc_type}</span>} {c.client_ref && <>Ref {c.client_ref} · </>}
+            {c.signed_on && <>signed {date(c.signed_on)} · </>}
+            {c.parent_number && <>under {c.parent_number} · </>}
+            {c.payment_terms_days != null && <>payment in {c.payment_terms_days} days · </>}
+            {c.notice_days != null && <>notice {c.notice_days} days · </>}
+            {c.governing_law && <>law of {c.governing_law}</>}
+            {c.summary && <p style={{ margin: '4px 0 0' }}>{c.summary}</p>}
+          </div>
+        )}
+        {(data.files ?? []).length > 0 && (
+          <div className="row small" style={{ gap: 8, flexWrap: 'wrap' }}>
+            {(data.files as Json[]).map((x) => (
+              <a key={x.id} className="btn sm" href={x.url} target="_blank" rel="noreferrer">
+                📄 {x.name}
+              </a>
+            ))}
+          </div>
+        )}
         <div className="small">
           <span className={`chip ${C_CLS[c.status] ?? ''}`}>{c.status}</span> {KINDS[c.kind]} for <b>{c.account_name}</b>
           {c.project_name && <> · project {c.project_name}</>} · {date(c.start_date)} – {c.end_date ? date(c.end_date) : 'open-ended'} · {FREQ[c.billing_frequency]}
-          {c.period_fee ? ` at ${inr(c.period_fee)} + GST ${c.tax_rate}%` : ''}
+          {c.period_fee ? ` at ${money2(c.period_fee, c.currency ?? 'INR')} + GST ${c.tax_rate}%` : ''}
         </div>
         <div className="kpis" style={{ margin: 0 }}>
           <div className="panel kpi">
