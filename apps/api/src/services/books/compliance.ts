@@ -13,6 +13,7 @@ import { badRequest, notFound } from '../../lib/errors';
 import type { RecordCtx } from '../records';
 import { systemCtxFor } from '../system';
 import { assertBooksAdmin } from './ledger';
+import { assertComplianceAccess } from './ca';
 
 export interface Due {
   key: string;
@@ -29,6 +30,13 @@ export const complianceSettingsSchema = z.object({
   audit: z.enum(['auto', 'yes', 'no']).default('auto'),
   taxAudit: z.enum(['auto', 'yes', 'no']).default('auto'),
   defaultAssigneeId: z.string().uuid().nullish(),
+  // payroll runs in the business's own HRMS: which staff filings still belong on this calendar
+  staffPf: z.boolean().default(false),
+  staffEsi: z.boolean().default(false),
+  staffPt: z.boolean().default(false),
+  salaryTds: z.boolean().default(false),
+  /** run payroll in Synapse too (off: the HRMS does it) */
+  payrollHere: z.boolean().default(false),
 });
 export type ComplianceSettings = z.infer<typeof complianceSettingsSchema>;
 
@@ -166,18 +174,20 @@ async function facts(ctx: RecordCtx, fyStart: number): Promise<Facts> {
       where tenant_id = $1 and deleted_at is null and doc_type in ('tax_invoice','credit_note') and status not in ('draft','cancelled') and invoice_date >= $2::date and invoice_date < $3::date`,
     [t, `${fyStart - 1}-04-01`, `${fyStart}-04-01`],
   );
+  const settings = await complianceSettings(ctx);
+  const here = settings.payrollHere;
   return {
     fyStart,
     constitution: String(c.constitution ?? ''),
     gst: !!(c.gstin || gstConn),
     tds: !!(cfg?.tan || cfg?.tds_enabled || c.tan),
-    pf: !!emp?.pf,
-    esi: !!emp?.esi,
-    pt: !!emp?.pt,
-    payroll: (emp?.n ?? 0) > 0,
+    pf: settings.staffPf || (here && !!emp?.pf),
+    esi: settings.staffEsi || (here && !!emp?.esi),
+    pt: settings.staffPt || (here && !!emp?.pt),
+    payroll: settings.salaryTds || (here && (emp?.n ?? 0) > 0),
     partners,
     turnover: turn?.v ?? 0,
-    settings: await complianceSettings(ctx),
+    settings,
   };
 }
 
@@ -208,7 +218,7 @@ export async function generateYear(ctx: RecordCtx, fyStart = fyOf()) {
 }
 
 export async function listItems(ctx: RecordCtx, q: { from?: string | null; to?: string | null }) {
-  await assertBooksAdmin(ctx);
+  assertComplianceAccess(ctx);
   const from = q.from ?? `${fyOf()}-04-01`;
   const to = q.to ?? `${fyOf() + 1}-12-31`;
   return ctx.tx.query(
@@ -232,7 +242,7 @@ export const itemUpdateSchema = z.object({
 });
 
 export async function updateItem(ctx: RecordCtx, id: string, u: z.infer<typeof itemUpdateSchema>) {
-  await assertBooksAdmin(ctx);
+  assertComplianceAccess(ctx);
   const cur = await ctx.tx.one<{ id: string }>(`select id from compliance_items where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
   if (!cur) throw notFound();
   const sets: string[] = [];
@@ -263,7 +273,7 @@ export const customItemSchema = z.object({
 });
 
 export async function addItem(ctx: RecordCtx, c: z.infer<typeof customItemSchema>) {
-  await assertBooksAdmin(ctx);
+  assertComplianceAccess(ctx);
   const r = await ctx.tx.one<{ id: string }>(
     `insert into compliance_items (tenant_id, key, period, name, authority, description, due_date, assignee_id, source) values ($1,$2,$3,$4,$5,$6,$7,$8,'manual') returning id`,
     [ctx.tenantId, `custom:${crypto.randomUUID().slice(0, 8)}`, c.dueDate, c.name, c.authority, c.description ?? null, c.dueDate, c.assigneeId ?? null],
@@ -317,7 +327,7 @@ export async function complianceDailySweep(env: Env, db: Db, tenantId: string) {
  * expenditure, and turnover). The CA checks and files them; Synapse prepares the figures.
  */
 export async function llpWorking(ctx: RecordCtx, fyStart: number) {
-  await assertBooksAdmin(ctx);
+  assertComplianceAccess(ctx);
   const { balanceSheet, profitAndLoss } = await import('./reports');
   const end = `${fyStart + 1}-03-31`;
   const start = `${fyStart}-04-01`;

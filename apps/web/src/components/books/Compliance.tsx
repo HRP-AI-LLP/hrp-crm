@@ -1,7 +1,7 @@
 /** Books → Compliance: the year's statutory filings (MCA, GST, income tax, TDS, PF, ESI, PT) tracked to filed. */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import { get, patch, post, put } from '../../lib/api';
+import { del, get, patch, post, put } from '../../lib/api';
 import { money2 } from '../../lib/format';
 import { FilesPanel } from '../Files';
 import { Modal, Spinner, useToast } from '../ui';
@@ -15,7 +15,7 @@ const fyNow = () => {
 };
 const fmt = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
-export function Compliance() {
+export function Compliance({ manage = true }: { manage?: boolean }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [fy, setFy] = useState(fyNow());
@@ -77,9 +77,11 @@ export function Compliance() {
           </button>
         </div>
         <span style={{ flex: 1 }} />
-        <button className="btn sm" onClick={() => setSettings(true)}>
-          Settings
-        </button>
+        {manage && (
+          <button className="btn sm" onClick={() => setSettings(true)}>
+            Settings
+          </button>
+        )}
         <button className="btn sm" onClick={() => setAdding(true)}>
           + Add a filing
         </button>
@@ -87,6 +89,7 @@ export function Compliance() {
           {items.length ? 'Refresh the calendar' : 'Build the calendar'}
         </button>
       </div>
+      {manage && <YourCa />}
       {!items.length ? (
         <div className="panel" style={{ padding: 24, textAlign: 'center' }}>
           <h3>Every filing the business owes, in one calendar</h3>
@@ -275,6 +278,7 @@ function ItemModal({ item, users, onClose, onSaved }: { item: Json; users: Json[
           <textarea rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
         </label>
         {['llp_form8', 'llp_form11'].includes(item.key) && <LlpWorking fy={Number(String(item.period).slice(0, 4))} form={item.key === 'llp_form8' ? 8 : 11} />}
+        <Conversation itemId={item.id} />
         <div className="wide">
           <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>
             Acknowledgement, challan and working papers
@@ -402,6 +406,24 @@ function SettingsModal({ users, onClose, onSaved }: { users: Json[]; onClose: ()
             <option value="no">Does not apply</option>
           </select>
         </label>
+        <div className="wide small" style={{ fontWeight: 700 }}>
+          Staff filings (payroll runs in your HRMS)
+        </div>
+        <label className="row small">
+          <input type="checkbox" checked={!!v.staffPf} onChange={(e) => setF({ ...v, staffPf: e.target.checked })} /> PF (ECR by the 15th)
+        </label>
+        <label className="row small">
+          <input type="checkbox" checked={!!v.staffEsi} onChange={(e) => setF({ ...v, staffEsi: e.target.checked })} /> ESI
+        </label>
+        <label className="row small">
+          <input type="checkbox" checked={!!v.staffPt} onChange={(e) => setF({ ...v, staffPt: e.target.checked })} /> Professional tax
+        </label>
+        <label className="row small">
+          <input type="checkbox" checked={!!v.salaryTds} onChange={(e) => setF({ ...v, salaryTds: e.target.checked })} /> TDS on salaries (24Q, Form 16)
+        </label>
+        <label className="row small wide">
+          <input type="checkbox" checked={!!v.payrollHere} onChange={(e) => setF({ ...v, payrollHere: e.target.checked })} /> Also run payroll in Synapse (shows the Payroll tab in Books)
+        </label>
         <label className="field">
           Usually filed by (your CA's login)
           <select value={v.defaultAssigneeId ?? ''} onChange={(e) => setF({ ...v, defaultAssigneeId: e.target.value })}>
@@ -499,6 +521,159 @@ function LlpWorking({ fy, form }: { fy: number; form: 8 | 11 }) {
           {!f8.balanceSheet.totals.balanced && <div style={{ color: 'var(--bad)' }}>⚠ The balance sheet does not balance yet: finish the accounts desk first.</div>}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The business's CA: invite them to their own portal, see who has access, remove it. */
+function YourCa() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ['books', 'accountants'], queryFn: () => get<Json[]>('/api/v1/books/accountants'), retry: false });
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState({ fullName: '', email: '', firm: '', assignFilings: true });
+  const [link, setLink] = useState<string | null>(null);
+  if (!data) return null;
+  const active = data.filter((a) => a.status !== 'disabled');
+  return (
+    <div className="panel" style={{ padding: '12px 16px' }}>
+      <div className="row" style={{ flexWrap: 'wrap', gap: 10 }}>
+        <b>Your CA</b>
+        {active.length ? (
+          active.map((a) => (
+            <span key={a.id} className="row small" style={{ gap: 6, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 999, padding: '3px 4px 3px 10px' }}>
+              {a.full_name}
+              {a.firm ? ` · ${a.firm}` : ''}
+              <span className={`pill ${a.status === 'active' ? 'good' : 'warn'}`}>{a.status === 'active' ? (a.last_login_at ? 'active' : 'joined') : 'invited'}</span>
+              <button
+                className="btn ghost sm"
+                title="Remove access"
+                onClick={async () => {
+                  if (!confirm(`Remove ${a.full_name}'s access to the portal?`)) return;
+                  await del(`/api/v1/books/accountants/${a.id}`).catch((e) => toast((e as Error).message, true));
+                  qc.invalidateQueries({ queryKey: ['books', 'accountants'] });
+                }}
+              >
+                ✕
+              </button>
+            </span>
+          ))
+        ) : (
+          <span className="small muted">Give your chartered accountant a portal of their own: every filing with its due date, statements, GST and TDS returns and the audit trail — nothing else of the business.</span>
+        )}
+        <span style={{ flex: 1 }} />
+        <button className="btn sm primary" onClick={() => { setLink(null); setOpen(true); }}>
+          {active.length ? '+ Another CA' : 'Invite your CA'}
+        </button>
+      </div>
+      {open && (
+        <Modal
+          title="Invite your CA to their portal"
+          onClose={() => setOpen(false)}
+          footer={
+            link ? (
+              <button className="btn primary" onClick={() => setOpen(false)}>
+                Done
+              </button>
+            ) : (
+              <button
+                className="btn primary"
+                disabled={!f.fullName || !f.email}
+                onClick={async () => {
+                  try {
+                    const r = await post<Json>('/api/v1/books/accountants', { ...f, firm: f.firm || null });
+                    qc.invalidateQueries({ queryKey: ['books', 'accountants'] });
+                    qc.invalidateQueries({ queryKey: ['books', 'compliance'] });
+                    if (r.inviteUrl && !r.emailed) setLink(r.inviteUrl);
+                    else {
+                      toast(r.invited ? `Invitation emailed to ${f.email}` : `${f.fullName} now has the CA portal`);
+                      setOpen(false);
+                    }
+                  } catch (e) {
+                    toast((e as Error).message, true);
+                  }
+                }}
+              >
+                Send the invitation
+              </button>
+            )
+          }
+        >
+          <div className="modal-body">
+            {link ? (
+              <div className="wide">
+                <p style={{ marginTop: 0 }}>Email is not set up here, so send your CA this link (valid for 7 days):</p>
+                <input readOnly value={link} onFocus={(e) => e.target.select()} />
+              </div>
+            ) : (
+              <>
+                <label className="field">
+                  Name
+                  <input value={f.fullName} onChange={(e) => setF({ ...f, fullName: e.target.value })} placeholder="CA Rakesh Gupta" />
+                </label>
+                <label className="field">
+                  Email
+                  <input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+                </label>
+                <label className="field">
+                  Firm
+                  <input value={f.firm} onChange={(e) => setF({ ...f, firm: e.target.value })} placeholder="Gupta & Associates" />
+                </label>
+                <label className="row small" style={{ alignSelf: 'end' }}>
+                  <input type="checkbox" checked={f.assignFilings} onChange={(e) => setF({ ...f, assignFilings: e.target.checked })} /> Make them responsible for the open filings
+                </label>
+                <p className="small muted wide" style={{ margin: 0 }}>
+                  They sign in with their own password (and two-factor if your workspace requires it) and see only the CA portal. Every change they make is in the audit trail under their name.
+                </p>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/** The conversation between the business and its CA on one filing. */
+function Conversation({ itemId }: { itemId: string }) {
+  const toast = useToast();
+  const { data, refetch } = useQuery({ queryKey: ['books', 'compliance-comments', itemId], queryFn: () => get<Json[]>(`/api/v1/books/compliance/items/${itemId}/comments`) });
+  const [body, setBody] = useState('');
+  return (
+    <div className="wide">
+      <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>
+        Conversation
+      </div>
+      <div className="stack" style={{ gap: 6, maxHeight: 220, overflow: 'auto', marginBottom: 6 }}>
+        {(data ?? []).map((m) => (
+          <div key={m.id} style={{ alignSelf: m.from_ca ? 'flex-start' : 'flex-end', maxWidth: '80%', background: m.from_ca ? 'var(--surface-2)' : 'var(--brand-50)', border: '1px solid var(--line)', borderRadius: 10, padding: '6px 10px' }}>
+            <div className="small" style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>
+            <div className="small muted" style={{ fontSize: 11 }}>
+              {m.author}
+              {m.from_ca ? ' (CA)' : ''} · {new Date(m.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}
+            </div>
+          </div>
+        ))}
+        {!data?.length && <span className="small muted">No messages yet. Ask for a document, share a query or note what was filed.</span>}
+      </div>
+      <div className="row">
+        <input value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write a message…" onKeyDown={(e) => e.key === 'Enter' && body.trim() && (e.currentTarget.nextElementSibling as HTMLButtonElement)?.click()} />
+        <button
+          className="btn sm"
+          disabled={!body.trim()}
+          onClick={async () => {
+            try {
+              await post(`/api/v1/books/compliance/items/${itemId}/comments`, { body: body.trim() });
+              setBody('');
+              refetch();
+            } catch (e) {
+              toast((e as Error).message, true);
+            }
+          }}
+        >
+          Send
+        </button>
+      </div>
     </div>
   );
 }

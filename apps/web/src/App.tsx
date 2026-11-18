@@ -18,6 +18,7 @@ const RecordDetailPage = page(() => import('./pages/RecordDetail'), 'RecordDetai
 const RecordListPage = page(() => import('./pages/RecordList'), 'RecordListPage');
 const SettingsPage = page(() => import('./pages/Settings'), 'SettingsPage');
 const OrganisationPage = page(() => import('./pages/Organisation'), 'OrganisationPage');
+const CaPortalPage = page(() => import('./pages/CaPortal'), 'CaPortalPage');
 const TasksPage = page(() => import('./pages/Tasks'), 'TasksPage');
 const CalendarPage = page(() => import('./pages/Calendar'), 'CalendarPage');
 const DashboardsPage = page(() => import('./pages/Dashboards'), 'DashboardsPage');
@@ -154,6 +155,7 @@ export function App() {
         <Route path="intake/:section" element={<IntakePage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="organisation" element={<OrganisationPage />} />
+        <Route path="ca" element={<CaPortalPage />} />
         <Route path="inbox" element={<InboxPage />} />
         <Route path="health" element={<HealthPage />} />
         <Route path="copilot" element={<CopilotPage />} />

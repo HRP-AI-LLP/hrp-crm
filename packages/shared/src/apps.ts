@@ -136,6 +136,12 @@ export const APPS: Record<string, AppDefinition> = {
         description: 'Books, bills, expenses, banking, journals and financial reports',
         permissions: { objects: { '*': readOnly, invoice: { ...all, delete: 'all' }, payment: all, bill: { ...all, delete: 'all' }, vendor_payment: all, expense: all, vendor: all, account: all, lead: none, deal: readOnly }, admin: ['billing', 'books'] },
       },
+      {
+        key: 'chartered_accountant',
+        name: 'Chartered accountant (CA)',
+        description: 'Your CA: the compliance calendar and filings, financial statements, GST and TDS returns and the audit trail; read-only access to invoices, bills and payments',
+        permissions: { objects: { '*': none, invoice: readOnly, payment: readOnly, bill: readOnly, vendor_payment: readOnly, expense: readOnly, vendor: readOnly, account: readOnly }, admin: ['compliance'] },
+      },
     ],
   },
   manufacturing: {

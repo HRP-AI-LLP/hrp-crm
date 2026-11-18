@@ -58,7 +58,7 @@ describe('the arithmetic', () => {
     expect(lateInterest(10000, '2026-05-10', '2026-06-20', '2026-05')).toBe(300);
   });
   it('an LLP calendar', () => {
-    const list = dueList({ fyStart: 2026, constitution: 'llp', gst: true, tds: true, pf: true, esi: false, pt: false, payroll: true, partners: [{ id: 'p1', name: 'Prashant' }], turnover: 30_00_000, settings: { gstReturns: 'monthly', audit: 'auto', taxAudit: 'auto' } });
+    const list = dueList({ fyStart: 2026, constitution: 'llp', gst: true, tds: true, pf: true, esi: false, pt: false, payroll: true, partners: [{ id: 'p1', name: 'Prashant' }], turnover: 30_00_000, settings: { gstReturns: 'monthly', audit: 'auto', taxAudit: 'auto', staffPf: false, staffEsi: false, staffPt: false, salaryTds: false, payrollHere: false } });
     const by = (k: string) => list.filter((x) => x.key === k);
     expect(by('llp_form11')[0]!.due).toBe('2027-05-30');
     expect(by('llp_form8')[0]!.due).toBe('2027-10-30');
@@ -69,7 +69,7 @@ describe('the arithmetic', () => {
     expect(by('tds_26q').map((x) => x.due)).toEqual(['2026-07-31', '2026-10-31', '2027-01-31', '2027-05-31']);
     expect(by('dir3kyc:p1')[0]!.due).toBe('2027-09-30');
     expect(by('pf_ecr')).toHaveLength(12);
-    const big = dueList({ fyStart: 2026, constitution: 'llp', gst: false, tds: false, pf: false, esi: false, pt: false, payroll: false, partners: [], turnover: 1_50_00_000, settings: { gstReturns: 'monthly', audit: 'auto', taxAudit: 'auto' } });
+    const big = dueList({ fyStart: 2026, constitution: 'llp', gst: false, tds: false, pf: false, esi: false, pt: false, payroll: false, partners: [], turnover: 1_50_00_000, settings: { gstReturns: 'monthly', audit: 'auto', taxAudit: 'auto', staffPf: false, staffEsi: false, staffPt: false, salaryTds: false, payrollHere: false } });
     expect(big.find((x) => x.key === 'llp_audit')).toBeTruthy();
     expect(big.find((x) => x.key === 'tax_audit')!.due).toBe('2027-09-30');
     expect(big.find((x) => x.key === 'itr')!.due).toBe('2027-10-31');
@@ -138,5 +138,55 @@ describe('in the workspace', () => {
     expect(kinds.has('compliance_item')).toBe(true);
     const csv = await api('GET', '/api/v1/books/audit-trail?format=csv&object=employee');
     expect(csv.text).toContain('Senior Engineer');
+  });
+});
+
+describe('the CA portal', () => {
+  let caApi: ReturnType<typeof h.as>;
+  let itemId = '';
+  it('invites the CA, who gets only the compliance side', async () => {
+    const r = await api('POST', '/api/v1/books/accountants', { email: 'ca@firm.test', fullName: 'CA Rakesh Gupta', firm: 'Gupta & Co', assignFilings: true });
+    expect(r.status, JSON.stringify(r.json)).toBe(201);
+    expect(r.json).toMatchObject({ invited: true });
+    expect(r.json.inviteUrl).toMatch(/accept-invite/);
+    const token = new URL(r.json.inviteUrl).searchParams.get('token');
+    const acc = await h.call('POST', '/api/auth/invite/accept', { tenant: 'acme', body: { token, password: 'Str0ng-Passw0rd!', fullName: 'CA Rakesh Gupta' } });
+    expect(acc.status, JSON.stringify(acc.json)).toBeLessThan(300);
+    caApi = h.as('acme', (await h.login('acme', 'ca@firm.test')).token);
+    expect(((await api('GET', '/api/v1/books/accountants')).json as any[])[0]).toMatchObject({ email: 'ca@firm.test', status: 'active' });
+  });
+  it('the CA sees the filings, statements, TDS and audit trail', async () => {
+    const items = (await caApi('GET', '/api/v1/books/compliance?from=2026-04-01&to=2027-12-31')).json as any[];
+    expect(items.length).toBeGreaterThan(10);
+    expect(items.every((i) => i.status !== 'pending' || i.assignee === 'CA Rakesh Gupta')).toBe(true);
+    itemId = items.find((i) => i.key === 'llp_form8').id;
+    expect((await caApi('GET', '/api/v1/books/reports/profit-and-loss?from=2026-04-01&to=2027-03-31')).status).toBe(200);
+    expect((await caApi('GET', '/api/v1/books/tds/return?fy=2026&q=3&form=24Q')).status).toBe(200);
+    expect((await caApi('GET', '/api/v1/books/audit-trail')).status).toBe(200);
+    expect((await caApi('GET', '/api/v1/books/compliance/llp-working?fy=2026')).status).toBe(200);
+    expect((await caApi('GET', `/api/v1/files?object=compliance_item&id=${itemId}`)).status).toBe(200);
+  });
+  it('but not the CRM, payroll, settings or the CA list', async () => {
+    expect((await caApi('GET', '/api/v1/records/lead')).status).toBe(403);
+    expect((await caApi('GET', '/api/v1/books/payroll')).status).toBe(403);
+    expect((await caApi('PUT', '/api/v1/books/compliance/settings', { gstReturns: 'none' })).status).toBe(403);
+    expect((await caApi('GET', '/api/v1/books/accountants')).status).toBe(403);
+    expect((await caApi('GET', '/api/v1/books/bank-accounts')).status).toBe(403);
+  });
+  it('they talk on a filing, and the business is told when the CA files', async () => {
+    expect((await api('POST', `/api/v1/books/compliance/items/${itemId}/comments`, { body: 'Please file Form 8 this week.' })).status).toBe(201);
+    expect((await caApi('POST', `/api/v1/books/compliance/items/${itemId}/comments`, { body: 'Need the bank statement for March.' })).status).toBe(201);
+    const thread = (await caApi('GET', `/api/v1/books/compliance/items/${itemId}/comments`)).json as any[];
+    expect(thread.map((t) => t.from_ca)).toEqual([false, true]);
+    expect((await caApi('PATCH', `/api/v1/books/compliance/items/${itemId}`, { status: 'filed', reference: 'SRN F98765432' })).status).toBe(200);
+    const notes = (await api('GET', '/api/v1/notifications')).json;
+    const titles = JSON.stringify(notes);
+    expect(titles).toMatch(/Filed by your CA/);
+    expect(titles).toMatch(/CA Rakesh Gupta wrote/);
+  });
+  it('removing the CA switches the login off', async () => {
+    const list = (await api('GET', '/api/v1/books/accountants')).json as any[];
+    const r = await api('DELETE', `/api/v1/books/accountants/${list[0].id}`);
+    expect(r.json).toMatchObject({ disabled: true });
   });
 });

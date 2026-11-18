@@ -102,7 +102,7 @@ const BOOKS_OWNED: Record<string, string> = { compliance_item: 'compliance_items
 async function assertRecordAccess(ctx: RecordCtx, objectKey: string, recordId: string, action: 'read' | 'update') {
   const table = BOOKS_OWNED[objectKey];
   if (table) {
-    if (!hasAdmin(ctx.principal.permissions, 'books')) throw forbidden();
+    if (!hasAdmin(ctx.principal.permissions, 'books') && !(objectKey === 'compliance_item' && hasAdmin(ctx.principal.permissions, 'compliance'))) throw forbidden();
     if (!(await ctx.tx.one(`select 1 from ${table} where tenant_id = $1 and id = $2`, [ctx.tenantId, recordId]))) throw notFound();
     return;
   }

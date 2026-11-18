@@ -187,9 +187,15 @@ export function Shell() {
   const custom = objects.filter((o) => !std.includes(o.key) && !opsKeys.includes(o.key) && !o.moduleKey?.startsWith('app.'));
   const apps = new Set((meta?.modules ?? []).filter((m) => m.enabled && m.key.startsWith('app.')).map((m) => m.key.slice(4)));
   const opsObjects = opsKeys.map((k) => objects.find((o) => o.key === k)).filter((o): o is NonNullable<typeof o> => !!o);
-  const approvals = useApprovalCount(!!me);
-  const inbox = useQuery({ queryKey: ['inbox-badge'], queryFn: () => get<{ counts: { unread: number } }>('/api/v1/inbox?view=mine&status=open'), enabled: !!me, refetchInterval: 60_000, staleTime: 30_000 });
-  const copilot = useQuery({ queryKey: ['copilot'], queryFn: () => get<{ insights: unknown[] }>('/api/v1/intel/copilot'), enabled: !!me, refetchInterval: 300_000, staleTime: 120_000 });
+  // the business's CA sees their portal and nothing of the CRM
+  const caOnly = !!me && hasAdmin(me.permissions, 'compliance') && !hasAdmin(me.permissions, 'books') && !me.user.isOwner;
+  const navTo = useNavigate();
+  useEffect(() => {
+    if (caOnly && loc.pathname === '/') navTo('/ca', { replace: true });
+  }, [caOnly, loc.pathname]);
+  const approvals = useApprovalCount(!!me && !caOnly);
+  const inbox = useQuery({ queryKey: ['inbox-badge'], queryFn: () => get<{ counts: { unread: number } }>('/api/v1/inbox?view=mine&status=open'), enabled: !!me && !caOnly, refetchInterval: 60_000, staleTime: 30_000 });
+  const copilot = useQuery({ queryKey: ['copilot'], queryFn: () => get<{ insights: unknown[] }>('/api/v1/intel/copilot'), enabled: !!me && !caOnly, refetchInterval: 300_000, staleTime: 120_000 });
   const online = useOnline();
   // people an admin named to manage the organisation profile reach it without the rest of Settings
   const orgQ = useQuery({ queryKey: ['organisation'], queryFn: () => get<Record<string, any>>('/api/v1/organisation'), enabled: !!me, staleTime: 300_000, retry: false });
@@ -305,10 +311,25 @@ export function Shell() {
       ],
     },
   ].filter((g) => g.items.length);
+  if (caOnly)
+    groups.splice(0, groups.length,
+      { key: 'top', label: null, items: [{ to: '/ca', label: 'Filings', icon: 'stamp', end: false } as Item] },
+      {
+        key: 'ca',
+        label: 'Records',
+        items: [
+          { to: '/o/invoice', label: 'Invoices', icon: 'file' },
+          { to: '/o/payment', label: 'Receipts', icon: 'rupee' },
+          { to: '/o/bill', label: 'Bills', icon: 'receipt' },
+          { to: '/o/vendor_payment', label: 'Vendor payments', icon: 'wallet' },
+          { to: '/o/expense', label: 'Expenses', icon: 'card' },
+        ],
+      },
+    );
   const commands: Command[] = [
     ...groups.flatMap((g) => g.items.map((i) => ({ id: `go:${i.to}`, label: i.label, group: 'Go to' as const, icon: i.icon, to: i.to, hint: g.label ?? undefined }))),
     ...objects
-      .filter((o) => [...std, ...opsKeys].includes(o.key))
+      .filter((o) => !caOnly && [...std, ...opsKeys].includes(o.key))
       .map((o) => ({ id: `new:${o.key}`, label: `New ${o.label.toLowerCase()}`, group: 'Create' as const, icon: 'plus', to: `/o/${o.key}?new=1`, keywords: `add create ${o.label}` })),
     { id: 'act:theme', label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme', group: 'Actions', icon: theme === 'dark' ? 'sun' : 'moon', run: () => setTheme(theme === 'dark' ? 'light' : 'dark'), keywords: 'dark mode night appearance' },
     { id: 'act:account', label: 'My account and security', group: 'Actions', icon: 'user', to: '/account' },

@@ -57,6 +57,9 @@ export function BooksPage() {
   const apps = useApps();
   const metaReady = useMetaReady();
   const loc = useLocation();
+  // payroll lives in the business's own HRMS unless it chose to run it here
+  const compSettings = useQuery({ queryKey: ['books', 'compliance-settings'], queryFn: () => get<Json>('/api/v1/books/compliance/settings'), retry: false, staleTime: 300_000 });
+  const tabs = TABS.filter(([k]) => k !== 'payroll' || compSettings.data?.payrollHere);
   const [tab, setTab] = useState<Tab>(() => {
     // "#gst:2026-06" opens GST & TDS on that month
     const [h, arg] = window.location.hash.slice(1).split(':');
@@ -109,7 +112,7 @@ export function BooksPage() {
       </div>
       <section className="panel">
         <div className="tabs" role="tablist">
-          {TABS.map(([k, l]) => (
+          {tabs.map(([k, l]) => (
             <button key={k} role="tab" aria-selected={tab === k} onClick={() => go(k)}>
               {l}
             </button>
@@ -1701,7 +1704,7 @@ const REPORTS: [string, string, 'range' | 'asof' | 'month' | 'account' | 'custom
   ['expenses-by-category', 'Expenses by category', 'range'],
 ];
 
-function Reports() {
+export function Reports() {
   const [r, setR] = useState('profit-and-loss');
   const [p, setP] = useState({ from: fyStart(), to: today(), accountId: '', partyId: '', compare: false });
   const kind = REPORTS.find((x) => x[0] === r)![2];

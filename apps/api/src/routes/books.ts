@@ -37,6 +37,9 @@ import * as docs from '../services/books/doc-import';
 import { attachSourceFiles, keepSourceFiles } from '../services/books/import-files';
 import * as dunning from '../services/books/dunning';
 import * as compliance from '../services/books/compliance';
+import * as ca from '../services/books/ca';
+import { createUserToken } from './auth';
+import { sendInvite } from './security';
 import * as payroll from '../services/books/payroll';
 import * as tdsr from '../services/books/tds-returns';
 import * as feeds from '../services/books/feeds';
@@ -65,6 +68,12 @@ function rctx(c: { var: AppEnv['Variables'] }, tx: RecordCtx['tx']): RecordCtx {
 }
 function requireBooks(c: { var: AppEnv['Variables'] }) {
   if (!enabledApps(c.var.meta).has('books')) throw notFound('Books is switched off for the workspace');
+}
+/** The books' people, or the business's CA (compliance permission). */
+function requireCompliance(c: { var: AppEnv['Variables'] }) {
+  requireBooks(c);
+  const p = c.var.principal.permissions;
+  if (!hasAdmin(p, 'books') && !hasAdmin(p, 'compliance')) throw forbidden('Requires the books or the compliance permission');
 }
 function requireAdmin(c: { var: AppEnv['Variables'] }) {
   requireBooks(c);
@@ -272,7 +281,7 @@ export const booksRoutes = new Hono<AppEnv>()
 
   /* ───── chart of accounts ───── */
   .get('/books/accounts', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     return c.json(await c.var.db.tx(scope(c), (tx) => setup.listAccounts(rctx(c, tx), { includeInactive: c.req.query('all') === '1' })));
   })
   .post('/books/accounts', async (c) => {
@@ -294,7 +303,7 @@ export const booksRoutes = new Hono<AppEnv>()
 
   /* ───── journals and opening balances ───── */
   .get('/books/journals', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const r = await c.var.db.tx(scope(c, true), (tx) =>
       setup.listJournals(rctx(c, tx), { from: q(c, 'from'), to: q(c, 'to'), sourceType: q(c, 'source'), status: q(c, 'status'), search: q(c, 'q'), limit: Math.max(1, Math.min(500, Math.trunc(Number(c.req.query('limit') ?? 100)) || 100)), offset: Math.max(0, Math.min(100_000, Math.trunc(Number(c.req.query('offset') ?? 0)) || 0)) }),
     );
@@ -479,18 +488,18 @@ export const booksRoutes = new Hono<AppEnv>()
   })
   // ───── statutory compliance calendar ─────
   .get('/books/compliance', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const from = c.req.query('from') ?? null;
     const to = c.req.query('to') ?? null;
     return c.json(await c.var.db.tx(scope(c, true), (tx) => compliance.listItems(rctx(c, tx), { from, to })));
   })
   .post('/books/compliance/generate', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const b = z.object({ fy: z.number().int().min(2015).max(2100).optional() }).parse(await c.req.json().catch(() => ({})));
     return c.json(await c.var.db.tx(scope(c), (tx) => compliance.generateYear(rctx(c, tx), b.fy)));
   })
   .get('/books/compliance/settings', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     return c.json(await c.var.db.tx(scope(c, true), (tx) => compliance.complianceSettings(rctx(c, tx))));
   })
   .put('/books/compliance/settings', async (c) => {
@@ -499,7 +508,7 @@ export const booksRoutes = new Hono<AppEnv>()
     return c.json(await c.var.db.tx(scope(c), (tx) => compliance.saveComplianceSettings(rctx(c, tx), b)));
   })
   .post('/books/compliance/mark-past-filed', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const b = z.object({ before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(await c.req.json());
     const r = await c.var.db.tx(scope(c), (tx) =>
       tx.query(`update compliance_items set status = 'filed', notes = coalesce(notes, 'Filed before Synapse kept the calendar'), updated_at = now() where tenant_id = $1 and status in ('pending','in_progress') and due_date < $2::date returning id`, [c.var.tenant.id, b.before]),
@@ -507,19 +516,54 @@ export const booksRoutes = new Hono<AppEnv>()
     return c.json({ updated: r.length });
   })
   .get('/books/compliance/llp-working', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const fy = z.coerce.number().int().min(2015).max(2100).parse(c.req.query('fy'));
     return c.json(await c.var.db.tx(scope(c, true), (tx) => compliance.llpWorking(rctx(c, tx), fy)));
   })
-  .post('/books/compliance/items', async (c) => {
+  .get('/books/compliance/items/:id/comments', async (c) => {
+    requireCompliance(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => ca.comments(rctx(c, tx), qUuid(c))));
+  })
+  .post('/books/compliance/items/:id/comments', async (c) => {
+    requireCompliance(c);
+    const b = z.object({ body: z.string().trim().min(1).max(4000) }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => ca.addComment(rctx(c, tx), qUuid(c), b.body)), 201);
+  })
+  // the business's CA: invite, list, remove
+  .get('/books/accountants', async (c) => {
     requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => ca.listAccountants(rctx(c, tx))));
+  })
+  .post('/books/accountants', async (c) => {
+    requireAdmin(c);
+    const b = ca.inviteSchema.parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), async (tx) => {
+      const out = await ca.addAccountant(rctx(c, tx), b);
+      const token = out.invited ? await createUserToken(tx, c.var.tenant.id, out.id, 'invite', 7 * 86_400) : null;
+      return { ...out, token };
+    });
+    const sent = r.token ? await sendInvite(c, { email: b.email, full_name: b.fullName }, r.token) : null;
+    return c.json({ id: r.id, invited: r.invited, inviteUrl: sent?.url ?? null, emailed: sent?.emailed ?? false }, 201);
+  })
+  .delete('/books/accountants/:id', async (c) => {
+    requireAdmin(c);
+    return c.json(await c.var.db.tx(scope(c), (tx) => ca.removeAccountant(rctx(c, tx), qUuid(c))));
+  })
+  .post('/books/compliance/items', async (c) => {
+    requireCompliance(c);
     const b = compliance.customItemSchema.parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => compliance.addItem(rctx(c, tx), b)), 201);
   })
   .patch('/books/compliance/items/:id', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const b = compliance.itemUpdateSchema.parse(await c.req.json());
-    return c.json(await c.var.db.tx(scope(c), (tx) => compliance.updateItem(rctx(c, tx), qUuid(c), b)));
+    return c.json(
+      await c.var.db.tx(scope(c), async (tx) => {
+        const r = await compliance.updateItem(rctx(c, tx), qUuid(c), b);
+        await ca.afterItemUpdate(rctx(c, tx), qUuid(c), b.status);
+        return r;
+      }),
+    );
   })
   .delete('/books/compliance/items/:id', async (c) => {
     requireAdmin(c);
@@ -577,20 +621,20 @@ export const booksRoutes = new Hono<AppEnv>()
   })
   // ───── TDS deposits and returns ─────
   .get('/books/tds/challans', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     return c.json(await c.var.db.tx(scope(c, true), (tx) => tdsr.listChallans(rctx(c, tx), c.req.query('from'), c.req.query('to'))));
   })
   .post('/books/tds/challans', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const b = tdsr.challanSchema.parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => tdsr.saveChallan(rctx(c, tx), b)), 201);
   })
   .delete('/books/tds/challans/:id', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     return c.json(await c.var.db.tx(scope(c), (tx) => tdsr.deleteChallan(rctx(c, tx), qUuid(c))));
   })
   .get('/books/tds/return', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const q = z.object({ fy: z.coerce.number().int().min(2015).max(2100), q: z.coerce.number().int().min(1).max(4), form: z.enum(['26Q', '24Q']).default('26Q'), format: z.enum(['json', 'csv']).default('json') }).parse(c.req.query());
     const r = await c.var.db.tx(scope(c, true), (tx) => tdsr.quarterReturn(rctx(c, tx), q.fy, q.q as 1 | 2 | 3 | 4, q.form));
     if (q.format === 'csv') {
@@ -601,13 +645,13 @@ export const booksRoutes = new Hono<AppEnv>()
     return c.json(r);
   })
   .get('/books/tds/form16a', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const q = z.object({ fy: z.coerce.number().int(), q: z.coerce.number().int().min(1).max(4) }).parse(c.req.query());
     return c.json(await c.var.db.tx(scope(c, true), (tx) => tdsr.form16aRegister(rctx(c, tx), q.fy, q.q as 1 | 2 | 3 | 4)));
   })
   // ───── the books' audit trail (every change to documents, lines, entries and bank lines) ─────
   .get('/books/audit-trail', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const q = z
       .object({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), object: z.string().max(40).optional(), action: z.enum(['create', 'update', 'delete']).optional(), format: z.enum(['json', 'csv']).default('json'), limit: z.coerce.number().int().min(1).max(5000).default(300) })
       .parse(c.req.query());
@@ -648,7 +692,7 @@ export const booksRoutes = new Hono<AppEnv>()
     return c.json(await c.var.db.tx(scope(c), (tx) => dunning.remindNow(rctx(c, tx), c.env, qUuid(c))));
   })
   .get('/books/reports/:report', async (c) => {
-    requireAdmin(c);
+    requireCompliance(c);
     const report = c.req.param('report');
     const from = qDate(c, 'from', fyFrom());
     const to = qDate(c, 'to', today());

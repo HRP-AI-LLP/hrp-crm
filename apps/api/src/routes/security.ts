@@ -20,7 +20,7 @@ const uuid = z.string().uuid();
 const RULE_OPS = ['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'starts_with', 'in', 'is_null', 'not_null'] as const;
 const criteriaSchema = z.array(z.object({ field: z.string().regex(KEY_PATTERN), op: z.enum(RULE_OPS), value: z.unknown().optional() })).max(10);
 
-async function sendInvite(c: { env: AppEnv['Bindings']; req: { url: string }; var: AppEnv['Variables'] }, user: { email: string; full_name: string }, token: string) {
+export async function sendInvite(c: { env: AppEnv['Bindings']; req: { url: string }; var: AppEnv['Variables'] }, user: { email: string; full_name: string }, token: string) {
   const url = `${appOrigin(c.env, c.req.url)}/accept-invite?workspace=${c.var.tenant.slug}&token=${token}`;
   const mail = actionEmail({
     heading: `Join ${c.var.tenant.name} on HRP Synapse`,

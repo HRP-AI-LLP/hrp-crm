@@ -8,7 +8,8 @@
 import { z } from 'zod';
 import { badRequest, notFound } from '../../lib/errors';
 import type { RecordCtx } from '../records';
-import { assertBooksAdmin, postJournal, r2, sys, voidSource } from './ledger';
+import { postJournal, r2, sys, voidSource } from './ledger';
+import { assertComplianceAccess } from './ca';
 
 export const challanSchema = z.object({
   nature: z.enum(['non_salary', 'salary']).default('non_salary'),
@@ -26,7 +27,7 @@ export const challanSchema = z.object({
 });
 
 export async function listChallans(ctx: RecordCtx, from?: string, to?: string) {
-  await assertBooksAdmin(ctx);
+  assertComplianceAccess(ctx);
   return ctx.tx.query(
     `select c.id, c.nature, c.section, c.period, to_char(c.deposited_on, 'YYYY-MM-DD') as deposited_on, c.tax::float8 as tax, c.interest::float8 as interest, c.late_fee::float8 as late_fee,
             c.bsr_code, c.challan_no, c.cin, c.bank_account_id, c.journal_id, c.notes
@@ -36,7 +37,7 @@ export async function listChallans(ctx: RecordCtx, from?: string, to?: string) {
 }
 
 export async function saveChallan(ctx: RecordCtx, input: z.infer<typeof challanSchema>) {
-  await assertBooksAdmin(ctx);
+  assertComplianceAccess(ctx);
   if (input.tax + input.interest + input.lateFee <= 0) throw badRequest('Enter the amount deposited');
   const r = await ctx.tx.one<{ id: string }>(
     `insert into tds_challans (tenant_id, nature, section, period, deposited_on, tax, interest, late_fee, bsr_code, challan_no, cin, bank_account_id, notes)
@@ -66,7 +67,7 @@ export async function saveChallan(ctx: RecordCtx, input: z.infer<typeof challanS
 }
 
 export async function deleteChallan(ctx: RecordCtx, id: string) {
-  await assertBooksAdmin(ctx);
+  assertComplianceAccess(ctx);
   const c = await ctx.tx.one<{ journal_id: string | null }>(`select journal_id from tds_challans where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
   if (!c) throw notFound();
   if (c.journal_id) await voidSource(ctx.tx, ctx.tenantId, 'tds_challan', id, 'Challan removed');
@@ -97,7 +98,7 @@ export function lateInterest(amount: number, deductedOn: string, depositedOn: st
 }
 
 export async function quarterReturn(ctx: RecordCtx, fy: number, q: 1 | 2 | 3 | 4, form: '26Q' | '24Q') {
-  await assertBooksAdmin(ctx);
+  assertComplianceAccess(ctx);
   const months = quarterMonths(fy, q);
   const from = `${months[0]}-01`;
   const [ly, lm] = months[2]!.split('-').map(Number) as [number, number];
