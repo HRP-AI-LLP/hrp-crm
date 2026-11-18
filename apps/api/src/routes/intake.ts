@@ -9,6 +9,7 @@ import { notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enqueue, eventJobs } from '../services/jobs';
 import * as gem from '../services/intake/gem';
+import { fetchBidFromGem } from '../services/intake/gem-fetch';
 import * as ik from '../services/intake/intake';
 import type { RecordCtx, RecordEvent } from '../services/records';
 import { safeCtx } from './public';
@@ -87,6 +88,14 @@ export const intakeRoutes = new Hono<AppEnv>()
     const b = z.object({ name: z.string().trim().max(200).default('bid.pdf'), data: z.string().max(20_000_000).nullish(), pages }).parse(await c.req.json());
     const bytes = b.data ? Uint8Array.from(atob(b.data), (ch) => ch.charCodeAt(0)) : null;
     return c.json(await c.var.db.tx(scope(c), (tx) => gem.attachBidDocument(rctx(c, tx), c.env, id(c), { name: b.name, bytes, pages: b.pages })));
+  })
+  .post('/intake/gem/:id/fetch', async (c) => {
+    const bid = id(c);
+    await c.var.db.tx(scope(c, true), async (tx) => {
+      gem.assertGem(rctx(c, tx), true);
+      if (!(await tx.one(`select 1 from gem_bids where tenant_id = $1 and id = $2`, [c.var.tenant.id, bid]))) throw notFound('Bid not found');
+    });
+    return c.json(await fetchBidFromGem(c.env, c.var.db, c.var.tenant.id, bid, { review: false }));
   })
   .get('/intake/gem/:id/pack', async (c) => {
     const r = await c.var.db.tx(scope(c, true), (tx) => gem.bidPack(rctx(c, tx), c.env, id(c)));

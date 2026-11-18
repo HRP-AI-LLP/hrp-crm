@@ -4,8 +4,8 @@
  * documents put together in one PDF.
  */
 import net from 'node:net';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { PDFDocument, PDFName, PDFString, StandardFonts } from 'pdf-lib';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { parseMail } from '../src/lib/mime';
 import { classify, parseBidDocument, parseCorrigendum, parseNewBids } from '../src/services/intake/parse';
 import { fakeR2, makeHarness } from './harness';
@@ -317,5 +317,100 @@ ePBG Percentage(%) 5.00`;
     expect(deal.status, JSON.stringify(deal.json)).toBe(201);
     expect((await api('GET', `/api/v1/records/deal/${deal.json.dealId}`)).json.name).toMatch(/^GEM\/2026\/B\/8301001/);
     expect(((await api('GET', '/api/v1/intake/gem')).json as any[]).find((b) => b.id === ids.bid).status).toBe('preparing');
+  });
+});
+
+describe('a followed bid read from GeM', () => {
+  const SCOPE = 'https://bidplus.gem.gov.in/resources/upload_nas/NovQ426/bidding/biddoc/bid-10118747/1793699147.pdf';
+  const ATC = 'https://fulfilment.gem.gov.in/contract/slafds?fileDownloadPath=SLA_UPLOAD_PATH/2026/Nov/GEM_2026_B_8301002/CLM0010/ATC_abc_GEM905445.docx';
+  const GTC = 'https://admin.gem.gov.in/apis/v1/gtc/pdfByDate/?date=20261103';
+
+  async function bidPdf() {
+    const d = await PDFDocument.create();
+    const p = d.addPage([595, 842]);
+    const f = await d.embedFont(StandardFonts.Helvetica);
+    const rows: [string, string][] = [
+      ['Bid Number: GEM/2026/B/8301002', ''],
+      ['Dated: 17-11-2026', ''],
+      ['Bid End Date/Time', '01-12-2026 18:00:00'],
+      ['Ministry/State Name', 'Ministry Of Finance'],
+      ['Department Name', 'Department Of Financial Services'],
+      ['Organisation Name', 'Canara Bank'],
+      ['Office Name', 'Department Of Information Technology'],
+      ['Item Category', 'Software Development Service - AI chatbot'],
+      ['Contract Period', '3 Month(s)'],
+      ['MSE Relaxation for Years Of Experience', 'Yes | Complete'],
+      ['', 'Experience Criteria,Bidder Turnover'],
+      ['Document required from seller', '*In case any bidder is seeking exemption'],
+      ['Type of Bid', 'Two Packet Bid'],
+      ['EMD Amount', '160000'],
+      ['ePBG Percentage(%)', '5.00'],
+      ['Buyer Email id: buyer@canarabank.com', ''],
+      ['Scope of Work:1793699147.pdf', ''],
+    ];
+    rows.forEach(([a, b], i) => {
+      if (a) p.drawText(a, { x: 40, y: 800 - i * 20, size: 10, font: f });
+      if (b) p.drawText(b, { x: 300, y: 800 - i * 20, size: 10, font: f });
+    });
+    const links = [SCOPE, ATC, GTC].map((u, i) =>
+      d.context.register(d.context.obj({ Type: 'Annot', Subtype: 'Link', Rect: [40, 400 - i * 20, 200, 415 - i * 20], Border: [0, 0, 0], A: { Type: 'Action', S: 'URI', URI: PDFString.of(u) } })),
+    );
+    p.node.set(PDFName.of('Annots'), d.context.obj(links));
+    return d.save();
+  }
+
+  it('finds the bid, keeps its document and the buyer files, and fills in the details', async () => {
+    const doc = await bidPdf();
+    const scope = await pdfWith(['Scope of work']);
+    const calls: string[] = [];
+    const real = globalThis.fetch;
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input: any, init?: any) => {
+      const url = String(input instanceof Request ? input.url : input);
+      if (!/gem\.gov\.in/.test(url)) return real(input, init);
+      calls.push(url);
+      if (url.endsWith('/all-bids')) return new Response(`<script>var x = {'csrf_bd_gem_nk': '4afcc6aa67bbdd8602376eef4e11b396'};</script>`, { headers: { 'set-cookie': 'ci_session=abc; path=/', 'content-type': 'text/html' } });
+      if (url.endsWith('/all-bids-data')) {
+        const body = new URLSearchParams(String(init.body));
+        expect(body.get('csrf_bd_gem_nk')).toBe('4afcc6aa67bbdd8602376eef4e11b396');
+        expect(init.headers.cookie).toBe('ci_session=abc');
+        const want = JSON.parse(body.get('payload')!).param.searchBid;
+        const docs = want === 'GEM/2026/B/8301002'
+          ? [{ id: '10118747', b_id: [10118747], b_bid_number: ['GEM/2026/B/8301002'], b_category_name: ['Software Development Service - AI chatbot'], b_total_quantity: [1], b_bid_type: [1], final_start_date_sort: ['2026-11-17T11:30:00Z'], final_end_date_sort: ['2026-12-01T18:00:00Z'], ba_official_details_minName: ['Ministry of Finance'], ba_official_details_deptName: ['Department of Financial Services'] }]
+          : [];
+        return Response.json({ status: 1, code: 200, response: { response: { numFound: docs.length, start: 0, docs } } });
+      }
+      if (url.endsWith('/showbidDocument/10118747')) return new Response(doc, { headers: { 'content-type': 'application/pdf', 'content-disposition': 'attachment; filename="GeM-Bidding-10118747.pdf"' } });
+      if (url === SCOPE) return new Response(scope, { headers: { 'content-type': 'application/pdf' } });
+      if (url === ATC) return new Response(new Uint8Array([0x50, 0x4b, 3, 4, ...new TextEncoder().encode('word/document.xml fake docx body')]), { headers: { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="ATC_abc_GEM905445.docx"' } });
+      return new Response('nope', { status: 404 });
+    });
+    try {
+      const bid = ((await api('GET', '/api/v1/intake/gem')).json as any[]).find((b) => b.bid_number === 'GEM/2026/B/8301002');
+      const r = await api('POST', `/api/v1/intake/gem/${bid.id}/fetch`);
+      expect(r.status, JSON.stringify(r.json)).toBe(200);
+      expect(calls.some((u) => u.includes('gtc'))).toBe(false); // the general terms are linked, not downloaded
+      const c = (await api('GET', `/api/v1/intake/gem/${bid.id}/check`)).json;
+      expect(c.bid).toMatchObject({
+        gem_id: 10118747, organisation: 'Canara Bank', ministry: 'Ministry of Finance', emd_amount: 160000, epbg_percent: 5, mse_exempt: true, bid_type: 'Two Packet Bid', status: 'new',
+        end_at: '2026-12-01T12:30:00.000Z', documents_required: ['Experience Criteria', 'Bidder Turnover'],
+      });
+      expect(c.bid.details).toMatchObject({ Office: 'Department Of Information Technology', 'Contract period': '3 Month(s)', 'Buyer email': 'buyer@canarabank.com' });
+      const files = Object.fromEntries(c.files.map((f: any) => [f.label, f]));
+      expect(Object.keys(files).sort()).toEqual(['Bid document', 'Buyer ATC (additional terms)', 'GeM General Terms and Conditions', 'Scope of Work']);
+      expect(files['Bid document'].open).toBeTruthy();
+      expect(files['Scope of Work'].open).toBeTruthy();
+      expect(files['GeM General Terms and Conditions'].open).toBeNull();
+      expect(c.documentUrl).toBeTruthy();
+      // read again: nothing is kept twice
+      expect((await api('POST', `/api/v1/intake/gem/${bid.id}/fetch`)).status).toBe(200);
+      expect((await api('GET', `/api/v1/intake/gem/${bid.id}/check`)).json.files).toHaveLength(4);
+      // a bid GeM does not know: the reason is kept on the bid
+      const other = ((await api('GET', '/api/v1/intake/gem')).json as any[]).find((b) => b.bid_number === 'GEM/2026/B/8301001');
+      const miss = await api('POST', `/api/v1/intake/gem/${other.id}/fetch`);
+      expect(miss.status).toBe(400);
+      expect(((await api('GET', '/api/v1/intake/gem')).json as any[]).find((b) => b.id === other.id).fetch_error).toMatch(/Not found/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

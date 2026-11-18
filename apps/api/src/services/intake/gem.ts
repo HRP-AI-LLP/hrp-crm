@@ -14,9 +14,9 @@ import { badRequest, forbidden, notFound } from '../../lib/errors';
 import { saveFile, signedFileUrl } from '../files';
 import { COMPANY_DOCS } from '../org-documents';
 import { createRecord, type RecordCtx, type RecordEvent } from '../records';
-import { DOC_MAP, parseBidDocument } from './parse';
+import { type BidDocument, DOC_MAP, parseBidDocument } from './parse';
 
-function assertGem(ctx: RecordCtx, write = false) {
+export function assertGem(ctx: RecordCtx, write = false) {
   const p = ctx.principal.permissions;
   if (['books', 'billing', 'projects', 'metadata'].some((k) => hasAdmin(p, k))) return;
   const deal = objectPerm(p, 'deal');
@@ -27,7 +27,7 @@ function assertGem(ctx: RecordCtx, write = false) {
 const COLS = `b.id, b.bid_number, b.title, b.category, b.quantity::float8 as quantity, b.ministry, b.department, b.organisation, b.bid_date::text, b.start_at, b.end_at, b.opening_at,
   b.emd_amount::float8 as emd_amount, b.epbg_percent::float8 as epbg_percent, b.min_turnover::float8 as min_turnover, b.experience_years::float8 as experience_years,
   b.mse_exempt, b.startup_exempt, b.documents_required, b.bid_type, b.status, b.corrigenda, b.last_corrigendum_at, b.document_file_id, b.notes, b.owner_id, u.full_name as owner_name,
-  b.deal_id, b.created_at, b.updated_at`;
+  b.deal_id, b.gem_id::float8 as gem_id, b.details, b.files, b.fetched_at, b.fetch_error, b.created_at, b.updated_at`;
 
 export async function listBids(ctx: RecordCtx, q: { status?: string | null; open?: boolean } = {}) {
   assertGem(ctx);
@@ -78,19 +78,25 @@ export async function attachBidDocument(ctx: RecordCtx, env: Env, id: string, in
   if (d.bidNumber && d.bidNumber !== b.bid_number) throw badRequest(`This document is for ${d.bidNumber}, not ${b.bid_number}`);
   let fileId: string | null = null;
   if (input.bytes?.length) fileId = (await saveFile(ctx, env, { objectKey: 'gem_bid', recordId: id, name: input.name || `${b.bid_number.replace(/\//g, '-')}.pdf`, bytes: input.bytes, kind: 'document' }, { system: true })).id;
+  await applyBidRead(ctx, id, d, fileId);
+  return { read: d };
+}
+
+/** What a bid document says, onto the bid (blanks keep what is there). */
+export async function applyBidRead(ctx: RecordCtx, id: string, d: BidDocument, fileId: string | null, review = true) {
   await ctx.tx.query(
     `update gem_bids set category = coalesce($3, category), title = coalesce(title, $3), quantity = coalesce($4, quantity), ministry = coalesce($5, ministry), department = coalesce($6, department),
             organisation = coalesce($7, organisation), bid_date = coalesce($8::date, bid_date), end_at = coalesce($9::timestamptz, end_at), opening_at = coalesce($10::timestamptz, opening_at),
             emd_amount = coalesce($11, emd_amount), epbg_percent = coalesce($12, epbg_percent), min_turnover = coalesce($13, min_turnover), experience_years = coalesce($14, experience_years),
             mse_exempt = coalesce($15, mse_exempt), startup_exempt = coalesce($16, startup_exempt), documents_required = case when $17::jsonb = '[]'::jsonb then documents_required else $17::jsonb end,
-            bid_type = coalesce($18, bid_type), document_file_id = coalesce($19, document_file_id), status = case when status = 'new' then 'reviewing' else status end, updated_at = now()
+            bid_type = coalesce($18, bid_type), document_file_id = coalesce($19, document_file_id), details = details || $20::jsonb,
+            status = case when status = 'new' and $21::boolean then 'reviewing' else status end, updated_at = now()
       where tenant_id = $1 and id = $2`,
     [
       ctx.tenantId, id, d.category, d.quantity, d.ministry, d.department, d.organisation, d.bidDate, d.endAt, d.openingAt, d.emdAmount, d.epbgPercent, d.minTurnover, d.experienceYears,
-      d.mseExempt, d.startupExempt, JSON.stringify(d.documentsRequired), d.bidType, fileId,
+      d.mseExempt, d.startupExempt, JSON.stringify(d.documentsRequired), d.bidType, fileId, JSON.stringify(d.extra ?? {}), review,
     ],
   );
-  return { read: d };
 }
 
 /* ───────────── fit check and documents ───────────── */
@@ -187,7 +193,8 @@ export async function bidCheck(ctx: RecordCtx, env: Env, id: string) {
   }
   const docUrl = b.document_file_id ? await signedFileUrl(env, ctx.tenantId, b.document_file_id, true) : null;
   const corrigenda = await ctx.tx.query(`select received_at, subject, data from intake_items where tenant_id = $1 and link_object = 'gem_bid' and link_id = $2 order by received_at desc`, [ctx.tenantId, id]);
-  return { bid: b, checks, documents, turnoverByYear: f.turnoverByYear, documentUrl: docUrl, history: corrigenda, ready: documents.filter((d) => d.status === 'ready').length, missing: documents.filter((d) => d.status === 'missing' || d.status === 'expired').length };
+  const files = await Promise.all(((b.files as { fileId: string | null }[]) ?? []).map(async (x) => ({ ...x, open: x.fileId ? await signedFileUrl(env, ctx.tenantId, x.fileId, true) : null })));
+  return { bid: b, checks, documents, files, turnoverByYear: f.turnoverByYear, documentUrl: docUrl, history: corrigenda, ready: documents.filter((d) => d.status === 'ready').length, missing: documents.filter((d) => d.status === 'missing' || d.status === 'expired').length };
 }
 
 /** Every ready document in one PDF, with a contents page — to upload on GeM (or split as asked). */

@@ -161,6 +161,10 @@ export interface BidDocument {
   emdAmount: number | null;
   epbgPercent: number | null;
   bidType: string | null;
+  /** Other facts worth showing (office, contract period, offer validity, evaluation, estimated value…). */
+  extra: Record<string, string>;
+  /** "Scope of Work:1793699147.pdf" → { '1793699147.pdf': 'Scope of Work' } (names of linked buyer files). */
+  fileLabels: Record<string, string>;
 }
 
 /** Amounts as GeM prints them: "50 Lakh (s)", "1.5 Crore", "₹ 2,50,000". */
@@ -185,8 +189,22 @@ export function parseBidDocument(text: string): BidDocument {
     const v = rest.split(stop)[0]!.trim();
     return v || rest.split('\n').find((x) => x.trim())?.trim() || null;
   };
+  const lines = t.split('\n').map((x) => x.trim());
+  // value written before its label (a long value wraps above a short label in GeM's table)
+  const docsBefore = () => {
+    const i = lines.findIndex((x) => /Document required/i.test(x));
+    if (i < 0) return null;
+    const got: string[] = [];
+    for (let j = i - 1; j >= Math.max(0, i - 6); j--) {
+      const x = lines[j]!.replace(/^.*\t/, '');
+      if (!/,|\(Requested|in ATC\)/i.test(x) || /\b(the|must|bidder|seeking|eligibility|supporting|uploaded|evaluation|buyer|relaxation)\b/.test(x)) break;
+      got.unshift(x);
+    }
+    return got.length ? got.join(' ') : null;
+  };
   const yes = (v: string | null) => (v == null ? null : /^\s*(yes|हाँ|हां)/i.test(v) ? true : /^\s*(no|नहीं)/i.test(v) ? false : null);
-  const docs = after(/Document required from seller/i, /\n\s*\*|\n\s*(?:Do you want|Bid to RA|Type of Bid|Primary product|Time allowed|Inspection|Evaluation)/i);
+  const docs0 = after(/Document required from seller/i, /\n\s*\*|\n\s*(?:Do you want|Bid to RA|Type of Bid|Primary product|Time allowed|Inspection|Evaluation)/i);
+  const docs = docsBefore() ?? (docs0 && /^\*|^In case/i.test(docs0) ? null : docs0);
   const docList = (docs ?? '')
     .split(/,|\n/)
     .map((x) => x.replace(/\s+/g, ' ').trim())
@@ -195,7 +213,7 @@ export function parseBidDocument(text: string): BidDocument {
     bidNumber: (t.match(BID_RE) ?? [])[0] ?? null,
     bidDate: gemDate(after(/\bDated\b/i))?.date ?? null,
     endAt: gemDate(after(/Bid End Date\s*\/\s*Time/i))?.at ?? null,
-    openingAt: gemDate(after(/Bid Opening Date\s*\/\s*Time/i))?.at ?? null,
+    openingAt: gemDate(after(/Bid Opening Date\s*\/\s*Time/i))?.at ?? gemDate(/Bid Opening[^\n]*\n\s*(\d{1,2}-\d{1,2}-\d{4}\s+\d{1,2}:\d{2}(?::\d{2})?)/i.exec(t)?.[1])?.at ?? null,
     ministry: after(/Ministry\s*\/\s*State Name/i),
     department: after(/Department Name/i),
     organisation: after(/Organi[sz]ation Name/i),
@@ -210,8 +228,8 @@ export function parseBidDocument(text: string): BidDocument {
       const n = v ? /([\d.]+)/.exec(v) : null;
       return n ? Number(n[1]) : null;
     })(),
-    mseExempt: yes(after(/MSE Exemption for Years Of Experience and Turnover/i)),
-    startupExempt: yes(after(/Startup Exemption for Years Of Experience and Turnover/i)),
+    mseExempt: yes(after(/MSE (?:Exemption|Relaxation) for Years Of Experience(?: and Turnover)?/i)),
+    startupExempt: yes(after(/Startup (?:Exemption|Relaxation) for Years Of(?:\s+Experience(?: and Turnover)?)?/i)),
     documentsRequired: [...new Set(docList)],
     emdAmount: (() => {
       const v = after(/EMD Amount/i);
@@ -223,6 +241,29 @@ export function parseBidDocument(text: string): BidDocument {
       return n ? Number(n[1]) : null;
     })(),
     bidType: after(/Type of Bid/i),
+    extra: (() => {
+      const e: Record<string, string> = {};
+      const put = (k: string, v: string | null | undefined) => {
+        const x = v?.replace(/\s+/g, ' ').trim();
+        if (x && x.length < 400) e[k] = x;
+      };
+      put('Office', after(/Office Name/i));
+      put('Contract period', after(/Contract Period/i));
+      put('Offer validity', /Bid Offer[^\n]*\n\s*(\d+\s*\(Days\))/i.exec(t)?.[1] ?? after(/Validity \(From End Date\)/i));
+      put('Evaluation method', after(/Evaluation Method/i));
+      put('Estimated bid value', after(/Estimated Bid Value(?!\s+indicated)/i));
+      put('Bid to RA', after(/Bid to RA enabled/i));
+      put('EMD bank', after(/Advisory Bank/i));
+      put('ePBG duration (months)', /Duration of ePBG[^\n]*\n?\s*(\d+)/i.exec(t)?.[1]);
+      put('Contract type', after(/Type of Contract/i));
+      put('Inspection', after(/Inspection Required/i));
+      put('Buyer email', /Buyer Email id\s*:\s*(\S+@\S+)/i.exec(t)?.[1]);
+      put('Grievance email', /HOD Email id\s*:\s*(\S+@\S+)/i.exec(t)?.[1]);
+      put('Pre-bid', /Pre[- ]?Bid Date and Time[\s:/-]*([^\n]+)/i.exec(t)?.[1]);
+      put('Payment timelines', /Payment Timelines/i.test(t) ? /(Payments? shall be made[^]*?)(?:\n[^\n]*\/|\n\S*\s*Evaluation)/i.exec(t)?.[1]?.replace(/Payment Timelines/i, '') : null);
+      return e;
+    })(),
+    fileLabels: Object.fromEntries([...t.matchAll(/^\s*([A-Za-z][A-Za-z /&()-]{2,60}?)\s*:\s*(\d{6,}\.(?:pdf|docx?|xlsx?|zip))\s*$/gim)].map((m) => [m[2]!, m[1]!.trim()])),
   };
 }
 

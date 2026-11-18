@@ -142,8 +142,15 @@ function GemBids() {
             {rows.map((b) => (
               <tr key={b.id} className="click" onClick={() => setOpen(b.id)}>
                 <td style={{ whiteSpace: 'nowrap' }}>{b.bid_number}</td>
-                <td>{b.title ?? b.category ?? <span className="muted">Upload the bid document to read it</span>}</td>
-                <td className="small">{[b.organisation, b.department].filter(Boolean).join(' · ') || '—'}</td>
+                <td>
+                  {b.title ?? b.category ?? <span className="muted">{b.fetch_error ? 'Could not read it from GeM yet' : 'Reading it from GeM…'}</span>}
+                  <div className="small muted">
+                    {[b.quantity ? `Qty ${b.quantity}` : null, b.emd_amount ? `EMD ${money2(b.emd_amount)}` : b.emd_amount === 0 ? 'No EMD' : null, (b.files ?? []).filter((f: Json) => f.fileId).length ? `${(b.files ?? []).filter((f: Json) => f.fileId).length} document(s)` : null]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </div>
+                </td>
+                <td className="small">{[b.organisation, b.department ?? b.ministry].filter(Boolean).join(' · ') || '—'}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   {b.end_at ? dateTime(b.end_at) : '—'}
                   <div className="small muted">{left(b.end_at)}</div>
@@ -204,6 +211,65 @@ function AddBid({ onClose, onSave }: { onClose: () => void; onSave: (b: Json) =>
   );
 }
 
+const yesNo = (v: boolean | null) => (v == null ? null : v ? 'Yes' : 'No');
+
+/** Everything known about the bid, from GeM's search and its bid document. */
+function BidDetails({ b }: { b: Json }) {
+  const rows: [string, React.ReactNode][] = [
+    ['Item category', b.category],
+    ['Quantity', b.quantity],
+    ['Ministry', b.ministry],
+    ['Department', b.department],
+    ['Organisation', b.organisation],
+    ['Bid date', b.bid_date ? date(b.bid_date) : null],
+    ['Starts', b.start_at ? dateTime(b.start_at) : null],
+    ['Closes', b.end_at ? dateTime(b.end_at) : null],
+    ['Opens (technical)', b.opening_at ? dateTime(b.opening_at) : null],
+    ['Type of bid', b.bid_type],
+    ['EMD', b.emd_amount != null ? (Number(b.emd_amount) ? money2(b.emd_amount) : 'Not required') : null],
+    ['ePBG', b.epbg_percent != null ? `${b.epbg_percent}%` : null],
+    ['Min. average turnover', b.min_turnover != null ? money2(b.min_turnover) : null],
+    ['Experience asked', b.experience_years != null ? `${b.experience_years} year(s)` : null],
+    ['MSE relaxation', yesNo(b.mse_exempt)],
+    ['Startup relaxation', yesNo(b.startup_exempt)],
+    ...Object.entries((b.details ?? {}) as Record<string, string>).map(([k, v]): [string, React.ReactNode] => [
+      k,
+      /^https?:\/\//.test(v) ? (
+        <a href={v} target="_blank" rel="noreferrer noopener">
+          Open ↗
+        </a>
+      ) : /@/.test(v) && !/\s/.test(v) ? (
+        <a href={`mailto:${v}`}>{v}</a>
+      ) : (
+        v
+      ),
+    ]),
+  ];
+  const shown = rows.filter(([, v]) => v != null && v !== '');
+  if (!shown.length) return null;
+  return (
+    <div>
+      <b>Bid details</b>
+      <dl className="grid2 small" style={{ margin: '6px 0 0', rowGap: 4 }}>
+        {shown.map(([k, v]) => (
+          <div key={k} style={{ display: 'flex', gap: 8 }}>
+            <dt className="muted" style={{ minWidth: 150, flex: 'none' }}>
+              {k}
+            </dt>
+            <dd style={{ margin: 0 }}>{v}</dd>
+          </div>
+        ))}
+      </dl>
+      {(b.documents_required ?? []).length > 0 && (
+        <div className="small" style={{ marginTop: 6 }}>
+          <span className="muted">Documents asked from sellers: </span>
+          {(b.documents_required as string[]).join(', ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const DOC_CLS: Record<string, [string, string]> = { ready: ['good', 'On file'], missing: ['bad', 'Missing'], expired: ['bad', 'Expired'], manual: ['warn', 'Prepare'] };
 
 function BidModal({ id, onClose }: { id: string; onClose: () => void }) {
@@ -215,6 +281,12 @@ function BidModal({ id, onClose }: { id: string; onClose: () => void }) {
   const nav = useNavigate();
   const [reading, setReading] = useState(false);
   const [notes, setNotes] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const fetchNow = async () => {
+    setFetching(true);
+    await act(() => post<Json>(`/api/v1/intake/gem/${id}/fetch`), (r) => `Read from GeM: ${r.files} document(s)`);
+    setFetching(false);
+  };
   if (error) return null;
   if (!data) return null;
   const b = data.bid;
@@ -278,26 +350,58 @@ function BidModal({ id, onClose }: { id: string; onClose: () => void }) {
           </div>
         </div>
 
+        <BidDetails b={b} />
+
         <div className="panel" style={{ padding: 12 }}>
           <div className="spread" style={{ flexWrap: 'wrap', gap: 8 }}>
             <div>
-              <b>Bid document</b>
+              <b>Bid documents</b>
               <div className="small muted">
-                {data.documentUrl ? 'Read: eligibility and the documents it asks for are below.' : 'Download the bid document (PDF) from GeM and add it here: its eligibility and document list are read for you.'}
+                {b.fetch_error
+                  ? `GeM could not be read: ${b.fetch_error}`
+                  : b.fetched_at
+                    ? `Read from GeM ${dateTime(b.fetched_at)}: the bid document and the buyer's files it links to.`
+                    : 'Being read from GeM (within a few minutes of the alert).'}
               </div>
             </div>
             <div className="row" style={{ gap: 6 }}>
-              {data.documentUrl && (
-                <a className="btn sm" href={data.documentUrl} target="_blank" rel="noreferrer">
-                  Open
-                </a>
-              )}
-              <label className="btn sm primary" style={{ cursor: 'pointer' }}>
-                {reading ? 'Reading…' : data.documentUrl ? 'Replace' : 'Add bid document'}
+              <button className="btn sm primary" disabled={fetching} onClick={fetchNow}>
+                {fetching ? 'Reading GeM…' : b.fetched_at ? 'Read again from GeM' : 'Read from GeM now'}
+              </button>
+              <label className="btn sm ghost" style={{ cursor: 'pointer' }} title="If GeM cannot be reached: download the bid PDF yourself and add it here">
+                {reading ? 'Reading…' : 'Upload a PDF instead'}
                 <input type="file" accept="application/pdf" hidden disabled={reading} onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
               </label>
             </div>
           </div>
+          {(data.files ?? []).length > 0 ? (
+            <table className="data" style={{ marginTop: 8 }}>
+              <tbody>
+                {(data.files as Json[]).map((f, i) => (
+                  <tr key={i}>
+                    <td>{f.label}</td>
+                    <td className="small muted">{f.name ?? ''}{f.size ? ` · ${Math.max(1, Math.round(f.size / 1024))} KB` : ''}{f.at ? ` · ${date(f.at)}` : ''}</td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      {f.open ? (
+                        <a className="btn sm" href={f.open} target="_blank" rel="noreferrer">
+                          Open
+                        </a>
+                      ) : null}{' '}
+                      <a className="btn sm ghost" href={f.url} target="_blank" rel="noreferrer noopener">
+                        On GeM ↗
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : data.documentUrl ? (
+            <div style={{ marginTop: 8 }}>
+              <a className="btn sm" href={data.documentUrl} target="_blank" rel="noreferrer">
+                Open the bid document
+              </a>
+            </div>
+          ) : null}
         </div>
 
         {data.checks.length > 0 && (
