@@ -133,6 +133,8 @@ describe('uploading existing contracts', () => {
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     expect(r.json.account).toMatchObject({ id: ids.client });
     expect(r.json.docs.map((d: any) => d.read?.docType)).toEqual(['nda', 'sow']);
+    // read together they are one engagement: the SoW's terms, the NDA's notice and law filling gaps
+    expect(r.json.merged).toMatchObject({ docType: 'sow', kind: 'fixed_bid', value: 30000, currency: 'USD', noticeDays: 30, governingLaw: 'India', projectName: 'AI support assistant' });
     // the NDA
     const nda = r.json.docs[0].read;
     const a = await api('POST', '/api/v1/it/contracts/upload', {
@@ -156,6 +158,23 @@ describe('uploading existing contracts', () => {
     const ms = (await api('GET', `/api/v1/projects/${s.json.projectId}`)).json.milestones as any[];
     expect(ms.map((m) => [m.name, Number(m.amount)])).toEqual([['Design', 6000], ['Build', 18000], ['Go-live', 6000]]);
     expect(((await api('GET', '/api/v1/it/contracts')).json as any[]).length).toBe(2);
+  });
+
+  it('saves an NDA and a SoW as one contract with both documents', async () => {
+    const files = [
+      { name: 'Acme-NDA.docx', data: b64(docx(NDA)) },
+      { name: 'Acme-SOW.pdf', data: b64(await pdf(SOW)) },
+    ];
+    const m = (await api('POST', '/api/v1/it/contracts/read', { files })).json.merged;
+    const s = await api('POST', '/api/v1/it/contracts/upload', {
+      files, fileTypes: ['nda', 'sow'], accountId: ids.client, name: 'AI support assistant (one contract)', docType: m.docType, kind: m.kind, startDate: m.effectiveDate, endDate: m.endDate,
+      currency: m.currency, value: m.value, billingFrequency: m.billingFrequency, noticeDays: m.noticeDays, governingLaw: m.governingLaw,
+    });
+    expect(s.status, JSON.stringify(s.json)).toBe(201);
+    expect(s.json.files).toBe(2);
+    const c = (await api('GET', `/api/v1/it/contracts/${s.json.id}`)).json;
+    expect(c.files.map((f: any) => f.description.split(' — ')[0])).toEqual(['NDA', 'SOW']);
+    expect(c.contract).toMatchObject({ notice_days: 30, governing_law: 'India' });
   });
 
   it('a monthly retainer is billed from the next period, not for the months already invoiced elsewhere', async () => {

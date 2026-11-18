@@ -879,6 +879,7 @@ function UploadContracts({ onClose }: { onClose: () => void }) {
   const [files, setFiles] = useState<{ name: string; data: string }[]>([]);
   const [res, setRes] = useState<Json | null>(null);
   const [saved, setSaved] = useState<Record<number, Json>>({});
+  const [separate, setSeparate] = useState(false);
   const read = async (list: FileList | null) => {
     if (!list?.length) return;
     setBusy(true);
@@ -905,7 +906,34 @@ function UploadContracts({ onClose }: { onClose: () => void }) {
           {busy ? 'Reading…' : res ? 'Choose other files' : 'Choose files'}
           <input type="file" multiple accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden disabled={busy} onChange={(e) => read(e.target.files)} />
         </label>
+        {res && (res.docs as Json[]).length > 1 && (
+          <label className="row small" style={{ gap: 6 }}>
+            <input type="checkbox" checked={separate} onChange={(e) => (setSeparate(e.target.checked), setSaved({}))} />
+            These are different contracts: save each document on its own (otherwise they are one contract with all its documents)
+          </label>
+        )}
+        {res && !separate && (
+          saved[0] ? (
+            <div className="panel small" style={{ padding: 10 }}>
+              ✓ Saved as {saved[0].number} ({saved[0].status}) with {files.length} document(s){saved[0].projectId ? ' and its project' : ''}
+              {saved[0].nextInvoiceDate ? `; billed here from ${date(saved[0].nextInvoiceDate)}` : ''}
+            </div>
+          ) : (
+            <ContractDraft
+              doc={{ name: (res.docs as Json[]).map((d) => `${d.name}${d.read ? ` (${DOC_TYPES[d.read.docType] ?? d.read.docType})` : ''}`).join(' + '), read: res.merged, note: (res.docs as Json[]).map((d) => d.note).filter(Boolean).join(' · ') || null }}
+              files={files}
+              fileTypes={(res.docs as Json[]).map((d) => d.read?.docType ?? 'other')}
+              res={res}
+              parents={parents}
+              onSaved={(x) => {
+                setSaved({ 0: x });
+                qc.invalidateQueries({ queryKey: ['it'] });
+              }}
+            />
+          )
+        )}
         {res &&
+          separate &&
           (res.docs as Json[]).map((d, i) =>
             saved[i] ? (
               <div key={i} className="panel small" style={{ padding: 10 }}>
@@ -916,7 +944,8 @@ function UploadContracts({ onClose }: { onClose: () => void }) {
               <ContractDraft
                 key={i}
                 doc={d}
-                file={files[i]!}
+                files={[files[i]!]}
+                fileTypes={[d.read?.docType ?? 'other']}
                 res={res}
                 parents={parents}
                 onSaved={(x) => {
@@ -931,7 +960,8 @@ function UploadContracts({ onClose }: { onClose: () => void }) {
   );
 }
 
-function ContractDraft({ doc, file, res, parents, onSaved }: { doc: Json; file: { name: string; data: string }; res: Json; parents: Json[]; onSaved: (x: Json) => void }) {
+function ContractDraft({ doc, files, fileTypes, res, parents, onSaved }: { doc: Json; files: { name: string; data: string }[]; fileTypes: string[]; res: Json; parents: Json[]; onSaved: (x: Json) => void }) {
+  const file = files[0]!;
   const toast = useToast();
   const r = (doc.read ?? {}) as Json;
   const [busy, setBusy] = useState(false);
@@ -968,7 +998,8 @@ function ContractDraft({ doc, file, res, parents, onSaved }: { doc: Json; file: 
     setBusy(true);
     try {
       const x = await post<Json>('/api/v1/it/contracts/upload', {
-        files: [file],
+        files,
+        fileTypes,
         accountId: f.accountId || null,
         newAccountName: f.accountId ? null : f.newAccountName.trim() || null,
         name: f.name.trim(),
@@ -1206,8 +1237,9 @@ function ContractView({ id, onClose, onEdit }: { id: string; onClose: () => void
         {(data.files ?? []).length > 0 && (
           <div className="row small" style={{ gap: 8, flexWrap: 'wrap' }}>
             {(data.files as Json[]).map((x) => (
-              <a key={x.id} className="btn sm" href={x.url} target="_blank" rel="noreferrer">
-                📄 {x.name}
+              <a key={x.id} className="btn sm" href={x.url} target="_blank" rel="noreferrer" title={x.description ?? undefined}>
+                📄 {x.description ? `${x.description.split(' — ')[0]}: ` : ''}
+                {x.name}
               </a>
             ))}
           </div>

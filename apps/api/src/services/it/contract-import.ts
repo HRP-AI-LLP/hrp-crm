@@ -29,6 +29,30 @@ const bytesOf = (b64: string) => {
 
 const norm = (s: string) => s.toLowerCase().replace(/&/g, ' and ').replace(/\b(pvt|private|ltd|limited|llp|inc|llc|co|company|the|m\/s)\b/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
 
+/**
+ * The documents of one engagement (an NDA, the MSA, a SoW, an amendment) read as one contract: the
+ * commercial document (SoW, then agreement, MSA, PO, amendment) gives the terms, the others fill gaps.
+ */
+export function mergeReads(reads: (ContractRead | null)[]): ContractRead | null {
+  const rank: Record<string, number> = { sow: 0, agreement: 1, msa: 2, purchase_order: 3, amendment: 4, other: 5, nda: 6 };
+  const list = reads.filter((r): r is ContractRead => !!r).sort((a, b) => (rank[a.docType] ?? 9) - (rank[b.docType] ?? 9));
+  if (!list.length) return null;
+  const [main, ...rest] = list;
+  const out = { ...main! } as Record<string, unknown>;
+  for (const r of rest)
+    for (const [k, v] of Object.entries(r)) {
+      const cur = out[k];
+      if ((cur === null || cur === undefined || (Array.isArray(cur) && !cur.length)) && v !== null && v !== undefined) out[k] = v;
+    }
+  out.parties = [...new Set(list.flatMap((r) => r.parties))];
+  // the earliest start (an NDA signed before the work) and the latest end
+  const starts = list.map((r) => r.effectiveDate).filter((x): x is string => !!x).sort();
+  const ends = list.map((r) => r.endDate).filter((x): x is string => !!x).sort();
+  if (starts.length) out.effectiveDate = main!.effectiveDate ?? starts[0];
+  if (ends.length) out.endDate = main!.endDate ?? ends[ends.length - 1];
+  return out as unknown as ContractRead;
+}
+
 /** Reads the uploaded contracts (nothing is saved yet) and finds the client, its deals, projects and MSAs. */
 export async function readUploaded(deps: { run<T>(fn: (ctx: RecordCtx) => Promise<T>): Promise<T>; ai: AiCtx | null }, input: z.infer<typeof uploadSchema>) {
   const own = await deps.run(async (ctx) => {
@@ -69,12 +93,14 @@ export async function readUploaded(deps: { run<T>(fn: (ctx: RecordCtx) => Promis
           contracts: await ctx.tx.query(`select id, contract_number, name, kind, doc_type, client_ref from service_contracts where tenant_id = $1 and account_id = $2 order by start_date desc limit 50`, [ctx.tenantId, account.id]),
         }
       : { deals: [], projects: [], contracts: [] };
-    return { docs, client, account, ...related };
+    return { docs, merged: mergeReads(docs.map((d) => d.read)), client, account, ...related };
   });
 }
 
 export const saveSchema = z.object({
   files: uploadSchema.shape.files,
+  /** what each file is (NDA, SoW…), in the order of files */
+  fileTypes: z.array(z.string().max(30)).max(10).optional(),
   accountId: z.string().uuid().nullish(),
   newAccountName: z.string().trim().min(2).max(200).nullish(),
   name: z.string().trim().min(1).max(200),
@@ -187,8 +213,9 @@ export async function saveUploaded(ctx: RecordCtx, env: Env, input: z.infer<type
   // the documents, kept with the contract
   const files: string[] = [];
   if (env.FILES)
-    for (const f of input.files) {
-      const r = await saveFile(ctx, env, { objectKey: 'service_contract', recordId: id, name: f.name, bytes: bytesOf(f.data), kind: 'document', description: `${input.docType.toUpperCase()} — ${input.name}`.slice(0, 200) }, { system: true });
+    for (const [i, f] of input.files.entries()) {
+      const what = (input.fileTypes?.[i] ?? input.docType).toUpperCase();
+      const r = await saveFile(ctx, env, { objectKey: 'service_contract', recordId: id, name: f.name, bytes: bytesOf(f.data), kind: 'document', description: `${what} — ${input.name}`.slice(0, 200) }, { system: true });
       files.push(r.id);
     }
   await ctx.tx.query(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1,'system',$2,'account',$3)`, [
@@ -200,8 +227,8 @@ export async function saveUploaded(ctx: RecordCtx, env: Env, input: z.infer<type
 /** The documents kept with a contract. */
 export async function contractFiles(ctx: RecordCtx, env: Env, id: string) {
   assertReader(ctx);
-  const rows = await ctx.tx.query<{ id: string; name: string; size_bytes: number; created_at: string }>(
-    `select id, name, size_bytes, created_at from files where tenant_id = $1 and object_key = 'service_contract' and record_id = $2 and deleted_at is null order by created_at`,
+  const rows = await ctx.tx.query<{ id: string; name: string; size_bytes: number; description: string | null; created_at: string }>(
+    `select id, name, size_bytes, description, created_at from files where tenant_id = $1 and object_key = 'service_contract' and record_id = $2 and deleted_at is null order by created_at, id`,
     [ctx.tenantId, id],
   );
   return Promise.all(rows.map(async (f) => ({ ...f, url: await signedFileUrl(env, ctx.tenantId, f.id, true) })));
