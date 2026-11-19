@@ -9,6 +9,7 @@ import { notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import { enqueue, eventJobs } from '../services/jobs';
+import * as calls from '../services/calls';
 import * as pj from '../services/projects';
 import type { RecordCtx, RecordEvent } from '../services/records';
 import { safeCtx } from './public';
@@ -105,6 +106,52 @@ export const projectRoutes = new Hono<AppEnv>()
   .use('/timesheet', async (c, next) => (requireProjects(c), next()))
   .use('/project-reports/*', async (c, next) => (requireProjects(c), next()))
   .use('/my-tasks', async (c, next) => (requireProjects(c), next()))
+  .use('/calls/*', async (c, next) => (requireProjects(c), next()))
+  .use('/calls', async (c, next) => (requireProjects(c), next()))
+
+  /* ───── project calls: schedule, transcript, analysis ───── */
+  .get('/projects/:id/calls', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => calls.listProjectCalls(rctx(c, tx), id(c)))))
+  .post('/projects/:id/calls', async (c) => {
+    const b = calls.callSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => calls.scheduleProjectCall(rctx(c, tx), c.env, id(c), b)), 201);
+  })
+  .get('/calls', async (c) => {
+    const s = z.enum(['upcoming', 'recent', 'unassigned']).parse(c.req.query('scope') ?? 'upcoming');
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => calls.listMyCalls(rctx(c, tx), { scope: s })));
+  })
+  .get('/calls/meeting-accounts', async (c) => c.json({ accounts: await c.var.db.tx(scope(c, true), (tx) => calls.myMeetingChoices(rctx(c, tx))) }))
+  .get('/calls/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => calls.getCall(rctx(c, tx), id(c)))))
+  .patch('/calls/:id', async (c) => {
+    const b = z
+      .object({
+        title: z.string().trim().min(1).max(200).optional(),
+        startsAt: z.string().datetime({ offset: true }).optional(),
+        endsAt: z.string().datetime({ offset: true }).optional(),
+        agenda: z.string().max(5000).nullish(),
+        status: z.enum(['scheduled', 'done', 'cancelled']).optional(),
+        notes: z.string().max(20000).nullish(),
+      })
+      .parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => calls.updateCall(rctx(c, tx), id(c), b)));
+  })
+  .delete('/calls/:id', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => calls.deleteCall(rctx(c, tx), id(c)))))
+  .put('/calls/:id/transcript', async (c) => {
+    const b = z.object({ text: z.string().min(1).max(1_000_000), fileName: z.string().max(200).nullish(), source: z.enum(['pasted', 'upload', 'typed']).default('pasted') }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => calls.saveTranscript(rctx(c, tx), id(c), b)));
+  })
+  .post('/calls/:id/analyse', async (c) => {
+    const b = z.object({ createTasks: z.boolean().default(true) }).parse(await c.req.json().catch(() => ({})));
+    return c.json(await calls.analyseCall({ env: c.env, db: c.var.db, tenantId: c.var.tenant.id, principal: c.var.principal, meta: c.var.meta, requestId: c.var.requestId }, id(c), b));
+  })
+  .patch('/calls/:id/actions/:index', async (c) => {
+    const index = z.coerce.number().int().min(0).max(100).parse(c.req.param('index'));
+    const b = z.object({ owner: z.string().trim().max(80).optional(), task: z.string().trim().min(1).max(280).optional(), due: dateStr.nullish(), done: z.boolean().optional(), makeTask: z.boolean().optional() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => calls.updateAction(rctx(c, tx), id(c), index, b)));
+  })
+  .post('/calls/:id/assign', async (c) => {
+    const b = z.object({ projectId: uuid.nullable() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => calls.assignCall(rctx(c, tx), id(c), b.projectId)));
+  })
 
   /* ───── projects ───── */
   .get('/projects', async (c) =>
@@ -291,6 +338,11 @@ export const projectRoutes = new Hono<AppEnv>()
   .get('/project-reports/utilisation', async (c) => {
     const from = qDate(c, 'from', new Date(Date.now() - 27 * 86_400_000).toISOString().slice(0, 10));
     return c.json(await c.var.db.tx(scope(c, true), (tx) => pj.utilisation(rctx(c, tx), from, qDate(c, 'to', today()))));
+  })
+  .get('/projects/:id/time-entries', async (c) => {
+    const from = qDate(c, 'from', new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10));
+    const userId = c.req.query('userId') ? uuid.parse(c.req.query('userId')) : null;
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => pj.projectTimeEntries(rctx(c, tx), id(c), { from, to: qDate(c, 'to', today()), userId })));
   })
   .put('/project-reports/capacity/:id', async (c) => {
     const b = z.object({ weeklyHours: z.number().min(0).max(100) }).parse(await c.req.json());

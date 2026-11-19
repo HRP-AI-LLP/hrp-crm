@@ -9,7 +9,9 @@ import type { Env } from './env';
 import { Db } from './lib/db';
 import type { Job } from './services/jobs';
 import { dailyBackups } from './services/backup';
+import { analyseAsOwner } from './services/calls';
 import { mailSweep } from './services/mail';
+import { meetingSweep } from './services/meetings';
 import { statementSweep } from './services/books/statement-mail';
 import { gemDetailsSweep } from './services/intake/gem-fetch';
 import { intakeSweep } from './services/intake/intake';
@@ -51,6 +53,8 @@ export default {
         await reminderSweep(env, db);
         // connected Gmail / Outlook mailboxes (each at most every ~15 minutes)
         await mailSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'mail-sweep', msg: (e as Error).message })));
+        // Zoom / Meet / Teams calls that ended: transcript fetched, then analysed into minutes and actions
+        await meetingSweep(env, db, (t, e, o) => analyseAsOwner(env, db, t, e, o)).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'meeting-sweep', msg: (e as Error).message })));
         // mailboxes read for GeM alerts, bills and invoices (each at most every ~15 minutes)
         await intakeSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'intake-sweep', msg: (e as Error).message })));
         // followed GeM bids: details and bid documents read from GeM's public pages

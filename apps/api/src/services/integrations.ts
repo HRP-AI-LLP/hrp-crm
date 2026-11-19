@@ -9,8 +9,10 @@ import { b64url, decryptSecret, encryptSecret, hmacSha256Hex, timingSafeEqual } 
 import type { Tx } from '../lib/db';
 import { badRequest, notFound } from '../lib/errors';
 
-export type Provider = 'google' | 'microsoft' | 'razorpay' | 'exotel' | 'meta_leads' | 'google_leads' | 'tally' | 'teams' | 'slack' | 'gchat' | 'jira' | 'azure_devops' | 'asana' | 'dynamics_bc' | 'sap_b1' | 'netsuite';
-export type OAuthProvider = 'google' | 'microsoft' | 'meta';
+export type Provider = 'google' | 'microsoft' | 'razorpay' | 'exotel' | 'meta_leads' | 'google_leads' | 'tally' | 'teams' | 'slack' | 'gchat' | 'jira' | 'azure_devops' | 'asana' | 'dynamics_bc' | 'sap_b1' | 'netsuite' | 'zoom_meet' | 'google_meet' | 'ms_teams_meet';
+export type OAuthProvider = 'google' | 'microsoft' | 'meta' | 'zoom' | 'gmeet' | 'msmeet';
+/** Meeting apps a person connects with their own accounts (several each). */
+export const MEETING_OAUTH = { zoom: 'zoom_meet', gmeet: 'google_meet', msmeet: 'ms_teams_meet' } as const;
 
 export interface Integration {
   id: string;
@@ -175,17 +177,30 @@ export function redirectUri(env: Env, requestUrl: string, provider: OAuthProvide
 }
 
 export function oauthConfigured(env: Env, p: OAuthProvider) {
-  if (p === 'google') return !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
-  if (p === 'microsoft') return !!(env.MS_CLIENT_ID && env.MS_CLIENT_SECRET);
+  if (p === 'google' || p === 'gmeet') return !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
+  if (p === 'microsoft' || p === 'msmeet') return !!(env.MS_CLIENT_ID && env.MS_CLIENT_SECRET);
+  if (p === 'zoom') return !!(env.ZOOM_CLIENT_ID && env.ZOOM_CLIENT_SECRET);
   return !!(env.META_APP_ID && env.META_APP_SECRET);
 }
 
 const GOOGLE_SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/calendar.events'];
 const MS_SCOPES = ['offline_access', 'openid', 'email', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite'];
+// meetings: create Meet / Teams meetings in the calendar and read their transcripts afterwards
+export const GMEET_SCOPES = ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/meetings.space.readonly'];
+export const MSMEET_SCOPES = ['offline_access', 'openid', 'email', 'User.Read', 'Calendars.ReadWrite', 'OnlineMeetings.ReadWrite', 'OnlineMeetingTranscript.Read.All'];
 const META_SCOPES = ['pages_show_list', 'pages_read_engagement', 'pages_manage_metadata', 'pages_manage_ads', 'leads_retrieval', 'business_management'];
 
 export function authorizeUrl(env: Env, p: OAuthProvider, redirect: string, state: string): string {
-  if (!oauthConfigured(env, p)) throw badRequest(`${p === 'meta' ? 'Facebook' : p === 'google' ? 'Google' : 'Microsoft'} sign-in is not set up on this server yet`);
+  if (!oauthConfigured(env, p)) throw badRequest(`${{ meta: 'Facebook', google: 'Google', gmeet: 'Google', microsoft: 'Microsoft', msmeet: 'Microsoft', zoom: 'Zoom' }[p]} sign-in is not set up on this server yet`);
+  if (p === 'gmeet') {
+    return `https://accounts.google.com/o/oauth2/v2/auth?${form({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: redirect, response_type: 'code', scope: GMEET_SCOPES.join(' '), access_type: 'offline', prompt: 'consent select_account', state })}`;
+  }
+  if (p === 'msmeet') {
+    return `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${form({ client_id: env.MS_CLIENT_ID, redirect_uri: redirect, response_type: 'code', response_mode: 'query', scope: MSMEET_SCOPES.join(' '), prompt: 'select_account', state })}`;
+  }
+  if (p === 'zoom') {
+    return `https://zoom.us/oauth/authorize?${form({ client_id: env.ZOOM_CLIENT_ID, redirect_uri: redirect, response_type: 'code', state })}`;
+  }
   if (p === 'google') {
     return `https://accounts.google.com/o/oauth2/v2/auth?${form({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: redirect, response_type: 'code', scope: GOOGLE_SCOPES.join(' '), access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true', state })}`;
   }
@@ -202,7 +217,22 @@ export interface TokenSet {
 }
 
 export async function exchangeCode(env: Env, p: OAuthProvider, code: string, redirect: string): Promise<TokenSet> {
-  if (p === 'google') {
+  if (p === 'zoom') {
+    const t = await providerFetch('https://zoom.us/oauth/token', {
+      method: 'POST',
+      headers: { authorization: `Basic ${btoa(`${env.ZOOM_CLIENT_ID}:${env.ZOOM_CLIENT_SECRET}`)}` },
+      body: form({ code, redirect_uri: redirect, grant_type: 'authorization_code' }),
+    });
+    return { accessToken: t.access_token, refreshToken: t.refresh_token, expiresAt: Date.now() + (Number(t.expires_in) || 3600) * 1000 };
+  }
+  if (p === 'msmeet') {
+    const t = await providerFetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+      method: 'POST',
+      body: form({ code, client_id: env.MS_CLIENT_ID, client_secret: env.MS_CLIENT_SECRET, redirect_uri: redirect, grant_type: 'authorization_code', scope: MSMEET_SCOPES.join(' ') }),
+    });
+    return { accessToken: t.access_token, refreshToken: t.refresh_token, expiresAt: Date.now() + (Number(t.expires_in) || 3600) * 1000 };
+  }
+  if (p === 'google' || p === 'gmeet') {
     const t = await providerFetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       body: form({ code, client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, redirect_uri: redirect, grant_type: 'authorization_code' }),

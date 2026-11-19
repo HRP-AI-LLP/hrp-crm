@@ -12,6 +12,7 @@ import { useUsers } from '../../lib/hooks';
 import { BarChart } from '../charts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 import { AgileTab, ChangesTab, ReleasesTab } from './Agile';
+import { ProjectCalls } from './ProjectCalls';
 
 type Json = Record<string, any>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -38,9 +39,9 @@ function useAct(keys: unknown[][]) {
   };
 }
 
-type Tab = 'overview' | 'tasks' | 'agile' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'issues' | 'time' | 'billing' | 'team';
+type Tab = 'overview' | 'tasks' | 'agile' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'issues' | 'time' | 'billing' | 'team';
 
-const PROJECT_ICON: Record<string, string> = { overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
+const PROJECT_ICON: Record<string, string> = { overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
 
 export function ProjectWorkspace({ id }: { id: string }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`) });
@@ -50,7 +51,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
   const manage = data.level === 'manage';
   const member = manage || data.level === 'member';
   const tabs: [Tab, string][] = [
-    ['overview', 'Overview'], ['tasks', 'Tasks'], ['agile', 'Sprints'], ['releases', 'Releases'], ['changes', 'Changes & portal'], ['gantt', 'Gantt'], ['milestones', 'Milestones'], ['issues', 'Issues'], ['time', 'Time'],
+    ['overview', 'Overview'], ['tasks', 'Tasks'], ['agile', 'Sprints'], ['releases', 'Releases'], ['changes', 'Changes & portal'], ['gantt', 'Gantt'], ['milestones', 'Milestones'], ['calls', 'Calls'], ['issues', 'Issues'], ['time', 'Time'],
     ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'],
   ];
   return (
@@ -60,7 +61,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
       title="Project"
       value={tab}
       onChange={setTab}
-      items={tabs.map(([k, l]) => ({ key: k, label: l, icon: PROJECT_ICON[k], group: ['overview', 'tasks', 'agile', 'releases', 'gantt'].includes(k) ? 'Work' : ['milestones', 'changes', 'issues'].includes(k) ? 'Delivery' : 'People & money' }))}
+      items={tabs.map(([k, l]) => ({ key: k, label: l, icon: PROJECT_ICON[k], group: ['overview', 'tasks', 'agile', 'releases', 'gantt'].includes(k) ? 'Work' : ['milestones', 'changes', 'calls', 'issues'].includes(k) ? 'Delivery' : 'People & money' }))}
     >
       <div className="panel-body">
         {tab === 'overview' && <Overview id={id} data={data} />}
@@ -70,6 +71,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
         {tab === 'changes' && <ChangesTab id={id} data={data} manage={manage} member={member} />}
         {tab === 'gantt' && <Gantt id={id} data={data} member={member} />}
         {tab === 'milestones' && <Milestones id={id} data={data} manage={manage} />}
+        {tab === 'calls' && <ProjectCalls id={id} />}
         {tab === 'issues' && <Issues id={id} data={data} member={member} />}
         {tab === 'time' && <ProjectTime id={id} data={data} member={member} />}
         {tab === 'billing' && manage && <Billing id={id} />}
@@ -1258,7 +1260,35 @@ function IssueModal({ issue, who, member, projectId, onClose, onSave }: { issue:
 
 function ProjectTime({ id, data, member }: { id: string; data: Json; member: boolean }) {
   const [from, setFrom] = useState(addDays(today(), -30));
-  const { data: rep } = useQuery({ queryKey: ['project', id, 'time', from], queryFn: () => get<Json[]>(`/api/v1/project-reports/time?projectId=${id}&from=${from}&to=${today()}&groupBy=person`) });
+  const [to, setTo] = useState(today());
+  const [view, setView] = useState<'entries' | 'person' | 'task' | 'day'>(() => {
+    try {
+      return (localStorage.getItem('synapse.project.timeView') as 'entries') || 'entries';
+    } catch {
+      return 'entries';
+    }
+  });
+  const [who, setWho] = useState('');
+  const pickView = (v: typeof view) => {
+    setView(v);
+    try {
+      localStorage.setItem('synapse.project.timeView', v);
+    } catch {
+      /* ignore */
+    }
+  };
+  const { data: rep } = useQuery({
+    queryKey: ['project', id, 'time', from, to, view, who],
+    enabled: view !== 'entries',
+    queryFn: () => get<Json[]>(`/api/v1/project-reports/time?projectId=${id}&from=${from}&to=${to}&groupBy=${view}${who ? `&userId=${who}` : ''}`),
+  });
+  const { data: entries } = useQuery({
+    queryKey: ['project', id, 'time-entries', from, to, who],
+    enabled: view === 'entries',
+    queryFn: () => get<Json[]>(`/api/v1/projects/${id}/time-entries?from=${from}&to=${to}${who ? `&userId=${who}` : ''}`),
+  });
+  const [editEntry, setEditEntry] = useState<Json | null>(null);
+  const team = people(data);
   const { data: t } = useTasks(id);
   const act = useAct([['project', id], ['timesheet']]);
   const [f, setF] = useState({ date: today(), hours: '', taskId: '', notes: '', billable: data.project.billing_method !== 'non_billable' && data.project.billing_method !== 'fixed_price' });
@@ -1312,13 +1342,95 @@ function ProjectTime({ id, data, member }: { id: string; data: Json; member: boo
           </p>
         </div>
       )}
-      <div className="row">
+      <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end', gap: 10 }}>
+        <div className="field">
+          View
+          <div className="seg" role="radiogroup" aria-label="Time view">
+            {(
+              [
+                ['entries', 'Detailed'],
+                ['person', 'By person'],
+                ['task', 'By task'],
+                ['day', 'By day'],
+              ] as const
+            ).map(([k, l]) => (
+              <button key={k} type="button" role="radio" aria-checked={view === k} className={view === k ? 'on' : ''} onClick={() => pickView(k)}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
         <label className="field">
-          Since
-          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+          From
+          <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
         </label>
+        <label className="field">
+          To
+          <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
+        </label>
+        {team.size > 1 && (
+          <label className="field">
+            Person
+            <select value={who} onChange={(e) => setWho(e.target.value)}>
+              <option value="">Everyone</option>
+              {[...team].map(([uid, name]) => (
+                <option key={uid} value={uid}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
-      {!rep ? (
+      {view === 'entries' ? (
+        !entries ? (
+          <Spinner />
+        ) : !entries.length ? (
+          <Empty title="No time in this range" />
+        ) : (
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Person</th>
+                <th>Task</th>
+                <th>Notes</th>
+                <th className="num">Hours</th>
+                <th>Billable</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map((e) => (
+                <tr key={e.id} className={e.canEdit ? 'click' : ''} onClick={() => e.canEdit && setEditEntry(e)} title={e.canEdit ? 'Edit' : ''}>
+                  <td className="nowrap">{date(e.work_date)}</td>
+                  <td>{e.person}</td>
+                  <td style={{ whiteSpace: 'normal' }}>{e.task ?? <span className="muted">General</span>}</td>
+                  <td style={{ whiteSpace: 'normal' }}>{e.notes ?? ''}</td>
+                  <td className="num">{e.timer_started_at ? <span className="chip info">running</span> : hrs(e.minutes)}</td>
+                  <td>{e.billable ? 'Yes' : <span className="muted">No</span>}</td>
+                  <td>
+                    <span className={`chip ${e.status === 'approved' || e.status === 'invoiced' ? 'good' : e.status === 'submitted' ? 'info' : e.status === 'rejected' ? 'bad' : ''}`}>{e.status}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={4}>
+                  <strong>Total</strong> · {entries.length} entr{entries.length === 1 ? 'y' : 'ies'}
+                </td>
+                <td className="num">
+                  <strong>{hrs(entries.reduce((n, e) => n + e.minutes, 0))}</strong>
+                </td>
+                <td colSpan={2} className="muted small">
+                  billable {hrs(entries.filter((e) => e.billable).reduce((n, e) => n + e.minutes, 0))}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        )
+      ) : !rep ? (
         <Spinner />
       ) : !rep.length ? (
         <Empty title="No time in this range" />
@@ -1326,7 +1438,7 @@ function ProjectTime({ id, data, member }: { id: string; data: Json; member: boo
         <table className="data">
           <thead>
             <tr>
-              <th>Person</th>
+              <th>{view === 'person' ? 'Person' : view === 'task' ? 'Task' : 'Day'}</th>
               <th className="num">Hours</th>
               <th className="num">Billable</th>
               <th className="num">Awaiting approval</th>
@@ -1335,7 +1447,7 @@ function ProjectTime({ id, data, member }: { id: string; data: Json; member: boo
           <tbody>
             {rep.map((r) => (
               <tr key={r.label}>
-                <td>{r.label}</td>
+                <td>{view === 'day' ? date(r.label) : r.label}</td>
                 <td className="num">{Math.round(r.hours * 100) / 100}</td>
                 <td className="num">{Math.round(r.billable_hours * 100) / 100}</td>
                 <td className="num">{r.awaiting_approval || ''}</td>
@@ -1344,7 +1456,61 @@ function ProjectTime({ id, data, member }: { id: string; data: Json; member: boo
           </tbody>
         </table>
       )}
+      {editEntry && <TimeEntryModal entry={editEntry} tasks={t?.tasks ?? []} onClose={() => setEditEntry(null)} act={act} />}
     </div>
+  );
+}
+
+function TimeEntryModal({ entry, tasks, onClose, act }: { entry: Json; tasks: Json[]; onClose: () => void; act: ReturnType<typeof useAct> }) {
+  const [f, setF] = useState({ date: entry.work_date as string, hours: hrs(entry.minutes), taskId: (entry.task_id as string) ?? '', notes: (entry.notes as string) ?? '', billable: !!entry.billable });
+  return (
+    <Modal
+      title={`Time · ${entry.person}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn danger" onClick={async () => window.confirm('Delete this entry?') && (await act(() => del(`/api/v1/time/${entry.id}`), 'Deleted')) && onClose()}>
+            Delete
+          </button>
+          <button
+            className="btn primary"
+            disabled={!parseHours(f.hours)}
+            onClick={async () => (await act(() => patch(`/api/v1/time/${entry.id}`, { date: f.date, minutes: parseHours(f.hours), taskId: f.taskId || null, notes: f.notes || null, billable: f.billable }), 'Saved')) && onClose()}
+          >
+            Save
+          </button>
+        </>
+      }
+    >
+      <div className="modal-body grid2">
+        <label className="field">
+          Date
+          <input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
+        </label>
+        <label className="field">
+          Hours
+          <input value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} />
+        </label>
+        <label className="field wide">
+          Task
+          <select value={f.taskId} onChange={(e) => setF({ ...f, taskId: e.target.value })}>
+            <option value="">General</option>
+            {tasks.map((x) => (
+              <option key={x.id} value={x.id}>
+                #{x.task_number} {x.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field wide">
+          Notes
+          <input value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} />
+        </label>
+        <label className="row small">
+          <input type="checkbox" checked={f.billable} onChange={(e) => setF({ ...f, billable: e.target.checked })} /> Billable
+        </label>
+      </div>
+    </Modal>
   );
 }
 

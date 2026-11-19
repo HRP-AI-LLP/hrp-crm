@@ -61,6 +61,14 @@ The callback and webhook hosts are `https://hrpsynapse.hrpai.in` for prod and `h
 
 > Until App Review is approved, only people with a role on the Meta app (admins, developers, testers) can connect pages. That is enough for pilots.
 
+### Meeting apps (Zoom, Google Meet, Microsoft Teams)
+
+Each person connects their own accounts (several per app) under **My account → Meeting apps**. Calls scheduled on a project can then be created on that account, and the transcript is fetched about 5–10 minutes after the call ends (checked on the 5-minute cron for up to 7 days) and analysed into minutes.
+
+- **Google Meet** reuses the Google OAuth client. Enable the **Google Meet REST API** and the **Google Calendar API**, add the scope `https://www.googleapis.com/auth/meetings.space.readonly` to the consent screen, and add redirect URIs ending in `/api/public/oauth/gmeet/callback`. Transcripts need a Workspace edition with Meet transcription, switched on in the meeting.
+- **Microsoft Teams** reuses the Microsoft app registration. Add redirect URIs ending in `/api/public/oauth/msmeet/callback` and the delegated Graph permissions `Calendars.ReadWrite`, `OnlineMeetings.ReadWrite` and `OnlineMeetingTranscript.Read.All`. The transcript permission needs **admin consent** in each customer tenant. Work or school accounts only.
+- **Zoom**: create a *General app* (user-managed OAuth) in the Zoom App Marketplace with the redirect URIs ending in `/api/public/oauth/zoom/callback` and the scopes `user:read:user`, `meeting:write:meeting`, `meeting:read:meeting`, `cloud_recording:read:list_user_recordings` and `cloud_recording:read:list_recording_files` (classic names: `user:read`, `meeting:write`, `recording:read`). Set the secrets `ZOOM_CLIENT_ID` and `ZOOM_CLIENT_SECRET`. Transcripts come from cloud recording with *Audio transcript* on (Pro plan or above); meetings created from Synapse turn cloud recording on.
+
 ### Secrets
 
 These values are required to turn the features on: without Google or Microsoft keys the mailbox buttons stay hidden, and without Meta keys the Facebook card says "not set up".
@@ -72,7 +80,7 @@ cd apps/api
 npx wrangler secret put GOOGLE_CLIENT_SECRET --env dev   # repeat for each name and for --env production
 ```
 
-Names: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `META_APP_ID`, `META_APP_SECRET`, `META_VERIFY_TOKEN`.
+Names: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`, `META_APP_ID`, `META_APP_SECRET`, `META_VERIFY_TOKEN`, `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET`.
 
 For `pnpm local`, set the same variables in the terminal before running it.
 

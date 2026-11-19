@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import qrcode from 'qrcode-generator';
 import { useMemo, useState } from 'react';
 import { MailboxPanel } from '../components/MailboxPanel';
+import { MeetingAppsPanel } from '../components/MeetingApps';
 import { PushDevices } from '../components/PushDevices';
 import { Modal, Spinner, useToast } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
@@ -165,6 +166,7 @@ export function AccountPage() {
       </div>
       <div className="account-grid">
         <MailboxPanel />
+        <MeetingAppsPanel />
         <PushDevices />
         <section className="panel">
           <div className="panel-head">

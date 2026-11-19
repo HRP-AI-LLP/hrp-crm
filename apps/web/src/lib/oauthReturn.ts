@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useToast } from '../components/ui';
 
-const NAMES: Record<string, string> = { google: 'Gmail', microsoft: 'Outlook', meta: 'Facebook' };
+const NAMES: Record<string, string> = { google: 'Gmail', microsoft: 'Outlook', meta: 'Facebook', zoom: 'Zoom', gmeet: 'Google Meet', msmeet: 'Microsoft Teams' };
 
 /** After an OAuth round trip the API sends people back with ?integration=…&connected=…|error=… */
 export function useOAuthReturn(onDone?: () => void) {

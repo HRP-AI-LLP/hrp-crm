@@ -5,6 +5,7 @@
  *   integrationPublicRoutes  → /api/public OAuth callbacks and provider webhooks
  */
 import { hasAdmin } from '@synapse/shared';
+import { connectMeetingAccount, importRecent, markMeetingsPresent, myMeetingAccounts, removeMeetingAccount, updateMeetingAccount } from '../services/meetings';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
@@ -71,7 +72,7 @@ export const integrationRoutes = new Hono<AppEnv>()
       const me = await tx.one<{ phone: string | null }>(`select phone from users where tenant_id = $1 and id = $2`, [c.var.tenant.id, c.var.principal.user.id]);
       return {
         mailbox: mb ? publicView(mb) : null,
-        available: { google: oauthConfigured(c.env, 'google'), microsoft: oauthConfigured(c.env, 'microsoft'), meta: oauthConfigured(c.env, 'meta') },
+        available: { google: oauthConfigured(c.env, 'google'), microsoft: oauthConfigured(c.env, 'microsoft'), meta: oauthConfigured(c.env, 'meta'), zoom: oauthConfigured(c.env, 'zoom'), gmeet: oauthConfigured(c.env, 'gmeet'), msmeet: oauthConfigured(c.env, 'msmeet') },
         telephony: !!exotel,
         payments: !!rzp,
         myPhone: me?.phone ?? null,
@@ -80,9 +81,9 @@ export const integrationRoutes = new Hono<AppEnv>()
     return c.json(out);
   })
   .post('/integrations/oauth/:provider/start', async (c) => {
-    const provider = z.enum(['google', 'microsoft', 'meta']).parse(c.req.param('provider'));
+    const provider = z.enum(['google', 'microsoft', 'meta', 'zoom', 'gmeet', 'msmeet']).parse(c.req.param('provider'));
     if (provider === 'meta' && !hasAdmin(c.var.principal.permissions, 'channels')) throw forbidden('Connecting Facebook pages needs the Channels admin permission');
-    const { returnTo } = z.object({ returnTo: z.enum(['/account', '/settings']).default('/account') }).parse(await c.req.json().catch(() => ({})));
+    const { returnTo } = z.object({ returnTo: z.enum(['/account', '/settings', '/calls']).default('/account') }).parse(await c.req.json().catch(() => ({})));
     // the callback only completes in the browser that started the flow: a link forwarded to someone
     // else cannot attach their mailbox (or pages) to this account
     const binding = randomToken(24);
@@ -112,6 +113,30 @@ export const integrationRoutes = new Hono<AppEnv>()
       for (const r of rows) await revokeTokens(c.env, r);
     });
     return c.body(null, 204);
+  })
+  /* ───── my meeting apps (Zoom / Google Meet / Teams, several accounts each) ───── */
+  .get('/meeting-accounts', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => myMeetingAccounts(rctx(c, tx), c.env))))
+  .patch('/meeting-accounts/:id', async (c) => {
+    const b = z.object({ autoFetch: z.boolean().optional(), autoAnalyse: z.boolean().optional(), importAll: z.boolean().optional(), createTasks: z.boolean().optional() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => updateMeetingAccount(rctx(c, tx), uuid.parse(c.req.param('id')), b)));
+  })
+  .delete('/meeting-accounts/:id', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => removeMeetingAccount(rctx(c, tx), c.env, uuid.parse(c.req.param('id'))))))
+  .post('/meeting-accounts/:id/import', async (c) => {
+    const out = await c.var.db.tx(scope(c), async (tx) => {
+      const i = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and id = $2 and user_id = $3 and provider in ('zoom_meet','google_meet','ms_teams_meet')`, [
+        c.var.tenant.id, uuid.parse(c.req.param('id')), c.var.principal.user.id,
+      ]);
+      if (!i) throw notFound('Meeting account not found');
+      try {
+        const r = await importRecent(c.env, tx, i, 7);
+        await tx.query(`update integrations set last_sync_at = now(), status = 'active', last_error = null where tenant_id = $1 and id = $2`, [c.var.tenant.id, i.id]);
+        return r;
+      } catch (e) {
+        throw badRequest(`Could not read meetings: ${(e as Error).message}`);
+      }
+    });
+    await markMeetingsPresent(c.env);
+    return c.json(out);
   })
   .put('/me/phone', async (c) => {
     const { phone } = z.object({ phone: z.string().trim().regex(/^\+?[0-9 ()-]{6,20}$/, 'Use digits, e.g. +91 98100 00000').nullable() }).parse(await c.req.json());
@@ -192,7 +217,7 @@ export const integrationAdminRoutes = new Hono<AppEnv>()
     );
     return c.json({
       items: rows.map((r) => ({ ...publicView(r), userName: r.user_name, urls: hookUrls(c, r) })),
-      available: { google: oauthConfigured(c.env, 'google'), microsoft: oauthConfigured(c.env, 'microsoft'), meta: oauthConfigured(c.env, 'meta') },
+      available: { google: oauthConfigured(c.env, 'google'), microsoft: oauthConfigured(c.env, 'microsoft'), meta: oauthConfigured(c.env, 'meta'), zoom: oauthConfigured(c.env, 'zoom'), gmeet: oauthConfigured(c.env, 'gmeet'), msmeet: oauthConfigured(c.env, 'msmeet') },
     });
   })
   .post('/integrations/razorpay', async (c) => {
@@ -323,7 +348,7 @@ async function rawBody(c: { req: { raw: Request; header(n: string): string | und
 
 export const integrationPublicRoutes = new Hono<AppEnv>()
   .get('/oauth/:provider/callback', async (c) => {
-    const provider = z.enum(['google', 'microsoft', 'meta']).parse(c.req.param('provider')) as OAuthProvider;
+    const provider = z.enum(['google', 'microsoft', 'meta', 'zoom', 'gmeet', 'msmeet']).parse(c.req.param('provider')) as OAuthProvider;
     const s = await verifyState(c.env, c.req.query('state'));
     if (s.p !== provider) throw badRequest('Mismatched sign-in');
     const binding = /(?:^|;\s*)__Host-synapse_oauth=([A-Za-z0-9_-]+)/.exec(c.req.header('cookie') ?? '')?.[1];
@@ -351,6 +376,7 @@ export const integrationPublicRoutes = new Hono<AppEnv>()
       const result = await c.var.db.tx({ tenantId: s.t, userId: s.u }, async (tx) => {
         const who = await actAs(c.env, tx, s.t, s.u, 'oauth');
         if (!who) throw forbidden();
+        if (provider === 'zoom' || provider === 'gmeet' || provider === 'msmeet') return connectMeetingAccount(c.env, tx, s.t, s.u, provider, tokens);
         if (provider === 'meta') {
           // re-checked now, not only when the flow started
           if (!hasAdmin(who.principal.permissions, 'channels')) throw forbidden('Connecting Facebook pages needs the Channels admin permission');
@@ -376,7 +402,8 @@ export const integrationPublicRoutes = new Hono<AppEnv>()
         );
         return { connected: [address], failed: [] as string[] };
       });
-      if (provider !== 'meta') await markMailboxesPresent(c.env);
+      if (provider === 'google' || provider === 'microsoft') await markMailboxesPresent(c.env);
+      if (provider === 'zoom' || provider === 'gmeet' || provider === 'msmeet') await markMeetingsPresent(c.env);
       return done({ integration: provider, connected: result.connected.join(', '), ...(result.failed.length ? { failed: result.failed.join('; ') } : {}) });
     } catch (e) {
       return done({ integration: provider, error: (e as Error).message.slice(0, 200) });

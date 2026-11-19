@@ -1160,6 +1160,22 @@ export async function timeReport(ctx: RecordCtx, q: { from: string; to: string; 
   );
 }
 
+/** Every time entry on one project in a date range: managers see everyone's, others their own. */
+export async function projectTimeEntries(ctx: RecordCtx, projectId: string, q: { from: string; to: string; userId?: string | null }) {
+  const { level } = await projectAccess(ctx, projectId, 'view');
+  const me = ctx.principal.user.id;
+  const rows = await ctx.tx.query<Record<string, any>>(
+    `select e.id, e.work_date, e.minutes, e.notes, e.billable, e.status, e.user_id, u.full_name as person, e.task_id, e.issue_id,
+            case when t.id is not null then '#' || t.task_number || ' ' || t.name end as task, e.timer_started_at, e.created_at
+       from time_entries e join users u on u.tenant_id = e.tenant_id and u.id = e.user_id
+       left join project_tasks t on t.tenant_id = e.tenant_id and t.id = e.task_id
+      where e.tenant_id = $1 and e.project_id = $2 and e.work_date between $3::date and $4::date and ($5::uuid is null or e.user_id = $5) and ($6::boolean or e.user_id = $7)
+      order by e.work_date desc, e.created_at desc limit 2000`,
+    [ctx.tenantId, projectId, q.from, q.to, q.userId ?? null, level === 'manage', me],
+  );
+  return rows.map((r) => ({ ...r, work_date: d10(r.work_date), canEdit: ['draft', 'rejected'].includes(r.status) && (r.user_id === me || level === 'manage') && (level !== 'view' || r.user_id === me) }));
+}
+
 /** Logged vs available hours per person (projects admins: everyone; managers: their project members). */
 export async function utilisation(ctx: RecordCtx, from: string, to: string) {
   const managed = await managedProjectIds(ctx);

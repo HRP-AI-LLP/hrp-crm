@@ -57,6 +57,9 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string;
   /** Outlook / Microsoft 365 mail + calendar (Entra app registration, multi-tenant) */
   MS_CLIENT_ID?: string;
+  /** Zoom OAuth app (General app, user-managed) for meetings and their transcripts */
+  ZOOM_CLIENT_ID?: string;
+  ZOOM_CLIENT_SECRET?: string;
   MS_CLIENT_SECRET?: string;
   /** GST portal, e-invoice and e-way bill through the WhiteBooks GSP (developer.whitebooks.in).
    *  WHITEBOOKS_ENV: sandbox (default) or production; the e-invoice / e-way bill keys fall back to the GST API keys. */

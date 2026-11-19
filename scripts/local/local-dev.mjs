@@ -192,6 +192,8 @@ const vars = {
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET ?? '',
   MS_CLIENT_ID: process.env.MS_CLIENT_ID ?? '',
   MS_CLIENT_SECRET: process.env.MS_CLIENT_SECRET ?? '',
+  ZOOM_CLIENT_ID: process.env.ZOOM_CLIENT_ID ?? '',
+  ZOOM_CLIENT_SECRET: process.env.ZOOM_CLIENT_SECRET ?? '',
   META_APP_ID: process.env.META_APP_ID ?? '',
   META_APP_SECRET: process.env.META_APP_SECRET ?? '',
   META_VERIFY_TOKEN: process.env.META_VERIFY_TOKEN ?? '',
