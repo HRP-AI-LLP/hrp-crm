@@ -96,3 +96,17 @@ Everything is under `/api/v1`:
 - `/timesheet`, `/timesheet/submit`, `/timesheet/approvals` and `/timesheet/decide`
 - `/my-tasks`
 - `/project-reports/time`, `/project-reports/utilisation` and `/project-reports/capacity/:userId`
+
+## Work management (Jira / Azure DevOps style)
+
+Every project has a **work item key** (from its code or name, e.g. `FLEET`) and items are numbered `FLEET-1`, `FLEET-2` …
+
+- **Hierarchy**: epic → feature → story / bug / task / spike / chore → sub-task (four levels). A story or bug sits under an epic or a feature; tasks and sub-tasks under a story, bug or task. Points and progress roll up in *Epics & hierarchy*.
+- **Workflows** (*Work setup*): states per work item type, each counting as a status category (to do, in progress, review, blocked, done, cancelled). Without moves defined any state goes to any state; with them, only the ticked moves are offered, optionally manager-only and needing an assignee, resolution, comment, points or estimate. Status changes made elsewhere (task list, bulk edit) follow the workflow too.
+- **Components** (with a lead who can take new items) and **custom fields** per type (text, number, date, choice, multi-choice, person, checkbox, link; optionally required).
+- **Boards**: kanban (open work and the last 14 days of done) or scrum (the active sprint); columns by status category or exact states, WIP limits, swimlanes (assignee, epic, parent, priority, type), quick filters and a board filter written as a query. Drag a card to move it through its workflow.
+- **Queries**: `type = bug AND status != done AND assignee = currentUser() ORDER BY priority DESC`. Fields: project, key, type, status, state, assignee, reporter, watcher, priority, severity, points, estimate, remaining, sprint, release, epic, parent, component, labels, text, summary, description, resolution, created, updated, due, resolved, started and custom field keys. Operators `= != > >= < <= ~ !~ IN NOT IN IS EMPTY IS NOT EMPTY`, `AND OR NOT ( )`; functions `currentUser() openSprints() currentSprint() closedSprints() releasedVersions() unreleasedVersions() now() startOfDay() startOfWeek() startOfMonth()`; relative dates `-7d -2w -1m`. Save (private or shared), export CSV, select results for **bulk change** (status, assignee, priority, points, sprint, release, labels, component, delete). *Work items* in the menu runs queries across all your projects.
+- **Item view**: workflow buttons, details, children, links between items (relates, blocks, duplicates, clones, causes, tests), comments with `@mentions`, watchers, every change in *History*, code links and covering test cases. `?item=<id>` on a project opens it.
+- **Dashboards**: widgets from queries (number, breakdown, list) plus cumulative flow, cycle and lead time with weekly throughput, created vs resolved, and workload by person.
+- **Test plans**: test cases with steps and expected results, linked to the stories they cover; plans for a sprint or release (add a suite or the cases covering its items); runs record pass / fail per step, and a failed run can raise a bug with the steps. *Coverage* shows which requirements have passing tests.
+- **Code**: see INTEGRATIONS.md → GitHub and Azure DevOps. Mentioning a key in a branch, commit, pull request or build links it; *Work setup → Automation from code* can move the item when a branch is created, a PR opens or merges, or a build fails.

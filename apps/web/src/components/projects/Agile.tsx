@@ -8,6 +8,7 @@ import { del, get, patch, post, put } from '../../lib/api';
 import { date, money2 } from '../../lib/format';
 import { BarChart, LineChart } from '../charts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
+import { WorkItemModal } from './WorkItem';
 
 type Json = Record<string, any>;
 const today = () => new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10);
@@ -19,6 +20,8 @@ export const WORK_TYPES: [string, string, string][] = [
   ['spike', 'Spike', '🔬'],
   ['chore', 'Chore', '🧹'],
   ['epic', 'Epic', '⚡'],
+  ['feature', 'Feature', '🧩'],
+  ['subtask', 'Sub-task', '↳'],
 ];
 const typeIcon = (t: string) => WORK_TYPES.find((w) => w[0] === t)?.[2] ?? '☑️';
 const STATUS_CLS: Record<string, string> = {
@@ -348,7 +351,7 @@ export function AgileTab({ id, manage, member }: { id: string; manage: boolean; 
         </>
       )}
 
-      {open && <ItemModal id={id} item={open} board={b} member={member} onClose={() => setOpen(null)} />}
+      {open && <WorkItemModal projectId={id} id={open.id} onClose={() => setOpen(null)} onOpen={(x) => setOpen({ id: x })} />}
       {sprintEdit && (
         <SprintModal
           s={sprintEdit}
@@ -603,7 +606,8 @@ function CloseSprint({ s, planned, open, onClose, onDone }: { s: Json; planned: 
 }
 
 /** Type, points, sprint, release, epic and code links of one work item. */
-function ItemModal({ id, item, board, member, onClose }: { id: string; item: Json; board: Json; member: boolean; onClose: () => void }) {
+/** The earlier planning dialog (kept for reference; the full work item view replaced it). */
+export function ItemModal({ id, item, board, member, onClose }: { id: string; item: Json; board: Json; member: boolean; onClose: () => void }) {
   const act = useAct([
     ['agile', id],
     ['project', id],

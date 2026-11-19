@@ -69,6 +69,15 @@ Each person connects their own accounts (several per app) under **My account →
 - **Microsoft Teams** reuses the Microsoft app registration. Add redirect URIs ending in `/api/public/oauth/msmeet/callback` and the delegated Graph permissions `Calendars.ReadWrite`, `OnlineMeetings.ReadWrite` and `OnlineMeetingTranscript.Read.All`. The transcript permission needs **admin consent** in each customer tenant. Work or school accounts only.
 - **Zoom**: create a *General app* (user-managed OAuth) in the Zoom App Marketplace with the redirect URIs ending in `/api/public/oauth/zoom/callback` and the scopes `user:read:user`, `meeting:write:meeting`, `meeting:read:meeting`, `cloud_recording:read:list_user_recordings` and `cloud_recording:read:list_recording_files` (classic names: `user:read`, `meeting:write`, `recording:read`). Set the secrets `ZOOM_CLIENT_ID` and `ZOOM_CLIENT_SECRET`. Transcripts come from cloud recording with *Audio transcript* on (Pro plan or above); meetings created from Synapse turn cloud recording on.
 
+### GitHub and Azure DevOps (code links for work items)
+
+An admin with the *developers* permission adds a connection in any project's **Work setup → Code connections**. Synapse shows a payload URL and a secret once.
+
+- **GitHub**: repository or organisation → Settings → Webhooks → Add webhook; payload URL as shown, content type `application/json`, the secret; events *Pushes*, *Branch or tag creation*, *Pull requests*, *Workflow runs*. Requests are checked with `X-Hub-Signature-256`.
+- **Azure DevOps**: Project settings → Service hooks → *Web Hooks*, one subscription per event (*Code pushed*, *Pull request created*, *Pull request updated*, *Pull request merged*, *Build completed*), URL as shown, basic authentication user `synapse` with the secret as the password.
+
+Any work item key (`FLEET-12`) in a branch name, commit message, PR title or description links that branch / commit / PR / build to the item. Each project chooses in *Automation from code* which state an item moves to when its branch is created, its PR opens or merges, or its build fails.
+
 ### Secrets
 
 These values are required to turn the features on: without Google or Microsoft keys the mailbox buttons stay hidden, and without Meta keys the Facebook card says "not set up".

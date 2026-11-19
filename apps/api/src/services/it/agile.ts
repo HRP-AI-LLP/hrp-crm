@@ -14,7 +14,8 @@ import type { RecordCtx } from '../records';
 const today = () => new Date(Date.now() + 5.5 * 3_600_000).toISOString().slice(0, 10);
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
-export type WorkType = 'task' | 'story' | 'bug' | 'epic' | 'spike' | 'chore';
+import { checkParent, refreshEpics, type WorkType } from '../work-types';
+export type { WorkType };
 
 /* ───────────── board data ───────────── */
 
@@ -71,8 +72,9 @@ export interface AgileInput {
 
 export async function setAgile(ctx: RecordCtx, projectId: string, taskId: string, input: AgileInput) {
   await projectAccess(ctx, projectId, 'member');
-  const t = await ctx.tx.one<{ id: string; work_type: string; sprint_id: string | null }>(`select id, work_type, sprint_id from project_tasks where tenant_id = $1 and id = $2 and project_id = $3 for update`, [ctx.tenantId, taskId, projectId]);
+  const t = await ctx.tx.one<{ id: string; work_type: string; sprint_id: string | null; parent_id: string | null }>(`select id, work_type, sprint_id, parent_id from project_tasks where tenant_id = $1 and id = $2 and project_id = $3 for update`, [ctx.tenantId, taskId, projectId]);
   if (!t) throw notFound('Task not found');
+  if (input.workType && input.workType !== t.work_type && t.parent_id) await checkParent(ctx.tx, ctx.tenantId, projectId, input.workType, t.parent_id, taskId);
   if (input.sprintId) {
     const s = await ctx.tx.one<{ status: string }>(`select status from project_sprints where tenant_id = $1 and id = $2 and project_id = $3`, [ctx.tenantId, input.sprintId, projectId]);
     if (!s) throw badRequest('Sprint not found');
@@ -104,6 +106,7 @@ export async function setAgile(ctx: RecordCtx, projectId: string, taskId: string
       input.releaseId !== undefined, input.releaseId ?? null, input.epicId !== undefined, input.epicId ?? null, input.backlogRank ?? null,
     ],
   );
+  if (input.workType !== undefined || input.epicId !== undefined) await refreshEpics(ctx.tx, ctx.tenantId, taskId);
   // sub-tasks follow their story into the sprint
   if (input.sprintId !== undefined) await ctx.tx.query(`update project_tasks set sprint_id = $3 where tenant_id = $1 and parent_id = $2`, [ctx.tenantId, taskId, input.sprintId ?? null]);
 }

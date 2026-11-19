@@ -12,6 +12,7 @@ import { ApiError, badRequest, forbidden, notFound } from '../lib/errors';
 import type { Tx } from '../lib/db';
 import { saveInvoiceLines } from './billing';
 import { d10, r2 } from './books/ledger';
+import { checkParent, refreshEpics, stateForStatus, type WorkType } from './work-types';
 import { createRecord, loadRow, Params, type RecordCtx, type RecordEvent, toDto, visibilityWhere } from './records';
 
 export type Level = 'manage' | 'member' | 'view';
@@ -436,6 +437,7 @@ export interface TaskInput {
   rate?: number | null;
   tags?: string[];
   position?: number;
+  workType?: WorkType;
 }
 
 const TASK_COLS = `t.id, t.project_id, t.list_id, t.milestone_id, t.parent_id, t.task_number, t.name, t.description, t.status, t.priority, t.assignees, t.start_date, t.due_date,
@@ -465,11 +467,8 @@ async function checkTaskRefs(ctx: RecordCtx, project: Record<string, any>, input
   if (input.listId && !(await ctx.tx.one(`select 1 from project_task_lists where tenant_id = $1 and id = $2 and project_id = $3`, [ctx.tenantId, input.listId, pid]))) throw badRequest('Task list not found');
   if (input.milestoneId && !(await ctx.tx.one(`select 1 from project_milestones where tenant_id = $1 and id = $2 and project_id = $3`, [ctx.tenantId, input.milestoneId, pid]))) throw badRequest('Milestone not found');
   if (input.parentId) {
-    const p = await ctx.tx.one<{ parent_id: string | null }>(`select parent_id from project_tasks where tenant_id = $1 and id = $2 and project_id = $3`, [ctx.tenantId, input.parentId, pid]);
-    if (!p) throw badRequest('Parent task not found');
-    if (p.parent_id) throw badRequest('Sub-tasks go one level deep');
-    if (input.parentId === selfId) throw badRequest('A task cannot be its own parent');
-    if (selfId && (await ctx.tx.one(`select 1 from project_tasks where tenant_id = $1 and parent_id = $2`, [ctx.tenantId, selfId]))) throw badRequest('A task with sub-tasks cannot become a sub-task');
+    const type = selfId ? ((await ctx.tx.one<{ work_type: WorkType }>(`select work_type from project_tasks where tenant_id = $1 and id = $2`, [ctx.tenantId, selfId]))?.work_type ?? 'task') : (input.workType ?? 'task');
+    await checkParent(ctx.tx, ctx.tenantId, pid, type, input.parentId, selfId);
   }
   if (input.assignees?.length) {
     const ok = await workers(ctx.tx, ctx.tenantId, project);
@@ -485,15 +484,16 @@ export async function createTask(ctx: RecordCtx, projectId: string, input: TaskI
   await ctx.tx.query(`select 1 from projects where tenant_id = $1 and id = $2 for update`, [ctx.tenantId, projectId]);
   const n = await ctx.tx.one<{ n: number }>(`select coalesce(max(task_number), 0) + 1 as n from project_tasks where tenant_id = $1 and project_id = $2`, [ctx.tenantId, projectId]);
   const t = await ctx.tx.one<{ id: string }>(
-    `insert into project_tasks (tenant_id, project_id, list_id, milestone_id, parent_id, task_number, name, description, status, priority, assignees, start_date, due_date, estimate_hours, progress, billable, rate, tags, position, completed_at)
+    `insert into project_tasks (tenant_id, project_id, list_id, milestone_id, parent_id, task_number, name, description, status, priority, assignees, start_date, due_date, estimate_hours, progress, billable, rate, tags, position, completed_at, work_type, reporter_id)
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,
-             coalesce($19, (select coalesce(max(position), 0) + 1 from project_tasks where tenant_id = $1 and project_id = $2)), case when $9 = 'done' then now() end) returning id`,
+             coalesce($19, (select coalesce(max(position), 0) + 1 from project_tasks where tenant_id = $1 and project_id = $2)), case when $9 = 'done' then now() end, $20, $21) returning id`,
     [
       ctx.tenantId, projectId, input.listId ?? null, input.milestoneId ?? null, input.parentId ?? null, n!.n, input.name, input.description ?? null, input.status ?? 'open', input.priority ?? 'medium',
       input.assignees ?? [], input.startDate ?? null, input.dueDate ?? null, input.estimateHours ?? null, input.status === 'done' ? 100 : input.progress ?? 0, input.billable ?? project.billing_method !== 'non_billable', input.rate ?? null,
-      input.tags ?? [], input.position ?? null,
+      input.tags ?? [], input.position ?? null, input.workType ?? 'task', ctx.principal.user.id,
     ],
   );
+  if (input.parentId) await refreshEpics(ctx.tx, ctx.tenantId, t!.id);
   await refreshProgress(ctx.tx, ctx.tenantId, projectId);
   await notify(ctx, input.assignees ?? [], `New task in ${project.name}: ${input.name}`, `/projects/${projectId}#task-${t!.id}`);
   return { id: t!.id, number: n!.n };
@@ -515,6 +515,7 @@ export async function updateTask(ctx: RecordCtx, projectId: string, taskId: stri
   };
   await checkTaskRefs(ctx, project, { ...next, assignees: input.assignees?.filter((a) => !(cur.assignees as string[]).includes(a)) }, taskId);
   const status = input.status ?? cur.status;
+  const nextState = status !== cur.status ? await stateForStatus(ctx.tx, ctx.tenantId, projectId, cur as never, status, level === 'manage' ? 'manager' : 'member') : cur.state;
   if (status === 'done' && cur.status !== 'done') {
     const open = await ctx.tx.one(`select 1 from project_tasks where tenant_id = $1 and parent_id = $2 and status not in ('done','cancelled') limit 1`, [ctx.tenantId, taskId]);
     if (open) throw badRequest('Finish or cancel the sub-tasks first');
@@ -524,14 +525,15 @@ export async function updateTask(ctx: RecordCtx, projectId: string, taskId: stri
             status = $9, priority = coalesce($10, priority), assignees = coalesce($11, assignees), start_date = $12, due_date = $13,
             estimate_hours = case when $14::boolean then $15 else estimate_hours end, progress = case when $9 = 'done' then 100 else coalesce($16, progress) end,
             billable = coalesce($17, billable), rate = case when $18::boolean then $19 else rate end, tags = coalesce($20, tags), position = coalesce($21, position),
-            completed_at = case when $9 = 'done' and status <> 'done' then now() when $9 <> 'done' then null else completed_at end
+            completed_at = case when $9 = 'done' and status <> 'done' then now() when $9 <> 'done' then null else completed_at end, state = $22
       where tenant_id = $1 and id = $2`,
     [
       ctx.tenantId, taskId, input.name ?? null, input.description !== undefined, input.description ?? null, next.listId, next.milestoneId, next.parentId, status, input.priority ?? null,
       input.assignees ?? null, next.startDate, next.dueDate, input.estimateHours !== undefined, input.estimateHours ?? null, input.progress ?? null, input.billable ?? null,
-      input.rate !== undefined, input.rate ?? null, input.tags ?? null, input.position ?? null,
+      input.rate !== undefined, input.rate ?? null, input.tags ?? null, input.position ?? null, nextState ?? null,
     ],
   );
+  if (input.parentId !== undefined && input.parentId !== cur.parent_id) await refreshEpics(ctx.tx, ctx.tenantId, taskId);
   if (input.dueDate !== undefined || input.startDate !== undefined) await reschedule(ctx.tx, ctx.tenantId, taskId);
   await refreshProgress(ctx.tx, ctx.tenantId, projectId);
   const added = (input.assignees ?? []).filter((a) => !(cur.assignees as string[]).includes(a));

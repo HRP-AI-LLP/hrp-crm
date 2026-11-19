@@ -18,6 +18,7 @@ import { dealBillingRoutes } from './routes/deal-billing';
 import { booksRoutes } from './routes/books';
 import { projectRoutes } from './routes/projects';
 import { itRoutes } from './routes/it';
+import { workAdminRoutes, workPublicRoutes, workRoutes } from './routes/work';
 import { industryPublicRoutes, industryRoutes } from './routes/industry';
 import { intakeRoutes } from './routes/intake';
 import { manufacturingRoutes } from './routes/manufacturing';
@@ -68,6 +69,7 @@ export function createApp() {
   app.route('/api/public', tallyPublicRoutes);
   app.route('/api/public', verifyPublicRoutes);
   app.route('/api/public', industryPublicRoutes);
+  app.route('/api/public', workPublicRoutes);
 
   app.use('/api/auth/*', tenantResolver);
   app.route('/api/auth', authRoutes);
@@ -87,6 +89,7 @@ export function createApp() {
   app.route('/api/v1', booksRoutes);
   app.route('/api/v1', projectRoutes);
   app.route('/api/v1', itRoutes);
+  app.route('/api/v1', workRoutes);
   app.route('/api/v1', industryRoutes);
   app.route('/api/v1', intakeRoutes);
   app.route('/api/v1', manufacturingRoutes);
@@ -113,6 +116,7 @@ export function createApp() {
   app.route('/api/admin', whatsappAdminRoutes);
   app.route('/api/admin', insightsAdminRoutes);
   app.route('/api/admin', tallyAdminRoutes);
+  app.route('/api/admin', workAdminRoutes);
   app.route('/api/admin/intel', intelAdminRoutes);
 
   app.all('/api/*', () => {

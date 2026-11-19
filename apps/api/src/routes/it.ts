@@ -9,6 +9,7 @@ import { notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import * as ag from '../services/it/agile';
+import { WORK_TYPES } from '../services/work-types';
 import * as ci from '../services/it/contract-import';
 import * as ct from '../services/it/contracts';
 import * as pm from '../services/it/product';
@@ -49,7 +50,7 @@ const releaseSchema = z.object({
 });
 const agileSchema = z
   .object({
-    workType: z.enum(['task', 'story', 'bug', 'epic', 'spike', 'chore']),
+    workType: z.enum(WORK_TYPES),
     storyPoints: z.number().min(0).max(1000).nullish(),
     sprintId: uuid.nullish(),
     releaseId: uuid.nullish(),

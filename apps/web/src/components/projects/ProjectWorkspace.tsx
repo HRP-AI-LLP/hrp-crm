@@ -3,7 +3,7 @@ import { SideTabs } from '../SideTabs';
 import { ViewSignButton } from '../DocumentViewer';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { uploadFile } from '../Files';
 import { del, get, patch, post, put } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -13,6 +13,8 @@ import { BarChart } from '../charts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 import { AgileTab, ChangesTab, ReleasesTab } from './Agile';
 import { ProjectCalls } from './ProjectCalls';
+import { BoardsTab, DashboardsTab, HierarchyTab, QueriesView, TestsTab, WorkSetupTab } from './Work';
+import { WorkItemModal } from './WorkItem';
 
 type Json = Record<string, any>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -39,21 +41,35 @@ function useAct(keys: unknown[][]) {
   };
 }
 
-type Tab = 'overview' | 'tasks' | 'agile' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'issues' | 'time' | 'billing' | 'team';
+type Tab = 'overview' | 'tasks' | 'boards' | 'agile' | 'hierarchy' | 'queries' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'issues' | 'tests' | 'dashboards' | 'time' | 'billing' | 'team' | 'worksetup';
 
-const PROJECT_ICON: Record<string, string> = { overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
+const PROJECT_ICON: Record<string, string> = { boards: 'board', hierarchy: 'layers', queries: 'search', tests: 'check', dashboards: 'chart', worksetup: 'gear', overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
 
 export function ProjectWorkspace({ id }: { id: string }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`) });
   const [tab, setTab] = useState<Tab>('overview');
+  const [params, setParams] = useSearchParams();
+  const item = params.get('item');
+  const openItem = (x: string | null) =>
+    setParams(
+      (p) => {
+        const n = new URLSearchParams(p);
+        if (x) n.set('item', x);
+        else n.delete('item');
+        return n;
+      },
+      { preventScrollReset: true },
+    );
   if (isLoading) return <Spinner />;
   if (error || !data) return null;
   const manage = data.level === 'manage';
   const member = manage || data.level === 'member';
   const tabs: [Tab, string][] = [
-    ['overview', 'Overview'], ['tasks', 'Tasks'], ['agile', 'Sprints'], ['releases', 'Releases'], ['changes', 'Changes & portal'], ['gantt', 'Gantt'], ['milestones', 'Milestones'], ['calls', 'Calls'], ['issues', 'Issues'], ['time', 'Time'],
-    ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'],
+    ['overview', 'Overview'], ['tasks', 'Tasks'], ['boards', 'Boards'], ['agile', 'Backlog & sprints'], ['hierarchy', 'Epics & hierarchy'], ['queries', 'Queries'], ['releases', 'Releases'], ['gantt', 'Gantt'],
+    ['milestones', 'Milestones'], ['changes', 'Changes & portal'], ['calls', 'Calls'], ['issues', 'Issues'], ['tests', 'Test plans'], ['dashboards', 'Dashboards'], ['time', 'Time'],
+    ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'], ['worksetup', 'Work setup'],
   ];
+  const GROUP: Record<string, string> = { overview: 'Work', tasks: 'Work', boards: 'Work', agile: 'Work', hierarchy: 'Work', queries: 'Work', releases: 'Work', gantt: 'Work', milestones: 'Delivery', changes: 'Delivery', calls: 'Delivery', issues: 'Delivery', tests: 'Delivery', dashboards: 'Insights', time: 'People & money', billing: 'People & money', team: 'People & money', worksetup: 'Settings' };
   return (
     <div style={{ marginBottom: 20 }}>
     <SideTabs
@@ -61,7 +77,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
       title="Project"
       value={tab}
       onChange={setTab}
-      items={tabs.map(([k, l]) => ({ key: k, label: l, icon: PROJECT_ICON[k], group: ['overview', 'tasks', 'agile', 'releases', 'gantt'].includes(k) ? 'Work' : ['milestones', 'changes', 'calls', 'issues'].includes(k) ? 'Delivery' : 'People & money' }))}
+      items={tabs.map(([k, l]) => ({ key: k, label: l, icon: PROJECT_ICON[k], group: GROUP[k] }))}
     >
       <div className="panel-body">
         {tab === 'overview' && <Overview id={id} data={data} />}
@@ -72,12 +88,19 @@ export function ProjectWorkspace({ id }: { id: string }) {
         {tab === 'gantt' && <Gantt id={id} data={data} member={member} />}
         {tab === 'milestones' && <Milestones id={id} data={data} manage={manage} />}
         {tab === 'calls' && <ProjectCalls id={id} />}
+        {tab === 'boards' && <BoardsTab id={id} manage={manage} member={member} onOpen={openItem} />}
+        {tab === 'hierarchy' && <HierarchyTab id={id} member={member} onOpen={openItem} />}
+        {tab === 'queries' && <QueriesView projectId={id} member={member} />}
+        {tab === 'tests' && <TestsTab id={id} member={member} onOpen={openItem} />}
+        {tab === 'dashboards' && <DashboardsTab id={id} onOpen={openItem} />}
+        {tab === 'worksetup' && <WorkSetupTab id={id} manage={manage} />}
         {tab === 'issues' && <Issues id={id} data={data} member={member} />}
         {tab === 'time' && <ProjectTime id={id} data={data} member={member} />}
         {tab === 'billing' && manage && <Billing id={id} />}
         {tab === 'team' && <Team id={id} data={data} manage={manage} />}
       </div>
     </SideTabs>
+    {item && /^[0-9a-f-]{36}$/i.test(item) && <WorkItemModal projectId={id} id={item} onClose={() => openItem(null)} onOpen={openItem} />}
     </div>
   );
 }
