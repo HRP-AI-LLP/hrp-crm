@@ -276,6 +276,10 @@ export async function syncMailbox(env: Env, db: Db, tenantId: string, integratio
     }
     return n;
   });
+  // call invites in the calendar become calls on the right project
+  await db
+    .tx({ tenantId, userId: i.user_id }, async (tx) => (await import('./invites')).syncInvites(env, tx, i))
+    .catch((e) => console.error(JSON.stringify({ level: 'warn', job: 'invites', tenant: tenantId, msg: (e as Error).message })));
   await release({ since: started.toISOString() }, true);
   return { fetched: items.length, logged };
 }

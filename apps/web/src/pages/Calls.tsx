@@ -23,6 +23,7 @@ export function CallsPage() {
       return n;
     });
   const qc = useQueryClient();
+  const toast = useToast();
   useOAuthReturn(() => qc.invalidateQueries({ queryKey: ['meeting-accounts'] }));
   const { data } = useQuery({ queryKey: ['my-calls', scope], queryFn: () => get<{ calls: Json[] }>(`/api/v1/calls?scope=${scope}`) });
   const { data: inbox } = useQuery({ queryKey: ['my-calls', 'unassigned'], queryFn: () => get<{ calls: Json[] }>('/api/v1/calls?scope=unassigned') });
@@ -34,9 +35,25 @@ export function CallsPage() {
           <h1>Calls</h1>
           <p>Project calls with clients and the team — transcripts and minutes, with each person’s actions.</p>
         </div>
-        <button className="btn" onClick={() => setApps(!apps)}>
-          {apps ? 'Hide meeting apps' : 'Meeting apps'}
-        </button>
+        <div className="row" style={{ gap: 6 }}>
+          <button
+            className="btn"
+            onClick={async () => {
+              try {
+                const r = await post<Json>('/api/v1/calls/invites/sync', {});
+                toast(!r.mailbox ? 'Connect Gmail or Outlook in My account to pick up call invites' : r.added ? `${r.added} call${r.added > 1 ? 's' : ''} added from your calendar` : `No new call invites (${r.found} seen)`, !r.mailbox);
+                qc.invalidateQueries({ queryKey: ['my-calls'] });
+              } catch (e) {
+                toast((e as Error).message, true);
+              }
+            }}
+          >
+            Check my invites
+          </button>
+          <button className="btn" onClick={() => setApps(!apps)}>
+            {apps ? 'Hide meeting apps' : 'Meeting apps'}
+          </button>
+        </div>
       </div>
       {apps && (
         <div style={{ marginBottom: 16 }}>

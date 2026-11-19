@@ -36,8 +36,15 @@ export function sniffType(bytes: Uint8Array, name: string): string | null {
   if (ascii(bytes, 4, 8) === 'ftyp') {
     const brand = ascii(bytes, 8, 12);
     if (['heic', 'heix', 'mif1', 'msf1', 'hevc'].includes(brand)) return 'image/heic';
-    if (['isom', 'iso2', 'mp41', 'mp42', 'avc1', 'M4V ', 'qt  '].includes(brand)) return brand === 'qt  ' ? 'video/quicktime' : 'video/mp4';
+    if (['isom', 'iso2', 'mp41', 'mp42', 'avc1', 'M4V ', 'qt  '].includes(brand)) return brand === 'qt  ' ? 'video/quicktime' : ext === 'm4a' ? 'audio/mp4' : 'video/mp4';
+    if (['M4A ', 'M4B ', 'dash'].includes(brand)) return 'audio/mp4';
   }
+  // call recordings
+  if (ascii(bytes, 0, 3) === 'ID3' || (bytes[0] === 0xff && ((bytes[1] ?? 0) & 0xe0) === 0xe0 && ext === 'mp3')) return 'audio/mpeg';
+  if (ascii(bytes, 0, 4) === 'RIFF' && ascii(bytes, 8, 12) === 'WAVE') return 'audio/wav';
+  if (ascii(bytes, 0, 4) === 'OggS') return 'audio/ogg';
+  if (ascii(bytes, 0, 4) === 'fLaC') return 'audio/flac';
+  if (startsWith(bytes, [0x1a, 0x45, 0xdf, 0xa3])) return ext === 'weba' ? 'audio/webm' : 'video/webm';
   if (ascii(bytes, 0, 5) === '%PDF-') return 'application/pdf';
   if (startsWith(bytes, [0x50, 0x4b, 0x03, 0x04])) {
     const office: Record<string, string> = {
@@ -59,7 +66,7 @@ export function sniffType(bytes: Uint8Array, name: string): string | null {
   return null;
 }
 
-export const INLINE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf', 'video/mp4']);
+export const INLINE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf', 'video/mp4', 'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'video/webm']);
 
 function safeName(name: string): string {
   const n = name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 200);
@@ -151,12 +158,13 @@ export async function saveFile(
   ctx: RecordCtx,
   env: Env,
   input: { objectKey: string; recordId: string; name: string; bytes: Uint8Array; kind?: FileKind; description?: string | null },
-  opts: { system?: boolean } = {},
+  opts: { system?: boolean; maxBytes?: number } = {},
 ) {
   if (!env.FILES) throw new StorageUnavailableError();
   if (!opts.system) await assertRecordAccess(ctx, input.objectKey, input.recordId, 'update');
   if (!input.bytes.length) throw badRequest('The file is empty');
-  if (input.bytes.length > MAX_FILE_BYTES) throw badRequest('Files can be at most 25 MB');
+  const max = opts.maxBytes ?? MAX_FILE_BYTES;
+  if (input.bytes.length > max) throw badRequest(`Files can be at most ${Math.round(max / 1024 / 1024)} MB`);
   const name = safeName(input.name);
   const type = sniffType(input.bytes, name);
   if (!type) throw badRequest('This file type is not allowed. Upload images, PDF, Office documents, CSV or text files.');

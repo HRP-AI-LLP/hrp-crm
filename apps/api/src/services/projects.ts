@@ -105,7 +105,8 @@ export async function listProjects(ctx: RecordCtx, q: { status?: string | null; 
             (select name from accounts a where a.tenant_id = r.tenant_id and a.id = r.account_id) as customer,
             (select count(*)::int from project_tasks t where t.tenant_id = r.tenant_id and t.project_id = r.id and t.status not in ('done','cancelled')) as open_tasks,
             (select count(*)::int from project_tasks t where t.tenant_id = r.tenant_id and t.project_id = r.id and t.status not in ('done','cancelled') and t.due_date < current_date) as overdue_tasks,
-            (select coalesce(sum(minutes), 0)::float8 / 60 from time_entries e where e.tenant_id = r.tenant_id and e.project_id = r.id) as hours
+            (select coalesce(sum(minutes), 0)::float8 / 60 from time_entries e where e.tenant_id = r.tenant_id and e.project_id = r.id) as hours,
+            (select count(*)::int from project_repos g where g.tenant_id = r.tenant_id and g.project_id = r.id) as repos
        from projects r where ${where.join(' and ')}
       order by case r.status when 'active' then 0 when 'planning' then 1 when 'on_hold' then 2 else 3 end, coalesce(r.end_date, '9999-12-31'), r.name limit 500`,
     p.values,

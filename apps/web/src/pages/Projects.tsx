@@ -89,6 +89,11 @@ export function ProjectsPage() {
                           {p.project_code ? <span className="muted">{p.project_code} · </span> : null}
                           {p.name}
                         </Link>
+                        {p.repos === 0 && !['completed', 'cancelled'].includes(p.status) && (
+                          <span className="chip warn" style={{ marginLeft: 6 }} title="No code repository linked — Work setup → Code repositories">
+                            no repo
+                          </span>
+                        )}
                       </td>
                       <td>{p.customer ?? '—'}</td>
                       <td>{p.manager ?? '—'}</td>

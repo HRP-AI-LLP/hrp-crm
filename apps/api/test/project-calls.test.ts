@@ -4,7 +4,8 @@ import { Db } from '../src/lib/db';
 import { parseDue, parseJoinUrl, ruleAnalysis } from '../src/services/calls';
 import { captionsToText, meetingSweep } from '../src/services/meetings';
 import { analyseAsOwner } from '../src/services/calls';
-import { type Json, makeHarness, PW } from './harness';
+import { sealSecret } from '../src/services/integrations';
+import { fakeR2, type Json, makeHarness, PW } from './harness';
 
 let h: Awaited<ReturnType<typeof makeHarness>>;
 let api: ReturnType<typeof h.as>;
@@ -15,6 +16,7 @@ const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { sta
 const realFetch = globalThis.fetch;
 const hits: string[] = [];
 let aiReply: unknown = null;
+let calendar: Json[] = [];
 
 const VTT = `WEBVTT
 
@@ -56,7 +58,7 @@ beforeAll(async () => {
 
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (!/^https:\/\/(zoom\.us|api\.zoom\.us)\//.test(url)) return realFetch(input, init);
+    if (!/^https:\/\/(zoom\.us|api\.zoom\.us|www\.googleapis\.com)\//.test(url)) return realFetch(input, init);
     const m = `${init?.method ?? 'GET'} ${url}`;
     hits.push(m);
     if (m.startsWith('POST https://zoom.us/oauth/token')) return json({ access_token: 'z-access', refresh_token: 'z-refresh', expires_in: 3600 });
@@ -65,10 +67,12 @@ beforeAll(async () => {
     if (m === 'GET https://api.zoom.us/v2/meetings/81234567890/recordings')
       return json({ recording_files: [{ file_type: 'MP4', download_url: 'https://zoom.us/rec/download/v' }, { file_type: 'TRANSCRIPT', status: 'completed', download_url: 'https://zoom.us/rec/download/t' }] });
     if (m === 'GET https://zoom.us/rec/download/t') return new Response(VTT, { status: 200 });
+    if (m.startsWith('GET https://www.googleapis.com/calendar/v3/calendars/primary/events?')) return json({ items: calendar });
     return json({ message: `unmocked ${m}` }, 404);
   });
   h.env.AI = {
-    run: async () => {
+    run: async (model: string) => {
+      if (String(model).includes('whisper')) return { text: 'x', segments: [{ start: 0, text: 'Owner: we agreed the dispatch scope today.' }, { start: 4.5, text: 'Dev Kumar will share the API spec by Friday.' }] };
       if (!aiReply) throw new Error('model down');
       return { response: aiReply };
     },
@@ -206,5 +210,59 @@ describe('project calls', () => {
     expect(mine[0]).toMatchObject({ notes: 'API spec draft', person: 'Dev Kumar', canEdit: true });
     expect((await api('GET', `/api/v1/projects/${ids.project}/time-entries?userId=${ids.dev}`)).json).toHaveLength(1);
     expect((await viewer('GET', `/api/v1/projects/${ids.project}/time-entries`)).json).toHaveLength(0);
+  });
+
+  it('keeps a recording of a call that already happened, transcribes it and writes the minutes', async () => {
+    h.env.FILES = fakeR2() as unknown as R2Bucket;
+    const at = new Date(Date.now() - 50 * 3_600_000);
+    const call = await api('POST', `/api/v1/projects/${ids.project}/calls`, { title: 'Kick-off (recorded)', startsAt: at.toISOString(), endsAt: new Date(at.getTime() + 3_600_000).toISOString(), userIds: [ids.dev] });
+    expect(call.status).toBe(201);
+    const mp3 = new Uint8Array(4096);
+    mp3.set([0x49, 0x44, 0x33, 0x04]);
+    const up = await h.app.request(`http://synapse.test/api/v1/calls/${call.json.id}/recording?name=kickoff.mp3&analyse=1`, { method: 'POST', headers: { 'x-tenant': 'acme', authorization: `Bearer ${(await h.login('acme', 'owner@acme.test')).token}`, 'content-type': 'application/octet-stream' }, body: mp3 }, h.env);
+    const body = (await up.json()) as Json;
+    expect(up.status, JSON.stringify(body)).toBe(201);
+    expect(body).toMatchObject({ transcribed: true, analysed: true });
+    const c = (await api('GET', `/api/v1/calls/${call.json.id}`)).json;
+    expect(c).toMatchObject({ transcriptSource: 'audio', recordings: 1, status: 'done' });
+    expect(c.transcript).toMatch(/\[00:00:04\] Dev Kumar will share the API spec/);
+    expect((await api('GET', `/api/v1/calls/${call.json.id}/recordings`)).json[0]).toMatchObject({ name: 'kickoff.mp3', type: 'audio/mpeg' });
+    // not a recording
+    const bad = await h.app.request(`http://synapse.test/api/v1/calls/${call.json.id}/recording?name=notes.csv`, { method: 'POST', headers: { 'x-tenant': 'acme', authorization: `Bearer ${(await h.login('acme', 'owner@acme.test')).token}` }, body: new TextEncoder().encode('a,b') }, h.env);
+    expect(bad.status).toBe(400);
+  });
+
+  it('files call invites from the connected mailbox on the right project', async () => {
+    const tenant = (await api('GET', '/api/auth/me')).json.tenant.id as string;
+    const db = Db.fromEnv(h.env);
+    try {
+      await db.tx({ tenantId: tenant }, async (tx) =>
+        tx.query(`insert into integrations (tenant_id, provider, user_id, label, account_ref, secret_ciphertext, config) values ($1,'google',$2,'Gmail','owner@acme.test',$3,'{"calendar":true}')`, [
+          tenant, ids.owner, await sealSecret(h.env, tenant, { accessToken: 'g', refreshToken: 'r', expiresAt: Date.now() + 3_600_000 }),
+        ]),
+      );
+    } finally {
+      await db.close();
+    }
+    const start = new Date(Date.now() + 2 * 86_400_000);
+    const end = new Date(start.getTime() + 1_800_000);
+    calendar = [
+      { id: 'ev1', summary: 'Dispatch review', start: { dateTime: start.toISOString() }, end: { dateTime: end.toISOString() }, hangoutLink: 'https://meet.google.com/xyz-abcd-efg', attendees: [{ email: 'owner@acme.test', self: true }, { email: 'Anita@konkan.test', displayName: 'Anita Desai' }] },
+      { id: 'ev2', summary: 'Team lunch', start: { dateTime: start.toISOString() }, end: { dateTime: end.toISOString() }, attendees: [{ email: 'owner@acme.test', self: true }, { email: 'dev@acme.test' }] },
+      { id: 'ev3', summary: 'Cancelled sync', status: 'cancelled', start: { dateTime: start.toISOString() }, end: { dateTime: end.toISOString() }, hangoutLink: 'https://meet.google.com/aaa-bbbb-ccc', attendees: [{ email: 'x@other.test' }] },
+      { id: 'ev4', summary: 'Intro with a prospect', start: { dateTime: start.toISOString() }, end: { dateTime: end.toISOString() }, location: 'https://us02web.zoom.us/j/99887766554', attendees: [{ email: 'cto@prospect.test' }] },
+    ];
+    const r = await api('POST', '/api/v1/calls/invites/sync');
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json).toMatchObject({ mailbox: true, added: 2 });
+    const onProject = (await api('GET', `/api/v1/projects/${ids.project}/calls`)).json.calls as Json[];
+    expect(onProject.find((c) => c.title === 'Dispatch review')).toMatchObject({ meeting: { provider: 'google_meet' } });
+    const unfiled = (await api('GET', '/api/v1/calls?scope=unassigned')).json.calls as Json[];
+    expect(unfiled.find((c) => c.title === 'Intro with a prospect')).toMatchObject({ meeting: { provider: 'zoom_meet' }, transcriptStatus: 'waiting' });
+    // again: updated, not duplicated; a later cancellation follows
+    calendar[0] = { ...calendar[0], status: 'cancelled' };
+    const again = (await api('POST', '/api/v1/calls/invites/sync')).json;
+    expect(again.added).toBe(0);
+    expect(((await api('GET', `/api/v1/projects/${ids.project}/calls`)).json.calls as Json[]).find((c) => c.title === 'Dispatch review')!.status).toBe('cancelled');
   });
 });

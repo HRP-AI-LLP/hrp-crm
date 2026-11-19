@@ -5,7 +5,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { AppEnv } from '../env';
-import { notFound } from '../lib/errors';
+import { badRequest, notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import { enqueue, eventJobs } from '../services/jobs';
@@ -138,6 +138,25 @@ export const projectRoutes = new Hono<AppEnv>()
   .put('/calls/:id/transcript', async (c) => {
     const b = z.object({ text: z.string().min(1).max(1_000_000), fileName: z.string().max(200).nullish(), source: z.enum(['pasted', 'upload', 'typed']).default('pasted') }).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => calls.saveTranscript(rctx(c, tx), id(c), b)));
+  })
+  .post('/calls/invites/sync', async (c) => {
+    const { syncMyInvites } = await import('../services/invites');
+    return c.json(await syncMyInvites(c.env, c.var.db, c.var.tenant.id, c.var.principal.user.id));
+  })
+  .get('/calls/:id/recordings', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => calls.listRecordings(rctx(c, tx), c.env, id(c)))))
+  .post('/calls/:id/recording', async (c) => {
+    const name = z.string().trim().min(1).max(200).parse(c.req.query('name') ?? 'recording');
+    const len = Number(c.req.header('content-length') ?? 0);
+    if (len > calls.MAX_RECORDING_BYTES) throw badRequest('Recordings can be at most 95 MB — upload an audio-only file');
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (bytes.length > calls.MAX_RECORDING_BYTES) throw badRequest('Recordings can be at most 95 MB — upload an audio-only file');
+    return c.json(
+      await calls.uploadRecording({ env: c.env, db: c.var.db, tenantId: c.var.tenant.id, principal: c.var.principal, meta: c.var.meta, requestId: c.var.requestId }, id(c), name, bytes, {
+        transcribe: c.req.query('transcribe') !== '0',
+        analyse: c.req.query('analyse') === '1',
+      }),
+      201,
+    );
   })
   .post('/calls/:id/analyse', async (c) => {
     const b = z.object({ createTasks: z.boolean().default(true) }).parse(await c.req.json().catch(() => ({})));

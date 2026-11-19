@@ -110,3 +110,22 @@ Every project has a **work item key** (from its code or name, e.g. `FLEET`) and 
 - **Dashboards**: widgets from queries (number, breakdown, list) plus cumulative flow, cycle and lead time with weekly throughput, created vs resolved, and workload by person.
 - **Test plans**: test cases with steps and expected results, linked to the stories they cover; plans for a sprint or release (add a suite or the cases covering its items); runs record pass / fail per step, and a failed run can raise a bug with the steps. *Coverage* shows which requirements have passing tests.
 - **Code**: see INTEGRATIONS.md → GitHub and Azure DevOps. Mentioning a key in a branch, commit, pull request or build links it; *Work setup → Automation from code* can move the item when a branch is created, a PR opens or merges, or a build fails.
+
+### Repositories and the code policy
+
+Each project links its repositories (*Work setup → Code repositories*, GitHub `owner/name` or Azure DevOps `project/repo`; a repository belongs to one project). Projects without one show a **no repo** flag in the list and a banner on the project.
+
+Per repository a policy decides what happens to a commit or pull request that names no work item (`FLEET-12`) or change request (`FLEET-CR-3`):
+
+- **Enforce** — the CI check fails, so with branch protection (GitHub: required status check *Synapse work items / work-item*; Azure: required build validation) the PR cannot merge; the commit-msg hook refuses the commit on the developer's machine. GitHub / Azure cannot refuse the push itself from an outside service.
+- **Auto-create** — Synapse creates the item from the message: `feat:` story, `fix:` bug, `epic:` epic, `cr:` change request, `spike:` spike, `chore:`/`ci:`/`build:` chore, `docs:`/`refactor:`/`test:`/`perf:` task, `(scope)` → component; assigned to the author when they are on the project, placed in the active sprint (optional), labelled `from-git`. Once per commit.
+- **Warn** — recorded under *Commits and pull requests without a work item*, where each can be linked to a key or turned into an item.
+- **Off**.
+
+*Setup files* gives the GitHub Actions workflow, the Azure Pipeline and the commit-msg hook (it adds the key from a branch named like `feature/FLEET-12-…`). They call `POST /api/public/dev/check` with the repository token (secret `SYNAPSE_TOKEN`, shown once; *New token* replaces it). Merge commits pass; a PR without a key passes when its branch's commits were linked.
+
+### Calls from the mailbox and recordings
+
+With Gmail or Outlook connected, the calendar (a week back to a month ahead) is read with each mailbox sync: meetings with a Zoom / Meet / Teams link or outside guests become calls, filed on the project their title, project code or guests' company points to — else under *Calls → Not filed*. Updates and cancellations follow; calls Synapse scheduled itself are not doubled. *My account → Meeting apps → Call invites from my mailbox* turns it off; *Calls → Check my invites* runs it now.
+
+For a call that already happened, *Add a past call* on the project, then on the call either upload the transcript or **Upload recording** (mp3, m4a, wav, ogg, flac, mp4, webm, mov; up to 95 MB). Recordings up to 25 MB are transcribed with Workers AI (Whisper) and the minutes written; larger ones are kept, and the transcript can be added by hand.

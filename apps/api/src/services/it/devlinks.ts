@@ -17,6 +17,7 @@ import { type Integration, readSecret, sealSecret } from '../integrations';
 import type { RecordCtx } from '../records';
 import { systemCtxFor } from '../system';
 import { pickWorkflow, projectWorkflows } from '../work-types';
+import { normRepo, processCode, type Repo } from './codepolicy';
 import { transition, type WorkSettings } from './work';
 
 export type DevProvider = 'github' | 'azure_repos';
@@ -57,6 +58,9 @@ export interface DevEvent {
   at: string | null;
   texts: string[];
   auto: 'branch' | 'prOpened' | 'prMerged' | 'buildFailed' | null;
+  message?: string;
+  authorEmail?: string | null;
+  branch?: string | null;
 }
 
 export async function verifyDevHook(env: Env, i: Integration, headers: (n: string) => string | undefined, raw: string) {
@@ -86,7 +90,7 @@ export function githubEvents(event: string, b: any): DevEvent[] {
   if (event === 'push') {
     const branch = refName(b.ref ?? '');
     for (const c of (b.commits ?? []).slice(0, 50))
-      out.push({ kind: 'commit', externalId: `gh:commit:${c.id}`, url: c.url, title: short(c.message?.split('\n')[0], 300), status: null, author: c.author?.name ?? c.author?.username ?? null, repo, at: c.timestamp ?? null, texts: [c.message ?? '', branch], auto: null });
+      out.push({ kind: 'commit', externalId: `gh:commit:${String(c.id).toLowerCase()}`, url: c.url, title: short(c.message?.split('\n')[0], 300), status: null, author: c.author?.name ?? c.author?.username ?? null, repo, at: c.timestamp ?? null, texts: [c.message ?? '', branch], auto: null, message: c.message ?? '', authorEmail: c.author?.email ?? null, branch });
     if (b.created && branch) out.push({ kind: 'branch', externalId: `gh:branch:${repo}:${branch}`, url: `${b.repository?.html_url}/tree/${branch}`, title: branch, status: 'open', author: b.sender?.login ?? null, repo, at: null, texts: [branch], auto: 'branch' });
   } else if (event === 'create' && b.ref_type === 'branch') {
     out.push({ kind: 'branch', externalId: `gh:branch:${repo}:${b.ref}`, url: `${b.repository?.html_url}/tree/${b.ref}`, title: b.ref, status: 'open', author: b.sender?.login ?? null, repo, at: null, texts: [b.ref], auto: 'branch' });
@@ -95,7 +99,7 @@ export function githubEvents(event: string, b: any): DevEvent[] {
     const merged = !!pr.merged;
     const status = merged ? 'merged' : pr.state === 'closed' ? 'closed' : pr.draft ? 'draft' : 'open';
     const auto = b.action === 'closed' && merged ? 'prMerged' : ['opened', 'reopened', 'ready_for_review'].includes(b.action) && !pr.draft ? 'prOpened' : null;
-    out.push({ kind: 'pr', externalId: `gh:pr:${repo}#${pr.number}`, url: pr.html_url, title: short(`#${pr.number} ${pr.title}`), status, author: pr.user?.login ?? null, repo, at: pr.updated_at ?? null, texts: [pr.title ?? '', pr.body ?? '', pr.head?.ref ?? ''], auto });
+    out.push({ kind: 'pr', externalId: `gh:pr:${String(repo).toLowerCase()}#${pr.number}`, url: pr.html_url, title: short(`#${pr.number} ${pr.title}`), status, author: pr.user?.login ?? null, repo, at: pr.updated_at ?? null, texts: [pr.title ?? '', pr.body ?? '', pr.head?.ref ?? ''], auto, message: `${pr.title ?? ''}\n${pr.body ?? ''}`, branch: pr.head?.ref ?? null });
   } else if (event === 'workflow_run') {
     const r = b.workflow_run ?? {};
     const status = r.status !== 'completed' ? 'running' : r.conclusion === 'success' ? 'succeeded' : r.conclusion === 'failure' || r.conclusion === 'timed_out' ? 'failed' : null;
@@ -108,12 +112,12 @@ export function githubEvents(event: string, b: any): DevEvent[] {
 export function azureEvents(b: any): DevEvent[] {
   const type = String(b.eventType ?? '');
   const r = b.resource ?? {};
-  const repo = r.repository?.name ?? r.repository?.id ?? null;
+  const repo = r.repository?.project?.name && r.repository?.name ? `${r.repository.project.name}/${r.repository.name}` : (r.repository?.name ?? r.repository?.id ?? null);
   const out: DevEvent[] = [];
   if (type === 'git.push') {
     const branch = refName(r.refUpdates?.[0]?.name ?? '');
     for (const c of (r.commits ?? []).slice(0, 50))
-      out.push({ kind: 'commit', externalId: `az:commit:${c.commitId}`, url: c.remoteUrl ?? c.url, title: short(c.comment?.split('\n')[0]), status: null, author: c.author?.name ?? null, repo, at: c.author?.date ?? null, texts: [c.comment ?? '', branch], auto: null });
+      out.push({ kind: 'commit', externalId: `az:commit:${String(c.commitId).toLowerCase()}`, url: c.remoteUrl ?? c.url, title: short(c.comment?.split('\n')[0]), status: null, author: c.author?.name ?? null, repo, at: c.author?.date ?? null, texts: [c.comment ?? '', branch], auto: null, message: c.comment ?? '', authorEmail: c.author?.email ?? null, branch });
     const created = r.refUpdates?.find((u: any) => /^0+$/.test(u.oldObjectId ?? ''));
     if (created) {
       const name = refName(created.name);
@@ -123,7 +127,7 @@ export function azureEvents(b: any): DevEvent[] {
     const status = r.status === 'completed' ? 'merged' : r.status === 'abandoned' ? 'closed' : r.isDraft ? 'draft' : 'open';
     const auto = status === 'merged' ? 'prMerged' : type === 'git.pullrequest.created' && status === 'open' ? 'prOpened' : null;
     const web = r._links?.web?.href ?? `${r.repository?.webUrl ?? ''}/pullrequest/${r.pullRequestId}`;
-    out.push({ kind: 'pr', externalId: `az:pr:${repo}#${r.pullRequestId}`, url: web, title: short(`!${r.pullRequestId} ${r.title}`), status, author: r.createdBy?.displayName ?? null, repo, at: r.closedDate ?? r.creationDate ?? null, texts: [r.title ?? '', r.description ?? '', refName(r.sourceRefName ?? '')], auto });
+    out.push({ kind: 'pr', externalId: `az:pr:${String(repo).toLowerCase()}#${r.pullRequestId}`, url: web, title: short(`!${r.pullRequestId} ${r.title}`), status, author: r.createdBy?.displayName ?? null, repo, at: r.closedDate ?? r.creationDate ?? null, texts: [r.title ?? '', r.description ?? '', refName(r.sourceRefName ?? '')], auto, message: `${r.title ?? ''}\n${r.description ?? ''}`, authorEmail: r.createdBy?.uniqueName ?? null, branch: refName(r.sourceRefName ?? '') });
   } else if (type === 'build.complete' || type === 'ms.vss-pipelines.run-state-changed-event') {
     const result = r.result ?? r.run?.result;
     const status = result === 'succeeded' ? 'succeeded' : result === 'failed' || result === 'partiallySucceeded' ? 'failed' : result ? null : 'running';
@@ -147,7 +151,20 @@ export async function applyDevEvents(env: Env, tx: Tx, tenantId: string, provide
   let linked = 0;
   for (const e of events) {
     if (!e.url || !/^https?:\/\//.test(e.url)) continue;
-    for (const k of keysIn(e.texts)) {
+    // a repository linked to a project: its code policy decides (link, record, or create an item)
+    let keys = keysIn(e.texts);
+    const repo = (e.kind === 'commit' || e.kind === 'pr') && e.repo ? await tx.one<Repo>(`select * from project_repos where tenant_id = $1 and provider = $2 and repo = $3`, [tenantId, provider, normRepo(e.repo)]) : null;
+    if (repo && repo.policy !== 'off') {
+      const r = await processCode(env, tx, repo, {
+        kind: e.kind as 'commit' | 'pr', externalId: e.externalId, title: e.title, message: e.message ?? e.title, texts: e.texts, author: e.author, authorEmail: e.authorEmail ?? null, url: e.url, branch: e.branch ?? null, at: e.at, status: e.status,
+      }, 'webhook');
+      linked += r.keys.length;
+      keys = r.keys.filter((k) => !/-CR-/.test(k)).map((k) => ({ key: k.split('-')[0]!, number: Number(k.split('-')[1]) }));
+      if (!e.auto) continue;
+      for (const k of keys) await autoMove(ctx, tx, tenantId, k, e.auto);
+      continue;
+    }
+    for (const k of keys) {
       const t = await tx.one<{ id: string; project_id: string; status: string; work_type: string; work_settings: WorkSettings }>(
         `select t.id, t.project_id, t.status, t.work_type, p.work_settings from project_tasks t join projects p on p.tenant_id = t.tenant_id and p.id = t.project_id
           where t.tenant_id = $1 and p.work_key = $2 and t.task_number = $3 and p.deleted_at is null`,
@@ -162,23 +179,31 @@ export async function applyDevEvents(env: Env, tx: Tx, tenantId: string, provide
         [tenantId, t.id, e.kind, e.url.slice(0, 1000), e.title.slice(0, 300) || null, e.status, provider === 'github' ? 'github' : 'azure', e.externalId.slice(0, 300), e.author?.slice(0, 200) ?? null, e.repo?.slice(0, 200) ?? null, e.at],
       );
       linked++;
-      const to = e.auto ? t.work_settings?.autoTransitions?.[e.auto] : null;
-      if (to && t.status !== 'done' && t.status !== 'cancelled') {
-        const wf = pickWorkflow(await projectWorkflows(tx, tenantId, t.project_id), t.work_type);
-        if (wf.states.some((s) => s.key === to)) {
-          await tx.query('savepoint dev_move');
-          try {
-            await transition(ctx, t.project_id, t.id, { to }, { system: true });
-            await tx.query('release savepoint dev_move');
-          } catch {
-            // the workflow may not allow that move from where the item is: the link still stands
-            await tx.query('rollback to savepoint dev_move');
-          }
-        }
-      }
+      if (e.auto) await autoMove(ctx, tx, tenantId, k, e.auto);
     }
   }
   return { linked };
+}
+
+/** The project's automation: move the item named by key when its code reaches a stage. */
+async function autoMove(ctx: RecordCtx, tx: Tx, tenantId: string, k: { key: string; number: number }, stage: NonNullable<DevEvent['auto']>) {
+  const t = await tx.one<{ id: string; project_id: string; status: string; work_type: string; work_settings: WorkSettings }>(
+    `select t.id, t.project_id, t.status, t.work_type, p.work_settings from project_tasks t join projects p on p.tenant_id = t.tenant_id and p.id = t.project_id
+      where t.tenant_id = $1 and p.work_key = $2 and t.task_number = $3 and p.deleted_at is null`,
+    [tenantId, k.key, k.number],
+  );
+  const to = t?.work_settings?.autoTransitions?.[stage];
+  if (!t || !to || t.status === 'done' || t.status === 'cancelled') return;
+  const wf = pickWorkflow(await projectWorkflows(tx, tenantId, t.project_id), t.work_type);
+  if (!wf.states.some((s) => s.key === to)) return;
+  await tx.query('savepoint dev_move');
+  try {
+    await transition(ctx, t.project_id, t.id, { to }, { system: true });
+    await tx.query('release savepoint dev_move');
+  } catch {
+    // the workflow may not allow that move from where the item is: the link still stands
+    await tx.query('rollback to savepoint dev_move');
+  }
 }
 
 export async function handleDevHook(env: Env, db: Db, tenantId: string, integrationId: string, headers: (n: string) => string | undefined, raw: string) {

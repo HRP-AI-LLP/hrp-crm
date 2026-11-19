@@ -92,7 +92,7 @@ export const integrationRoutes = new Hono<AppEnv>()
     return c.json({ url: authorizeUrl(c.env, provider, redirectUri(c.env, c.req.url, provider), state) });
   })
   .patch('/integrations/mailbox', async (c) => {
-    const b = z.object({ calendar: z.boolean().optional(), ignore: z.array(z.string().trim().toLowerCase().max(200)).max(200).optional() }).parse(await c.req.json());
+    const b = z.object({ calendar: z.boolean().optional(), invites: z.boolean().optional(), ignore: z.array(z.string().trim().toLowerCase().max(200)).max(200).optional() }).parse(await c.req.json());
     const out = await c.var.db.tx(scope(c), async (tx) => {
       const mb = await mailboxOf(tx, c.var.tenant.id, c.var.principal.user.id);
       if (!mb) throw notFound('No mailbox connected');

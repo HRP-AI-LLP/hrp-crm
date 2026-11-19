@@ -11,10 +11,10 @@ import { useOAuthReturn } from '../lib/oauthReturn';
 import { Spinner, useToast } from './ui';
 
 type Json = Record<string, any>;
-const APPS: { key: 'zoom' | 'gmeet' | 'msmeet'; provider: string; name: string; note: string }[] = [
-  { key: 'zoom', provider: 'zoom_meet', name: 'Zoom', note: 'Cloud-recording transcripts (Pro plan or above, audio transcript switched on).' },
-  { key: 'gmeet', provider: 'google_meet', name: 'Google Meet', note: 'Meet transcripts (Workspace editions with transcription).' },
-  { key: 'msmeet', provider: 'ms_teams_meet', name: 'Microsoft Teams', note: 'Teams meeting transcripts (work or school account; your admin may need to approve).' },
+const APPS: { key: 'zoom' | 'gmeet' | 'msmeet'; provider: string; name: string; note: string; keys: string }[] = [
+  { key: 'zoom', provider: 'zoom_meet', name: 'Zoom', note: 'Cloud-recording transcripts (Pro plan or above, audio transcript switched on).', keys: 'ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET' },
+  { key: 'gmeet', provider: 'google_meet', name: 'Google Meet', note: 'Meet transcripts (Workspace editions with transcription).', keys: 'GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET' },
+  { key: 'msmeet', provider: 'ms_teams_meet', name: 'Microsoft Teams', note: 'Teams meeting transcripts (work or school account; your admin may need to approve).', keys: 'MS_CLIENT_ID and MS_CLIENT_SECRET' },
 ];
 const TOGGLES: [string, string][] = [
   ['autoFetch', 'Fetch transcripts after calls'],
@@ -62,6 +62,11 @@ export function MeetingAppsPanel({ returnTo = '/account' }: { returnTo?: '/accou
         <p className="muted small" style={{ margin: 0 }}>
           Connect the accounts you hold calls on. Synapse creates the meeting when you schedule a project call, picks up the transcript afterwards, and writes the minutes with each person’s actions.
         </p>
+        {data && !Object.values(data.available).some(Boolean) && (
+          <div className="callout warn small">
+            The meeting apps are not set up on this server yet, so Connect is off. The platform admin registers Synapse with Zoom, Google and Microsoft and adds their app keys to the server (redirect addresses and scopes are in docs/INTEGRATIONS.md). Until then, schedule calls with a pasted meeting link and upload the transcript or the recording on each call.
+          </div>
+        )}
         {!data ? (
           <Spinner />
         ) : (
@@ -74,6 +79,7 @@ export function MeetingAppsPanel({ returnTo = '/account' }: { returnTo?: '/accou
                   <div>
                     <span className={`meet-badge ${app.provider}`}>{app.name}</span>
                     <div className="muted small">{app.note}</div>
+                    {!can && <div className="small warn-text" style={{ marginTop: 4 }}>Not set up on this server: needs {app.keys}.</div>}
                   </div>
                   <button className="btn small" disabled={!can || busy === app.key} title={can ? '' : 'Not set up for this workspace yet (the administrator adds the app keys)'} onClick={() => connect(app.key)}>
                     {mine.length ? 'Add another account' : 'Connect'}
@@ -126,7 +132,68 @@ export function MeetingAppsPanel({ returnTo = '/account' }: { returnTo?: '/accou
             );
           })
         )}
+        <InvitesRow />
       </div>
     </section>
+  );
+}
+
+/** Call invites from the connected mailbox's calendar. */
+function InvitesRow() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ['integrations-status'], queryFn: () => get<Json>('/api/v1/integrations/status'), staleTime: 60_000 });
+  const [busy, setBusy] = useState(false);
+  const mb = data?.mailbox as Json | null | undefined;
+  return (
+    <div className="meet-app">
+      <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
+        <div>
+          <strong>Call invites from my mailbox</strong>
+          <div className="muted small">
+            {mb
+              ? `Meetings in ${mb.account}'s calendar (a week back, a month ahead) with a Zoom / Meet / Teams link or outside guests become calls, filed on the project their title or guests point to.`
+              : 'Connect Gmail or Outlook under “Email, calendar & calls” and the calendar’s call invites are filed on the right project automatically.'}
+          </div>
+        </div>
+        {mb && (
+          <div className="row" style={{ gap: 6 }}>
+            <label className="row small" style={{ gap: 4 }}>
+              <input
+                type="checkbox"
+                checked={mb.config?.invites !== false}
+                onChange={async (e) => {
+                  try {
+                    await patch('/api/v1/integrations/mailbox', { invites: e.target.checked });
+                    qc.invalidateQueries({ queryKey: ['integrations-status'] });
+                  } catch (err) {
+                    toast((err as Error).message, true);
+                  }
+                }}
+              />{' '}
+              On
+            </label>
+            <button
+              className="btn small"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const r = await post<Json>('/api/v1/calls/invites/sync', {});
+                  toast(r.added ? `${r.added} call${r.added > 1 ? 's' : ''} added from the calendar` : `No new call invites (${r.found} seen)`);
+                  qc.invalidateQueries({ queryKey: ['my-calls'] });
+                } catch (err) {
+                  toast((err as Error).message, true);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? 'Checking…' : 'Check now'}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

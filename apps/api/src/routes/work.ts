@@ -8,6 +8,7 @@ import type { AppEnv } from '../env';
 import { ApiError, notFound } from '../lib/errors';
 import { requireAdmin, scope } from '../middleware';
 import { enabledApps } from '../services/apps';
+import * as cp from '../services/it/codepolicy';
 import * as dev from '../services/it/devlinks';
 import * as ts from '../services/it/tests';
 import * as wk from '../services/it/work';
@@ -258,6 +259,23 @@ export const workRoutes = new Hono<AppEnv>()
     const b = z.object({ boardId: uuid.nullable(), taskId: uuid, column: z.number().int().min(0).max(20), after: uuid.nullish() }).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => wk.moveCard(rctx(c, tx), id(c), b.boardId, b.taskId, b.column, b.after)));
   })
+  /* ───── repositories and the code policy ───── */
+  .get('/projects/:id/work/repos', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => cp.listRepos(rctx(c, tx), id(c)))))
+  .post('/projects/:id/work/repos', async (c) => {
+    const b = z.object({ provider: z.enum(['github', 'azure_repos']), repo: z.string().trim().min(3).max(300), defaultBranch: z.string().trim().max(200).optional(), policy: z.enum(['off', 'warn', 'enforce', 'auto_create']).optional(), autoSprint: z.boolean().optional() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => cp.addRepo(rctx(c, tx), id(c), b)), 201);
+  })
+  .patch('/projects/:id/work/repos/:rid', async (c) => {
+    const b = z.object({ policy: z.enum(['off', 'warn', 'enforce', 'auto_create']).optional(), defaultBranch: z.string().trim().max(200).optional(), autoSprint: z.boolean().optional() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => cp.updateRepo(rctx(c, tx), id(c), id(c, 'rid'), b)));
+  })
+  .post('/projects/:id/work/repos/:rid/rotate', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => cp.rotateRepoToken(rctx(c, tx), id(c), id(c, 'rid')))))
+  .delete('/projects/:id/work/repos/:rid', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => cp.removeRepo(rctx(c, tx), id(c), id(c, 'rid')))))
+  .get('/projects/:id/work/repos/:rid/setup', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => cp.setupFiles(rctx(c, tx), id(c), id(c, 'rid'), base(c)))))
+  .post('/projects/:id/work/code-events/:eid/resolve', async (c) => {
+    const b = z.object({ key: z.string().trim().max(24).nullish(), create: z.boolean().optional() }).refine((x) => !!x.key || x.create, 'Give a key or ask to create an item').parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => cp.resolveMissing(rctx(c, tx), c.env, id(c), id(c, 'eid'), b)));
+  })
   .get('/projects/:id/work/hierarchy', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => wk.hierarchy(rctx(c, tx), id(c), { open: c.req.query('open') === '1' }))))
 
   /* ───── reports & dashboards ───── */
@@ -344,9 +362,31 @@ export const workAdminRoutes = new Hono<AppEnv>()
   })
   .delete('/work/dev-connections/:cid', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => dev.deleteDevConnection(rctx(c, tx), id(c, 'cid')))));
 
-/* ───── webhooks ───── */
+/* ───── webhooks and the CI check ───── */
 const MAX_DEV_HOOK = 2 * 1024 * 1024;
-export const workPublicRoutes = new Hono<AppEnv>().post('/hooks/dev/:key', async (c) => {
+const checkSchema = z.object({
+  event: z.string().max(40).optional(),
+  branch: z.string().max(300).nullish(),
+  title: z.string().max(1000).nullish(),
+  body: z.string().max(20000).nullish(),
+  pr: z.coerce.number().int().min(1).nullish(),
+  url: z.string().max(1000).nullish(),
+  author: z.string().max(200).nullish(),
+  commits: z.array(z.object({ sha: z.string().max(64), message: z.string().max(20000).default(''), author: z.string().max(200).nullish(), email: z.string().max(320).nullish(), url: z.string().max(1000).nullish() })).max(200).default([]),
+});
+export const workPublicRoutes = new Hono<AppEnv>()
+  .post('/dev/check', async (c) => {
+    const tok = /^Bearer\s+([a-f0-9]{32})\.([A-Za-z0-9_-]{16,80})$/.exec(c.req.header('authorization') ?? '');
+    if (!tok) throw new ApiError(401, 'bad_token', 'Send the repository token as Authorization: Bearer <token> (the SYNAPSE_TOKEN secret)');
+    const route = await resolveRoute(c, 'repo', tok[1]!).catch(() => null);
+    const repo = route ? await cp.repoByToken(c.var.db, route, tok[2]!) : null;
+    if (!repo) throw new ApiError(401, 'bad_token', 'Unknown or revoked repository token');
+    const raw = await c.req.text();
+    if (raw.length > MAX_DEV_HOOK) throw new ApiError(413, 'too_large', 'Payload too large');
+    const b = checkSchema.parse(JSON.parse(raw || '{}'));
+    return c.json(await cp.runCheck(c.env, c.var.db, repo, b));
+  })
+  .post('/hooks/dev/:key', async (c) => {
   const route = await resolveRoute(c, 'integration', c.req.param('key'));
   const len = Number(c.req.header('content-length') ?? 0);
   if (len > MAX_DEV_HOOK) throw new ApiError(413, 'too_large', 'Payload too large');
@@ -355,4 +395,4 @@ export const workPublicRoutes = new Hono<AppEnv>().post('/hooks/dev/:key', async
   const r = await dev.handleDevHook(c.env, c.var.db, route.tenant_id, route.target_id, (n) => c.req.header(n), raw);
   if (!r.ok) throw new ApiError(401, 'bad_signature', 'Invalid signature');
   return c.json({ ok: true, linked: r.linked ?? 0 });
-});
+  });

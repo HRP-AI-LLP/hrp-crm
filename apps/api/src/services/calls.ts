@@ -218,6 +218,7 @@ export async function getCall(ctx: RecordCtx, eventId: string) {
     analysis,
     analysisBy: n?.analysis_by ?? null,
     people: people.map((p) => ({ name: p.name, email: p.email, side: p.side, userId: p.userId })),
+    recordings: (await ctx.tx.one<{ n: number }>(`select count(*)::int as n from files where tenant_id = $1 and object_key = 'event' and record_id = $2 and deleted_at is null`, [ctx.tenantId, eventId]))?.n ?? 0,
     canEdit: level !== 'view',
   };
 }
@@ -638,4 +639,75 @@ export async function myMeetingChoices(ctx: RecordCtx) {
     [ctx.tenantId, ctx.principal.user.id, MEET_PROVIDERS],
   );
   return rows.map((r) => ({ id: r.id, provider: r.provider, label: MEET_LABEL[r.provider], account: r.account_ref, ok: r.status === 'active' }));
+}
+
+/* ───────────────────────── recordings ───────────────────────── */
+
+export const MAX_RECORDING_BYTES = 95 * 1024 * 1024;
+const AUDIO_TYPES = new Set(['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/flac', 'audio/webm', 'video/mp4', 'video/webm', 'video/quicktime']);
+const WHISPER = '@cf/openai/whisper-large-v3-turbo';
+/** Whisper on Workers AI takes up to ~25 MB of audio in one request. */
+const WHISPER_MAX = 25 * 1024 * 1024;
+
+export async function listRecordings(ctx: RecordCtx, env: Env, eventId: string) {
+  await loadCall(ctx, eventId);
+  const rows = await ctx.tx.query<{ id: string; name: string; content_type: string; size_bytes: string; created_at: string; uploader: string | null }>(
+    `select f.id, f.name, f.content_type, f.size_bytes, f.created_at, u.full_name as uploader from files f left join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
+      where f.tenant_id = $1 and f.object_key = 'event' and f.record_id = $2 and f.deleted_at is null order by f.created_at desc`,
+    [ctx.tenantId, eventId],
+  );
+  const { signedFileUrl } = await import('./files');
+  const out = [];
+  for (const r of rows) out.push({ id: r.id, name: r.name, type: r.content_type, size: Number(r.size_bytes), createdAt: r.created_at, uploader: r.uploader, url: await signedFileUrl(env, ctx.tenantId, r.id, true) });
+  return out;
+}
+
+/** Keeps a call recording (audio or video) on the call. */
+export async function saveRecording(ctx: RecordCtx, env: Env, eventId: string, name: string, bytes: Uint8Array) {
+  await loadCall(ctx, eventId, 'member');
+  const { saveFile, sniffType } = await import('./files');
+  const type = sniffType(bytes, name);
+  if (!type || !AUDIO_TYPES.has(type)) throw badRequest('Upload the recording as audio or video: mp3, m4a, wav, ogg, flac, mp4, webm or mov');
+  const f = await saveFile(ctx, env, { objectKey: 'event', recordId: eventId, name, bytes, kind: 'attachment', description: 'Call recording' }, { system: true, maxBytes: MAX_RECORDING_BYTES });
+  await ctx.tx.query(`update events set status = case when status = 'scheduled' and starts_at < now() then 'done' else status end where tenant_id = $1 and id = $2`, [ctx.tenantId, eventId]);
+  return { id: f.id, type };
+}
+
+/** Transcribes a recording with Workers AI (Whisper); returns null text when it cannot. */
+export async function transcribeRecording(env: Env, bytes: Uint8Array): Promise<{ text: string | null; reason: string | null }> {
+  if (!env.AI) return { text: null, reason: 'Speech-to-text is not available on this server' };
+  if (bytes.length > WHISPER_MAX) return { text: null, reason: 'The recording is over 25 MB — transcribe it in the meeting app or upload an audio-only file (m4a / mp3)' };
+  try {
+    let bin = '';
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    const out = (await env.AI.run(WHISPER as never, { audio: btoa(bin), task: 'transcribe', vad_filter: true } as never)) as { text?: string; vtt?: string; segments?: { start: number; text: string }[] };
+    const segs = out.segments?.length ? out.segments.map((s) => `[${new Date(s.start * 1000).toISOString().slice(11, 19)}] ${s.text.trim()}`).join('\n') : null;
+    const text = (segs ?? out.text ?? '').trim();
+    return text.length >= 20 ? { text, reason: null } : { text: null, reason: 'No speech was recognised in the recording' };
+  } catch (e) {
+    return { text: null, reason: `Speech-to-text failed: ${(e as Error).message.slice(0, 200)}` };
+  }
+}
+
+/** Upload → keep → transcribe → (optionally) analyse. The model call runs outside any transaction. */
+export async function uploadRecording(a: CallEnv, eventId: string, name: string, bytes: Uint8Array, opts: { transcribe: boolean; analyse: boolean }) {
+  const scope = { tenantId: a.tenantId, userId: a.principal.user.id, requestId: a.requestId ?? null };
+  const saved = await a.db.tx(scope, (tx) => saveRecording({ tx, meta: a.meta, principal: a.principal, tenantId: a.tenantId }, a.env, eventId, name, bytes));
+  if (!opts.transcribe) return { file: saved, transcribed: false, reason: null, analysed: false };
+  const t = await transcribeRecording(a.env, bytes);
+  if (!t.text) return { file: saved, transcribed: false, reason: t.reason, analysed: false };
+  await a.db.tx(scope, (tx) => saveTranscriptAs({ tx, meta: a.meta, principal: a.principal, tenantId: a.tenantId }, eventId, t.text!, 'audio'));
+  if (!opts.analyse) return { file: saved, transcribed: true, reason: null, analysed: false };
+  const r = await analyseCall(a, eventId, { createTasks: true });
+  return { file: saved, transcribed: true, reason: null, analysed: true, ai: r.analysis.ai, tasksCreated: r.tasksCreated };
+}
+
+async function saveTranscriptAs(ctx: RecordCtx, eventId: string, text: string, source: 'audio') {
+  await ctx.tx.query(
+    `insert into meeting_notes (tenant_id, event_id, transcript, transcript_source, updated_by) values ($1,$2,$3,$4,$5)
+     on conflict (tenant_id, event_id) do update set transcript = excluded.transcript, transcript_source = excluded.transcript_source, updated_by = excluded.updated_by, updated_at = now()`,
+    [ctx.tenantId, eventId, text.slice(0, 200_000), source, ctx.principal.user.id],
+  );
+  await ctx.tx.query(`update events set transcript_status = case when transcript_status = 'waiting' then 'fetched' else transcript_status end where tenant_id = $1 and id = $2`, [ctx.tenantId, eventId]);
 }

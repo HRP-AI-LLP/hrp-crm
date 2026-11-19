@@ -72,6 +72,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
   const GROUP: Record<string, string> = { overview: 'Work', tasks: 'Work', boards: 'Work', agile: 'Work', hierarchy: 'Work', queries: 'Work', releases: 'Work', gantt: 'Work', milestones: 'Delivery', changes: 'Delivery', calls: 'Delivery', issues: 'Delivery', tests: 'Delivery', dashboards: 'Insights', time: 'People & money', billing: 'People & money', team: 'People & money', worksetup: 'Settings' };
   return (
     <div style={{ marginBottom: 20 }}>
+    <RepoBanner id={id} manage={manage} status={data.project.status} onOpen={() => setTab('worksetup')} />
     <SideTabs
       id="project"
       title="Project"
@@ -101,6 +102,24 @@ export function ProjectWorkspace({ id }: { id: string }) {
       </div>
     </SideTabs>
     {item && /^[0-9a-f-]{36}$/i.test(item) && <WorkItemModal projectId={id} id={item} onClose={() => openItem(null)} onOpen={openItem} />}
+    </div>
+  );
+}
+
+/** Every project should be linked to its code repository. */
+function RepoBanner({ id, manage, status, onOpen }: { id: string; manage: boolean; status: string; onOpen: () => void }) {
+  const { data } = useQuery({ queryKey: ['work', id, 'repos'], queryFn: () => get<Json>(`/api/v1/projects/${id}/work/repos`), staleTime: 60_000 });
+  if (!data || data.repos.length || ['completed', 'cancelled'].includes(status)) return null;
+  return (
+    <div className="callout warn small row" style={{ justifyContent: 'space-between', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
+      <span>
+        <strong>No code repository linked.</strong> Link the GitHub or Azure DevOps repository so every commit and pull request is tied to a work item of this project.
+      </span>
+      {manage && (
+        <button className="btn small" onClick={onOpen}>
+          Link repository
+        </button>
+      )}
     </div>
   );
 }

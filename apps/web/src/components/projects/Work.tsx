@@ -5,7 +5,7 @@
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { type DragEvent, useEffect, useMemo, useState } from 'react';
-import { del, download, get, post, put } from '../../lib/api';
+import { del, download, get, patch as patch_, post, put } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { date } from '../../lib/format';
 import { Chart } from '../charts';
@@ -1753,6 +1753,8 @@ export function WorkSetupTab({ id, manage }: { id: string; manage: boolean }) {
         </section>
       </div>
 
+      <ReposSection id={id} manage={manage} />
+
       {isAdmin && <DevConnections />}
 
       {wf && <WorkflowEditor projectId={id} wf={wf} onClose={() => setWf(null)} onSaved={() => (setWf(null), reload())} />}
@@ -2108,3 +2110,269 @@ function DevConnections() {
   );
 }
 
+/* ───────────────────────── repositories and the code policy ───────────────────────── */
+
+const POLICY: [string, string, string][] = [
+  ['enforce', 'Enforce', 'The CI check and the commit hook fail until a work item is named'],
+  ['auto_create', 'Auto-create', 'An item is created from the commit message (feat → story, fix → bug, cr → change request …)'],
+  ['warn', 'Warn', 'Unlinked commits are only recorded here'],
+  ['off', 'Off', 'No check'],
+];
+
+export function ReposSection({ id, manage }: { id: string; manage: boolean }) {
+  const { data, refetch } = useQuery({ queryKey: ['work', id, 'repos'], queryFn: () => get<Json>(`/api/v1/projects/${id}/work/repos`) });
+  const run = useRun();
+  const [add, setAdd] = useState<Json | null>(null);
+  const [files, setFiles] = useState<Json | null>(null);
+  const [resolve, setResolve] = useState<Json | null>(null);
+  if (!data) return null;
+  const openSetup = async (repoId: string, token?: string) => {
+    const f = await run(() => get<Json>(`/api/v1/projects/${id}/work/repos/${repoId}/setup`));
+    if (f) setFiles({ ...f, repoId, token });
+  };
+  return (
+    <section>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h3 className="section-label">Code repositories &amp; policy</h3>
+        {manage && (
+          <button className="btn small primary" onClick={() => setAdd({ provider: 'github', repo: '', defaultBranch: 'main', policy: 'enforce', autoSprint: true })}>
+            + Link repository
+          </button>
+        )}
+      </div>
+      {!data.repos.length ? (
+        <div className="callout warn small">
+          <strong>No repository linked.</strong> Link the project’s GitHub or Azure DevOps repository so every push and pull request names one of its work items — or gets one created automatically.
+        </div>
+      ) : (
+        <table className="data compact">
+          <thead>
+            <tr>
+              <th>Repository</th>
+              <th>Policy</th>
+              <th className="num">Last 30 days</th>
+              <th>Last check</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {(data.repos as Json[]).map((r) => (
+              <tr key={r.id}>
+                <td>
+                  {r.provider === 'github' ? 'GitHub' : 'Azure DevOps'} · <span className="mono">{r.repo}</span> <span className="muted small">({r.default_branch})</span>
+                </td>
+                <td>
+                  <select style={{ minWidth: 130 }} disabled={!manage} value={r.policy} onChange={async (e) => (await run(() => patch_(`/api/v1/projects/${id}/work/repos/${r.id}`, { policy: e.target.value }), 'Policy saved')) !== null && refetch()} aria-label="Policy">
+                    {POLICY.map(([k, l]) => (
+                      <option key={k} value={k}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+                <td className="num small">
+                  {r.events ? (
+                    <>
+                      <span className="good-text">{r.linked} linked</span> · {r.created} created · <span className={r.missing ? 'bad-text' : ''}>{r.missing} without item</span>
+                    </>
+                  ) : (
+                    <span className="muted">no commits yet</span>
+                  )}
+                </td>
+                <td className="small">{r.last_check_at ? date(r.last_check_at) : <span className="warn-text">CI check not run yet</span>}</td>
+                <td>
+                  <button className="link-btn small" onClick={() => openSetup(r.id)}>
+                    Setup files
+                  </button>
+                  {manage && (
+                    <>
+                      {' · '}
+                      <button className="link-btn small" onClick={async () => window.confirm('Make a new token? The old one stops working; update the SYNAPSE_TOKEN secret.') && (async () => { const t = await run(() => post<Json>(`/api/v1/projects/${id}/work/repos/${r.id}/rotate`, {})); if (t) openSetup(r.id, t.token); })()}>
+                        New token
+                      </button>
+                      {' · '}
+                      <button className="link-btn small" onClick={async () => window.confirm(`Unlink ${r.repo}?`) && (await run(() => del(`/api/v1/projects/${id}/work/repos/${r.id}`), 'Unlinked')) !== null && refetch()}>
+                        Unlink
+                      </button>
+                    </>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {(data.missing as Json[]).length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <h3 className="section-label">Commits and pull requests without a work item</h3>
+          <table className="data compact">
+            <tbody>
+              {(data.missing as Json[]).map((m) => (
+                <tr key={m.id}>
+                  <td className="small nowrap">{date(m.at)}</td>
+                  <td style={{ whiteSpace: 'normal' }}>
+                    {m.url ? (
+                      <a href={m.url} target="_blank" rel="noreferrer">
+                        {m.title || m.kind}
+                      </a>
+                    ) : (
+                      m.title
+                    )}
+                    <div className="muted small">
+                      {m.kind === 'pr' ? 'Pull request' : 'Commit'} · {m.repo}
+                      {m.branch && ` · ${m.branch}`}
+                      {m.author && ` · ${m.author}`}
+                    </div>
+                  </td>
+                  <td className="nowrap">
+                    <button className="btn small" onClick={() => setResolve({ ...m, key: '' })}>
+                      Link…
+                    </button>{' '}
+                    <button className="btn small" onClick={async () => { const r = await run(() => post<Json>(`/api/v1/projects/${id}/work/code-events/${m.id}/resolve`, { create: true })); if (r) (refetch(), window.setTimeout(() => undefined)); }}>
+                      Create item
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {add && (
+        <Modal
+          title="Link a repository"
+          onClose={() => setAdd(null)}
+          footer={
+            <button
+              className="btn primary"
+              disabled={!add.repo.trim()}
+              onClick={async () => {
+                const r = await run(() => post<Json>(`/api/v1/projects/${id}/work/repos`, add), 'Repository linked');
+                if (r) (setAdd(null), refetch(), openSetup(r.id, r.token));
+              }}
+            >
+              Link
+            </button>
+          }
+        >
+          <div className="modal-body stack">
+            <label className="field">
+              Host
+              <select value={add.provider} onChange={(e) => setAdd({ ...add, provider: e.target.value })}>
+                <option value="github">GitHub</option>
+                <option value="azure_repos">Azure DevOps (Repos + Pipelines)</option>
+              </select>
+            </label>
+            <label className="field">
+              Repository
+              <input autoFocus className="mono" value={add.repo} onChange={(e) => setAdd({ ...add, repo: e.target.value })} placeholder={add.provider === 'github' ? 'acme/fleet-portal or its URL' : 'Project/repo, e.g. Fleet/fleet-api'} />
+            </label>
+            <label className="field">
+              Main branch
+              <input className="mono" value={add.defaultBranch} onChange={(e) => setAdd({ ...add, defaultBranch: e.target.value })} />
+            </label>
+            <div className="field">
+              Policy
+              {POLICY.map(([k, l, d]) => (
+                <label key={k} className="row small" style={{ gap: 6, alignItems: 'flex-start' }}>
+                  <input type="radio" name="policy" checked={add.policy === k} onChange={() => setAdd({ ...add, policy: k })} />
+                  <span>
+                    <strong>{l}</strong> — {d}
+                  </span>
+                </label>
+              ))}
+            </div>
+            {add.policy === 'auto_create' && (
+              <label className="row small" style={{ gap: 6 }}>
+                <input type="checkbox" checked={add.autoSprint} onChange={(e) => setAdd({ ...add, autoSprint: e.target.checked })} /> Put auto-created items in the active sprint
+              </label>
+            )}
+          </div>
+        </Modal>
+      )}
+      {files && <SetupFiles f={files} onClose={() => setFiles(null)} />}
+      {resolve && (
+        <Modal
+          title="Link to a work item"
+          onClose={() => setResolve(null)}
+          footer={
+            <button className="btn primary" disabled={!resolve.key.trim()} onClick={async () => (await run(() => post(`/api/v1/projects/${id}/work/code-events/${resolve.id}/resolve`, { key: resolve.key.trim() }), 'Linked')) !== null && (setResolve(null), refetch())}>
+              Link
+            </button>
+          }
+        >
+          <div className="modal-body stack">
+            <p className="small" style={{ margin: 0 }}>{resolve.title}</p>
+            <label className="field">
+              Work item or change request key
+              <input autoFocus className="mono" value={resolve.key} onChange={(e) => setResolve({ ...resolve, key: e.target.value.toUpperCase() })} placeholder="FLEET-12 or FLEET-CR-3" />
+            </label>
+          </div>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+function SetupFiles({ f, onClose }: { f: Json; onClose: () => void }) {
+  const toast = useToast();
+  const [tab, setTab] = useState<'ci' | 'hook'>('ci');
+  const copy = (t: string, what: string) => navigator.clipboard.writeText(t).then(() => toast(`${what} copied`), () => toast('Copy failed', true));
+  const gh = f.provider === 'github';
+  const ci = gh ? f.githubWorkflow : f.azurePipeline;
+  return (
+    <Modal title={`Set up ${f.repo}`} onClose={onClose} xl>
+      <div className="modal-body stack small">
+        {f.token && (
+          <div className="callout warn">
+            <strong>Repository token — copy it now, it is not shown again.</strong>
+            <div className="row" style={{ gap: 6, marginTop: 6 }}>
+              <code className="mono" style={{ wordBreak: 'break-all' }}>{f.token}</code>
+              <button className="btn small" onClick={() => copy(f.token, 'Token')}>
+                Copy
+              </button>
+            </div>
+            <div style={{ marginTop: 6 }}>{gh ? 'Add it as the repository secret SYNAPSE_TOKEN (Settings → Secrets and variables → Actions).' : 'Add it as the secret pipeline variable SYNAPSE_TOKEN.'}</div>
+          </div>
+        )}
+        <ol className="bullets" style={{ listStyle: 'decimal' }}>
+          {gh ? (
+            <>
+              <li>Commit the workflow below as <code className="mono">.github/workflows/synapse-work-items.yml</code>.</li>
+              <li>Settings → Branches → protect the main branch: <em>Require status checks to pass</em> and pick <strong>Synapse work items / work-item</strong>. Pull requests then cannot merge until every commit names a work item.</li>
+              <li>Optional, for instant feedback: install the commit hook on each developer machine (second tab). Commits on a branch like <code className="mono">{f.branchExample}</code> get the key added automatically.</li>
+              <li>Add a GitHub connection under <em>Code connections</em> so pushes, PRs and builds also link in real time.</li>
+            </>
+          ) : (
+            <>
+              <li>Commit the pipeline below as <code className="mono">azure-pipelines-synapse.yml</code> and create a pipeline from it.</li>
+              <li>Repos → Branches → main → Branch policies → <em>Build validation</em>: add this pipeline as <strong>required</strong>. Pull requests cannot complete until every commit names a work item.</li>
+              <li>Optional: install the commit hook on each developer machine (second tab).</li>
+              <li>Add an Azure DevOps connection under <em>Code connections</em> so pushes, PRs and builds also link in real time.</li>
+            </>
+          )}
+        </ol>
+        <p className="muted" style={{ margin: 0 }}>
+          GitHub and Azure DevOps cannot refuse a push from an outside service; the required check blocks merging, and the commit hook stops an unlinked commit on the developer’s machine.
+          {f.policy === 'auto_create' && ' With auto-create, unlinked commits get an item made from their message instead, so checks pass.'}
+        </p>
+        <div className="seg">
+          <button className={tab === 'ci' ? 'on' : ''} onClick={() => setTab('ci')}>
+            {gh ? 'GitHub Actions workflow' : 'Azure Pipeline'}
+          </button>
+          <button className={tab === 'hook' ? 'on' : ''} onClick={() => setTab('hook')}>
+            commit-msg hook
+          </button>
+        </div>
+        <div className="row" style={{ justifyContent: 'flex-end' }}>
+          <button className="btn small" onClick={() => copy(tab === 'ci' ? ci : f.commitMsgHook, tab === 'ci' ? 'Workflow' : 'Hook')}>
+            Copy
+          </button>
+        </div>
+        <pre className="transcript" style={{ maxHeight: 360 }}>
+          {tab === 'ci' ? ci : f.commitMsgHook}
+        </pre>
+      </div>
+    </Modal>
+  );
+}

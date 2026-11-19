@@ -1467,3 +1467,6 @@ table.tree td { padding-top: 5px; padding-bottom: 5px; }
 .tree-cell { display: flex; align-items: center; gap: 4px; }
 .tree-cell .tree-tog { flex: none; }
 table.tree .wi-progress { width: 100px; }
+.callout.warn { background: #fff7ed; border-color: #fed7aa; color: #9a3412; }
+:root[data-theme="dark"] .callout.warn { background: rgba(251, 146, 60, .12); border-color: rgba(251, 146, 60, .35); color: #fdba74; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .callout.warn { background: rgba(251, 146, 60, .12); border-color: rgba(251, 146, 60, .35); color: #fdba74; } }

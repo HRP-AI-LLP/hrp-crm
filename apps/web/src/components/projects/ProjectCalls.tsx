@@ -8,7 +8,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { del, get, patch, post, put } from '../../lib/api';
+import { del, get, patch, post, put, upload } from '../../lib/api';
 import { date } from '../../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 
@@ -49,7 +49,7 @@ export function ProjectCalls({ id }: { id: string }) {
       },
       { preventScrollReset: true },
     );
-  const [schedule, setSchedule] = useState(false);
+  const [schedule, setSchedule] = useState<boolean | 'past'>(false);
   if (!data) return <Spinner />;
   const calls = data.calls as Json[];
   const upcoming = calls.filter((c) => new Date(c.endsAt).getTime() >= Date.now() && c.status !== 'cancelled').reverse();
@@ -61,9 +61,14 @@ export function ProjectCalls({ id }: { id: string }) {
           Calls with the client or the team. Add the transcript — or let Zoom, Google Meet or Teams send it — and Synapse writes the minutes: what was discussed, requirements, decisions and who does what.
         </p>
         {data.canSchedule && (
-          <button className="btn primary" onClick={() => setSchedule(true)}>
-            Schedule a call
-          </button>
+          <div className="row" style={{ gap: 6 }}>
+            <button className="btn" onClick={() => setSchedule('past')}>
+              Add a past call
+            </button>
+            <button className="btn primary" onClick={() => setSchedule(true)}>
+              Schedule a call
+            </button>
+          </div>
         )}
       </div>
       {!calls.length ? (
@@ -74,7 +79,7 @@ export function ProjectCalls({ id }: { id: string }) {
           {past.length > 0 && <CallTable title="Held" calls={past} onOpen={setOpen} />}
         </>
       )}
-      {schedule && <ScheduleCall projectId={id} team={data.team} contacts={data.contacts} onClose={() => setSchedule(false)} onDone={(cid) => (setSchedule(false), setOpen(cid))} />}
+      {schedule && <ScheduleCall projectId={id} team={data.team} contacts={data.contacts} past={schedule === 'past'} onClose={() => setSchedule(false)} onDone={(cid) => (setSchedule(false), setOpen(cid))} />}
       {open && <CallDetail id={open} onClose={() => setOpen(null)} invalidate={[['project', id, 'calls'], ['project', id]]} />}
     </div>
   );
@@ -121,22 +126,22 @@ export function CallTable({ title, calls, onOpen, showProject }: { title?: strin
 
 /* ───────────────────────── schedule ───────────────────────── */
 
-function ScheduleCall({ projectId, team, contacts, onClose, onDone }: { projectId: string; team: Json[]; contacts: Json[]; onClose: () => void; onDone: (id: string) => void }) {
+function ScheduleCall({ projectId, team, contacts, past: pastCall, onClose, onDone }: { projectId: string; team: Json[]; contacts: Json[]; past?: boolean; onClose: () => void; onDone: (id: string) => void }) {
   const toast = useToast();
   const qc = useQueryClient();
   const { data: acc } = useQuery({ queryKey: ['meeting-choices'], queryFn: () => get<{ accounts: Json[] }>('/api/v1/calls/meeting-accounts') });
   const start = useMemo(() => {
-    const d = new Date(Date.now() + 3_600_000);
+    const d = new Date(Date.now() + (pastCall ? -2 : 1) * 3_600_000);
     d.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0);
     return d;
   }, []);
-  const [f, setF] = useState({ title: '', kind: 'meeting', starts: localInput(start), minutes: 30, agenda: '', mode: 'none', integrationId: '', joinUrl: '', emails: '' });
+  const [f, setF] = useState({ title: '', kind: 'meeting', starts: localInput(start), minutes: 30, agenda: '', mode: pastCall ? 'none' : 'none', integrationId: '', joinUrl: '', emails: '' });
   const [users, setUsers] = useState<string[]>([]);
   const [cons, setCons] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     const ok = acc?.accounts.filter((a) => a.ok) ?? [];
-    if (ok.length && !f.integrationId) setF((x) => ({ ...x, integrationId: ok[0]!.id, mode: x.mode === 'none' ? 'create' : x.mode }));
+    if (ok.length && !f.integrationId) setF((x) => ({ ...x, integrationId: ok[0]!.id, mode: x.mode === 'none' && !pastCall ? 'create' : x.mode }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [acc]);
   const toggle = (list: string[], set: (v: string[]) => void, v: string) => set(list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
@@ -389,6 +394,7 @@ export function CallDetail({ id, onClose, invalidate = [] }: { id: string; onClo
             <div style={{ whiteSpace: 'pre-wrap' }}>{c.agenda}</div>
           </div>
         )}
+        <Recordings id={id} count={c.recordings} canEdit={c.canEdit} hasTranscript={c.hasTranscript} onChanged={refresh} />
         {c.transcriptStatus === 'waiting' && !c.hasTranscript && (
           <div className="callout info small">
             {MEET_LABEL[c.meeting?.provider] ?? 'The meeting app'} makes the transcript once the call is over; Synapse checks for it and analyses it automatically. Turn on transcription / cloud recording in the meeting.
@@ -616,6 +622,56 @@ function Minutes({ call, a, canEdit, onChange }: { call: Json; a: Json; canEdit:
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Recordings of a call: listen, and upload one (it is transcribed and, if asked, analysed). */
+function Recordings({ id, count, canEdit, hasTranscript, onChanged }: { id: string; count: number; canEdit: boolean; hasTranscript: boolean; onChanged: () => void }) {
+  const toast = useToast();
+  const { data, refetch } = useQuery({ queryKey: ['call', id, 'recordings'], enabled: count > 0, queryFn: () => get<Json[]>(`/api/v1/calls/${id}/recordings`) });
+  const [busy, setBusy] = useState<string | null>(null);
+  const file = useRef<HTMLInputElement>(null);
+  const send = async (f: File | undefined) => {
+    if (!f) return;
+    if (f.size > 95 * 1024 * 1024) return toast('Recordings can be at most 95 MB — export audio only (m4a / mp3) from the meeting app', true);
+    setBusy(`Uploading ${f.name}…`);
+    try {
+      const r = await upload<Json>(`/api/v1/calls/${id}/recording?name=${encodeURIComponent(f.name)}&transcribe=${hasTranscript ? 0 : 1}&analyse=${hasTranscript ? 0 : 1}`, f);
+      toast(r.analysed ? 'Recording transcribed and the minutes written' : r.transcribed ? 'Recording transcribed' : r.reason ? `Recording saved · ${r.reason}` : 'Recording saved');
+      refetch();
+      onChanged();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  };
+  if (!count && !canEdit) return null;
+  return (
+    <div className="callout">
+      <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
+        <div>
+          <strong>Recordings</strong>
+          <div className="muted small">{hasTranscript ? 'Kept with the call.' : 'Upload the recording of a call that already happened — Synapse transcribes it and writes the minutes.'}</div>
+        </div>
+        {canEdit && (
+          <>
+            <button className="btn small" disabled={!!busy} onClick={() => file.current?.click()}>
+              {busy ?? 'Upload recording'}
+            </button>
+            <input ref={file} type="file" hidden accept="audio/*,video/mp4,video/webm,video/quicktime,.m4a,.mp3,.wav,.ogg,.flac,.mp4,.webm,.mov" onChange={(e) => void send(e.target.files?.[0])} />
+          </>
+        )}
+      </div>
+      {(data ?? []).map((r) => (
+        <div key={r.id} className="stack" style={{ gap: 4, marginTop: 8 }}>
+          <span className="small">
+            {r.name} · {(r.size / 1024 / 1024).toFixed(1)} MB{r.uploader ? ` · ${r.uploader}` : ''}
+          </span>
+          {r.type.startsWith('video/') ? <video controls preload="none" src={r.url} style={{ maxWidth: '100%', maxHeight: 280 }} /> : <audio controls preload="none" src={r.url} style={{ width: '100%' }} />}
+        </div>
+      ))}
     </div>
   );
 }
