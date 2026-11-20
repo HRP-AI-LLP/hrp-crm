@@ -146,7 +146,7 @@ export const form = (o: Record<string, string | undefined | null>) => {
 };
 
 // ---------------------------------------------------------------------------------- OAuth
-interface OAuthState {
+export interface OAuthState {
   t: string; // tenant id
   u: string; // user id
   p: OAuthProvider;

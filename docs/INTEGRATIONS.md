@@ -78,6 +78,19 @@ An admin with the *developers* permission adds a connection in any project's **W
 
 Any work item key (`FLEET-12`) in a branch name, commit message, PR title or description links that branch / commit / PR / build to the item. Each project chooses in *Automation from code* which state an item moves to when its branch is created, its PR opens or merges, or its build fails.
 
+### GitHub App (repository picker, checks on pull requests, branches)
+
+One app serves the whole platform. Create it at GitHub → Settings → Developer settings → GitHub Apps → New:
+
+- **Callback / Setup URL**: `https://<app host>/api/public/github/setup` (tick *Redirect on update*); **Webhook URL**: `https://<app host>/api/public/github/app` with a webhook secret.
+- **Repository permissions**: Checks *read & write*, Contents *read-only*, Metadata *read-only*, Pull requests *read-only*; Administration *read & write* only if Synapse should set branch protection (*Require check*). To create branches from work items Contents needs *read & write*.
+- **Subscribe to events**: Push, Pull request, Create, Workflow run (installation events come by default).
+- Generate a private key (PEM).
+
+Set `GITHUB_APP_ID`, `GITHUB_APP_SLUG` (the app's URL name), `GITHUB_APP_PRIVATE_KEY` (the PEM; in `.env` on one line with `\n` for line breaks — `pnpm local` converts them) and `GITHUB_APP_WEBHOOK_SECRET` (`wrangler secret put …` in the cloud). A workspace admin then clicks **Install the GitHub App** (Work setup → GitHub App) and picks the organisation and repositories; GitHub returns to Synapse, which ties that installation to the workspace. Uninstalling in GitHub removes it here.
+
+Repositories linked through the app get the **Synapse work items** check run on every push and PR; webhooks from the app also link branches, commits, PRs and builds exactly as the per-workspace webhook connections below do (use one or the other per repository).
+
 ### Secrets
 
 These values are required to turn the features on: without Google or Microsoft keys the mailbox buttons stay hidden, and without Meta keys the Facebook card says "not set up".

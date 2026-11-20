@@ -115,6 +115,10 @@ Every project has a **work item key** (from its code or name, e.g. `FLEET`) and 
 
 Each project links its repositories (*Work setup → Code repositories*, GitHub `owner/name` or Azure DevOps `project/repo`; a repository belongs to one project). Projects without one show a **no repo** flag in the list and a banner on the project.
 
+With the **GitHub App** installed (an admin, *Work setup → GitHub App*), *Link repository* lists the organisation's repositories to pick from; such repositories get a **Synapse work items** check run on every push and pull request (success / neutral / failure by the policy, with the linked items listed), *Require check* turns that into a required status check on the main branch (added to an existing rule's checks, or a new rule with only that check; a rule without status checks is left for you to change), and an item's *Code* tab can **create a branch** in GitHub named after it.
+
+**Every project must have a repository** (*Work setup → GitHub App*, admins): when on, work items can't be created in an active project until a repository is linked. Tick *This project has no code* on projects that never will (consulting, events).
+
 Per repository a policy decides what happens to a commit or pull request that names no work item (`FLEET-12`) or change request (`FLEET-CR-3`):
 
 - **Enforce** — the CI check fails, so with branch protection (GitHub: required status check *Synapse work items / work-item*; Azure: required build validation) the PR cannot merge; the commit-msg hook refuses the commit on the developer's machine. GitHub / Azure cannot refuse the push itself from an outside service.
@@ -128,4 +132,43 @@ Per repository a policy decides what happens to a commit or pull request that na
 
 With Gmail or Outlook connected, the calendar (a week back to a month ahead) is read with each mailbox sync: meetings with a Zoom / Meet / Teams link or outside guests become calls, filed on the project their title, project code or guests' company points to — else under *Calls → Not filed*. Updates and cancellations follow; calls Synapse scheduled itself are not doubled. *My account → Meeting apps → Call invites from my mailbox* turns it off; *Calls → Check my invites* runs it now.
 
-For a call that already happened, *Add a past call* on the project, then on the call either upload the transcript or **Upload recording** (mp3, m4a, wav, ogg, flac, mp4, webm, mov; up to 95 MB). Recordings up to 25 MB are transcribed with Workers AI (Whisper) and the minutes written; larger ones are kept, and the transcript can be added by hand.
+Invitations that arrive as email attachments (`.ics` from Zoho, Webex, GoTo and other tools that never reach the calendar) are read too — the same meeting from the calendar and the email is filed once (by its iCalendar UID); a cancellation (`METHOD:CANCEL`) cancels the call.
+
+**Filing learns**: moving a call to a project (or *Not filed* → project) remembers its title (without dates and numbers, so a weekly call keeps one key), the outside people and their company's email domain; the next invite like it lands on that project. A correction outweighs older hints.
+
+For a call that already happened, *Add a past call* on the project, then on the call either upload the transcript or **Upload recording** (mp3, m4a, wav, ogg, flac, mp4, webm, mov; up to 95 MB).
+
+- **Speakers**: with *Speakers* ticked (the default) the recording goes to Workers AI Deepgram Nova-3 with diarisation — lines read `[00:01:02] Speaker 1: …`. In *Transcript → Speakers* give each one a name (people on the call are suggested); the transcript is rewritten, and *Analyse again* uses the names. If Nova-3 is not available, Whisper transcribes without speakers.
+- **Long recordings**: Whisper takes about 25 MB per request. Bigger MP3 and WAV files are cut on the server (MP3 at frame boundaries); any other format (m4a, mp4, webm …) is decoded in the browser and sent as 10-minute WAV parts (16 kHz mono, ~19 MB each) with their time offsets, and the transcript is put together when the last part is in. Speaker numbers are matched within a part only — long recordings label them `P1 Speaker 1`, `P2 Speaker 1` …
+- *Transcribe again* on a kept recording replaces the transcript (for example with speakers this time).
+- Free plan: Nova-3 costs more neurons per audio minute than Whisper — roughly 20 minutes a day fit in the free 10,000 neurons; untick *Speakers* to use Whisper.
+
+### Automation rules
+
+*Automation* (project menu, managers edit) — **when** an item is created, moves state (from / to a state or any state of a category), has a field changed (priority, assignee, sprint, severity, type, points, labels, due — optionally to a value), gets a comment, or **every day at an hour (IST)**; **if** it matches a query (optional; scheduled rules need one and act on up to 200 items it finds); **then** (up to 10): move to a state, set priority / severity / points / sprint (active or next) / due in N days / add or remove a label / add a component / type, assign (a person, the reporter, the component lead, round-robin, least open work, nobody), comment (shown with 🤖 and the rule's name), notify assignee / reporter / watchers / project manager / people (app + email), post to Teams / Slack / Google Chat, create a child item, add watchers. Texts take `{{key}} {{summary}} {{type}} {{state}} {{priority}} {{assignee}} {{reporter}} {{project}} {{link}} {{due}}`.
+
+Rules run inside the change (their effects land with it). A rule's own changes can trigger rules three levels deep at most; rule comments do not trigger comment rules. Each rule runs in a savepoint — a failing rule never undoes the person's change, is logged under *Recent runs*, and is switched off after 5 errors in a row. *Run now* runs a rule on one item (or a scheduled rule on its query).
+
+### Rich text, attachments and live boards
+
+Descriptions and comments are Markdown (toolbar, *Preview*): headings, **bold**, _italic_, lists, check lists, quotes, code, tables, links, `@mentions`. Paste or drop a screenshot and it is uploaded as an attachment and shown inline (`![name](file:<id>)`). *Attachments* on the item keeps any file up to 25 MB (images get thumbnails); adding or removing one is in the history.
+
+A project's boards, backlog, lists and open items refresh by themselves: the page asks every 5 seconds (only while visible) whether anything changed, and reloads when it did.
+
+### Email alerts
+
+*My account → Work item emails*: for **assigned to me**, **mentions** and **items I watch** choose right away, a daily digest or off; **due and overdue** (items due tomorrow or late) comes in the digest. The digest time is an IST hour (default 09:00). Mail goes out with the 5-minute background run; rules' notify actions use the same preferences.
+
+### Templates
+
+*Work setup → Templates*: apply **Scrum** (Delivery and Bugs workflows, acceptance / environment / customer-impact fields, components, a sprint board, triage rules, a team dashboard, saved queries), **Kanban support** or **Bug tracking** — or **save this project's setup as a template** and apply it to new projects. Workflows, fields, components, boards, dashboards, queries and rules are copied; anything with the same name in the project is kept as it is (listed after applying). Rules that name a person are copied without that person.
+
+### Reports and the roadmap
+
+Dashboard widgets add **Sprint report** (committed at the start, added and removed during the sprint, completed and not — in points, with the items), **Time in each state** (average and total days per workflow state, per item) and **Release burn-up** (scope against done per day, with the date the release finishes at the last two weeks' pace).
+
+*Projects → Roadmap* (`/work/roadmap`) puts every epic and feature you can see on one timeline (3, 6 or 12 months; narrow to projects). Bars use the item's own start / due dates, else its children's dates and sprints (striped); progress is closed / all child items. Drag a bar to move it, drag an end to change one date — that sets the item's own dates. Items without dates can be planned with one click.
+
+### Big projects
+
+Screens stay quick at tens of thousands of items: the task list keeps the 3,000 open and recently closed items (with a note), the backlog hides work closed more than two weeks ago (unless it is in an open sprint), the hierarchy shows up to 2,500 nodes — epics, features and open work first — while its totals count every item, and an item's children list the first 300 (open first) with the full count. `test/work-scale.test.ts` times every work screen on a 12,000-item project. Request transactions run with Postgres JIT off.

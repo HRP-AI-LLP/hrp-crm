@@ -2,7 +2,7 @@
 import { CURRENCIES } from '@synapse/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useApps, useMetaReady } from '../components/ops/OrderPanel';
 import { ProjectWorkspace } from '../components/projects/ProjectWorkspace';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
@@ -25,12 +25,22 @@ export function ProjectsPage() {
   const metaReady = useMetaReady();
   const [q, setQ] = useState({ status: 'open', search: '', mine: false });
   const [create, setCreate] = useState(false);
+  const [sp, setSp] = useSearchParams();
+  const github = sp.get('github');
   const params = new URLSearchParams({ ...(q.status !== 'open' && q.status !== 'all' ? { status: q.status } : {}), ...(q.search ? { q: q.search } : {}), ...(q.mine ? { mine: '1' } : {}) });
   const { data } = useQuery({ queryKey: ['projects', params.toString()], queryFn: () => get<Json[]>(`/api/v1/projects?${params}`), enabled: apps.has('projects') });
   if (!apps.has('projects')) return metaReady ? <Navigate to="/" replace /> : <Spinner />;
   const rows = (data ?? []).filter((p) => q.status !== 'open' || ['planning', 'active', 'on_hold'].includes(p.status));
   return (
     <>
+      {github && (
+        <div className={`callout small ${github === 'cancelled' ? 'warn' : ''}`} style={{ marginBottom: 10 }}>
+          {github === 'cancelled' ? 'The GitHub App was not installed.' : `GitHub App installed on ${github}. Link a project’s repository from its Work setup — pick it from the list — and pull requests get the Synapse check.`}{' '}
+          <button className="link-btn small" onClick={() => setSp((p) => (p.delete('github'), p))}>
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="page-head">
         <div>
           <h1>Projects</h1>

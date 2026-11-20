@@ -10,6 +10,7 @@ import { useAuth } from '../../lib/auth';
 import { date } from '../../lib/format';
 import { Chart } from '../charts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
+import { AppRepoPicker, BurnupView, GitHubAppSection, RequireCheckButton, SprintReportView, TemplatesSection, TimeInStatusView } from './WorkPlus';
 import { CAT_CLS, CreateItemModal, type Json, priIcon, PRIORITIES, Progress, StateChip, typeIcon, typeLabel, TYPES, usePlanning, useTeam, useWorkSetup, WorkItemModal } from './WorkItem';
 
 const CATS: [string, string][] = [['todo', 'To do'], ['in_progress', 'In progress'], ['review', 'Review'], ['blocked', 'Blocked'], ['done', 'Done'], ['cancelled', 'Cancelled']];
@@ -726,6 +727,11 @@ export function HierarchyTab({ id, member, onOpen }: { id: string; member: boole
           )}
         </div>
       </div>
+      {data.truncated && (
+        <div className="callout small">
+          This project has {data.total.toLocaleString()} items — showing {data.shown.toLocaleString()} (epics, features and open work first). Totals and progress count every item; use Queries to find the rest.
+        </div>
+      )}
       {!rows.length ? (
         <Empty title="Nothing planned yet">Start with an epic, break it into features and stories, then tasks.</Empty>
       ) : (
@@ -792,6 +798,9 @@ const WIDGET_TYPES: [string, string][] = [
   ['cycle', 'Cycle & lead time'],
   ['created_resolved', 'Created vs resolved'],
   ['workload', 'Workload by person'],
+  ['sprint', 'Sprint report (scope change)'],
+  ['time_in_status', 'Time in each state'],
+  ['release_burnup', 'Release burn-up'],
 ];
 
 export function DashboardsTab({ id, onOpen }: { id: string; onOpen: (itemId: string) => void }) {
@@ -980,6 +989,9 @@ function WidgetBody({ w, d, onOpen }: { w: Json; d: Json; onOpen: (id: string) =
   if (w.type === 'created_resolved')
     return <Chart id={`w-${w.id}`} height={220} initial="line" data={{ categories: d.rows.map((r: Json) => date(r.period)), series: [{ label: 'Created', values: d.rows.map((r: Json) => r.created) }, { label: 'Resolved', values: d.rows.map((r: Json) => r.resolved) }] }} />;
   if (w.type === 'workload') return <WorkloadTable rows={d.rows} />;
+  if (w.type === 'sprint') return <SprintReportView d={d} onOpen={onOpen} />;
+  if (w.type === 'time_in_status') return <TimeInStatusView d={d} id={`w-${w.id}`} />;
+  if (w.type === 'release_burnup') return <BurnupView d={d} id={`w-${w.id}`} />;
   return null;
 }
 
@@ -1754,7 +1766,16 @@ export function WorkSetupTab({ id, manage }: { id: string; manage: boolean }) {
       </div>
 
       <ReposSection id={id} manage={manage} />
+      {manage && (
+        <label className="row small" style={{ gap: 6 }}>
+          <input type="checkbox" checked={!!data.settings.noCode} onChange={async (e) => (await run(() => put(`/api/v1/projects/${id}/work/settings`, { noCode: e.target.checked }), 'Saved')) && reload()} />
+          This project has no code (exempt from the workspace rule that every project needs a repository)
+        </label>
+      )}
 
+      <TemplatesSection id={id} manage={manage} />
+
+      {isAdmin && <GitHubAppSection />}
       {isAdmin && <DevConnections />}
 
       {wf && <WorkflowEditor projectId={id} wf={wf} onClose={() => setWf(null)} onSaved={() => (setWf(null), reload())} />}
@@ -2160,6 +2181,7 @@ export function ReposSection({ id, manage }: { id: string; manage: boolean }) {
               <tr key={r.id}>
                 <td>
                   {r.provider === 'github' ? 'GitHub' : 'Azure DevOps'} · <span className="mono">{r.repo}</span> <span className="muted small">({r.default_branch})</span>
+                  {r.installation_id && <span className="chip good small" title="Checks are posted on pull requests by the GitHub App">App</span>}
                 </td>
                 <td>
                   <select style={{ minWidth: 130 }} disabled={!manage} value={r.policy} onChange={async (e) => (await run(() => patch_(`/api/v1/projects/${id}/work/repos/${r.id}`, { policy: e.target.value }), 'Policy saved')) !== null && refetch()} aria-label="Policy">
@@ -2184,6 +2206,12 @@ export function ReposSection({ id, manage }: { id: string; manage: boolean }) {
                   <button className="link-btn small" onClick={() => openSetup(r.id)}>
                     Setup files
                   </button>
+                  {manage && r.installation_id && (
+                    <>
+                      {' · '}
+                      <RequireCheckButton projectId={id} repo={r} />
+                    </>
+                  )}
                   {manage && (
                     <>
                       {' · '}
@@ -2263,9 +2291,10 @@ export function ReposSection({ id, manage }: { id: string; manage: boolean }) {
                 <option value="azure_repos">Azure DevOps (Repos + Pipelines)</option>
               </select>
             </label>
+            {add.provider === 'github' && <AppRepoPicker onPick={(x) => setAdd({ ...add, repo: x.fullName, defaultBranch: x.defaultBranch, installationId: x.installationId })} />}
             <label className="field">
               Repository
-              <input autoFocus className="mono" value={add.repo} onChange={(e) => setAdd({ ...add, repo: e.target.value })} placeholder={add.provider === 'github' ? 'acme/fleet-portal or its URL' : 'Project/repo, e.g. Fleet/fleet-api'} />
+              <input autoFocus className="mono" value={add.repo} onChange={(e) => setAdd({ ...add, repo: e.target.value, installationId: null })} placeholder={add.provider === 'github' ? 'acme/fleet-portal or its URL' : 'Project/repo, e.g. Fleet/fleet-api'} />
             </label>
             <label className="field">
               Main branch

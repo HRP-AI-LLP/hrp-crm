@@ -406,6 +406,52 @@ export async function importRecent(env: Env, tx: Tx, i: Integration, days = 3) {
 }
 
 /** The project a meeting belongs to: its name or number in the title, else the customer's people on the call. */
+const FREE_MAIL = new Set(['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'yahoo.com', 'yahoo.co.in', 'icloud.com', 'rediffmail.com', 'proton.me', 'protonmail.com', 'zoho.com', 'aol.com']);
+
+/** A meeting title without dates, numbers and "Re:" — so a weekly call keeps one key. */
+export function titleKey(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/^(re|fwd?|updated invitation|invitation|accepted|declined)\s*:\s*/g, '')
+    .replace(/@.*$/, '')
+    .replace(/\b(\d{1,4}[-/.]\d{1,2}([-/.]\d{1,4})?|\d+(st|nd|rd|th)?|mon|tue|wed|thu|fri|sat|sun|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\b/g, ' ')
+    .replace(/[^a-z\s&]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+}
+
+/** The keys a call is filed by (outside people only — colleagues are in every project). */
+export function filingKeys(title: string, outsideEmails: string[]): { kind: 'title' | 'email' | 'domain'; value: string }[] {
+  const keys: { kind: 'title' | 'email' | 'domain'; value: string }[] = [];
+  const tk = titleKey(title);
+  if (tk.length >= 4) keys.push({ kind: 'title', value: tk });
+  for (const e of outsideEmails.slice(0, 30)) {
+    keys.push({ kind: 'email', value: e.toLowerCase() });
+    const d = e.toLowerCase().split('@')[1];
+    if (d && !FREE_MAIL.has(d)) keys.push({ kind: 'domain', value: d });
+  }
+  return [...new Map(keys.map((k) => [`${k.kind}:${k.value}`, k])).values()];
+}
+
+/** Moving a call to a project teaches the filing for the next ones like it. */
+export async function learnFiling(tx: Tx, tenantId: string, userId: string, projectId: string, title: string, attendeeEmails: string[]) {
+  const colleagues = new Set((await tx.query<{ email: string }>(`select lower(email) as email from users where tenant_id = $1 and email is not null`, [tenantId])).map((u) => u.email));
+  const keys = filingKeys(title, attendeeEmails.filter((e) => !colleagues.has(e.toLowerCase())));
+  if (!keys.length) return;
+  await tx.query(
+    `insert into call_filing_hints (tenant_id, user_id, kind, value, project_id) select $1, $2, k, v, $5 from unnest($3::text[], $4::text[]) as x(k, v)
+     on conflict (tenant_id, user_id, kind, value, project_id) do update set hits = call_filing_hints.hits + 1, updated_at = now()`,
+    [tenantId, userId, keys.map((k) => k.kind), keys.map((k) => k.value), projectId],
+  );
+  // the same key pointing at another project is weakened, so a correction wins quickly
+  await tx.query(
+    `update call_filing_hints set hits = greatest(0, hits - 1) where tenant_id = $1 and user_id = $2 and project_id <> $5 and (kind, value) in (select * from unnest($3::text[], $4::text[]))`,
+    [tenantId, userId, keys.map((k) => k.kind), keys.map((k) => k.value), projectId],
+  );
+  await tx.query(`delete from call_filing_hints where tenant_id = $1 and user_id = $2 and hits <= 0`, [tenantId, userId]);
+}
+
 export async function matchProject(tx: Tx, tenantId: string, userId: string, title: string, attendees: string[]): Promise<string | null> {
   const t = title.toLowerCase();
   const mine = await tx.query<{ id: string; name: string; project_code: string | null; account_id: string | null }>(
@@ -415,6 +461,20 @@ export async function matchProject(tx: Tx, tenantId: string, userId: string, tit
   );
   const byTitle = mine.filter((p) => (p.project_code && t.includes(p.project_code.toLowerCase())) || (p.name.length >= 5 && t.includes(p.name.toLowerCase())));
   if (byTitle.length === 1) return byTitle[0]!.id;
+  // what the person taught Synapse by moving earlier calls: the same (recurring) title, the same
+  // outside people, the same company domain
+  const open = new Set(mine.map((p) => p.id));
+  const keys = filingKeys(title, attendees);
+  if (keys.length) {
+    const hints = await tx.query<{ kind: string; project_id: string; hits: number }>(
+      `select kind, project_id, hits from call_filing_hints where tenant_id = $1 and user_id = $2 and (kind, value) in (select * from unnest($3::text[], $4::text[]))`,
+      [tenantId, userId, keys.map((k) => k.kind), keys.map((k) => k.value)],
+    );
+    const score = new Map<string, number>();
+    for (const h of hints) if (open.has(h.project_id)) score.set(h.project_id, (score.get(h.project_id) ?? 0) + (h.kind === 'title' ? 5 : h.kind === 'email' ? 3 : 1) * Math.min(h.hits, 5));
+    const ranked = [...score.entries()].sort((a, b) => b[1] - a[1]);
+    if (ranked.length && ranked[0]![1] >= 3 && (ranked.length === 1 || ranked[0]![1] >= ranked[1]![1] * 2)) return ranked[0]![0];
+  }
   if (attendees.length) {
     const acc = await tx.query<{ account_id: string }>(`select distinct account_id from contacts where tenant_id = $1 and lower(email) = any($2::text[]) and account_id is not null and deleted_at is null`, [tenantId, attendees]);
     const ids = new Set(acc.map((a) => a.account_id));

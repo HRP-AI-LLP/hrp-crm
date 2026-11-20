@@ -9,6 +9,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { del, get, patch, post, put } from '../../lib/api';
 import { date } from '../../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../ui';
+import { Attachments, CreateBranch, RichEditor, RichText, useItemFiles } from './WorkPlus';
 
 export type Json = Record<string, any>;
 
@@ -150,7 +151,7 @@ export function MentionBox({ team, value, onChange, placeholder, rows = 3 }: { t
 const FIELD_NAMES: Record<string, string> = {
   status: 'Status', state: 'State', name: 'Summary', priority: 'Priority', assignees: 'Assignee', work_type: 'Type', story_points: 'Story points', sprint_id: 'Sprint', release_id: 'Release',
   epic_id: 'Epic', parent_id: 'Parent', due_date: 'Due', component_ids: 'Components', severity: 'Severity', resolution: 'Resolution', remaining_hours: 'Remaining', estimate_hours: 'Estimate',
-  tags: 'Labels', description: 'Description', created: 'Created',
+  tags: 'Labels', description: 'Description', created: 'Created', attachment: 'Attachment',
 };
 const LINK_ICON: Record<string, string> = { pr: '⤴', commit: '●', branch: '⑂', build: '⚙', doc: '📄', design: '🎨', other: '🔗' };
 
@@ -170,6 +171,7 @@ export function WorkItemModal({ projectId, id, onClose, onOpen }: { projectId: s
   const [addChild, setAddChild] = useState(false);
   const [rel, setRel] = useState({ kind: 'relates', key: '' });
   const [busy, setBusy] = useState(false);
+  const { data: files, refetch: refetchFiles } = useItemFiles(projectId, id);
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['work', projectId, 'item', id] });
     invalidate();
@@ -272,10 +274,16 @@ export function WorkItemModal({ projectId, id, onClose, onOpen }: { projectId: s
               )}
             </div>
             {editDesc === null ? (
-              it.description ? <div className="wi-desc">{it.description}</div> : <p className="muted small">No description.</p>
+              it.description ? (
+                <div className="wi-desc">
+                  <RichText text={it.description} files={files} />
+                </div>
+              ) : (
+                <p className="muted small">No description.</p>
+              )
             ) : (
               <div className="stack">
-                <textarea rows={8} value={editDesc} onChange={(e) => setEditDesc(e.target.value)} autoFocus placeholder="Acceptance criteria, steps to reproduce, notes…" />
+                <RichEditor value={editDesc} onChange={setEditDesc} team={team} projectId={projectId} itemId={id} files={files} onUploaded={() => refetchFiles()} rows={10} autoFocus placeholder="Acceptance criteria, steps to reproduce, notes… Markdown works; paste or drop screenshots." />
                 <div className="row" style={{ gap: 6 }}>
                   <button className="btn primary small" onClick={async () => (await save({ description: editDesc || null }, 'Saved')) && setEditDesc(null)}>
                     Save
@@ -288,11 +296,13 @@ export function WorkItemModal({ projectId, id, onClose, onOpen }: { projectId: s
             )}
           </div>
 
+          <Attachments projectId={projectId} itemId={id} can={can} />
+
           {(d.children.length > 0 || CHILD_TYPES[it.workType]!.length > 0) && (
             <div>
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <h3 className="section-label">
-                  Child items {d.children.length > 0 && `· ${d.children.filter((c: Json) => ['done', 'cancelled'].includes(c.status)).length}/${d.children.length} done`}
+                  Child items {d.childStats?.total > 0 ? `· ${d.childStats.closed}/${d.childStats.total} done` : d.children.length > 0 && `· ${d.children.filter((c: Json) => ['done', 'cancelled'].includes(c.status)).length}/${d.children.length} done`}
                 </h3>
                 {can && CHILD_TYPES[it.workType]!.length > 0 && (
                   <button className="link-btn small" onClick={() => setAddChild(true)}>
@@ -300,8 +310,9 @@ export function WorkItemModal({ projectId, id, onClose, onOpen }: { projectId: s
                   </button>
                 )}
               </div>
-              {d.children.length > 0 && <Progress done={d.children.filter((c: Json) => c.status === 'done').length} total={d.children.length} />}
+              {d.children.length > 0 && <Progress done={d.childStats?.total ? d.childStats.closed : d.children.filter((c: Json) => c.status === 'done').length} total={d.childStats?.total || d.children.length} />}
               <ItemList items={d.children} people={people} onOpen={onOpen} />
+              {d.childStats?.total > d.children.length && <p className="muted small">Showing {d.children.length} of {d.childStats.total} — open work first. Use Queries (parent = {it.key}) for all of them.</p>}
             </div>
           )}
 
@@ -359,12 +370,12 @@ export function WorkItemModal({ projectId, id, onClose, onOpen }: { projectId: s
                     <div className="small">
                       <strong>{c.full_name ?? 'Someone'}</strong> <span className="muted">{new Date(c.created_at).toLocaleString()}</span>
                     </div>
-                    <MentionText text={c.body} />
+                    <RichText text={c.body} files={files} />
                   </div>
                 ))}
                 {can && (
                   <>
-                    <MentionBox team={team} value={commentText} onChange={setComment} />
+                    <RichEditor value={commentText} onChange={setComment} team={team} projectId={projectId} itemId={id} files={files} onUploaded={() => refetchFiles()} rows={3} placeholder="Comment — type @ to mention someone; Markdown and pasted screenshots work" />
                     <div>
                       <button className="btn small primary" disabled={!commentText.trim() || busy} onClick={async () => (await run(() => post(`/api/v1/projects/${projectId}/work/items/${id}/comments`, { body: commentText.trim() }))) && setComment('')}>
                         Comment
@@ -403,7 +414,8 @@ export function WorkItemModal({ projectId, id, onClose, onOpen }: { projectId: s
                   <code className="mono">{d.branchName}</code>{' '}
                   <button className="link-btn small" onClick={() => navigator.clipboard.writeText(`git checkout -b ${d.branchName}`).then(() => toast('Command copied'), () => toast('Copy failed', true))}>
                     Copy git command
-                  </button>
+                  </button>{' '}
+                  {can && <CreateBranch projectId={projectId} itemId={id} branchName={d.branchName} />}
                 </div>
                 {!d.links.length ? (
                   <p className="muted small">No code linked yet.</p>

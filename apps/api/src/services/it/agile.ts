@@ -53,6 +53,9 @@ export async function agileBoard(ctx: RecordCtx, projectId: string) {
             t.backlog_rank, t.due_date::text, t.parent_id,
             (select count(*)::int from project_task_links l where l.tenant_id = t.tenant_id and l.task_id = t.id) as links
        from project_tasks t where t.tenant_id = $1 and t.project_id = $2 and t.work_type <> 'epic' and t.parent_id is null
+        -- closed work stays on the backlog for two weeks, or while its sprint is open
+        and (t.status not in ('done','cancelled') or coalesce(t.completed_at, t.updated_at) > now() - interval '14 days'
+             or t.sprint_id in (select s.id from project_sprints s where s.tenant_id = $1 and s.project_id = $2 and s.status in ('active','planned')))
       order by t.backlog_rank, t.task_number limit 3000`,
     [ctx.tenantId, projectId],
   );

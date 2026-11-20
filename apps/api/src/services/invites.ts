@@ -25,6 +25,9 @@ export interface Invite {
   attendees: { email: string; name: string | null }[];
   cancelled: boolean;
   declined: boolean;
+  /** iCalendar UID: the same meeting from the calendar and from an emailed .ics */
+  uid?: string | null;
+  source?: 'calendar' | 'email';
 }
 
 /** The first Zoom / Meet / Teams link in an invite. */
@@ -49,11 +52,13 @@ async function googleInvites(token: string, from: Date, to: Date): Promise<Invit
       attendees: (e.attendees ?? []).filter((a: any) => a.email && !a.self && !a.resource).map((a: any) => ({ email: String(a.email).toLowerCase(), name: a.displayName ?? null })),
       cancelled: e.status === 'cancelled',
       declined: (e.attendees ?? []).some((a: any) => a.self && a.responseStatus === 'declined'),
+      uid: e.iCalUID ?? null,
+      source: 'calendar' as const,
     }));
 }
 
 async function graphInvites(token: string, from: Date, to: Date): Promise<Invite[]> {
-  const q = new URLSearchParams({ startDateTime: from.toISOString(), endDateTime: to.toISOString(), $top: '150', $select: 'id,subject,bodyPreview,start,end,location,attendees,isOnlineMeeting,onlineMeeting,isCancelled,isAllDay,responseStatus,organizer' });
+  const q = new URLSearchParams({ startDateTime: from.toISOString(), endDateTime: to.toISOString(), $top: '150', $select: 'id,iCalUId,subject,bodyPreview,start,end,location,attendees,isOnlineMeeting,onlineMeeting,isCancelled,isAllDay,responseStatus,organizer' });
   const r = await providerFetch<{ value?: any[] }>(`${GRAPH}/me/calendarView?${q}`, { headers: { authorization: `Bearer ${token}`, prefer: 'outlook.timezone="UTC"' } });
   return (r.value ?? [])
     .filter((e) => !e.isAllDay)
@@ -70,82 +75,275 @@ async function graphInvites(token: string, from: Date, to: Date): Promise<Invite
         .filter((a: { email: string }) => a.email),
       cancelled: !!e.isCancelled,
       declined: e.responseStatus?.response === 'declined',
+      uid: e.iCalUId ?? null,
+      source: 'calendar' as const,
     }));
 }
 
+/* ───────────────────────── invitations attached to emails (.ics) ───────────────────────── */
+
+const unescapeIcs = (v: string) => v.replace(/\\n/gi, '\n').replace(/\\([,;\\])/g, '$1');
+const WINDOWS_TZ: Record<string, string> = {
+  'India Standard Time': 'Asia/Kolkata', 'UTC': 'UTC', 'GMT Standard Time': 'Europe/London', 'W. Europe Standard Time': 'Europe/Berlin', 'Romance Standard Time': 'Europe/Paris',
+  'Eastern Standard Time': 'America/New_York', 'Central Standard Time': 'America/Chicago', 'Mountain Standard Time': 'America/Denver', 'Pacific Standard Time': 'America/Los_Angeles',
+  'Singapore Standard Time': 'Asia/Singapore', 'Arabian Standard Time': 'Asia/Dubai', 'Tokyo Standard Time': 'Asia/Tokyo', 'AUS Eastern Standard Time': 'Australia/Sydney', 'China Standard Time': 'Asia/Shanghai',
+};
+
+/** Offset (minutes east of UTC) of an IANA zone at a moment. */
+function zoneOffset(zone: string, at: Date): number | null {
+  try {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(at).map((x) => [x.type, x.value]));
+    return Math.round((Date.UTC(+p.year!, +p.month! - 1, +p.day!, +p.hour!, +p.minute!, +p.second!) - at.getTime()) / 60_000);
+  } catch {
+    return null;
+  }
+}
+
+/** An iCalendar date-time (with its TZID, the file's VTIMEZONE blocks as a fallback) → ISO. */
+export function icsTime(value: string, params: Record<string, string>, zones: Map<string, number>): string | null {
+  const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?$/.exec(value.trim());
+  if (!m) return null;
+  const [, y, mo, d, h = '00', mi = '00', se = '00', z] = m;
+  const naive = Date.UTC(+y!, +mo! - 1, +d!, +h, +mi, +se);
+  if (z || !params.TZID) return new Date(naive).toISOString();
+  const tzid = params.TZID.replace(/^"|"$/g, '');
+  const iana = WINDOWS_TZ[tzid] ?? tzid;
+  let off = zoneOffset(iana, new Date(naive));
+  if (off !== null) off = zoneOffset(iana, new Date(naive - off * 60_000)) ?? off;
+  if (off === null) off = zones.get(tzid) ?? 0;
+  return new Date(naive - off * 60_000).toISOString();
+}
+
+function icsDuration(v: string): number {
+  const m = /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(v.trim());
+  if (!m) return 3_600_000;
+  return (((+(m[1] ?? 0) * 7 + +(m[2] ?? 0)) * 24 + +(m[3] ?? 0)) * 3600 + +(m[4] ?? 0) * 60 + +(m[5] ?? 0)) * 1000;
+}
+
+/** The meetings in an .ics file (each VEVENT; recurring ones as their first time). */
+export function parseIcs(text: string): Invite[] {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\n[ \t]/g, '').split('\n');
+  const method = (lines.find((l) => /^METHOD:/i.test(l)) ?? '').split(':')[1]?.trim().toUpperCase() ?? '';
+  // VTIMEZONE: standard offset per TZID, for zone names Intl does not know
+  const zones = new Map<string, number>();
+  let tz: string | null = null;
+  let inStd = false;
+  for (const l of lines) {
+    if (/^TZID:/i.test(l)) tz = l.slice(5).trim();
+    else if (/^BEGIN:STANDARD/i.test(l)) inStd = true;
+    else if (/^END:STANDARD/i.test(l)) inStd = false;
+    else if (inStd && tz && /^TZOFFSETTO:/i.test(l)) {
+      const o = /([+-])(\d{2})(\d{2})/.exec(l);
+      if (o) zones.set(tz, (o[1] === '-' ? -1 : 1) * (+o[2]! * 60 + +o[3]!));
+    }
+  }
+  const out: Invite[] = [];
+  let ev: Record<string, { v: string; p: Record<string, string> }[]> | null = null;
+  for (const l of lines) {
+    if (/^BEGIN:VEVENT/i.test(l)) ev = {};
+    else if (/^END:VEVENT/i.test(l) && ev) {
+      const one = (k: string) => ev![k]?.[0];
+      const start = one('DTSTART');
+      const startsAt = start ? icsTime(start.v, start.p, zones) : null;
+      if (startsAt && start!.p.VALUE !== 'DATE') {
+        const end = one('DTEND');
+        const endsAt = (end && icsTime(end.v, end.p, zones)) ?? new Date(Date.parse(startsAt) + icsDuration(one('DURATION')?.v ?? 'PT1H')).toISOString();
+        const description = one('DESCRIPTION') ? unescapeIcs(one('DESCRIPTION')!.v) : null;
+        const location = one('LOCATION') ? unescapeIcs(one('LOCATION')!.v) : null;
+        const mail = (x: { v: string; p: Record<string, string> }) => ({ email: x.v.replace(/^mailto:/i, '').trim().toLowerCase(), name: x.p.CN ? x.p.CN.replace(/^"|"$/g, '') : null });
+        const people = [...(ev.ORGANIZER ?? []), ...(ev.ATTENDEE ?? [])].map(mail).filter((a) => /@/.test(a.email));
+        const extra = ['X-GOOGLE-CONFERENCE', 'X-MICROSOFT-SKYPETEAMSMEETINGURL', 'X-MICROSOFT-ONLINEMEETINGCONFLINK', 'URL'].map((k) => one(k)?.v);
+        out.push({
+          id: `ics:${one('UID')?.v ?? startsAt}`,
+          uid: one('UID')?.v ?? null,
+          title: unescapeIcs(one('SUMMARY')?.v ?? 'Meeting'),
+          startsAt,
+          endsAt,
+          location,
+          description,
+          joinUrl: meetingLink(...extra, location, description),
+          attendees: [...new Map(people.map((a) => [a.email, a])).values()],
+          cancelled: method === 'CANCEL' || /^CANCELLED$/i.test(one('STATUS')?.v ?? ''),
+          declined: false,
+          source: 'email',
+        });
+      }
+      ev = null;
+    } else if (ev) {
+      const i = l.indexOf(':');
+      if (i < 1) continue;
+      const [name, ...ps] = l.slice(0, i).split(';');
+      const p: Record<string, string> = {};
+      for (const kv of ps) {
+        const j = kv.indexOf('=');
+        if (j > 0) p[kv.slice(0, j).toUpperCase()] = kv.slice(j + 1);
+      }
+      (ev[name!.toUpperCase()] ??= []).push({ v: l.slice(i + 1), p });
+    }
+  }
+  return out;
+}
+
+const b64url = (s: string) => {
+  const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+  return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+};
+const isIcs = (name: string | undefined, type: string | undefined) => /\.(ics|vcs)$/i.test(name ?? '') || /text\/calendar|application\/ics/i.test(type ?? '');
+
+async function gmailIcs(token: string, since: Date): Promise<Invite[]> {
+  const auth = { authorization: `Bearer ${token}` };
+  const days = Math.max(1, Math.ceil((Date.now() - since.getTime()) / 86_400_000));
+  const q = new URLSearchParams({ q: `newer_than:${days}d (filename:ics OR filename:vcs OR has:invite)`, maxResults: '40' });
+  const list = await providerFetch<{ messages?: { id: string }[] }>(`https://gmail.googleapis.com/gmail/v1/users/me/messages?${q}`, { headers: auth });
+  const out: Invite[] = [];
+  for (const m of list.messages ?? []) {
+    const msg = await providerFetch<{ payload?: any }>(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=full`, { headers: auth }).catch(() => null);
+    const parts: any[] = [];
+    const walk = (p: any) => {
+      if (!p) return;
+      if (isIcs(p.filename, p.mimeType)) parts.push(p);
+      (p.parts ?? []).forEach(walk);
+    };
+    walk(msg?.payload);
+    for (const p of parts.slice(0, 3)) {
+      let data: string | null = p.body?.data ?? null;
+      if (!data && p.body?.attachmentId) data = (await providerFetch<{ data?: string }>(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}/attachments/${p.body.attachmentId}`, { headers: auth }).catch(() => null))?.data ?? null;
+      if (data) out.push(...parseIcs(b64url(data)));
+    }
+  }
+  return out;
+}
+
+async function graphIcs(token: string, since: Date): Promise<Invite[]> {
+  const auth = { authorization: `Bearer ${token}` };
+  const q = new URLSearchParams({ $filter: `receivedDateTime ge ${since.toISOString()} and hasAttachments eq true`, $top: '40', $select: 'id' });
+  const list = await providerFetch<{ value?: { id: string }[] }>(`${GRAPH}/me/messages?${q}`, { headers: auth });
+  const out: Invite[] = [];
+  for (const m of list.value ?? []) {
+    const atts = await providerFetch<{ value?: { id: string; name?: string; contentType?: string; size?: number }[] }>(`${GRAPH}/me/messages/${m.id}/attachments?$select=id,name,contentType,size`, { headers: auth }).catch(() => null);
+    for (const a of (atts?.value ?? []).filter((x) => isIcs(x.name, x.contentType) && (x.size ?? 0) < 500_000).slice(0, 3)) {
+      const full = await providerFetch<{ contentBytes?: string }>(`${GRAPH}/me/messages/${m.id}/attachments/${a.id}`, { headers: auth }).catch(() => null);
+      if (full?.contentBytes) out.push(...parseIcs(b64url(full.contentBytes)));
+    }
+  }
+  return out;
+}
+
+/* ───────────────────────── filing ───────────────────────── */
+
+interface FileCtx {
+  tenantId: string;
+  userId: string;
+  integrationId: string;
+  self: string;
+  colleagues: Set<string>;
+  myApps: { id: string; provider: string; account_ref: string }[];
+}
+
+/** One invite → a new call, an update to the one already filed, or nothing. */
+async function fileInvite(tx: Tx, f: FileCtx, inv: Invite): Promise<'added' | 'updated' | 'skipped'> {
+  const others = inv.attendees.filter((a) => a.email !== f.self);
+  const external = others.some((a) => !f.colleagues.has(a.email));
+  if (!inv.joinUrl && !external) return 'skipped';
+  // calls Synapse itself put in the calendar
+  if (/Scheduled from HRP Synapse/.test(inv.description ?? '')) return 'skipped';
+  if (inv.source !== 'email' && (await tx.one(`select 1 from events where tenant_id = $1 and calendar_ref ->> 'id' = $2`, [f.tenantId, inv.id]))) return 'skipped';
+  const ref = (inv.source === 'email' ? `ics:${inv.uid ?? inv.id}:${inv.startsAt}` : `cal:${f.integrationId}:${inv.id}`).slice(0, 300);
+  const existing =
+    (await tx.one<{ id: string }>(`select id from events where tenant_id = $1 and external_ref = $2`, [f.tenantId, ref])) ??
+    (inv.uid
+      ? await tx.one<{ id: string }>(`select id from events where tenant_id = $1 and ical_uid = $2 and starts_at between $3::timestamptz - interval '12 hours' and $3::timestamptz + interval '12 hours' order by created_at limit 1`, [f.tenantId, inv.uid.slice(0, 300), inv.startsAt])
+      : null);
+  const attendees = others.slice(0, 50).map((a) => ({ email: a.email, ...(a.name ? { name: a.name } : {}) }));
+  if (existing) {
+    await tx.query(
+      `update events set title = $3, starts_at = $4, ends_at = $5, attendees = $6, ical_uid = coalesce(ical_uid, $8), status = case when $7::boolean then 'cancelled' when status = 'cancelled' then 'scheduled' else status end, updated_at = now()
+        where tenant_id = $1 and id = $2`,
+      [f.tenantId, existing.id, inv.title.slice(0, 200), inv.startsAt, inv.endsAt, JSON.stringify(attendees), inv.cancelled || inv.declined, inv.uid?.slice(0, 300) ?? null],
+    );
+    return 'updated';
+  }
+  if (inv.cancelled || inv.declined) return 'skipped';
+  if (Date.parse(inv.endsAt) < Date.now() - 30 * 86_400_000) return 'skipped';
+  let online: OnlineMeeting | null = null;
+  if (inv.joinUrl) {
+    const p = parseJoinUrl(inv.joinUrl);
+    if (p) {
+      // the same meeting already came in from a meeting app, or was scheduled in Synapse
+      const dup = await tx.one<{ id: string }>(
+        `select id from events where tenant_id = $1 and online_meeting ->> 'joinUrl' = $2 and starts_at between $3::timestamptz - interval '1 day' and $3::timestamptz + interval '1 day'`,
+        [f.tenantId, p.joinUrl, inv.startsAt],
+      );
+      if (dup) {
+        await tx.query(`update events set external_ref = coalesce(external_ref, $3), ical_uid = coalesce(ical_uid, $4) where tenant_id = $1 and id = $2`, [f.tenantId, dup.id, ref, inv.uid?.slice(0, 300) ?? null]);
+        return 'skipped';
+      }
+      const app = f.myApps.find((a) => a.provider === p.provider);
+      online = { ...p, integrationId: app?.id ?? '', account: app?.account_ref ?? null };
+    }
+  }
+  const project = await matchProject(tx, f.tenantId, f.userId, inv.title, others.map((a) => a.email));
+  await tx.query(
+    `insert into events (tenant_id, title, kind, starts_at, ends_at, description, location, related_object, related_id, owner_id, created_by, attendees, online_meeting, transcript_status, external_ref, ical_uid)
+     values ($1,$2,'meeting',$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13,$14)`,
+    [
+      f.tenantId, inv.title.slice(0, 200), inv.startsAt, inv.endsAt, inv.description?.slice(0, 5000) ?? null, (inv.joinUrl ?? inv.location)?.slice(0, 300) ?? null, project ? 'project' : null, project, f.userId,
+      JSON.stringify(attendees), online ? JSON.stringify(online) : null, online?.integrationId && Date.parse(inv.endsAt) > Date.now() - 7 * 86_400_000 ? 'waiting' : 'none', ref, inv.uid?.slice(0, 300) ?? null,
+    ],
+  );
+  return 'added';
+}
+
 /**
- * Files one mailbox's calendar invites as calls. Only meetings that look like calls count: with a
- * Zoom / Meet / Teams link, or with someone from outside the workspace.
+ * Files one mailbox's invites as calls: the calendar (a week back to a month ahead) and invitations
+ * attached to emails (.ics — from Zoho, Webex, GoTo and other tools that do not reach the
+ * calendar). Only meetings that look like calls count: with a Zoom / Meet / Teams link, or with
+ * someone from outside the workspace.
  */
-export async function syncInvites(env: Env, tx: Tx, i: Integration): Promise<{ found: number; added: number; updated: number }> {
-  if (!i.user_id || i.config?.invites === false) return { found: 0, added: 0, updated: 0 };
+export async function syncInvites(env: Env, tx: Tx, i: Integration): Promise<{ found: number; added: number; updated: number; fromEmail: number }> {
+  if (!i.user_id || i.config?.invites === false) return { found: 0, added: 0, updated: 0, fromEmail: 0 };
   const token = await mailboxToken(env, tx, i);
   const from = new Date(Date.now() - 7 * 86_400_000);
   const to = new Date(Date.now() + 30 * 86_400_000);
   const list = i.provider === 'google' ? await googleInvites(token, from, to) : await graphInvites(token, from, to);
-  const self = (i.account_ref ?? '').toLowerCase();
-  const colleagues = new Set((await tx.query<{ email: string }>(`select lower(email) as email from users where tenant_id = $1 and email is not null`, [i.tenant_id])).map((u) => u.email));
-  const myApps = await tx.query<{ id: string; provider: string; account_ref: string }>(`select id, provider, account_ref from integrations where tenant_id = $1 and user_id = $2 and provider in ('zoom_meet','google_meet','ms_teams_meet') and status = 'active'`, [i.tenant_id, i.user_id]);
+  // emails since the last look (first time: two weeks back)
+  const lastLook = Date.parse(String(i.config?.icsScannedAt ?? '')) || Date.now() - 14 * 86_400_000;
+  const since = new Date(Math.max(lastLook - 86_400_000, Date.now() - 30 * 86_400_000));
+  const fromMail = await (i.provider === 'google' ? gmailIcs(token, since) : graphIcs(token, since)).catch((e) => {
+    console.error(JSON.stringify({ level: 'warn', job: 'invites-ics', msg: (e as Error).message }));
+    return [] as Invite[];
+  });
+  const calUids = new Set(list.map((x) => x.uid).filter(Boolean));
+  const f: FileCtx = {
+    tenantId: i.tenant_id,
+    userId: i.user_id,
+    integrationId: i.id,
+    self: (i.account_ref ?? '').toLowerCase(),
+    colleagues: new Set((await tx.query<{ email: string }>(`select lower(email) as email from users where tenant_id = $1 and email is not null`, [i.tenant_id])).map((u) => u.email)),
+    myApps: await tx.query(`select id, provider, account_ref from integrations where tenant_id = $1 and user_id = $2 and provider in ('zoom_meet','google_meet','ms_teams_meet') and status = 'active'`, [i.tenant_id, i.user_id]),
+  };
   let added = 0;
   let updated = 0;
   let found = 0;
-  for (const inv of list) {
-    const others = inv.attendees.filter((a) => a.email !== self);
-    const external = others.some((a) => !colleagues.has(a.email));
-    if (!inv.joinUrl && !external) continue;
-    // calls Synapse itself put in the calendar
-    if (/Scheduled from HRP Synapse/.test(inv.description ?? '')) continue;
-    if (await tx.one(`select 1 from events where tenant_id = $1 and calendar_ref ->> 'id' = $2`, [i.tenant_id, inv.id])) continue;
+  let fromEmail = 0;
+  // an emailed invite that is also in the calendar is filed once, from the calendar
+  for (const inv of [...list, ...fromMail.filter((x) => !(x.uid && calUids.has(x.uid)) && Date.parse(x.endsAt) > from.getTime())]) {
+    const r = await fileInvite(tx, f, inv);
+    if (r === 'skipped') continue;
     found++;
-    const ref = `cal:${i.id}:${inv.id}`.slice(0, 300);
-    const existing = await tx.one<{ id: string; related_id: string | null }>(`select id, related_id from events where tenant_id = $1 and external_ref = $2`, [i.tenant_id, ref]);
-    const attendees = others.slice(0, 50).map((a) => ({ email: a.email, ...(a.name ? { name: a.name } : {}) }));
-    if (existing) {
-      await tx.query(
-        `update events set title = $3, starts_at = $4, ends_at = $5, attendees = $6, status = case when $7::boolean then 'cancelled' when status = 'cancelled' then 'scheduled' else status end, updated_at = now()
-          where tenant_id = $1 and id = $2`,
-        [i.tenant_id, existing.id, inv.title.slice(0, 200), inv.startsAt, inv.endsAt, JSON.stringify(attendees), inv.cancelled || inv.declined],
-      );
-      updated++;
-      continue;
-    }
-    if (inv.cancelled || inv.declined) continue;
-    let online: OnlineMeeting | null = null;
-    if (inv.joinUrl) {
-      const p = parseJoinUrl(inv.joinUrl);
-      if (p) {
-        // the same meeting already came in from a meeting app, or was scheduled in Synapse
-        const dup = await tx.one<{ id: string }>(
-          `select id from events where tenant_id = $1 and online_meeting ->> 'joinUrl' = $2 and starts_at between $3::timestamptz - interval '1 day' and $3::timestamptz + interval '1 day'`,
-          [i.tenant_id, p.joinUrl, inv.startsAt],
-        );
-        if (dup) {
-          await tx.query(`update events set external_ref = coalesce(external_ref, $3) where tenant_id = $1 and id = $2`, [i.tenant_id, dup.id, ref]);
-          continue;
-        }
-        const app = myApps.find((a) => a.provider === p.provider);
-        online = { ...p, integrationId: app?.id ?? '', account: app?.account_ref ?? null };
-      }
-    }
-    const project = await matchProject(tx, i.tenant_id, i.user_id, inv.title, others.map((a) => a.email));
-    await tx.query(
-      `insert into events (tenant_id, title, kind, starts_at, ends_at, description, location, related_object, related_id, owner_id, created_by, attendees, online_meeting, transcript_status, external_ref)
-       values ($1,$2,'meeting',$3,$4,$5,$6,$7,$8,$9,$9,$10,$11,$12,$13)`,
-      [
-        i.tenant_id, inv.title.slice(0, 200), inv.startsAt, inv.endsAt, inv.description?.slice(0, 5000) ?? null, (inv.joinUrl ?? inv.location)?.slice(0, 300) ?? null, project ? 'project' : null, project, i.user_id,
-        JSON.stringify(attendees), online ? JSON.stringify(online) : null, online?.integrationId && Date.parse(inv.endsAt) > Date.now() - 7 * 86_400_000 ? 'waiting' : 'none', ref,
-      ],
-    );
-    added++;
+    if (r === 'added') added++;
+    else updated++;
+    if (inv.source === 'email') fromEmail++;
   }
-  return { found, added, updated };
+  await tx.query(`update integrations set config = coalesce(config, '{}'::jsonb) || jsonb_build_object('icsScannedAt', $3::text) where tenant_id = $1 and id = $2`, [i.tenant_id, i.id, new Date().toISOString()]);
+  return { found, added, updated, fromEmail };
 }
 
 /** "Check my invites now" from the Calls page. */
 export async function syncMyInvites(env: Env, db: Db, tenantId: string, userId: string) {
   return db.tx({ tenantId, userId }, async (tx) => {
     const mb = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft') and status <> 'disabled' limit 1`, [tenantId, userId]);
-    if (!mb) return { mailbox: false, found: 0, added: 0, updated: 0 };
+    if (!mb) return { mailbox: false, found: 0, added: 0, updated: 0, fromEmail: 0 };
     return { mailbox: true, ...(await syncInvites(env, tx, mb)) };
   });
 }

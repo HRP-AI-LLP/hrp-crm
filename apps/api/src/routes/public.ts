@@ -321,7 +321,7 @@ export const publicRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   });
 
-export async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form' | 'channel' | 'quote' | 'shipment' | 'installation' | 'ticket' | 'integration' | 'meta_page' | 'privacy' | 'privacy_request' | 'campaign' | 'dashboard' | 'portal' | 'roadmap' | 'dealer' | 'kb' | 'repo', key: string) {
+export async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form' | 'channel' | 'quote' | 'shipment' | 'installation' | 'ticket' | 'integration' | 'meta_page' | 'privacy' | 'privacy_request' | 'campaign' | 'dashboard' | 'portal' | 'roadmap' | 'dealer' | 'kb' | 'repo' | 'github_app', key: string) {
   if (!/^[A-Za-z0-9_-]{16,80}$/.test(key)) throw notFound();
   const rows = await c.var.db.platform<{ tenant_id: string; target_id: string; tenant_status: string }>(`select * from app.resolve_public_route($1, $2)`, [kind, key]);
   const r = rows[0];

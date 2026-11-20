@@ -78,10 +78,12 @@ async function managedProjectIds(ctx: RecordCtx): Promise<string[] | 'all'> {
   return ids;
 }
 
-async function notify(ctx: RecordCtx, userIds: (string | null | undefined)[], title: string, link: string, body: string | null = null) {
+async function notify(ctx: RecordCtx, userIds: (string | null | undefined)[], title: string, link: string, body: string | null = null, mail: 'assigned' | 'watching' | null = null) {
   const me = ctx.principal.user.id;
-  for (const u of new Set(userIds.filter((x): x is string => !!x && x !== me)))
+  for (const u of new Set(userIds.filter((x): x is string => !!x && x !== me))) {
     await ctx.tx.query(`insert into notifications (tenant_id, user_id, kind, title, body, link) values ($1,$2,'project',$3,$4,$5)`, [ctx.tenantId, u, title.slice(0, 200), body, link]);
+    if (mail) await (await import('./it/alerts')).queueMail(ctx.tx, ctx.tenantId, u, mail, { title, body, link });
+  }
 }
 
 /* ───────────────────────── projects ───────────────────────── */
@@ -447,12 +449,17 @@ const TASK_COLS = `t.id, t.project_id, t.list_id, t.milestone_id, t.parent_id, t
 
 export async function listTasks(ctx: RecordCtx, projectId: string, q: { assignee?: string | null; status?: string | null; listId?: string | null } = {}) {
   const { level } = await projectAccess(ctx, projectId);
+  // in a very big project the 3,000 kept are the open and recently closed ones
   const rows = await ctx.tx.query<Record<string, any>>(
-    `select ${TASK_COLS},
+    `with keep as materialized (
+       select x.id from project_tasks x
+        where x.tenant_id = $1 and x.project_id = $2 and ($3::uuid is null or $3 = any(x.assignees)) and ($4::text is null or x.status = $4) and ($5::uuid is null or x.list_id = $5)
+        order by (x.status in ('done','cancelled') and coalesce(x.completed_at, x.updated_at) < now() - interval '30 days'), x.position, x.task_number limit 3000)
+     select ${TASK_COLS},
             (select coalesce(sum(minutes), 0)::float8 / 60 from time_entries e where e.tenant_id = t.tenant_id and e.task_id = t.id) as logged_hours,
             (select count(*)::int from project_comments c where c.tenant_id = t.tenant_id and c.task_id = t.id) as comments
-       from project_tasks t where t.tenant_id = $1 and t.project_id = $2 and ($3::uuid is null or $3 = any(t.assignees)) and ($4::text is null or t.status = $4) and ($5::uuid is null or t.list_id = $5)
-      order by t.position, t.task_number limit 3000`,
+       from keep k join project_tasks t on t.tenant_id = $1 and t.id = k.id
+      order by t.position, t.task_number`,
     [ctx.tenantId, projectId, q.assignee ?? null, q.status ?? null, q.listId ?? null],
   );
   const deps = await ctx.tx.query(
@@ -460,7 +467,8 @@ export async function listTasks(ctx: RecordCtx, projectId: string, q: { assignee
     [ctx.tenantId, projectId],
   );
   if (level !== 'manage') for (const r of rows) delete r.rate;
-  return { tasks: rows, deps };
+  const total = (await ctx.tx.one<{ n: number }>(`select count(*)::int as n from project_tasks where tenant_id = $1 and project_id = $2`, [ctx.tenantId, projectId]))?.n ?? rows.length;
+  return { tasks: rows, deps, total, truncated: total > 3000 };
 }
 
 async function checkTaskRefs(ctx: RecordCtx, project: Record<string, any>, input: TaskInput, selfId?: string) {
@@ -496,7 +504,7 @@ export async function createTask(ctx: RecordCtx, projectId: string, input: TaskI
   );
   if (input.parentId) await refreshEpics(ctx.tx, ctx.tenantId, t!.id);
   await refreshProgress(ctx.tx, ctx.tenantId, projectId);
-  await notify(ctx, input.assignees ?? [], `New task in ${project.name}: ${input.name}`, `/projects/${projectId}#task-${t!.id}`);
+  await notify(ctx, input.assignees ?? [], `New task in ${project.name}: ${input.name}`, `/projects/${projectId}?item=${t!.id}`, null, 'assigned');
   return { id: t!.id, number: n!.n };
 }
 
@@ -535,10 +543,19 @@ export async function updateTask(ctx: RecordCtx, projectId: string, taskId: stri
     ],
   );
   if (input.parentId !== undefined && input.parentId !== cur.parent_id) await refreshEpics(ctx.tx, ctx.tenantId, taskId);
+  if (status !== cur.status) {
+    // automation rules on the move (the work item view moves through the workflow itself)
+    const { fireRules } = await import('./it/rules');
+    const { pickWorkflow, projectWorkflows, currentState } = await import('./work-types');
+    const wf = pickWorkflow(await projectWorkflows(ctx.tx, ctx.tenantId, projectId), cur.work_type);
+    const from = currentState(wf, cur.state, cur.status);
+    const to = currentState(wf, nextState ?? null, status);
+    await fireRules(ctx, projectId, taskId, { kind: 'state_changed', fromState: from.key, toState: to.key, toCategory: to.category });
+  }
   if (input.dueDate !== undefined || input.startDate !== undefined) await reschedule(ctx.tx, ctx.tenantId, taskId);
   await refreshProgress(ctx.tx, ctx.tenantId, projectId);
   const added = (input.assignees ?? []).filter((a) => !(cur.assignees as string[]).includes(a));
-  await notify(ctx, added, `Task assigned in ${project.name}: ${input.name ?? cur.name}`, `/projects/${projectId}#task-${taskId}`);
+  await notify(ctx, added, `Task assigned in ${project.name}: ${input.name ?? cur.name}`, `/projects/${projectId}?item=${taskId}`, null, 'assigned');
   if (status !== cur.status && (status === 'done' || status === 'review'))
     await notify(ctx, [cur.created_by, project.owner_id], `${input.name ?? cur.name} is ${status === 'done' ? 'done' : 'ready for review'}`, `/projects/${projectId}#task-${taskId}`);
 }
@@ -639,7 +656,7 @@ export async function addComment(ctx: RecordCtx, projectId: string, target: { ta
   if (!row) throw notFound();
   const c = await ctx.tx.one<{ id: string }>(`insert into project_comments (tenant_id, project_id, task_id, issue_id, body) values ($1,$2,$3,$4,$5) returning id`, [ctx.tenantId, projectId, target.taskId ?? null, target.issueId ?? null, body]);
   const team = await workers(ctx.tx, ctx.tenantId, project);
-  await notify(ctx, [...row.assignees, row.created_by].filter((u) => u && team.has(u)), `New comment on ${row.name}`, `/projects/${project.id}`, body.slice(0, 200));
+  await notify(ctx, [...row.assignees, row.created_by].filter((u) => u && team.has(u)), `New comment on ${row.name}`, target.taskId ? `/projects/${project.id}?item=${target.taskId}` : `/projects/${project.id}`, body.slice(0, 200), 'watching');
   return c;
 }
 

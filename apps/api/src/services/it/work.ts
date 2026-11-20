@@ -31,6 +31,8 @@ import {
   type Workflow,
   type WorkType,
 } from '../work-types';
+import { workNotify } from './alerts';
+import { fireRules } from './rules';
 import { compileWql, type WqlContext } from './wql';
 
 type Role = 'manager' | 'member';
@@ -72,6 +74,8 @@ export async function setWorkKey(ctx: RecordCtx, projectId: string, key: string)
 
 export interface WorkSettings {
   estimation?: 'points' | 'hours';
+  /** a project with no code (consulting, events…): exempt from the "every project has a repository" rule */
+  noCode?: boolean;
   autoTransitions?: { branch?: string | null; prOpened?: string | null; prMerged?: string | null; buildFailed?: string | null };
 }
 
@@ -250,10 +254,7 @@ export async function watch(tx: Tx, tenantId: string, taskId: string, userIds: (
 
 async function notifyWatchers(ctx: RecordCtx, taskId: string, title: string, link: string, body: string | null, skip: string[] = []) {
   const rows = await ctx.tx.query<{ user_id: string }>(`select user_id from project_task_watchers w join users u on u.tenant_id = w.tenant_id and u.id = w.user_id where w.tenant_id = $1 and w.task_id = $2 and u.status = 'active'`, [ctx.tenantId, taskId]);
-  for (const r of rows) {
-    if (r.user_id === ctx.principal.user.id || skip.includes(r.user_id)) continue;
-    await ctx.tx.query(`insert into notifications (tenant_id, user_id, kind, title, body, link) values ($1,$2,'project',$3,$4,$5)`, [ctx.tenantId, r.user_id, title.slice(0, 200), body?.slice(0, 300) ?? null, link]);
-  }
+  await workNotify(ctx, rows.map((r) => r.user_id).filter((u) => !skip.includes(u)), 'watching', { title, body, link });
 }
 
 export async function setWatching(ctx: RecordCtx, projectId: string, taskId: string, on: boolean, userId?: string) {
@@ -330,6 +331,7 @@ export async function transition(ctx: RecordCtx, projectId: string, taskId: stri
   if (!opts.system) await watch(ctx.tx, ctx.tenantId, taskId, [ctx.principal.user.id]);
   const key = `${await workKey(ctx.tx, ctx.tenantId, project)}-${t.task_number}`;
   await notifyWatchers(ctx, taskId, `${key} ${t.name} → ${target.label}`, itemLink(projectId, taskId), null);
+  await fireRules(ctx, projectId, taskId, { kind: 'state_changed', fromState: cur.key, toState: target.key, toCategory: target.category });
   return { state: target.key, status };
 }
 
@@ -377,6 +379,7 @@ async function checkPlan(tx: Tx, tenantId: string, projectId: string, i: ItemInp
 
 export async function createItem(ctx: RecordCtx, projectId: string, i: ItemInput & { name: string; workType: WorkType }, opts: { skipRequired?: boolean } = {}) {
   const { project } = await projectAccess(ctx, projectId, 'member');
+  await assertRepoRule(ctx, project);
   await checkPlan(ctx.tx, ctx.tenantId, projectId, i);
   if (i.workType === 'epic' && (i.parentId || i.sprintId)) throw badRequest('An epic is not planned into a sprint or put under another item');
   if (i.workType === 'subtask' && !i.parentId) throw badRequest('A sub-task needs a parent');
@@ -405,6 +408,7 @@ export async function createItem(ctx: RecordCtx, projectId: string, i: ItemInput
   await watch(ctx.tx, ctx.tenantId, t.id, [ctx.principal.user.id, ...assignees]);
   if (i.state) await transition(ctx, projectId, t.id, { to: i.state });
   const key = await workKey(ctx.tx, ctx.tenantId, project);
+  await fireRules(ctx, projectId, t.id, { kind: 'created' });
   return { id: t.id, number: t.number, key: `${key}-${t.number}` };
 }
 
@@ -457,6 +461,11 @@ export async function updateItem(ctx: RecordCtx, projectId: string, taskId: stri
   await watch(ctx.tx, ctx.tenantId, taskId, [ctx.principal.user.id]);
   if (i.assignees?.length) await watch(ctx.tx, ctx.tenantId, taskId, i.assignees);
   void level;
+  // rules on changed fields
+  const after = (await ctx.tx.one<Record<string, any>>(`select priority, assignees, sprint_id, severity, work_type, story_points, tags, due_date::text as due_date from project_tasks where tenant_id = $1 and id = $2`, [ctx.tenantId, taskId]))!;
+  const was: Record<string, unknown> = { priority: cur.priority, assignee: cur.assignees[0] ?? null, sprint: cur.sprint_id, severity: cur.severity, type: cur.work_type, points: cur.story_points === null ? null : Number(cur.story_points), labels: [...cur.tags].sort().join(','), due: cur.due_date ? d10(cur.due_date) : null };
+  const now: Record<string, unknown> = { priority: after.priority, assignee: after.assignees[0] ?? null, sprint: after.sprint_id, severity: after.severity, type: after.work_type, points: after.story_points === null ? null : Number(after.story_points), labels: [...after.tags].sort().join(','), due: after.due_date };
+  for (const f of Object.keys(now)) if (String(was[f] ?? '') !== String(now[f] ?? '')) await fireRules(ctx, projectId, taskId, { kind: 'field_changed', field: f, to: now[f] === null ? null : String(now[f]) });
   return { ok: true };
 }
 
@@ -470,7 +479,9 @@ export async function getItem(ctx: RecordCtx, projectId: string, taskId: string)
   const state = currentState(wf, t.state, t.status);
   const brief = `t.id, t.task_number, t.name, t.work_type, t.status, t.state, t.assignees, t.story_points::float8 as story_points, t.priority, t.project_id`;
   const parent = await (t.parent_id ? ctx.tx.one(`select ${brief} from project_tasks t where t.tenant_id = $1 and t.id = $2`, [ctx.tenantId, t.parent_id]) : null);
-  const children = await (ctx.tx.query(`select ${brief} from project_tasks t where t.tenant_id = $1 and t.parent_id = $2 order by t.backlog_rank, t.task_number`, [ctx.tenantId, taskId]));
+  // open children first; a parent with thousands of children shows the first 300 and the counts
+  const children = await (ctx.tx.query(`select ${brief} from project_tasks t where t.tenant_id = $1 and t.parent_id = $2 order by (t.status in ('done','cancelled')), t.backlog_rank, t.task_number limit 300`, [ctx.tenantId, taskId]));
+  const childStats = await ctx.tx.one<{ total: number; closed: number }>(`select count(*)::int as total, count(*) filter (where status in ('done','cancelled'))::int as closed from project_tasks where tenant_id = $1 and parent_id = $2`, [ctx.tenantId, taskId]);
   const epic = await (t.epic_id ? ctx.tx.one(`select ${brief} from project_tasks t where t.tenant_id = $1 and t.id = $2`, [ctx.tenantId, t.epic_id]) : null);
   const relations = await (ctx.tx.query(
       `select r.id, r.kind, (r.task_id = $2) as outward, o.id as item_id, o.task_number, o.name, o.status, o.work_type, op.work_key, o.project_id
@@ -527,6 +538,7 @@ export async function getItem(ctx: RecordCtx, projectId: string, taskId: string)
     parent: parent ? withKey(parent, key) : null,
     epic: epic ? withKey(epic, key) : null,
     children: (children as Record<string, any>[]).map((c) => withKey(c, key)),
+    childStats: childStats ?? { total: 0, closed: 0 },
     relations: (relations as Record<string, any>[]).map((r) => ({ id: r.id, kind: r.kind, outward: r.outward, label: relationLabel(r.kind, r.outward), item: { id: r.item_id, key: `${r.work_key ?? key}-${r.task_number}`, name: r.name, status: r.status, workType: r.work_type, projectId: r.project_id } })),
     links,
     watchers,
@@ -603,11 +615,11 @@ export async function comment(ctx: RecordCtx, projectId: string, taskId: string,
   mentioned.delete(ctx.principal.user.id);
   const key = `${await workKey(ctx.tx, ctx.tenantId, project)}-${t.task_number}`;
   const plain = body.replace(/@\[([^\]]+)\]\([0-9a-f-]{36}\)/g, '@$1');
-  for (const u of mentioned)
-    await ctx.tx.query(`insert into notifications (tenant_id, user_id, kind, title, body, link) values ($1,$2,'project',$3,$4,$5)`, [ctx.tenantId, u, `${ctx.principal.user.fullName || 'Someone'} mentioned you on ${key}`.slice(0, 200), plain.slice(0, 300), itemLink(projectId, taskId)]);
+  await workNotify(ctx, [...mentioned], 'mentioned', { title: `${ctx.principal.user.fullName || 'Someone'} mentioned you on ${key} ${t.name}`, body: plain.slice(0, 300), link: itemLink(projectId, taskId) });
   await watch(ctx.tx, ctx.tenantId, taskId, [ctx.principal.user.id, ...mentioned]);
   // addComment already told the assignees and the creator
   await notifyWatchers(ctx, taskId, `New comment on ${key} ${t.name}`, itemLink(projectId, taskId), plain, [...mentioned, ...t.assignees, t.created_by].filter(Boolean));
+  if (!body.startsWith('🤖')) await fireRules(ctx, projectId, taskId, { kind: 'commented' });
   return { id: c!.id, mentioned: [...mentioned] };
 }
 
@@ -680,7 +692,7 @@ async function visibleProjectIds(ctx: RecordCtx): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
-async function wqlContext(ctx: RecordCtx, projectIds: string[]): Promise<WqlContext> {
+export async function wqlContext(ctx: RecordCtx, projectIds: string[]): Promise<WqlContext> {
   const cf = await ctx.tx.query<{ key: string; label: string; type: string }>(`select distinct on (key) key, label, type from pm_field_defs where tenant_id = $1 and project_id = any($2::uuid[]) order by key`, [ctx.tenantId, projectIds]);
   const wf = await ctx.tx.query<{ states: WfState[] }>(`select states from pm_workflows where tenant_id = $1 and project_id = any($2::uuid[])`, [ctx.tenantId, projectIds]);
   const labels = new Map<string, string[]>();
@@ -937,13 +949,54 @@ export async function moveCard(ctx: RecordCtx, projectId: string, boardId: strin
 export async function hierarchy(ctx: RecordCtx, projectId: string, q: { open?: boolean }) {
   const { project } = await projectAccess(ctx, projectId, 'view');
   const key = await workKey(ctx.tx, ctx.tenantId, project);
+  // roll-ups come from every item (a light read); only up to SHOW items are sent with their details,
+  // open work first, so a project with tens of thousands of items still opens quickly
+  const SHOW = 2500;
+  const all = await ctx.tx.query<{ id: string; parent_id: string | null; epic_id: string | null; status: string; story_points: number | null; work_type: string }>(
+    `select id, parent_id, epic_id, status, story_points::float8 as story_points, work_type from project_tasks where tenant_id = $1 and project_id = $2 limit 100000`,
+    [ctx.tenantId, projectId],
+  );
+  const kids = new Map<string, string[]>();
+  const light = new Map(all.map((r) => [r.id, r]));
+  for (const r of all) {
+    const p = r.parent_id && light.has(r.parent_id) ? r.parent_id : r.epic_id && light.has(r.epic_id) && r.epic_id !== r.id ? r.epic_id : null;
+    if (p) (kids.get(p) ?? kids.set(p, []).get(p)!).push(r.id);
+  }
+  const rolled = new Map<string, { points: number; done: number; items: number; closed: number }>();
+  const rollOf = (id: string, depth = 0): { points: number; done: number; items: number; closed: number } => {
+    const hit = rolled.get(id);
+    if (hit) return hit;
+    let points = 0;
+    let done = 0;
+    let items = 0;
+    let closed = 0;
+    for (const c of depth > 20 ? [] : kids.get(id) ?? []) {
+      const r = rollOf(c, depth + 1);
+      const row = light.get(c)!;
+      points += r.points;
+      done += r.done;
+      items += r.items + 1;
+      closed += r.closed + (['done', 'cancelled'].includes(row.status) ? 1 : 0);
+    }
+    const n = light.get(id)!;
+    // estimates sit at the story level: a node's own points count when its children carry none
+    if (!points && n.story_points) {
+      points = Number(n.story_points);
+      done = n.status === 'done' ? points : 0;
+    }
+    const out = { points, done, items, closed };
+    rolled.set(id, out);
+    return out;
+  };
   const rows = await ctx.tx.query<Record<string, any>>(
     `select t.id, t.task_number, t.name, t.work_type, t.status, t.state, t.parent_id, t.epic_id, t.assignees, t.story_points::float8 as story_points, t.priority, t.sprint_id, t.backlog_rank, t.due_date::text as due_date,
             (select array_agg(u.full_name) from users u where u.tenant_id = t.tenant_id and u.id = any(t.assignees)) as assignee_names
        from project_tasks t where t.tenant_id = $1 and t.project_id = $2 and ($3::boolean is not true or t.status not in ('done','cancelled') or t.work_type in ('epic','feature'))
-      order by t.backlog_rank, t.task_number limit 5000`,
+      order by (t.work_type in ('epic','feature')) desc, (t.status in ('done','cancelled') and coalesce(t.completed_at, t.updated_at) < now() - interval '30 days'), t.backlog_rank, t.task_number limit ${SHOW + 1}`,
     [ctx.tenantId, projectId, q.open ?? false],
   );
+  const truncated = rows.length > SHOW;
+  if (truncated) rows.length = SHOW;
   const wfs = await projectWorkflows(ctx.tx, ctx.tenantId, projectId);
   const byId = new Map<string, any>(rows.map((r) => [r.id, { ...r, key: `${key}-${r.task_number}`, stateLabel: currentState(pickWorkflow(wfs, r.work_type), r.state, r.status).label, children: [] as any[] }]));
   const roots: any[] = [];
@@ -952,30 +1005,18 @@ export async function hierarchy(ctx: RecordCtx, projectId: string, q: { open?: b
     if (parent && parent !== n) parent.children.push(n);
     else roots.push(n);
   }
-  const roll = (n: any): { points: number; done: number; items: number; closed: number } => {
-    let points = 0;
-    let done = 0;
-    let items = 0;
-    let closed = 0;
-    for (const c of n.children) {
-      const r = roll(c);
-      points += r.points;
-      done += r.done;
-      items += r.items + 1;
-      closed += r.closed + (['done', 'cancelled'].includes(c.status) ? 1 : 0);
-    }
-    // estimates sit at the story level: a node's own points count when its children carry none
-    if (!points && n.story_points) {
-      points = Number(n.story_points);
-      done = n.status === 'done' ? points : 0;
-    }
-    Object.assign(n, { rollPoints: points, rollDone: done, rollItems: items, rollClosed: closed });
-    return { points, done, items, closed };
+  for (const n of byId.values()) {
+    const r = light.has(n.id) ? rollOf(n.id) : { points: 0, done: 0, items: 0, closed: 0 };
+    Object.assign(n, { rollPoints: r.points, rollDone: r.done, rollItems: r.items, rollClosed: r.closed, hidden: Math.max(0, (kids.get(n.id)?.length ?? 0) - n.children.length) });
+  }
+  const sortKids = (n: any) => {
+    n.children.sort((a: any, b: any) => a.backlog_rank - b.backlog_rank || a.task_number - b.task_number);
+    n.children.forEach(sortKids);
   };
-  roots.forEach(roll);
+  roots.forEach(sortKids);
   const rank = (n: any) => LEVEL[n.work_type as WorkType] ?? 3;
   roots.sort((a, b) => rank(a) - rank(b) || a.backlog_rank - b.backlog_rank || a.task_number - b.task_number);
-  return { roots };
+  return { roots, total: all.length, shown: rows.length, truncated };
 }
 
 /* ───────────────────────── reports ───────────────────────── */
@@ -984,19 +1025,37 @@ export async function hierarchy(ctx: RecordCtx, projectId: string, q: { open?: b
 export async function cumulativeFlow(ctx: RecordCtx, projectId: string, days: number) {
   await projectAccess(ctx, projectId, 'view');
   const n = Math.min(Math.max(days, 7), 180);
+  // Each item's status over time as segments [from, to); a segment counts on the days it spans,
+  // added up with +1 / −1 at its ends — one pass over the history, however many days are shown.
+  // right after a bulk import the table has no statistics yet and the planner guesses one row,
+  // which turns the CTE joins into nested loops (minutes); hash joins are right at any size
+  await ctx.tx.query(`set local enable_nestloop = off`);
   const rows = await ctx.tx.query<{ day: string; status: string; n: number }>(
-    `with days as (select generate_series(current_date - ($3::int - 1), current_date, interval '1 day')::date as day),
-          items as (select id, created_at, status,
-                           -- items from before history was kept: their status before the first recorded change, else today's
-                           coalesce((select h.old_value from project_task_history h where h.tenant_id = $1 and h.task_id = t.id and h.field = 'status' order by h.at limit 1), t.status) as first_status
-                      from project_tasks t where tenant_id = $1 and project_id = $2 and work_type <> 'epic')
-     select d.day::text as day, coalesce(
-              (select h.new_value from project_task_history h where h.tenant_id = $1 and h.task_id = i.id and h.field in ('status','created') and h.at < d.day + 1 order by h.at desc limit 1),
-              i.first_status) as status, count(*)::int as n
-       from days d join items i on i.created_at < d.day + 1
-      group by d.day, 2 order by d.day`,
+    `with t as (select id, created_at, status from project_tasks where tenant_id = $1 and project_id = $2 and work_type <> 'epic'),
+          h as (select h.task_id, h.at, h.old_value, h.new_value, h.field,
+                       row_number() over (partition by h.task_id order by h.at, h.id) as rn,
+                       lead(h.at) over (partition by h.task_id order by h.at, h.id) as next_at
+                  from project_task_history h join t on t.id = h.task_id
+                 where h.tenant_id = $1 and h.project_id = $2 and h.field in ('status', 'created')),
+          firsts as (select task_id, min(at) as first_at, (array_agg(old_value order by at, rn) filter (where field = 'status'))[1] as first_old from h group by task_id),
+          seg as (
+            -- before the first recorded change: the status it had then (items older than the history: today's)
+            select t.created_at as from_at, f.first_at as to_at, coalesce(f.first_old, t.status) as status from t left join firsts f on f.task_id = t.id
+            union all
+            select h.at, h.next_at, h.new_value from h),
+          bounds as (select current_date - ($3::int - 1) as lo, current_date as hi),
+          deltas as (
+            select greatest(from_at::date, b.lo) as day, status, 1 as d from seg, bounds b where from_at::date <= b.hi and (to_at is null or to_at::date > from_at::date)
+            union all
+            select greatest(to_at::date, b.lo), status, -1 from seg, bounds b where to_at is not null and to_at::date > from_at::date and to_at::date <= b.hi),
+          per_day as (select day, status, sum(d)::int as d from deltas group by day, status),
+          grid as (select g::date as day, s.status from bounds b, generate_series(b.lo, b.hi, interval '1 day') g, (select distinct status from per_day) s)
+     select g.day::text as day, g.status, (sum(coalesce(p.d, 0)) over (partition by g.status order by g.day))::int as n
+       from grid g left join per_day p on p.day = g.day and p.status = g.status
+      order by g.day`,
     [ctx.tenantId, projectId, n],
   );
+  await ctx.tx.query(`set local enable_nestloop = on`);
   const dayList = (await ctx.tx.query<{ day: string }>(`select generate_series(current_date - ($1::int - 1), current_date, interval '1 day')::date::text as day`, [n])).map((r) => r.day);
   const cats = ['done', 'review', 'in_progress', 'blocked', 'open'];
   return {
@@ -1074,7 +1133,9 @@ export async function workload(ctx: RecordCtx, projectId: string) {
 
 export interface Widget {
   id: string;
-  type: 'count' | 'breakdown' | 'list' | 'cfd' | 'cycle' | 'created_resolved' | 'workload' | 'velocity' | 'burndown';
+  type: 'count' | 'breakdown' | 'list' | 'cfd' | 'cycle' | 'created_resolved' | 'workload' | 'velocity' | 'burndown' | 'sprint' | 'time_in_status' | 'release_burnup';
+  sprintId?: string | null;
+  releaseId?: string | null;
   title: string;
   query?: string | null;
   groupBy?: Parameters<typeof groupQuery>[3];
@@ -1136,6 +1197,12 @@ export async function widgetData(ctx: RecordCtx, projectId: string, w: Widget) {
       return { rows: await createdResolved(ctx, projectId, w.days ?? 30) };
     case 'workload':
       return { rows: await workload(ctx, projectId) };
+    case 'sprint':
+      return sprintReport(ctx, projectId, w.sprintId ?? null);
+    case 'time_in_status':
+      return timeInStatus(ctx, projectId, w.days ?? 60);
+    case 'release_burnup':
+      return releaseBurnup(ctx, projectId, w.releaseId ?? null);
     default:
       return {};
   }
@@ -1145,4 +1212,244 @@ export async function widgetData(ctx: RecordCtx, projectId: string, w: Widget) {
 
 export async function myWork(ctx: RecordCtx) {
   return runQuery(ctx, { projectId: null, query: 'assignee = currentUser() AND status not in (done, cancelled) ORDER BY priority DESC, due ASC', limit: 300 });
+}
+
+
+/* ───────────────────────── workspace rule: every project has its repository ───────────────────────── */
+
+export async function repoRule(ctx: RecordCtx) {
+  const t = await ctx.tx.one<{ v: string | null }>(`select settings ->> 'requireRepo' as v from tenants where id = $1`, [ctx.tenantId]);
+  return t?.v === 'true';
+}
+
+export async function setRepoRule(ctx: RecordCtx, on: boolean) {
+  await ctx.tx.query(`update tenants set settings = coalesce(settings, '{}'::jsonb) || jsonb_build_object('requireRepo', $2::boolean) where id = $1`, [ctx.tenantId, on]);
+  return { requireRepo: on };
+}
+
+/** With the workspace rule on, work items are planned only in projects linked to code (or marked as having none). */
+async function assertRepoRule(ctx: RecordCtx, project: Record<string, any>) {
+  if ((project.work_settings ?? {}).noCode) return;
+  if (!(await repoRule(ctx))) return;
+  const has = await ctx.tx.one(`select 1 from project_repos where tenant_id = $1 and project_id = $2 limit 1`, [ctx.tenantId, project.id]);
+  if (!has) throw badRequest(`Link ${project.name}'s code repository first (Work setup → Code repositories) — your workspace requires every project to have one. A project with no code can be marked so there.`);
+}
+
+/* ───────────────────────── live updates ───────────────────────── */
+
+/** A cheap fingerprint of a project's work: changes when any item, comment or link changes. */
+export async function workStamp(ctx: RecordCtx, projectId: string) {
+  await projectAccess(ctx, projectId, 'view');
+  const r = await ctx.tx.one<{ s: string }>(
+    `select concat_ws(':',
+        (select extract(epoch from max(updated_at))::text || '/' || count(*) from project_tasks where tenant_id = $1 and project_id = $2),
+        (select extract(epoch from max(created_at))::text from project_comments where tenant_id = $1 and project_id = $2),
+        (select extract(epoch from max(h.at))::text from project_task_history h where h.tenant_id = $1 and h.project_id = $2),
+        (select extract(epoch from max(at))::text from pm_code_events where tenant_id = $1 and project_id = $2)) as s`,
+    [ctx.tenantId, projectId],
+  );
+  return { stamp: r!.s };
+}
+
+/* ───────────────────────── attachments on work items ───────────────────────── */
+
+export async function itemFiles(ctx: RecordCtx, env: import('../../env').Env, projectId: string, taskId: string) {
+  await projectAccess(ctx, projectId, 'view');
+  await itemRow(ctx.tx, ctx.tenantId, projectId, taskId);
+  const rows = await ctx.tx.query<{ id: string; name: string; content_type: string; size_bytes: string; created_at: string; uploader: string | null }>(
+    `select f.id, f.name, f.content_type, f.size_bytes, f.created_at, u.full_name as uploader from files f left join users u on u.tenant_id = f.tenant_id and u.id = f.uploaded_by
+      where f.tenant_id = $1 and f.object_key = 'work_item' and f.record_id = $2 and f.deleted_at is null order by f.created_at`,
+    [ctx.tenantId, taskId],
+  );
+  const { signedFileUrl } = await import('../files');
+  const out = [];
+  for (const r of rows) out.push({ id: r.id, name: r.name, type: r.content_type, size: Number(r.size_bytes), createdAt: r.created_at, uploader: r.uploader, url: await signedFileUrl(env, ctx.tenantId, r.id, true), downloadUrl: await signedFileUrl(env, ctx.tenantId, r.id, false) });
+  return out;
+}
+
+export async function attachToItem(ctx: RecordCtx, env: import('../../env').Env, projectId: string, taskId: string, name: string, bytes: Uint8Array) {
+  await projectAccess(ctx, projectId, 'member');
+  await itemRow(ctx.tx, ctx.tenantId, projectId, taskId);
+  const { saveFile } = await import('../files');
+  const f = await saveFile(ctx, env, { objectKey: 'work_item', recordId: taskId, name, bytes, kind: 'attachment' }, { system: true });
+  await ctx.tx.query(`insert into project_task_history (tenant_id, project_id, task_id, actor_id, field, new_value) values ($1,$2,$3,$4,'attachment',$5)`, [ctx.tenantId, projectId, taskId, ctx.principal.user.id, name.slice(0, 200)]);
+  return { id: f.id, name: f.name ?? name };
+}
+
+export async function removeItemFile(ctx: RecordCtx, projectId: string, taskId: string, fileId: string) {
+  await projectAccess(ctx, projectId, 'member');
+  const f = await ctx.tx.one<{ name: string }>(`update files set deleted_at = now() where tenant_id = $1 and id = $2 and object_key = 'work_item' and record_id = $3 and deleted_at is null returning name`, [ctx.tenantId, fileId, taskId]);
+  if (!f) throw notFound('Attachment not found');
+  await ctx.tx.query(`insert into project_task_history (tenant_id, project_id, task_id, actor_id, field, old_value) values ($1,$2,$3,$4,'attachment',$5)`, [ctx.tenantId, projectId, taskId, ctx.principal.user.id, f.name]);
+  return { ok: true };
+}
+
+/* ───────────────────────── more reports ───────────────────────── */
+
+/** How long items spend in each state (from the history), for items active in the period. */
+export async function timeInStatus(ctx: RecordCtx, projectId: string, days: number) {
+  const { project } = await projectAccess(ctx, projectId, 'view');
+  const key = await workKey(ctx.tx, ctx.tenantId, project);
+  const n = Math.min(Math.max(days, 7), 365);
+  await ctx.tx.query(`set local enable_nestloop = off`);
+  const rows = await ctx.tx.query<{ task_id: string; task_number: number; name: string; work_type: string; state: string; secs: number }>(
+    `with changes as (
+       select h.task_id, coalesce(h.new_value, 'open') as v, h.field, h.at,
+              lead(h.at) over (partition by h.task_id order by h.at, h.id) as next_at
+         from project_task_history h where h.tenant_id = $1 and h.project_id = $2 and h.field in ('created','status','state')),
+     spans as (
+       select c.task_id, c.v, c.field, greatest(c.at, now() - make_interval(days => $3)) as s, coalesce(c.next_at, now()) as e from changes c
+        where coalesce(c.next_at, now()) > now() - make_interval(days => $3))
+     select t.id as task_id, t.task_number, t.name, t.work_type, sp.v as state, sum(extract(epoch from (sp.e - sp.s)))::float8 as secs
+       from spans sp join project_tasks t on t.tenant_id = $1 and t.id = sp.task_id
+      where sp.e > sp.s and t.work_type <> 'epic'
+      group by t.id, t.task_number, t.name, t.work_type, sp.v`,
+    [ctx.tenantId, projectId, n],
+  );
+  await ctx.tx.query(`set local enable_nestloop = on`);
+  // a "state" row of null / a status value: show the workflow label
+  const wfs = await projectWorkflows(ctx.tx, ctx.tenantId, projectId);
+  const labelOf = (v: string, type: string) => {
+    const wf = pickWorkflow(wfs, type);
+    return wf.states.find((s) => s.key === v)?.label ?? currentState(wf, null, ['open', 'in_progress', 'review', 'blocked', 'done', 'cancelled'].includes(v) ? v : 'open').label;
+  };
+  const per = new Map<string, { label: string; total: number; items: Set<string> }>();
+  const items = new Map<string, { key: string; name: string; workType: string; states: Record<string, number> }>();
+  for (const r of rows) {
+    const l = labelOf(r.state, r.work_type);
+    const g = per.get(l) ?? { label: l, total: 0, items: new Set<string>() };
+    g.total += r.secs;
+    g.items.add(r.task_id);
+    per.set(l, g);
+    const it = items.get(r.task_id) ?? { key: `${key}-${r.task_number}`, name: r.name, workType: r.work_type, states: {} };
+    it.states[l] = Math.round(((it.states[l] ?? 0) + r.secs / 86400) * 10) / 10;
+    items.set(r.task_id, it);
+  }
+  const states = [...per.values()].map((g) => ({ state: g.label, items: g.items.size, avgDays: Math.round((g.total / g.items.size / 86400) * 10) / 10, totalDays: Math.round((g.total / 86400) * 10) / 10 })).sort((a, b) => b.totalDays - a.totalDays);
+  return { states, items: [...items.entries()].slice(0, 200).map(([id, v]) => ({ id, ...v })) };
+}
+
+/** Sprint report: committed at the start, added and removed during the sprint, completed or not. */
+export async function sprintReport(ctx: RecordCtx, projectId: string, sprintId: string | null) {
+  const { project } = await projectAccess(ctx, projectId, 'view');
+  const key = await workKey(ctx.tx, ctx.tenantId, project);
+  const sprint = sprintId
+    ? await ctx.tx.one<Record<string, any>>(`select * from project_sprints where tenant_id = $1 and id = $2 and project_id = $3`, [ctx.tenantId, sprintId, projectId])
+    : ((await ctx.tx.one<Record<string, any>>(`select * from project_sprints where tenant_id = $1 and project_id = $2 and status = 'active'`, [ctx.tenantId, projectId])) ??
+      (await ctx.tx.one<Record<string, any>>(`select * from project_sprints where tenant_id = $1 and project_id = $2 and status = 'closed' order by closed_at desc nulls last limit 1`, [ctx.tenantId, projectId])));
+  const sprints = await ctx.tx.query(`select id, name, status from project_sprints where tenant_id = $1 and project_id = $2 order by start_date desc`, [ctx.tenantId, projectId]);
+  if (!sprint) return { sprint: null, sprints, items: [], totals: null };
+  const started = sprint.started_at ? new Date(sprint.started_at) : new Date(`${d10(sprint.start_date)}T00:00:00Z`);
+  const ended = sprint.closed_at ? new Date(sprint.closed_at) : new Date();
+  // every item that was in the sprint at some point
+  const rows = await ctx.tx.query<{ id: string; task_number: number; name: string; work_type: string; status: string; sprint_id: string | null; story_points: number | null; completed_at: Date | null; created_at: Date }>(
+    `select t.id, t.task_number, t.name, t.work_type, t.status, t.sprint_id, t.story_points::float8 as story_points, t.completed_at, t.created_at from project_tasks t
+      where t.tenant_id = $1 and t.project_id = $2 and (t.sprint_id = $3 or exists (select 1 from project_task_history h where h.tenant_id = t.tenant_id and h.task_id = t.id and h.field = 'sprint_id' and (h.old_value = $3::text or h.new_value = $3::text)))`,
+    [ctx.tenantId, projectId, sprint.id],
+  );
+  const hist = await ctx.tx.query<{ task_id: string; old_value: string | null; new_value: string | null; at: Date }>(
+    `select task_id, old_value, new_value, at from project_task_history where tenant_id = $1 and project_id = $2 and field = 'sprint_id' and (old_value = $3::text or new_value = $3::text) order by at`,
+    [ctx.tenantId, projectId, sprint.id],
+  );
+  const items = rows.map((r) => {
+    const h = hist.filter((x) => x.task_id === r.id);
+    // in the sprint at its start: the last sprint change before the start put it in (or it was created into it before the start)
+    const before = h.filter((x) => new Date(x.at) <= started).pop();
+    const inAtStart = before ? before.new_value === sprint.id : h.length ? h[0]!.old_value === sprint.id : r.sprint_id === sprint.id && new Date(r.created_at) <= started;
+    const added = !inAtStart && h.some((x) => x.new_value === sprint.id && new Date(x.at) > started && new Date(x.at) <= ended);
+    const inAtEnd = sprint.status === 'closed' ? (h.filter((x) => new Date(x.at) <= ended).pop()?.new_value ?? r.sprint_id) === sprint.id : r.sprint_id === sprint.id;
+    const done = r.status === 'done' && r.completed_at !== null && new Date(r.completed_at) <= ended && (inAtEnd || h.some((x) => x.old_value === sprint.id && new Date(x.at) >= new Date(r.completed_at!)));
+    return { id: r.id, key: `${key}-${r.task_number}`, name: r.name, workType: r.work_type, points: r.story_points, committed: inAtStart, added, removed: !inAtEnd && !done, done };
+  });
+  const pts = (f: (i: (typeof items)[number]) => boolean) => Math.round(items.filter(f).reduce((a, i) => a + Number(i.points ?? 0), 0) * 10) / 10;
+  return {
+    sprint: { id: sprint.id, name: sprint.name, status: sprint.status, goal: sprint.goal, start: d10(sprint.start_date), end: d10(sprint.end_date) },
+    sprints,
+    items,
+    totals: {
+      committed: pts((i) => i.committed), added: pts((i) => i.added), removed: pts((i) => i.removed), completed: pts((i) => i.done), notCompleted: pts((i) => !i.done && !i.removed),
+      committedItems: items.filter((i) => i.committed).length, completedItems: items.filter((i) => i.done).length,
+    },
+  };
+}
+
+/** Release burn-up: scope (points in the release) against points done, day by day. */
+export async function releaseBurnup(ctx: RecordCtx, projectId: string, releaseId: string | null) {
+  await projectAccess(ctx, projectId, 'view');
+  const releases = await ctx.tx.query<{ id: string; name: string; status: string; release_date: string | null }>(`select id, name, status, coalesce(released_at, target_date)::text as release_date from project_releases where tenant_id = $1 and project_id = $2 order by coalesce(released_at, target_date, '2999-01-01') desc`, [ctx.tenantId, projectId]);
+  const rel = releaseId ? releases.find((r) => r.id === releaseId) : releases.find((r) => r.status !== 'released') ?? releases[0];
+  if (!rel) return { release: null, releases, days: [], scope: [], done: [] };
+  const items = await ctx.tx.query<{ id: string; points: number; created_at: Date; release_id: string | null }>(
+    `select t.id, coalesce(t.story_points, 1)::float8 as points, t.created_at, t.release_id from project_tasks t
+      where t.tenant_id = $1 and t.project_id = $2 and t.work_type not in ('epic','feature') and (t.release_id = $3 or exists (select 1 from project_task_history h where h.tenant_id = t.tenant_id and h.task_id = t.id and h.field = 'release_id' and (h.old_value = $3::text or h.new_value = $3::text)))`,
+    [ctx.tenantId, projectId, rel.id],
+  );
+  if (!items.length) return { release: rel, releases, days: [], scope: [], done: [] };
+  const hist = await ctx.tx.query<{ task_id: string; field: string; old_value: string | null; new_value: string | null; at: Date }>(
+    `select task_id, field, old_value, new_value, at from project_task_history where tenant_id = $1 and task_id = any($2::uuid[]) and field in ('release_id','status','created') order by at`,
+    [ctx.tenantId, items.map((i) => i.id)],
+  );
+  let firstMs = Infinity;
+  for (const i of items) firstMs = Math.min(firstMs, new Date(i.created_at).getTime());
+  for (const h of hist) if (h.field === 'release_id' && h.new_value === rel.id) firstMs = Math.min(firstMs, new Date(h.at).getTime());
+  const first = new Date(firstMs);
+  const last = rel.release_date && new Date(rel.release_date) > new Date() ? new Date(rel.release_date) : new Date();
+  const days: string[] = [];
+  for (let d = new Date(first.toISOString().slice(0, 10)); d <= last && days.length < 366; d = new Date(d.getTime() + 86_400_000)) days.push(d.toISOString().slice(0, 10));
+  const today = new Date().toISOString().slice(0, 10);
+  const ends = days.filter((d) => d <= today).map((d) => Date.parse(`${d}T23:59:59Z`));
+  const sc = new Array<number>(ends.length).fill(0);
+  const dn = new Array<number>(ends.length).fill(0);
+  const byTask = new Map<string, typeof hist>();
+  for (const x of hist) (byTask.get(x.task_id) ?? byTask.set(x.task_id, []).get(x.task_id)!).push(x);
+  // one pass per item over its own (time-ordered) history, day by day
+  for (const it of items) {
+    const h = byTask.get(it.id) ?? [];
+    const relEv = h.filter((x) => x.field === 'release_id');
+    const stEv = h.filter((x) => x.field === 'status' || x.field === 'created');
+    const startIn = relEv.length ? relEv[0]!.old_value === rel.id : it.release_id === rel.id;
+    const created = new Date(it.created_at).getTime();
+    let ri = 0;
+    let si = 0;
+    let inRel = startIn;
+    let st: string | null = null;
+    for (let k = 0; k < ends.length; k++) {
+      const end = ends[k]!;
+      while (ri < relEv.length && new Date(relEv[ri]!.at).getTime() <= end) inRel = relEv[ri++]!.new_value === rel.id;
+      while (si < stEv.length && new Date(stEv[si]!.at).getTime() <= end) st = stEv[si++]!.new_value;
+      if (!(ri > 0 ? inRel : created <= end && startIn)) continue;
+      sc[k]! += it.points;
+      if (st === 'done') dn[k]! += it.points;
+    }
+  }
+  const scope = sc.map((x) => Math.round(x * 10) / 10);
+  const done = dn.map((x) => Math.round(x * 10) / 10);
+  return { release: rel, releases, days, scope, done };
+}
+
+/* ───────────────────────── portfolio roadmap ───────────────────────── */
+
+/** Epics and features across the projects the person can see, with dates (own, else from their children) and progress. */
+export async function roadmap(ctx: RecordCtx, q: { projectIds?: string[] | null }) {
+  let ids = await visibleProjectIds(ctx);
+  if (q.projectIds?.length) ids = ids.filter((i) => q.projectIds!.includes(i));
+  const rows = await ctx.tx.query<Record<string, any>>(
+    `select t.id, t.project_id, p.name as project_name, p.work_key, t.task_number, t.name, t.work_type, t.status, t.state, t.parent_id, t.epic_id, t.priority,
+            t.start_date::text as own_start, t.due_date::text as own_due,
+            (select min(coalesce(c.start_date, c.created_at::date))::text from project_tasks c where c.tenant_id = t.tenant_id and (c.parent_id = t.id or c.epic_id = t.id)) as kid_start,
+            (select max(coalesce(c.due_date, s.end_date))::text from project_tasks c left join project_sprints s on s.tenant_id = c.tenant_id and s.id = c.sprint_id where c.tenant_id = t.tenant_id and (c.parent_id = t.id or c.epic_id = t.id)) as kid_due,
+            (select count(*)::int from project_tasks c where c.tenant_id = t.tenant_id and (c.parent_id = t.id or c.epic_id = t.id) and c.work_type not in ('epic','feature')) as total,
+            (select count(*)::int from project_tasks c where c.tenant_id = t.tenant_id and (c.parent_id = t.id or c.epic_id = t.id) and c.work_type not in ('epic','feature') and c.status in ('done','cancelled')) as closed,
+            (select string_agg(u.full_name, ', ') from users u where u.tenant_id = t.tenant_id and u.id = any(t.assignees)) as owner
+       from project_tasks t join projects p on p.tenant_id = t.tenant_id and p.id = t.project_id
+      where t.tenant_id = $1 and t.project_id = any($2::uuid[]) and t.work_type in ('epic','feature') and p.deleted_at is null and t.status <> 'cancelled'
+      order by p.name, t.work_type, t.backlog_rank, t.task_number limit 1000`,
+    [ctx.tenantId, ids],
+  );
+  return {
+    items: rows.map((r) => ({
+      id: r.id, projectId: r.project_id, projectName: r.project_name, key: `${r.work_key ?? 'X'}-${r.task_number}`, name: r.name, workType: r.work_type, status: r.status, priority: r.priority, owner: r.owner,
+      parentId: r.parent_id ?? (r.work_type === 'feature' ? r.epic_id : null), start: r.own_start ?? r.kid_start, due: r.own_due ?? r.kid_due, datesOwn: !!(r.own_start || r.own_due), total: r.total, closed: r.closed,
+    })),
+  };
 }

@@ -41,7 +41,7 @@ export function CallsPage() {
             onClick={async () => {
               try {
                 const r = await post<Json>('/api/v1/calls/invites/sync', {});
-                toast(!r.mailbox ? 'Connect Gmail or Outlook in My account to pick up call invites' : r.added ? `${r.added} call${r.added > 1 ? 's' : ''} added from your calendar` : `No new call invites (${r.found} seen)`, !r.mailbox);
+                toast(!r.mailbox ? 'Connect Gmail or Outlook in My account to pick up call invites' : r.added ? `${r.added} call${r.added > 1 ? 's' : ''} added from your calendar${r.fromEmail ? ` and emailed invitations (${r.fromEmail})` : ''}` : `No new call invites (${r.found} seen)`, !r.mailbox);
                 qc.invalidateQueries({ queryKey: ['my-calls'] });
               } catch (e) {
                 toast((e as Error).message, true);

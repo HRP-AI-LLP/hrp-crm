@@ -48,7 +48,7 @@ export const normRepo = (s: string) =>
 export async function listRepos(ctx: RecordCtx, projectId: string) {
   const { level } = await projectAccess(ctx, projectId, 'view');
   const rows = await ctx.tx.query<Record<string, any>>(
-    `select r.id, r.provider, r.repo, r.default_branch, r.policy, r.auto_sprint, r.last_check_at, r.created_at,
+    `select r.id, r.provider, r.repo, r.default_branch, r.policy, r.auto_sprint, r.last_check_at, r.created_at, r.installation_id::text as installation_id,
             count(e.id) filter (where e.at > now() - interval '30 days')::int as events,
             count(e.id) filter (where e.status = 'linked' and e.at > now() - interval '30 days')::int as linked,
             count(e.id) filter (where e.status = 'created' and e.at > now() - interval '30 days')::int as created,
@@ -65,7 +65,8 @@ export async function listRepos(ctx: RecordCtx, projectId: string) {
   return { repos: rows, missing, canManage: level === 'manage' };
 }
 
-export async function addRepo(ctx: RecordCtx, projectId: string, input: { provider: 'github' | 'azure_repos'; repo: string; defaultBranch?: string; policy?: Policy; autoSprint?: boolean }) {
+export async function addRepo(ctx: RecordCtx, projectId: string, input: { provider: 'github' | 'azure_repos'; repo: string; defaultBranch?: string; policy?: Policy; autoSprint?: boolean; installationId?: string | null }) {
+  if (input.installationId && !(await ctx.tx.one(`select 1 from github_installations where tenant_id = $1 and installation_id = $2::bigint`, [ctx.tenantId, input.installationId]))) throw badRequest('That GitHub installation is not connected to this workspace');
   await projectAccess(ctx, projectId, 'manage');
   const repo = normRepo(input.repo);
   if (!/^[a-z0-9._-]+(\/[a-z0-9._ -]+){1,2}$/.test(repo)) throw badRequest(input.provider === 'github' ? 'Give the repository as owner/name, e.g. acme/fleet-portal' : 'Give the repository as project/repo, e.g. Fleet/fleet-api');
@@ -73,8 +74,8 @@ export async function addRepo(ctx: RecordCtx, projectId: string, input: { provid
   if (taken) throw badRequest(`${repo} is already linked to ${taken.name}`);
   const secret = randomToken(24);
   const r = await ctx.tx.one<{ id: string; public_token: string }>(
-    `insert into project_repos (tenant_id, project_id, provider, repo, default_branch, policy, auto_sprint, secret_hash) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id, public_token`,
-    [ctx.tenantId, projectId, input.provider, repo, input.defaultBranch?.trim() || 'main', input.policy ?? 'enforce', input.autoSprint ?? true, await sha256Hex(secret)],
+    `insert into project_repos (tenant_id, project_id, provider, repo, default_branch, policy, auto_sprint, secret_hash, installation_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9::bigint) returning id, public_token`,
+    [ctx.tenantId, projectId, input.provider, repo, input.defaultBranch?.trim() || 'main', input.policy ?? 'enforce', input.autoSprint ?? true, await sha256Hex(secret), input.provider === 'github' ? (input.installationId ?? null) : null],
   );
   return { id: r!.id, token: `${r!.public_token}.${secret}` };
 }

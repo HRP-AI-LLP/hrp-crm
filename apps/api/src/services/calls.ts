@@ -218,6 +218,7 @@ export async function getCall(ctx: RecordCtx, eventId: string) {
     analysis,
     analysisBy: n?.analysis_by ?? null,
     people: people.map((p) => ({ name: p.name, email: p.email, side: p.side, userId: p.userId })),
+    speakers: (await import('./transcribe')).speakersIn(n?.transcript ?? null),
     recordings: (await ctx.tx.one<{ n: number }>(`select count(*)::int as n from files where tenant_id = $1 and object_key = 'event' and record_id = $2 and deleted_at is null`, [ctx.tenantId, eventId]))?.n ?? 0,
     canEdit: level !== 'view',
   };
@@ -350,6 +351,11 @@ export async function assignCall(ctx: RecordCtx, eventId: string, projectId: str
   if (ev.owner_id !== ctx.principal.user.id) throw forbidden('Only the organiser can move a call');
   if (projectId) await projectAccess(ctx, projectId, 'member');
   await ctx.tx.query(`update events set related_object = $3, related_id = $4, updated_at = now() where tenant_id = $1 and id = $2`, [ctx.tenantId, eventId, projectId ? 'project' : null, projectId]);
+  if (projectId) {
+    const { learnFiling } = await import('./meetings');
+    const emails = ((ev.attendees ?? []) as { email?: string }[]).map((a) => a.email).filter((e): e is string => !!e);
+    await learnFiling(ctx.tx, ctx.tenantId, ctx.principal.user.id, projectId, ev.title ?? '', emails);
+  }
   return { ok: true };
 }
 
@@ -645,10 +651,6 @@ export async function myMeetingChoices(ctx: RecordCtx) {
 
 export const MAX_RECORDING_BYTES = 95 * 1024 * 1024;
 const AUDIO_TYPES = new Set(['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/flac', 'audio/webm', 'video/mp4', 'video/webm', 'video/quicktime']);
-const WHISPER = '@cf/openai/whisper-large-v3-turbo';
-/** Whisper on Workers AI takes up to ~25 MB of audio in one request. */
-const WHISPER_MAX = 25 * 1024 * 1024;
-
 export async function listRecordings(ctx: RecordCtx, env: Env, eventId: string) {
   await loadCall(ctx, eventId);
   const rows = await ctx.tx.query<{ id: string; name: string; content_type: string; size_bytes: string; created_at: string; uploader: string | null }>(
@@ -673,34 +675,94 @@ export async function saveRecording(ctx: RecordCtx, env: Env, eventId: string, n
   return { id: f.id, type };
 }
 
-/** Transcribes a recording with Workers AI (Whisper); returns null text when it cannot. */
-export async function transcribeRecording(env: Env, bytes: Uint8Array): Promise<{ text: string | null; reason: string | null }> {
-  if (!env.AI) return { text: null, reason: 'Speech-to-text is not available on this server' };
-  if (bytes.length > WHISPER_MAX) return { text: null, reason: 'The recording is over 25 MB — transcribe it in the meeting app or upload an audio-only file (m4a / mp3)' };
-  try {
-    let bin = '';
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
-    const out = (await env.AI.run(WHISPER as never, { audio: btoa(bin), task: 'transcribe', vad_filter: true } as never)) as { text?: string; vtt?: string; segments?: { start: number; text: string }[] };
-    const segs = out.segments?.length ? out.segments.map((s) => `[${new Date(s.start * 1000).toISOString().slice(11, 19)}] ${s.text.trim()}`).join('\n') : null;
-    const text = (segs ?? out.text ?? '').trim();
-    return text.length >= 20 ? { text, reason: null } : { text: null, reason: 'No speech was recognised in the recording' };
-  } catch (e) {
-    return { text: null, reason: `Speech-to-text failed: ${(e as Error).message.slice(0, 200)}` };
-  }
+type RecOpts = { transcribe: boolean; analyse: boolean; speakers?: boolean };
+const scopeOf = (a: CallEnv) => ({ tenantId: a.tenantId, userId: a.principal.user.id, requestId: a.requestId ?? null });
+const ctxOf = (a: CallEnv, tx: Tx): RecordCtx => ({ tx, meta: a.meta, principal: a.principal, tenantId: a.tenantId });
+
+/** Transcript text → saved on the call → (optionally) analysed. */
+async function finishTranscript(a: CallEnv, eventId: string, text: string, engine: string | null, analyse: boolean) {
+  await a.db.tx(scopeOf(a), (tx) => saveTranscriptAs(ctxOf(a, tx), eventId, text, 'audio'));
+  const base = { transcribed: true, engine, reason: null, needsParts: false };
+  if (!analyse) return { ...base, analysed: false };
+  const r = await analyseCall(a, eventId, { createTasks: true });
+  return { ...base, analysed: true, ai: r.analysis.ai, tasksCreated: r.tasksCreated };
 }
 
-/** Upload → keep → transcribe → (optionally) analyse. The model call runs outside any transaction. */
-export async function uploadRecording(a: CallEnv, eventId: string, name: string, bytes: Uint8Array, opts: { transcribe: boolean; analyse: boolean }) {
-  const scope = { tenantId: a.tenantId, userId: a.principal.user.id, requestId: a.requestId ?? null };
-  const saved = await a.db.tx(scope, (tx) => saveRecording({ tx, meta: a.meta, principal: a.principal, tenantId: a.tenantId }, a.env, eventId, name, bytes));
-  if (!opts.transcribe) return { file: saved, transcribed: false, reason: null, analysed: false };
-  const t = await transcribeRecording(a.env, bytes);
-  if (!t.text) return { file: saved, transcribed: false, reason: t.reason, analysed: false };
-  await a.db.tx(scope, (tx) => saveTranscriptAs({ tx, meta: a.meta, principal: a.principal, tenantId: a.tenantId }, eventId, t.text!, 'audio'));
-  if (!opts.analyse) return { file: saved, transcribed: true, reason: null, analysed: false };
-  const r = await analyseCall(a, eventId, { createTasks: true });
-  return { file: saved, transcribed: true, reason: null, analysed: true, ai: r.analysis.ai, tasksCreated: r.tasksCreated };
+/** Transcribes one kept recording (speakers when possible); long ones may need cutting in the browser. */
+async function transcribeKept(a: CallEnv, eventId: string, fileId: string, type: string, bytes: Uint8Array, opts: RecOpts) {
+  const { transcribeAll } = await import('./transcribe');
+  const t = await transcribeAll(a.env, bytes, type, { speakers: opts.speakers !== false });
+  if (!t.text) {
+    if (t.needsParts) await a.db.tx(scopeOf(a), (tx) => tx.query(`delete from call_transcript_parts where tenant_id = $1 and file_id = $2`, [a.tenantId, fileId]));
+    return { transcribed: false, engine: null, reason: t.reason, needsParts: t.needsParts, analysed: false };
+  }
+  return finishTranscript(a, eventId, t.text, t.engine, opts.analyse);
+}
+
+/** Upload → keep → transcribe → (optionally) analyse. The model calls run outside any transaction. */
+export async function uploadRecording(a: CallEnv, eventId: string, name: string, bytes: Uint8Array, opts: RecOpts) {
+  const saved = await a.db.tx(scopeOf(a), (tx) => saveRecording(ctxOf(a, tx), a.env, eventId, name, bytes));
+  if (!opts.transcribe) return { file: saved, transcribed: false, reason: null, needsParts: false, analysed: false };
+  return { file: saved, ...(await transcribeKept(a, eventId, saved.id, saved.type, bytes, opts)) };
+}
+
+/** "Transcribe again" on a recording already kept on the call. */
+export async function transcribeRecordingFile(a: CallEnv, eventId: string, fileId: string, opts: Omit<RecOpts, 'transcribe'>) {
+  const f = await a.db.tx(scopeOf(a), async (tx) => {
+    await loadCall(ctxOf(a, tx), eventId, 'member');
+    const row = await tx.one<{ storage_key: string; content_type: string; size_bytes: string }>(
+      `select storage_key, content_type, size_bytes from files where tenant_id = $1 and id = $2 and object_key = 'event' and record_id = $3 and deleted_at is null`,
+      [a.tenantId, fileId, eventId],
+    );
+    if (!row) throw notFound('Recording not found');
+    return row;
+  });
+  if (!a.env.FILES) throw badRequest('File storage is not enabled');
+  const obj = await a.env.FILES.get(f.storage_key);
+  if (!obj) throw notFound('The recording file is missing from storage');
+  const bytes = new Uint8Array(await obj.arrayBuffer());
+  return { file: { id: fileId, type: f.content_type }, ...(await transcribeKept(a, eventId, fileId, f.content_type, bytes, { ...opts, transcribe: true })) };
+}
+
+/** Max size of one browser-made WAV part. */
+export const MAX_PART_BYTES = 24 * 1024 * 1024;
+
+/**
+ * One part of a long recording, cut and converted to WAV in the browser: transcribed with its time
+ * offset and kept; when every part is in, the transcript is put together and saved.
+ */
+export async function transcribePart(a: CallEnv, eventId: string, fileId: string, p: { index: number; total: number; offset: number; bytes: Uint8Array; speakers: boolean; analyse: boolean }) {
+  await a.db.tx(scopeOf(a), async (tx) => {
+    await loadCall(ctxOf(a, tx), eventId, 'member');
+    if (!(await tx.one(`select 1 from files where tenant_id = $1 and id = $2 and object_key = 'event' and record_id = $3 and deleted_at is null`, [a.tenantId, fileId, eventId]))) throw notFound('Recording not found');
+  });
+  const { transcribePiece, formatSegments } = await import('./transcribe');
+  const r = await transcribePiece(a.env, p.bytes, 'audio/wav', { speakers: p.speakers, offset: p.offset, prefix: p.total > 1 && p.speakers ? `P${p.index + 1} ` : '' });
+  if (!r.segments) throw badRequest(`Part ${p.index + 1} of ${p.total}: ${r.reason === 'too_large' ? 'the part is too big' : r.reason}`);
+  const done = await a.db.tx(scopeOf(a), async (tx) => {
+    await tx.query(
+      `insert into call_transcript_parts (tenant_id, event_id, file_id, idx, total, segments, engine) values ($1,$2,$3,$4,$5,$6,$7)
+       on conflict (tenant_id, file_id, idx) do update set total = excluded.total, segments = excluded.segments, engine = excluded.engine, created_at = now()`,
+      [a.tenantId, eventId, fileId, p.index, p.total, JSON.stringify(r.segments), r.engine],
+    );
+    const parts = await tx.query<{ idx: number; segments: any[]; engine: string | null }>(`select idx, segments, engine from call_transcript_parts where tenant_id = $1 and file_id = $2 and total = $3 order by idx`, [a.tenantId, fileId, p.total]);
+    if (parts.length < p.total) return null;
+    await tx.query(`delete from call_transcript_parts where tenant_id = $1 and file_id = $2`, [a.tenantId, fileId]);
+    return { text: formatSegments(parts.flatMap((x) => x.segments)), engine: parts.some((x) => x.engine === 'nova-3') ? 'nova-3' : 'whisper' };
+  });
+  if (!done) return { part: p.index, total: p.total, complete: false };
+  return { part: p.index, total: p.total, complete: true, ...(await finishTranscript(a, eventId, done.text, done.engine, p.analyse)) };
+}
+
+/** Names for the speakers in a transcript ("Speaker 1" → "Ravi Kumar"). */
+export async function nameSpeakers(ctx: RecordCtx, eventId: string, names: Record<string, string>) {
+  await loadCall(ctx, eventId, 'member');
+  const n = await ctx.tx.one<{ transcript: string | null }>(`select transcript from meeting_notes where tenant_id = $1 and event_id = $2 for update`, [ctx.tenantId, eventId]);
+  if (!n?.transcript) throw badRequest('There is no transcript on this call yet');
+  const { renameSpeakers, speakersIn } = await import('./transcribe');
+  const text = renameSpeakers(n.transcript, names);
+  await ctx.tx.query(`update meeting_notes set transcript = $3, updated_by = $4, updated_at = now() where tenant_id = $1 and event_id = $2`, [ctx.tenantId, eventId, text, ctx.principal.user.id]);
+  return { speakers: speakersIn(text) };
 }
 
 async function saveTranscriptAs(ctx: RecordCtx, eventId: string, text: string, source: 'audio') {

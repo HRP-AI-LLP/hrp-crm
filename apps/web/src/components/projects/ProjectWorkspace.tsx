@@ -14,6 +14,7 @@ import { Empty, Modal, Spinner, useToast } from '../ui';
 import { AgileTab, ChangesTab, ReleasesTab } from './Agile';
 import { ProjectCalls } from './ProjectCalls';
 import { BoardsTab, DashboardsTab, HierarchyTab, QueriesView, TestsTab, WorkSetupTab } from './Work';
+import { AutomationTab, useLiveWork } from './WorkPlus';
 import { WorkItemModal } from './WorkItem';
 
 type Json = Record<string, any>;
@@ -41,15 +42,17 @@ function useAct(keys: unknown[][]) {
   };
 }
 
-type Tab = 'overview' | 'tasks' | 'boards' | 'agile' | 'hierarchy' | 'queries' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'issues' | 'tests' | 'dashboards' | 'time' | 'billing' | 'team' | 'worksetup';
+type Tab = 'overview' | 'tasks' | 'boards' | 'agile' | 'hierarchy' | 'queries' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'issues' | 'tests' | 'dashboards' | 'time' | 'billing' | 'team' | 'worksetup' | 'automation';
 
-const PROJECT_ICON: Record<string, string> = { boards: 'board', hierarchy: 'layers', queries: 'search', tests: 'check', dashboards: 'chart', worksetup: 'gear', overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
+const PROJECT_ICON: Record<string, string> = { boards: 'board', hierarchy: 'layers', queries: 'search', tests: 'check', dashboards: 'chart', worksetup: 'gear', automation: 'repeat', overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
 
 export function ProjectWorkspace({ id }: { id: string }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`) });
   const [tab, setTab] = useState<Tab>('overview');
   const [params, setParams] = useSearchParams();
   const item = params.get('item');
+  // boards, backlog and items follow other people's changes without a refresh
+  useLiveWork(id);
   const openItem = (x: string | null) =>
     setParams(
       (p) => {
@@ -67,9 +70,9 @@ export function ProjectWorkspace({ id }: { id: string }) {
   const tabs: [Tab, string][] = [
     ['overview', 'Overview'], ['tasks', 'Tasks'], ['boards', 'Boards'], ['agile', 'Backlog & sprints'], ['hierarchy', 'Epics & hierarchy'], ['queries', 'Queries'], ['releases', 'Releases'], ['gantt', 'Gantt'],
     ['milestones', 'Milestones'], ['changes', 'Changes & portal'], ['calls', 'Calls'], ['issues', 'Issues'], ['tests', 'Test plans'], ['dashboards', 'Dashboards'], ['time', 'Time'],
-    ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'], ['worksetup', 'Work setup'],
+    ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'], ['automation', 'Automation'], ['worksetup', 'Work setup'],
   ];
-  const GROUP: Record<string, string> = { overview: 'Work', tasks: 'Work', boards: 'Work', agile: 'Work', hierarchy: 'Work', queries: 'Work', releases: 'Work', gantt: 'Work', milestones: 'Delivery', changes: 'Delivery', calls: 'Delivery', issues: 'Delivery', tests: 'Delivery', dashboards: 'Insights', time: 'People & money', billing: 'People & money', team: 'People & money', worksetup: 'Settings' };
+  const GROUP: Record<string, string> = { overview: 'Work', tasks: 'Work', boards: 'Work', agile: 'Work', hierarchy: 'Work', queries: 'Work', releases: 'Work', gantt: 'Work', milestones: 'Delivery', changes: 'Delivery', calls: 'Delivery', issues: 'Delivery', tests: 'Delivery', dashboards: 'Insights', time: 'People & money', billing: 'People & money', team: 'People & money', automation: 'Settings', worksetup: 'Settings' };
   return (
     <div style={{ marginBottom: 20 }}>
     <RepoBanner id={id} manage={manage} status={data.project.status} onOpen={() => setTab('worksetup')} />
@@ -95,6 +98,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
         {tab === 'tests' && <TestsTab id={id} member={member} onOpen={openItem} />}
         {tab === 'dashboards' && <DashboardsTab id={id} onOpen={openItem} />}
         {tab === 'worksetup' && <WorkSetupTab id={id} manage={manage} />}
+        {tab === 'automation' && <AutomationTab id={id} manage={manage} />}
         {tab === 'issues' && <Issues id={id} data={data} member={member} />}
         {tab === 'time' && <ProjectTime id={id} data={data} member={member} />}
         {tab === 'billing' && manage && <Billing id={id} />}
@@ -192,7 +196,7 @@ function Kpi({ l, v, sub, tone }: { l: string; v: string; sub?: string; tone?: '
 /* ───────────────────────── tasks ───────────────────────── */
 
 function useTasks(id: string) {
-  return useQuery({ queryKey: ['project', id, 'tasks'], queryFn: () => get<{ tasks: Json[]; deps: Json[] }>(`/api/v1/projects/${id}/tasks`) });
+  return useQuery({ queryKey: ['project', id, 'tasks'], queryFn: () => get<{ tasks: Json[]; deps: Json[]; total?: number; truncated?: boolean }>(`/api/v1/projects/${id}/tasks`) });
 }
 
 function people(data: Json) {
@@ -282,6 +286,7 @@ function Tasks({ id, data, member, manage }: { id: string; data: Json; member: b
           <input type="checkbox" checked={filter.mine} onChange={(e) => setFilter({ ...filter, mine: e.target.checked })} /> Mine
         </label>
       </div>
+      {t.truncated && <div className="callout small">This project has {Number(t.total).toLocaleString()} items — the {t.tasks.length.toLocaleString()} open and recently closed ones are listed here. Use Queries or the backlog for the rest.</div>}
       {view === 'list' ? (
         !t.tasks.length ? (
           <Empty title="No tasks yet">Break the work into lists and tasks; give them dates to see them on the Gantt chart.</Empty>

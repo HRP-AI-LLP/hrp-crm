@@ -25,6 +25,8 @@ import { booksDailySweep } from './services/books/sweep';
 import { assetRenewalSweep } from './services/industry/itops';
 import { sequenceSweep } from './services/industry/sequences';
 import { itDailySweep } from './services/it/sweep';
+import { queueDueSoon, workMailSweep } from './services/it/alerts';
+import { scheduledRulesSweep } from './services/it/rules';
 import { processJob } from './services/worker';
 
 const app = createApp();
@@ -66,6 +68,9 @@ export default {
         await digestSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'digest-sweep', msg: (e as Error).message })));
         // revenue intelligence: scores, insights, auto meeting prep, search index (hourly, KV-gated)
         await intelSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'intel-sweep', msg: (e as Error).message })));
+        // work items: scheduled automation rules (hourly), then watcher / assignee emails and chat posts
+        if (new Date().getUTCMinutes() < 5) await scheduledRulesSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'work-rules', msg: (e as Error).message })));
+        await workMailSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'work-mail', msg: (e as Error).message })));
         return;
       }
       await reminderSweep(env, db, true);
@@ -88,6 +93,8 @@ export default {
         await assetRenewalSweep(env, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'asset-renewals', tenant: t.tenant_id, msg: (e as Error).message })));
         // email sequences: follow-ups that are due
         await sequenceSweep(env, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'sequences', tenant: t.tenant_id, msg: (e as Error).message })));
+        // work items due tomorrow or overdue go into each assignee's morning digest
+        await queueDueSoon(db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'work-due', tenant: t.tenant_id, msg: (e as Error).message })));
       }
       // workspaces with automatic backups enabled get one a day (kept: newest 7)
       await dailyBackups(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'daily-backups', msg: (e as Error).message })));

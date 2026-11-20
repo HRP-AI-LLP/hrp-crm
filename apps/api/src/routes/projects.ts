@@ -154,9 +154,34 @@ export const projectRoutes = new Hono<AppEnv>()
       await calls.uploadRecording({ env: c.env, db: c.var.db, tenantId: c.var.tenant.id, principal: c.var.principal, meta: c.var.meta, requestId: c.var.requestId }, id(c), name, bytes, {
         transcribe: c.req.query('transcribe') !== '0',
         analyse: c.req.query('analyse') === '1',
+        speakers: c.req.query('speakers') !== '0',
       }),
       201,
     );
+  })
+  .post('/calls/:id/recordings/:fid/transcribe', async (c) => {
+    const b = z.object({ analyse: z.boolean().default(false), speakers: z.boolean().default(true) }).parse(await c.req.json().catch(() => ({})));
+    return c.json(await calls.transcribeRecordingFile({ env: c.env, db: c.var.db, tenantId: c.var.tenant.id, principal: c.var.principal, meta: c.var.meta, requestId: c.var.requestId }, id(c), id(c, 'fid'), b));
+  })
+  .post('/calls/:id/recordings/:fid/parts', async (c) => {
+    const n = (k: string) => Number(c.req.query(k));
+    const p = z.object({ index: z.number().int().min(0).max(499), total: z.number().int().min(1).max(500), offset: z.number().min(0).max(86_400) }).parse({ index: n('index'), total: n('total'), offset: n('offset') });
+    if (p.index >= p.total) throw badRequest('Part number out of range');
+    if (Number(c.req.header('content-length') ?? 0) > calls.MAX_PART_BYTES) throw badRequest('Each part can be at most 24 MB');
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    if (bytes.length > calls.MAX_PART_BYTES || bytes.length < 100) throw badRequest('Each part must be WAV audio up to 24 MB');
+    return c.json(
+      await calls.transcribePart({ env: c.env, db: c.var.db, tenantId: c.var.tenant.id, principal: c.var.principal, meta: c.var.meta, requestId: c.var.requestId }, id(c), id(c, 'fid'), {
+        ...p,
+        bytes,
+        speakers: c.req.query('speakers') !== '0',
+        analyse: c.req.query('analyse') === '1',
+      }),
+    );
+  })
+  .put('/calls/:id/speakers', async (c) => {
+    const b = z.object({ names: z.record(z.string().trim().min(1).max(60), z.string().trim().min(1).max(60).regex(/^[^:\[\]\n]+$/, 'Names cannot contain : [ or ]')) }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => calls.nameSpeakers(rctx(c, tx), id(c), b.names)));
   })
   .post('/calls/:id/analyse', async (c) => {
     const b = z.object({ createTasks: z.boolean().default(true) }).parse(await c.req.json().catch(() => ({})));

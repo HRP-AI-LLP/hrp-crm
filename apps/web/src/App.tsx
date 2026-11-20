@@ -36,6 +36,7 @@ const BooksPage = page(() => import('./pages/Books'), 'BooksPage');
 const TimesheetPage = page(() => import('./pages/Timesheet'), 'TimesheetPage');
 const CallsPage = page(() => import('./pages/Calls'), 'CallsPage');
 const WorkItemsPage = page(() => import('./pages/WorkItems'), 'WorkItemsPage');
+const RoadmapPage = page(() => import('./pages/Roadmap'), 'RoadmapPage');
 const ManufacturingPage = page(() => import('./pages/Manufacturing'), 'ManufacturingPage');
 const ProjectsPage = page(() => import('./pages/Projects'), 'ProjectsPage');
 const ProjectPage = page(() => import('./pages/Projects'), 'ProjectPage');
@@ -156,6 +157,7 @@ export function App() {
         <Route path="timesheet" element={<TimesheetPage />} />
         <Route path="calls" element={<CallsPage />} />
         <Route path="work" element={<WorkItemsPage />} />
+        <Route path="work/roadmap" element={<RoadmapPage />} />
         <Route path="manufacturing" element={<ManufacturingPage />} />
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:id" element={<ProjectPage />} />

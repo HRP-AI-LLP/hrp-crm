@@ -64,7 +64,9 @@ export class Db {
       await c.query(scope.readOnly ? 'begin read only' : 'begin');
       try {
         await c.query(
-          `select set_config('app.tenant_id', $1, true), set_config('app.user_id', $2, true), set_config('app.request_id', $3, true)`,
+          // jit off: request queries are short, and JIT compiling a big plan (estimated from skewed
+          // statistics) can cost a second on its own
+          `select set_config('app.tenant_id', $1, true), set_config('app.user_id', $2, true), set_config('app.request_id', $3, true), set_config('jit', 'off', true)`,
           [scope.tenantId, scope.userId ?? '', scope.requestId ?? ''],
         );
         const tx: Tx = {

@@ -295,7 +295,8 @@ export function Shell() {
             label: 'Projects',
             items: [
               { to: '/projects', label: 'Projects', icon: 'folder' },
-              { to: '/work', label: 'Work items', icon: 'search' },
+              { to: '/work', label: 'Work items', icon: 'search', end: true },
+              { to: '/work/roadmap', label: 'Roadmap', icon: 'layers' },
               { to: '/calls', label: 'Calls', icon: 'video' },
               { to: '/timesheet', label: 'Timesheet', icon: 'clock' },
               { to: '/it/subscriptions', label: 'Subscriptions', icon: 'repeat' },

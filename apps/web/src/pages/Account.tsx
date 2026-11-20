@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { MailboxPanel } from '../components/MailboxPanel';
 import { MeetingAppsPanel } from '../components/MeetingApps';
 import { PushDevices } from '../components/PushDevices';
+import { WorkAlertPrefs } from '../components/projects/WorkPlus';
 import { Modal, Spinner, useToast } from '../components/ui';
 import { ApiError, get, post } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -167,6 +168,7 @@ export function AccountPage() {
       <div className="account-grid">
         <MailboxPanel />
         <MeetingAppsPanel />
+        <WorkAlertPrefs />
         <PushDevices />
         <section className="panel">
           <div className="panel-head">

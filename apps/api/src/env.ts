@@ -59,6 +59,11 @@ export interface Env {
   MS_CLIENT_ID?: string;
   /** Zoom OAuth app (General app, user-managed) for meetings and their transcripts */
   ZOOM_CLIENT_ID?: string;
+  /** GitHub App (repository picker, check runs, branches from work items) */
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_SLUG?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
+  GITHUB_APP_WEBHOOK_SECRET?: string;
   ZOOM_CLIENT_SECRET?: string;
   MS_CLIENT_SECRET?: string;
   /** GST portal, e-invoice and e-way bill through the WhiteBooks GSP (developer.whitebooks.in).

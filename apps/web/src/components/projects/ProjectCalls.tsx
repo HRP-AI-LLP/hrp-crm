@@ -411,6 +411,7 @@ export function CallDetail({ id, onClose, invalidate = [] }: { id: string; onClo
             </button>
           </div>
         )}
+        {view === 'transcript' && c.hasTranscript && c.canEdit && <SpeakerNames id={id} speakers={c.speakers ?? []} people={c.people ?? []} onSaved={refresh} />}
         {view === 'transcript' && c.hasTranscript && <pre className="transcript">{c.transcript}</pre>}
         {view === 'minutes' &&
           (a ? (
@@ -631,16 +632,51 @@ function Recordings({ id, count, canEdit, hasTranscript, onChanged }: { id: stri
   const toast = useToast();
   const { data, refetch } = useQuery({ queryKey: ['call', id, 'recordings'], enabled: count > 0, queryFn: () => get<Json[]>(`/api/v1/calls/${id}/recordings`) });
   const [busy, setBusy] = useState<string | null>(null);
+  const [speakers, setSpeakers] = useState(true);
   const file = useRef<HTMLInputElement>(null);
+  const done = (r: Json, analyse: boolean) => {
+    toast(r.analysed ? `Transcribed${r.engine === 'nova-3' ? ' with speakers' : ''} and the minutes written` : r.transcribed ? `Recording transcribed${r.engine === 'nova-3' ? ' with speakers' : ''}` : r.reason ? `Recording saved · ${r.reason}` : 'Recording saved');
+    if (analyse && r.transcribed && !r.analysed) toast('Transcribed — analyse it from the call');
+    refetch();
+    onChanged();
+  };
+  /** Long recordings: the browser cuts them into 10-minute WAV parts; each is transcribed with its time offset. */
+  const inParts = async (fileId: string, blob: Blob, analyse: boolean) => {
+    setBusy('Reading the recording…');
+    const { prepareWavParts } = await import('../../lib/audio');
+    const parts = await prepareWavParts(blob);
+    let last: Json | null = null;
+    for (let p = 0; p < parts.total; p++) {
+      setBusy(`Transcribing part ${p + 1} of ${parts.total}…`);
+      const w = parts.part(p);
+      last = await upload<Json>(`/api/v1/calls/${id}/recordings/${fileId}/parts?index=${p}&total=${parts.total}&offset=${w.offset.toFixed(2)}&speakers=${speakers ? 1 : 0}&analyse=${analyse ? 1 : 0}`, w.blob);
+    }
+    return last!;
+  };
   const send = async (f: File | undefined) => {
     if (!f) return;
     if (f.size > 95 * 1024 * 1024) return toast('Recordings can be at most 95 MB — export audio only (m4a / mp3) from the meeting app', true);
+    const analyse = !hasTranscript;
     setBusy(`Uploading ${f.name}…`);
     try {
-      const r = await upload<Json>(`/api/v1/calls/${id}/recording?name=${encodeURIComponent(f.name)}&transcribe=${hasTranscript ? 0 : 1}&analyse=${hasTranscript ? 0 : 1}`, f);
-      toast(r.analysed ? 'Recording transcribed and the minutes written' : r.transcribed ? 'Recording transcribed' : r.reason ? `Recording saved · ${r.reason}` : 'Recording saved');
-      refetch();
-      onChanged();
+      const r = await upload<Json>(`/api/v1/calls/${id}/recording?name=${encodeURIComponent(f.name)}&transcribe=${hasTranscript ? 0 : 1}&analyse=${analyse ? 1 : 0}&speakers=${speakers ? 1 : 0}`, f);
+      done(r.needsParts ? await inParts(r.file.id, f, analyse) : r, analyse);
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const again = async (r: Json) => {
+    if (hasTranscript && !window.confirm('Replace the transcript with a new one from this recording?')) return;
+    setBusy('Transcribing…');
+    try {
+      const out = await post<Json>(`/api/v1/calls/${id}/recordings/${r.id}/transcribe`, { analyse: false, speakers });
+      if (out.needsParts) {
+        setBusy('Downloading the recording…');
+        const blob = await (await fetch(r.url)).blob();
+        done(await inParts(r.id, blob, false), false);
+      } else done(out, false);
     } catch (e) {
       toast((e as Error).message, true);
     } finally {
@@ -653,25 +689,89 @@ function Recordings({ id, count, canEdit, hasTranscript, onChanged }: { id: stri
       <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
         <div>
           <strong>Recordings</strong>
-          <div className="muted small">{hasTranscript ? 'Kept with the call.' : 'Upload the recording of a call that already happened — Synapse transcribes it and writes the minutes.'}</div>
+          <div className="muted small">{hasTranscript ? 'Kept with the call.' : 'Upload the recording of a call that already happened — Synapse transcribes it (who said what) and writes the minutes. Long recordings are cut into parts in your browser.'}</div>
         </div>
         {canEdit && (
-          <>
+          <div className="row" style={{ gap: 8 }}>
+            <label className="row small" style={{ gap: 4 }} title="Labels who is speaking (Speaker 1, Speaker 2 …) — you can name them afterwards">
+              <input type="checkbox" checked={speakers} onChange={(e) => setSpeakers(e.target.checked)} /> Speakers
+            </label>
             <button className="btn small" disabled={!!busy} onClick={() => file.current?.click()}>
               {busy ?? 'Upload recording'}
             </button>
-            <input ref={file} type="file" hidden accept="audio/*,video/mp4,video/webm,video/quicktime,.m4a,.mp3,.wav,.ogg,.flac,.mp4,.webm,.mov" onChange={(e) => void send(e.target.files?.[0])} />
-          </>
+            <input ref={file} type="file" hidden accept="audio/*,video/mp4,video/webm,video/quicktime,.m4a,.mp3,.wav,.ogg,.flac,.mp4,.webm,.mov" onChange={(e) => (void send(e.target.files?.[0]), (e.target.value = ''))} />
+          </div>
         )}
       </div>
       {(data ?? []).map((r) => (
         <div key={r.id} className="stack" style={{ gap: 4, marginTop: 8 }}>
-          <span className="small">
-            {r.name} · {(r.size / 1024 / 1024).toFixed(1)} MB{r.uploader ? ` · ${r.uploader}` : ''}
+          <span className="small row" style={{ gap: 8 }}>
+            <span>
+              {r.name} · {(r.size / 1024 / 1024).toFixed(1)} MB{r.uploader ? ` · ${r.uploader}` : ''}
+            </span>
+            {canEdit && (
+              <button className="link-btn small" disabled={!!busy} onClick={() => void again(r)}>
+                {hasTranscript ? 'Transcribe again' : 'Transcribe'}
+              </button>
+            )}
           </span>
           {r.type.startsWith('video/') ? <video controls preload="none" src={r.url} style={{ maxWidth: '100%', maxHeight: 280 }} /> : <audio controls preload="none" src={r.url} style={{ width: '100%' }} />}
         </div>
       ))}
     </div>
+  );
+}
+
+/** Speakers found in the transcript, with names to give them ("Speaker 1" → "Anita Desai"). */
+function SpeakerNames({ id, speakers, people, onSaved }: { id: string; speakers: Json[]; people: Json[]; onSaved: () => void }) {
+  const toast = useToast();
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const generic = speakers.filter((s) => /^(P\d+ )?Speaker \d+$/.test(s.label));
+  if (!speakers.length) return null;
+  const changed = Object.entries(names).filter(([k, v]) => v.trim() && v.trim() !== k);
+  return (
+    <details className="callout small" open={generic.length > 0}>
+      <summary>
+        <strong>Speakers</strong> · {speakers.map((s) => s.label).join(', ')}
+      </summary>
+      <div className="stack" style={{ gap: 6, marginTop: 8 }}>
+        {speakers.map((s) => (
+          <label key={s.label} className="row" style={{ gap: 8 }}>
+            <span style={{ width: 140 }}>
+              {s.label} <span className="muted">({s.lines})</span>
+            </span>
+            <input list={`people-${id}`} value={names[s.label] ?? ''} placeholder={s.label} onChange={(e) => setNames({ ...names, [s.label]: e.target.value })} aria-label={`Name for ${s.label}`} style={{ flex: 1 }} />
+          </label>
+        ))}
+        <datalist id={`people-${id}`}>
+          {people.map((p) => (
+            <option key={p.email ?? p.name} value={p.name} />
+          ))}
+        </datalist>
+        {generic.some((s) => s.label.startsWith('P')) && <span className="muted">Long recordings are labelled per part (P1, P2 …) — the same person can have a different number in each part.</span>}
+        <div>
+          <button
+            className="btn small primary"
+            disabled={!changed.length || busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await put(`/api/v1/calls/${id}/speakers`, { names: Object.fromEntries(changed.map(([k, v]) => [k, v.trim()])) });
+                toast('Names saved in the transcript — analyse again to use them in the minutes');
+                setNames({});
+                onSaved();
+              } catch (e) {
+                toast((e as Error).message, true);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Save names
+          </button>
+        </div>
+      </div>
+    </details>
   );
 }

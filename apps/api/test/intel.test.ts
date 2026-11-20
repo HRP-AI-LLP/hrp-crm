@@ -282,6 +282,8 @@ describe('insights sweep and Copilot', () => {
     const notes = await sql(`select title from notifications where kind = 'insight'`);
     expect(notes.some((n) => String(n.title).includes('Anil Kumar'))).toBe(true);
 
+    // "today" on the copilot is the IST day: keep the meeting inside it whatever time the suite runs
+    await sql(`update events set starts_at = now(), ends_at = now() + interval '1 hour' where id = $1`, [eventId]);
     const cp = await api('GET', '/api/v1/intel/copilot');
     expect(cp.status).toBe(200);
     expect(cp.json.meetings.map((m: Json) => m.id)).toContain(eventId);
