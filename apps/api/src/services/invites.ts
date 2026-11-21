@@ -28,6 +28,8 @@ export interface Invite {
   /** iCalendar UID: the same meeting from the calendar and from an emailed .ics */
   uid?: string | null;
   source?: 'calendar' | 'email';
+  /** iCalendar: which time of a recurring series this is */
+  recurrenceId?: string | null;
 }
 
 /** The first Zoom / Meet / Teams link in an invite. */
@@ -120,8 +122,69 @@ function icsDuration(v: string): number {
   return (((+(m[1] ?? 0) * 7 + +(m[2] ?? 0)) * 24 + +(m[3] ?? 0)) * 3600 + +(m[4] ?? 0) * 60 + +(m[5] ?? 0)) * 1000;
 }
 
-/** The meetings in an .ics file (each VEVENT; recurring ones as their first time). */
-export function parseIcs(text: string): Invite[] {
+const DAYS = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+const DAY_MS = 86_400_000;
+
+/**
+ * Start times of a recurring meeting (RRULE) that fall in [from, to]: FREQ DAILY / WEEKLY (BYDAY) /
+ * MONTHLY (BYMONTHDAY, or BYDAY like 2TU / -1FR) / YEARLY, with INTERVAL, COUNT and UNTIL; EXDATEs
+ * left out. Times keep the first meeting's clock time in UTC (India has no daylight saving).
+ */
+export function expandRrule(firstStart: number, rule: string, exdates: Set<number>, from: number, to: number): number[] {
+  const r = Object.fromEntries(rule.split(';').map((kv) => kv.split('=') as [string, string]));
+  const freq = (r.FREQ ?? '').toUpperCase();
+  const interval = Math.max(1, Number(r.INTERVAL ?? 1) || 1);
+  const count = r.COUNT ? Number(r.COUNT) : Infinity;
+  const until = r.UNTIL ? Date.parse(r.UNTIL.replace(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})Z?)?$/, (_m, y, mo, d, h = '23', mi = '59', se = '59') => `${y}-${mo}-${d}T${h}:${mi}:${se}Z`)) : Infinity;
+  const byday = (r.BYDAY ?? '').split(',').filter(Boolean);
+  const first = new Date(firstStart);
+  const tod = firstStart - Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), first.getUTCDate());
+  const out: number[] = [];
+  let n = 0;
+  const take = (t: number) => {
+    if (t < firstStart) return true;
+    if (t > until || n >= count) return false;
+    n++;
+    if (t >= from && t <= to && !exdates.has(t)) out.push(t);
+    return t <= to;
+  };
+  const dayStart = Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), first.getUTCDate());
+  for (let step = 0; step < 3000; step++) {
+    let cands: number[] = [];
+    if (freq === 'DAILY') cands = [dayStart + step * interval * DAY_MS + tod];
+    else if (freq === 'WEEKLY') {
+      const weekStart = dayStart - first.getUTCDay() * DAY_MS + step * interval * 7 * DAY_MS;
+      const days = byday.length ? byday.map((d) => DAYS.indexOf(d.slice(-2))).filter((d) => d >= 0) : [first.getUTCDay()];
+      cands = days.sort((a, b) => a - b).map((d) => weekStart + d * DAY_MS + tod);
+    } else if (freq === 'MONTHLY' || freq === 'YEARLY') {
+      const months = freq === 'MONTHLY' ? step * interval : step * interval * 12;
+      const y = first.getUTCFullYear() + Math.floor((first.getUTCMonth() + months) / 12);
+      const m = (first.getUTCMonth() + months) % 12;
+      const dim = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+      const nth = /^([+-]?\d+)?(SU|MO|TU|WE|TH|FR|SA)$/.exec(byday[0] ?? '');
+      if (nth) {
+        const wd = DAYS.indexOf(nth[2]!);
+        const k = Number(nth[1] ?? 1);
+        const matches: number[] = [];
+        for (let d = 1; d <= dim; d++) if (new Date(Date.UTC(y, m, d)).getUTCDay() === wd) matches.push(d);
+        const d = k > 0 ? matches[k - 1] : matches[matches.length + k];
+        if (d) cands = [Date.UTC(y, m, d) + tod];
+      } else {
+        const md = Number(r.BYMONTHDAY ?? first.getUTCDate());
+        const d = md < 0 ? dim + md + 1 : md;
+        if (d >= 1 && d <= dim) cands = [Date.UTC(y, m, d) + tod];
+      }
+    } else return firstStart >= from && firstStart <= to ? [firstStart] : [];
+    for (const t of cands) if (!take(t)) return out;
+  }
+  return out;
+}
+
+/**
+ * The meetings in an .ics file. A recurring meeting gives each of its times between a week ago and a
+ * month ahead (moved or cancelled single times — RECURRENCE-ID — replace theirs).
+ */
+export function parseIcs(text: string, window: { from: number; to: number } = { from: Date.now() - 7 * DAY_MS, to: Date.now() + 30 * DAY_MS }): Invite[] {
   const lines = text.replace(/\r\n/g, '\n').replace(/\n[ \t]/g, '').split('\n');
   const method = (lines.find((l) => /^METHOD:/i.test(l)) ?? '').split(':')[1]?.trim().toUpperCase() ?? '';
   // VTIMEZONE: standard offset per TZID, for zone names Intl does not know
@@ -153,12 +216,20 @@ export function parseIcs(text: string): Invite[] {
         const mail = (x: { v: string; p: Record<string, string> }) => ({ email: x.v.replace(/^mailto:/i, '').trim().toLowerCase(), name: x.p.CN ? x.p.CN.replace(/^"|"$/g, '') : null });
         const people = [...(ev.ORGANIZER ?? []), ...(ev.ATTENDEE ?? [])].map(mail).filter((a) => /@/.test(a.email));
         const extra = ['X-GOOGLE-CONFERENCE', 'X-MICROSOFT-SKYPETEAMSMEETINGURL', 'X-MICROSOFT-ONLINEMEETINGCONFLINK', 'URL'].map((k) => one(k)?.v);
-        out.push({
+        const t0 = Date.parse(startsAt);
+        const dur = Math.max(0, Date.parse(endsAt) - t0);
+        const rid = one('RECURRENCE-ID');
+        const rrule = one('RRULE')?.v;
+        const exdates = new Set((ev.EXDATE ?? []).flatMap((x) => x.v.split(',').map((v) => Date.parse(icsTime(v, x.p, zones) ?? ''))).filter((x) => !Number.isNaN(x)));
+        const times = rrule && !rid ? expandRrule(t0, rrule, exdates, window.from, window.to) : [t0];
+        for (const t of times) (out as (Invite & { override?: boolean })[]).push({
           id: `ics:${one('UID')?.v ?? startsAt}`,
           uid: one('UID')?.v ?? null,
           title: unescapeIcs(one('SUMMARY')?.v ?? 'Meeting'),
-          startsAt,
-          endsAt,
+          startsAt: new Date(t).toISOString(),
+          endsAt: new Date(t + dur).toISOString(),
+          recurrenceId: rid ? icsTime(rid.v, rid.p, zones) : rrule ? new Date(t).toISOString() : null,
+          override: !!rid,
           location,
           description,
           joinUrl: meetingLink(...extra, location, description),
@@ -181,7 +252,15 @@ export function parseIcs(text: string): Invite[] {
       (ev[name!.toUpperCase()] ??= []).push({ v: l.slice(i + 1), p });
     }
   }
-  return out;
+  // a single time moved or cancelled (RECURRENCE-ID) replaces that time of the series
+  const keyed = new Map<string, Invite & { override?: boolean }>();
+  for (const x of out as (Invite & { override?: boolean })[]) {
+    const k = `${x.uid}|${x.recurrenceId ?? x.startsAt}`;
+    if (!keyed.has(k) || x.override) keyed.set(k, x);
+  }
+  return [...keyed.values()]
+    .filter((x) => !x.override || (Date.parse(x.startsAt) >= window.from && Date.parse(x.startsAt) <= window.to) || !x.recurrenceId)
+    .map(({ override: _o, ...x }) => x);
 }
 
 const b64url = (s: string) => {
@@ -248,7 +327,8 @@ async function fileInvite(tx: Tx, f: FileCtx, inv: Invite): Promise<'added' | 'u
   // calls Synapse itself put in the calendar
   if (/Scheduled from HRP Synapse/.test(inv.description ?? '')) return 'skipped';
   if (inv.source !== 'email' && (await tx.one(`select 1 from events where tenant_id = $1 and calendar_ref ->> 'id' = $2`, [f.tenantId, inv.id]))) return 'skipped';
-  const ref = (inv.source === 'email' ? `ics:${inv.uid ?? inv.id}:${inv.startsAt}` : `cal:${f.integrationId}:${inv.id}`).slice(0, 300);
+  // an emailed meeting is one call per UID (per time of a recurring series), so a moved meeting updates it
+  const ref = (inv.source === 'email' ? `ics:${inv.uid ?? inv.id}${inv.recurrenceId ? `:${inv.recurrenceId}` : ''}` : `cal:${f.integrationId}:${inv.id}`).slice(0, 300);
   const existing =
     (await tx.one<{ id: string }>(`select id from events where tenant_id = $1 and external_ref = $2`, [f.tenantId, ref])) ??
     (inv.uid

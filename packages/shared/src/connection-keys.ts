@@ -36,6 +36,8 @@ export interface KeyGroup {
   required?: string[];
   /** a server-side check exists (Test button) */
   testable?: boolean;
+  /** settings with sensible defaults rather than keys: shown as "Using defaults" / "Changed" */
+  options?: boolean;
   /** a key pair can be generated here (VAPID) */
   generatePair?: 'vapid';
   guide: string;
@@ -220,6 +222,23 @@ export const KEY_GROUPS: KeyGroup[] = [
     ],
     guide: 'android',
   },
+  {
+    id: 'options',
+    title: 'Platform options',
+    unlocks: 'Who may sign up, when mailboxes sync, the AI allowance per workspace and which AI models are used.',
+    scope: 'platform',
+    options: true,
+    required: [],
+    fields: [
+      { key: 'SIGNUP_ENABLED', label: 'Anyone may create a new workspace (self-service sign-up)', kind: BOOL },
+      { key: 'MAIL_SYNC_ALWAYS', label: 'Sync mailboxes around the clock (off: 07:00–21:00 IST, saves database time)', kind: BOOL },
+      { key: 'AI_DAILY_LIMIT_PER_TENANT', label: 'AI requests per workspace per day on the platform’s AI', placeholder: '300', pattern: '^[0-9]{1,6}$' },
+      { key: 'AI_PII_PROVIDERS', label: 'AI providers that may receive personal data', placeholder: 'workers-ai,groq', pattern: '^(workers-ai|groq|gemini)(,(workers-ai|groq|gemini))*$', help: 'Comma list of workers-ai, groq, gemini. Leave Gemini out while you use its free tier.' },
+      { key: 'AI_MODEL_WORKERS', label: 'Workers AI chat model', placeholder: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', pattern: '^@cf/[a-z0-9._/-]+$' },
+      { key: 'AI_MODEL_WHISPER', label: 'Speech-to-text model (without speakers)', placeholder: '@cf/openai/whisper-large-v3-turbo', pattern: '^@cf/[a-z0-9._/-]+$' },
+    ],
+    guide: 'options',
+  },
 ];
 
 export const ALL_KEYS: string[] = KEY_GROUPS.flatMap((g) => g.fields.map((f) => f.key));
@@ -398,6 +417,17 @@ export const GUIDES: Record<string, Guide> = {
       'Workspace addresses (<workspace>.your-domain): My Profile → API Tokens → Create Token → Custom token with Account · Workers Scripts · Edit and Zone · Workers Routes · Edit + Zone · DNS · Edit for your zone. Paste it as “API token for workspace addresses”.',
       'Customer domains: on the zone enable SSL/TLS → Custom Hostnames (Cloudflare for SaaS; the first 100 hostnames are free), set a fallback origin, and create a CNAME target (for example customers.your-domain) pointing at it. Create a token with Zone · SSL and Certificates · Edit and Zone · Zone · Read for that zone and paste it with the CNAME target.',
       'Save and Test (checks each token is active).',
+    ],
+  },
+  options: {
+    title: 'What these options do',
+    links: [{ label: 'Workers AI models', url: 'https://developers.cloudflare.com/workers-ai/models/' }],
+    steps: [
+      'Sign-up: on lets anyone create a workspace from the sign-in page (keep Turnstile set up when it is on). Off: you create workspaces for customers.',
+      'Mailbox sync: Gmail and Outlook are read every ~15 minutes between 07:00 and 21:00 IST; on reads them all night too (more database time on the free plan).',
+      'AI allowance: requests per workspace per day on the platform’s AI (Workers AI, Groq, Gemini). Workspaces with their own AI keys (Settings → AI models) are not limited by it.',
+      'Personal data: only the providers listed get prompts with names, phone numbers or emails; the others get only prompts without them.',
+      'Models: leave empty for the defaults. Any model name from the Workers AI catalogue works; a wrong name makes AI features fall back to Groq / Gemini.',
     ],
   },
   android: {

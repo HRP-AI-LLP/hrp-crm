@@ -87,7 +87,7 @@ async function runNova(env: Env, audio: Uint8Array | ReadableStream, contentType
 }
 
 async function runWhisper(env: Env, bytes: Uint8Array, offset: number): Promise<Segment[]> {
-  const out = await env.AI!.run(WHISPER as never, { audio: toBase64(bytes), task: 'transcribe', vad_filter: true } as never);
+  const out = await env.AI!.run((env.AI_MODEL_WHISPER || WHISPER) as never, { audio: toBase64(bytes), task: 'transcribe', vad_filter: true } as never);
   return whisperSegments(out, offset);
 }
 

@@ -5,7 +5,7 @@ import { parseDue, parseJoinUrl, ruleAnalysis } from '../src/services/calls';
 import { captionsToText, meetingSweep } from '../src/services/meetings';
 import { analyseAsOwner } from '../src/services/calls';
 import { sealSecret } from '../src/services/integrations';
-import { parseIcs } from '../src/services/invites';
+import { expandRrule, parseIcs } from '../src/services/invites';
 import { filingKeys, titleKey } from '../src/services/meetings';
 import { formatSegments, novaSegments, renameSpeakers, speakersIn, splitMp3, splitWav } from '../src/services/transcribe';
 import { fakeR2, type Json, makeHarness, PW } from './harness';
@@ -404,6 +404,24 @@ describe('project calls', () => {
     expect(parseIcs(ics.replace('METHOD:REQUEST', 'METHOD:CANCEL'))[0]!.cancelled).toBe(true);
     expect(parseIcs(ics.replace('DTSTART;TZID=India Standard Time:20261125T150000', 'DTSTART;TZID=Asia/Kolkata:20261125T150000'))[0]!.startsAt).toBe('2026-11-25T09:30:00.000Z');
     expect(parseIcs(ics.replace('DTSTART;TZID=India Standard Time:20261125T150000', 'DTSTART:20261125T093000Z'))[0]!.startsAt).toBe('2026-11-25T09:30:00.000Z');
+
+    // recurring meetings: each time in the window, exceptions and moved times
+    const mon = Date.parse('2026-11-02T04:30:00Z'); // a Monday, 10:00 IST
+    const all = (rule: string, ex: number[] = []) => expandRrule(mon, rule, new Set(ex), Date.parse('2026-11-01T00:00:00Z'), Date.parse('2026-12-31T00:00:00Z')).map((t) => new Date(t).toISOString().slice(0, 10));
+    expect(all('FREQ=WEEKLY;BYDAY=MO,TH;COUNT=5')).toEqual(['2026-11-02', '2026-11-05', '2026-11-09', '2026-11-12', '2026-11-16']);
+    expect(all('FREQ=WEEKLY;INTERVAL=2;UNTIL=20261201T000000Z')).toEqual(['2026-11-02', '2026-11-16', '2026-11-30']);
+    expect(all('FREQ=DAILY;COUNT=3', [Date.parse('2026-11-03T04:30:00Z')])).toEqual(['2026-11-02', '2026-11-04']);
+    expect(all('FREQ=MONTHLY;BYDAY=-1FR')).toEqual(['2026-11-27', '2026-12-25']);
+    expect(all('FREQ=MONTHLY;BYMONTHDAY=15')).toEqual(['2026-11-15', '2026-12-15']);
+    const series = [
+      'BEGIN:VCALENDAR', 'METHOD:REQUEST',
+      'BEGIN:VEVENT', 'UID:standup@x.test', 'SUMMARY:Stand-up', 'DTSTART:20261102T043000Z', 'DTEND:20261102T044500Z', 'RRULE:FREQ=WEEKLY;BYDAY=MO;COUNT=4', 'EXDATE:20261109T043000Z', 'END:VEVENT',
+      'BEGIN:VEVENT', 'UID:standup@x.test', 'RECURRENCE-ID:20261116T043000Z', 'SUMMARY:Stand-up (moved)', 'DTSTART:20261117T060000Z', 'DTEND:20261117T061500Z', 'END:VEVENT',
+      'END:VCALENDAR',
+    ].join('\r\n');
+    const times = parseIcs(series, { from: Date.parse('2026-11-01T00:00:00Z'), to: Date.parse('2026-12-31T00:00:00Z') });
+    expect(times.map((x) => `${x.startsAt.slice(0, 16)} ${x.title}`)).toEqual(['2026-11-02T04:30 Stand-up', '2026-11-17T06:00 Stand-up (moved)', '2026-11-23T04:30 Stand-up']);
+    expect(times[1]!.recurrenceId).toBe('2026-11-16T04:30:00.000Z');
 
     expect(titleKey('Re: Konkan weekly sync – 21 Nov 2026')).toBe(titleKey('Konkan weekly sync (Thu 28th)'));
     expect(filingKeys('Konkan weekly sync', ['a@konkan.test', 'b@gmail.com']).map((k) => `${k.kind}:${k.value}`)).toEqual(['title:konkan weekly sync', 'email:a@konkan.test', 'domain:konkan.test', 'email:b@gmail.com']);

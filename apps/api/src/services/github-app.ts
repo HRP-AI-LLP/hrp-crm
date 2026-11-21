@@ -67,10 +67,12 @@ async function gh<T>(token: string, path: string, init: RequestInit & { auth?: '
 
 /** An installation access token (an hour; cached for 50 minutes). */
 export async function installationToken(env: Env, installationId: number | string): Promise<string> {
-  const k = String(installationId);
+  const id = String(installationId);
+  // per app as well: a new GitHub App set in Settings → Connection keys gets new tokens
+  const k = `${env.GITHUB_APP_ID}:${id}`;
   const c = tokenCache.get(k);
   if (c && c.exp - Date.now() > 600_000) return c.token;
-  const r = await gh<{ token: string; expires_at: string }>(appJwt(env), `/app/installations/${k}/access_tokens`, { method: 'POST' });
+  const r = await gh<{ token: string; expires_at: string }>(appJwt(env), `/app/installations/${id}/access_tokens`, { method: 'POST' });
   tokenCache.set(k, { token: r.token, exp: Date.parse(r.expires_at) });
   return r.token;
 }

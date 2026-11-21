@@ -37,6 +37,7 @@ export default {
 
   async queue(batch: MessageBatch<Job>, rawEnv: Env, ctx: ExecutionContext): Promise<void> {
     // keys saved in Settings → Connection keys (platform, then the job's workspace)
+    // (Db connects lazily: no query, no connection)
     const keysDb = Db.fromEnv(rawEnv);
     const platformEnv = await withPlatformKeys(rawEnv, keysDb);
     for (const msg of batch.messages) {
@@ -84,23 +85,25 @@ export default {
       await reminderSweep(env, db, true);
       const tenants = await db.platform<{ tenant_id: string }>(`select t as tenant_id from app.list_active_tenant_ids() t`);
       for (const t of tenants) {
+        // the workspace's own keys (e.g. its own GSP account) for its jobs
+        const tenv = await withTenantKeys(env, db, t.tenant_id);
         await db.tx({ tenantId: t.tenant_id }, async (tx) => {
           await tx.query(`delete from sessions where tenant_id = $1 and (expires_at < now() - interval '7 days' or revoked_at < now() - interval '7 days')`, [t.tenant_id]);
           await tx.query(`delete from ai_usage where tenant_id = $1 and created_at < now() - interval '90 days'`, [t.tenant_id]);
           await tx.query(`delete from webhook_deliveries where tenant_id = $1 and created_at < now() - interval '30 days'`, [t.tenant_id]);
         });
         // privacy: request deadlines and the workspace's own retention rules
-        await privacyDailySweep(env, db, t.tenant_id, async (tx) => (await systemCtxFor(env, tx, t.tenant_id))!).catch((e) =>
+        await privacyDailySweep(tenv, db, t.tenant_id, async (tx) => (await systemCtxFor(tenv, tx, t.tenant_id))!).catch((e) =>
           console.error(JSON.stringify({ level: 'error', job: 'privacy-sweep', tenant: t.tenant_id, msg: (e as Error).message })),
         );
         // books: recurring invoices, bills, expenses and journals that are due
-        await booksDailySweep(env, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'books-sweep', tenant: t.tenant_id, msg: (e as Error).message })));
+        await booksDailySweep(tenv, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'books-sweep', tenant: t.tenant_id, msg: (e as Error).message })));
         // IT: contract billing and renewals, subscription renewals and invoices
-        await itDailySweep(env, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'it-sweep', tenant: t.tenant_id, msg: (e as Error).message })));
+        await itDailySweep(tenv, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'it-sweep', tenant: t.tenant_id, msg: (e as Error).message })));
         // client IT: warranty and licence renewals coming up
-        await assetRenewalSweep(env, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'asset-renewals', tenant: t.tenant_id, msg: (e as Error).message })));
+        await assetRenewalSweep(tenv, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'asset-renewals', tenant: t.tenant_id, msg: (e as Error).message })));
         // email sequences: follow-ups that are due
-        await sequenceSweep(env, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'sequences', tenant: t.tenant_id, msg: (e as Error).message })));
+        await sequenceSweep(tenv, db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'sequences', tenant: t.tenant_id, msg: (e as Error).message })));
         // work items due tomorrow or overdue go into each assignee's morning digest
         await queueDueSoon(db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'work-due', tenant: t.tenant_id, msg: (e as Error).message })));
       }

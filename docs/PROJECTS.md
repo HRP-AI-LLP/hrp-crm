@@ -132,7 +132,7 @@ Per repository a policy decides what happens to a commit or pull request that na
 
 With Gmail or Outlook connected, the calendar (a week back to a month ahead) is read with each mailbox sync: meetings with a Zoom / Meet / Teams link or outside guests become calls, filed on the project their title, project code or guests' company points to — else under *Calls → Not filed*. Updates and cancellations follow; calls Synapse scheduled itself are not doubled. *My account → Meeting apps → Call invites from my mailbox* turns it off; *Calls → Check my invites* runs it now.
 
-Invitations that arrive as email attachments (`.ics` from Zoho, Webex, GoTo and other tools that never reach the calendar) are read too — the same meeting from the calendar and the email is filed once (by its iCalendar UID); a cancellation (`METHOD:CANCEL`) cancels the call.
+Invitations that arrive as email attachments (`.ics` from Zoho, Webex, GoTo and other tools that never reach the calendar) are read too — recurring ones give each of their times from a week ago to a month ahead (skipped and moved times respected) — the same meeting from the calendar and the email is filed once (by its iCalendar UID); a cancellation (`METHOD:CANCEL`) cancels the call.
 
 **Filing learns**: moving a call to a project (or *Not filed* → project) remembers its title (without dates and numbers, so a weekly call keeps one key), the outside people and their company's email domain; the next invite like it lands on that project. A correction outweighs older hints.
 

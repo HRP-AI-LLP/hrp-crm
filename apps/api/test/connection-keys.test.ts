@@ -126,6 +126,21 @@ describe('platform keys', () => {
     expect((await owner('PUT', '/api/admin/connection-keys', { scope: 'platform', values: { GITHUB_APP_PRIVATE_KEY: 'hello' } })).status).toBe(400);
   });
 
+  it('turns platform options on and off from the app', async () => {
+    const probe = async () => (await h.call('GET', '/api/public/tenant', { tenant: 'acme' })).json.signupEnabled;
+    expect(await probe()).toBe(true); // the harness .env has SIGNUP_ENABLED=true
+    let opts = (await owner('GET', '/api/admin/connection-keys?scope=platform')).json.groups.find((g: Json) => g.id === 'options');
+    expect(opts.status).toBe('defaults');
+    expect((await owner('PUT', '/api/admin/connection-keys', { scope: 'platform', values: { SIGNUP_ENABLED: 'false', AI_DAILY_LIMIT_PER_TENANT: '50' } })).status).toBe(200);
+    expect(await probe()).toBe(false);
+    opts = (await owner('GET', '/api/admin/connection-keys?scope=platform')).json.groups.find((g: Json) => g.id === 'options');
+    expect(opts.status).toBe('custom');
+    expect((await owner('PUT', '/api/admin/connection-keys', { scope: 'platform', values: { AI_PII_PROVIDERS: 'workers-ai,openai' } })).status).toBe(400);
+    expect((await owner('PUT', '/api/admin/connection-keys', { scope: 'platform', values: { SIGNUP_ENABLED: 'maybe' } })).status).toBe(400);
+    await owner('PUT', '/api/admin/connection-keys', { scope: 'platform', values: { SIGNUP_ENABLED: null, AI_DAILY_LIMIT_PER_TENANT: null } });
+    expect(await probe()).toBe(true);
+  });
+
   it('lists platform admins; once listed, only they may change keys', async () => {
     const me = (await owner('GET', '/api/auth/me')).json.user.id;
     const repId = (await rep('GET', '/api/auth/me')).json.user.id;

@@ -113,7 +113,7 @@ export function SetUpKeysLink({ group, children }: { group: string; children?: R
 
 /* ───────────────────────── the settings page ───────────────────────── */
 
-const STATUS: Record<string, [string, string]> = { ready: ['good', 'Ready'], partial: ['warn', 'Partly set'], off: ['', 'Not set'] };
+const STATUS: Record<string, [string, string]> = { ready: ['good', 'Ready'], partial: ['warn', 'Partly set'], off: ['', 'Not set'], defaults: ['', 'Using defaults'], custom: ['info', 'Changed'] };
 const SOURCE: Record<string, string> = { here: 'set here', env: 'from the server’s .env', platform: 'platform’s value' };
 
 function GroupCard({ g, scope, onSaved, focus }: { g: Json; scope: 'platform' | 'workspace'; onSaved: () => void; focus: boolean }) {
@@ -161,12 +161,12 @@ function GroupCard({ g, scope, onSaved, focus }: { g: Json; scope: 'platform' | 
           <p className="muted small">{g.unlocks}</p>
         </div>
         <button className="btn sm" onClick={() => setOpen(!open)} aria-expanded={open}>
-          {open ? 'Close' : g.status === 'off' ? 'Set up' : 'Change'}
+          {open ? 'Close' : g.status === 'off' ? 'Set up' : g.options ? 'Open' : 'Change'}
         </button>
       </div>
       {open && (
         <div className="stack" style={{ gap: 10 }}>
-          <Guide id={g.guide} open={g.status !== 'ready'} />
+          <Guide id={g.guide} open={!g.options && g.status !== 'ready'} />
           {g.generatePair === 'vapid' && (
             <div>
               <button
@@ -356,6 +356,7 @@ export function ConnectionKeysTab() {
   if (!me || isLoading || !data) return <Spinner />;
   const groups = data.groups as Json[];
   const ready = groups.filter((g) => g.status === 'ready').length;
+  const connections = groups.filter((g) => !g.options).length;
   return (
     <div className="stack integ">
       <p className="muted" style={{ margin: 0 }}>
@@ -373,7 +374,7 @@ export function ConnectionKeysTab() {
             </button>
           </div>
           <span className="muted small">
-            {ready} of {groups.length} ready
+            {ready} of {connections} connections ready
           </span>
         </div>
       )}

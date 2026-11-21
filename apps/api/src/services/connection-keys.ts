@@ -167,7 +167,9 @@ export async function describeKeys(env: Env, db: Db, scope: Scope, tenantId: str
     });
     const effective = (k: string) => fields.find((x) => x.key === k)?.source;
     const req = requiredKeys(g);
-    const status: 'ready' | 'partial' | 'off' = req.length
+    const status: 'ready' | 'partial' | 'off' | 'defaults' | 'custom' = g.options
+      ? fields.some((x) => x.source === 'here') ? 'custom' : 'defaults'
+      : req.length
       ? req.every((k) => effective(k)) ? 'ready' : req.some((k) => effective(k)) ? 'partial' : 'off'
       : fields.some((x) => x.source && x.kind !== 'bool' && x.kind !== 'select') ? 'ready' : 'off';
     return { ...g, fields, status, ownKeys: scope === 'workspace' && fields.some((x) => x.source === 'here') };
@@ -236,7 +238,6 @@ export async function saveKeys(env: Env, db: Db, scope: Scope, tenantId: string,
   if (scope === 'platform') await write((sql, p) => db.platform(sql, p));
   else await db.tx({ tenantId, userId }, (tx: Tx) => write((sql, p) => tx.query(sql, p)));
   forgetCachedKeys(tenantId);
-  if (scope === 'platform') await raw.CACHE_KV?.put('ckeys:changed', String(Date.now())).catch(() => undefined);
   return { saved: rows.length };
 }
 

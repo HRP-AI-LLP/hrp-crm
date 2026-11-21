@@ -37,6 +37,7 @@ import { salesRoutes } from './routes/sales';
 import { securityRoutes } from './routes/security';
 import { connectionKeyRoutes } from './routes/connection-keys';
 import { withPlatformKeys } from './services/connection-keys';
+import { Db } from './lib/db';
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -132,7 +133,14 @@ export function createApp() {
   });
 
   // Android Trusted Web Activity: proves the Play Store app and this domain belong together
-  app.get('/.well-known/assetlinks.json', (c) => {
+  app.get('/.well-known/assetlinks.json', async (c) => {
+    // the Android app keys can be set in Settings → Connection keys
+    const db = Db.fromEnv(c.env);
+    try {
+      c.env = await withPlatformKeys(c.env, db);
+    } finally {
+      await db.close();
+    }
     const fingerprints = (c.env.ANDROID_CERT_SHA256 ?? '').split(',').map((s) => s.trim()).filter(Boolean);
     if (!c.env.ANDROID_APP_ID || !fingerprints.length) return c.json([], 200, { 'cache-control': 'public, max-age=300' });
     return c.json(
