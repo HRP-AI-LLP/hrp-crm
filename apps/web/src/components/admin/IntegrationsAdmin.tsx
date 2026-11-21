@@ -4,6 +4,7 @@ import { del, get, patch, post } from '../../lib/api';
 import { relative } from '../../lib/format';
 import { useUsers } from '../../lib/hooks';
 import { Modal, Spinner, useToast } from '../ui';
+import { Guide, SetUpKeysLink } from './ConnectionKeys';
 
 type Json = Record<string, any>;
 interface Item {
@@ -52,7 +53,7 @@ function StatusChip({ i }: { i: Item }) {
   );
 }
 
-function Card({ title, logo, intro, children, action }: { title: string; logo: string; intro: ReactNode; children?: ReactNode; action?: ReactNode }) {
+function Card({ title, logo, intro, children, action, guide }: { title: string; logo: string; intro: ReactNode; children?: ReactNode; action?: ReactNode; guide?: string }) {
   return (
     <section className="integ-card">
       <div className="spread" style={{ alignItems: 'flex-start' }}>
@@ -68,6 +69,7 @@ function Card({ title, logo, intro, children, action }: { title: string; logo: s
         {action}
       </div>
       {children}
+      {guide && <Guide id={guide} />}
     </section>
   );
 }
@@ -130,6 +132,7 @@ export function IntegrationsTab() {
       {/* --------------------------------------------------------------- payments */}
       <Card
         title="Razorpay — online payments"
+        guide="razorpay"
         logo="₹"
         intro="Send payment links for invoices and order milestones (UPI, cards, net banking). Paid links record the receipt automatically."
         action={
@@ -166,6 +169,7 @@ export function IntegrationsTab() {
       {/* --------------------------------------------------------------- telephony */}
       <Card
         title="Exotel — calling"
+        guide="exotel"
         logo="☎"
         intro="Click-to-call from any lead, contact or account: Exotel rings the salesperson's phone, then connects the customer from your ExoPhone. Calls, recordings and missed calls are logged automatically."
         action={
@@ -217,6 +221,7 @@ export function IntegrationsTab() {
       {/* --------------------------------------------------------------- Meta lead ads */}
       <Card
         title="Facebook & Instagram lead ads"
+        guide="meta_leads"
         logo="f"
         intro="Every lead form submission on your pages becomes a lead within seconds — with the form answers, campaign and source — routed by your assignment rules."
         action={
@@ -233,7 +238,7 @@ export function IntegrationsTab() {
               {pages.length ? 'Add pages' : 'Connect with Facebook'}
             </button>
           ) : (
-            <span className="muted small">Not set up on this server yet</span>
+            <SetUpKeysLink group="meta" />
           )
         }
       >
@@ -267,6 +272,7 @@ export function IntegrationsTab() {
       {/* --------------------------------------------------------------- Google Ads lead forms */}
       <Card
         title="Google Ads lead forms"
+        guide="google_leads"
         logo="G"
         intro="Leads from lead form assets in Search, YouTube, Discovery and Performance Max campaigns arrive instantly through a webhook."
         action={
@@ -311,11 +317,16 @@ export function IntegrationsTab() {
       {/* --------------------------------------------------------------- mailboxes */}
       <Card
         title="Gmail & Outlook"
+        guide="mailbox"
         logo="@"
         intro="Each person connects their own mailbox in My account. Mail with your customers is logged on their timeline, mail sent from Synapse goes from the person's own address, and meetings appear in their calendar."
       >
         <div className="integ-body">
-          {!data.available.google && !data.available.microsoft && <p className="muted small">Not set up on this server yet.</p>}
+          {!data.available.google && !data.available.microsoft && (
+            <p className="muted small" style={{ margin: 0 }}>
+              <SetUpKeysLink group="google">Gmail and Outlook are not set up yet (Google and Microsoft app keys).</SetUpKeysLink>
+            </p>
+          )}
           {mailboxes.length ? (
             <table className="data">
               <tbody>
@@ -378,6 +389,7 @@ function RazorpayModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
       }
     >
       <div className="modal-body" style={{ gridTemplateColumns: '1fr' }}>
+        <div className="wide"><Guide id="razorpay" open /></div>
         <p className="muted small" style={{ margin: 0 }}>
           Razorpay Dashboard → Accounts & Settings → API Keys. Use test-mode keys (<code>rzp_test_…</code>) to try it first.
         </p>
@@ -436,6 +448,7 @@ function ExotelModal({ current, onClose, onDone }: { current?: Item; onClose: ()
       }
     >
       <div className="modal-body">
+        <div className="wide"><Guide id="exotel" open /></div>
         <p className="muted small wide" style={{ margin: 0 }}>
           Exotel dashboard → Settings → API settings. The ExoPhone is the number customers see.
         </p>

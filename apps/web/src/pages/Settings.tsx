@@ -2,6 +2,7 @@ import type { FieldDef } from '@synapse/shared';
 import type { RolePermissions } from '@synapse/shared';
 import { RoleEditor } from '../components/admin/RoleEditor';
 import { ConnectorsTab } from '../components/admin/Connectors';
+import { ConnectionKeysTab, Guide } from '../components/admin/ConnectionKeys';
 import { IntegrationsTab } from '../components/admin/IntegrationsAdmin';
 import { PrivacyTab } from '../components/admin/PrivacyAdmin';
 import { SolutionsPanel } from '../components/admin/SolutionsAdmin';
@@ -58,6 +59,7 @@ const GROUPS: [string, [string, string, string][]][] = [
     ['competitors', 'Competitors', 'ai'],
   ]],
   ['Connect', [
+    ['keys', 'Connection keys', 'channels'],
     ['ai', 'AI models', 'ai'],
     ['integrations', 'Integrations', 'channels'],
     ['connectors', 'Connectors (Teams, Jira, ERP)', 'developers'],
@@ -78,7 +80,8 @@ export function SettingsPage() {
   const groups = GROUPS.map(([g, items]) => [g, items.filter(([, , area]) => can(area))] as const).filter(([, items]) => items.length);
   const all = groups.flatMap(([, items]) => items);
   const initial = (() => {
-    const h = new URLSearchParams(window.location.search).get('integration') ? 'integrations' : window.location.hash.slice(1);
+    const qs = new URLSearchParams(window.location.search);
+    const h = qs.get('integration') ? 'integrations' : qs.get('keys') ? 'keys' : window.location.hash.slice(1);
     return all.some(([k]) => k === h) ? h : (all[0]?.[0] ?? 'fields');
   })();
   const [tab, setTabState] = useState<string>(initial);
@@ -145,6 +148,7 @@ export function SettingsPage() {
           {tab === 'routing' && <RoutingTab />}
           {tab === 'service' && <ServiceSettingsTab />}
           {tab === 'forms' && <FormsTab />}
+          {tab === 'keys' && <ConnectionKeysTab />}
           {tab === 'integrations' && <IntegrationsTab />}
           {tab === 'connectors' && <ConnectorsTab />}
           {tab === 'channels' && <ChannelsTab />}
@@ -706,6 +710,9 @@ function ChannelsTab() {
               Name
               <input value={c.name} onChange={(e) => setC({ ...c, name: e.target.value })} />
             </label>
+            <div className="wide">
+              <Guide id={({ whatsapp: 'whatsapp', instagram: 'instagram', email: 'email_channel', webhook: 'webhook_channel' } as Record<string, string>)[c.channel]!} open />
+            </div>
             {c.channel === 'email' && (
               <>
                 <label className="field">

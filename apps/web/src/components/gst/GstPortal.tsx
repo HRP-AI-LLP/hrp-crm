@@ -143,13 +143,12 @@ export function GstPortal() {
           className="panel"
           style={{ padding: 12, borderLeft: "4px solid var(--bad)" }}
         >
-          <b>No GST Suvidha Provider is set up on this server.</b> For India
-          Compliance, run{" "}
-          <code>pnpm gst:ic-account signup &lt;email&gt; &lt;GSTIN&gt;</code>,
-          click the e-mailed link, run <code>pnpm gst:ic-account finish</code>{" "}
-          and restart. (WhiteBooks: the <code>WHITEBOOKS_*</code> keys in{" "}
-          <code>.env</code>.) Until then you can prepare returns and download
-          the portal JSON.
+          <b>No GST Suvidha Provider is set up yet.</b> Add the API keys of
+          gstinapi.in, India Compliance or WhiteBooks in{" "}
+          <a href="/settings?keys=gst#keys">Settings → Connection keys → GST portal</a>{" "}
+          — the guide there shows how to get them, and a workspace can use its
+          own GSP account. Until then you can prepare returns and download the
+          portal JSON.
         </div>
       )}
       {data.gsp.configured && data.gsp.sandbox && (

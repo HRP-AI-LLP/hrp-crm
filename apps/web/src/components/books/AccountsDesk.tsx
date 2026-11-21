@@ -14,6 +14,7 @@ import { SelectAll } from '../SelectAll';
 import { InvoiceImport } from './InvoiceImport';
 import { OwnAccounts } from './OwnAccounts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
+import { Guide } from '../admin/ConnectionKeys';
 
 type Json = Record<string, any>;
 type View = 'queue' | 'findings' | 'close' | 'sources' | 'own' | 'invoices' | 'activity';
@@ -1844,6 +1845,7 @@ function ConnectFeed({ banks, onClose, onDone }: { banks: Json[]; onClose: () =>
       }
     >
       <div className="modal-body stack">
+        <Guide id="razorpayx" open />
         <div className="muted small">
           In the RazorpayX dashboard: Account &amp; Settings → Developer controls → API keys (generate a key). The account number is your RazorpayX current account number (or the customer identifier for RazorpayX Lite). The keys are checked
           with RazorpayX, stored encrypted and never shown again.

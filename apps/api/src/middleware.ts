@@ -9,6 +9,7 @@ import { ApiError, forbidden, unauthorized } from './lib/errors';
 import { sha256Hex } from './lib/crypto';
 import { verifyAccessToken } from './lib/jwt';
 import { dispatchPush, pushEnabled } from './services/webpush';
+import { withTenantKeys } from './services/connection-keys';
 import { invalidateTenantCache, loadMeta, loadPrincipal, resolveTenant } from './services/tenancy';
 
 /** Request id + per-request DB handle (closed after the response is produced). */
@@ -43,6 +44,8 @@ export const tenantResolver: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!tenant) throw new ApiError(404, 'tenant_not_found', 'Unknown workspace');
   if (tenant.status !== 'active') throw new ApiError(403, 'tenant_inactive', 'This workspace is not active');
   c.set('tenant', tenant);
+  // a workspace's own keys (its own GSP account) for this request only
+  c.env = await withTenantKeys(c.env, c.var.db, tenant.id);
   // sign-in, token refresh and two-factor steps honour the workspace network policy too
   if (c.req.method === 'POST' && new URL(c.req.url).pathname.startsWith('/api/auth/') && !new URL(c.req.url).pathname.endsWith('/logout')) {
     const row = await c.var.db.tx({ tenantId: tenant.id, readOnly: true }, (tx) => tx.one<{ security: SecurityPolicy | null }>(`select settings -> 'security' as security from tenants where id = $1`, [tenant.id]));

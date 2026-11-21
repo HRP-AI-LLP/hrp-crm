@@ -25,12 +25,14 @@ export function appConfigured(env: Env) {
 }
 
 const b64url = (s: string) => btoa(s).replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
-let jwtCache: { jwt: string; exp: number } | null = null;
+let jwtCache: { jwt: string; exp: number; for: string } | null = null;
 const tokenCache = new Map<string, { token: string; exp: number }>();
 
 /** The app's own JWT (RS256, 9 minutes), signed with its private key. */
 export function appJwt(env: Env): string {
-  if (jwtCache && jwtCache.exp - Date.now() > 60_000) return jwtCache.jwt;
+  // keyed by the app id and key, so new keys set in Settings → Connection keys take effect at once
+  const forKey = `${env.GITHUB_APP_ID}:${String(env.GITHUB_APP_PRIVATE_KEY ?? '').length}:${String(env.GITHUB_APP_PRIVATE_KEY ?? '').slice(-24)}`;
+  if (jwtCache && jwtCache.for === forKey && jwtCache.exp - Date.now() > 60_000) return jwtCache.jwt;
   const now = Math.floor(Date.now() / 1000);
   const head = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const body = b64url(JSON.stringify({ iat: now - 30, exp: now + 540, iss: env.GITHUB_APP_ID }));
@@ -38,7 +40,7 @@ export function appJwt(env: Env): string {
   const md = forge.md.sha256.create();
   md.update(`${head}.${body}`, 'utf8');
   const sig = b64url(key.sign(md));
-  jwtCache = { jwt: `${head}.${body}.${sig}`, exp: (now + 540) * 1000 };
+  jwtCache = { jwt: `${head}.${body}.${sig}`, exp: (now + 540) * 1000, for: forKey };
   return jwtCache.jwt;
 }
 

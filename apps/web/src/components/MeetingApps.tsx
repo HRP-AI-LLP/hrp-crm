@@ -9,12 +9,13 @@ import { del, get, patch, post } from '../lib/api';
 import { relative } from '../lib/format';
 import { useOAuthReturn } from '../lib/oauthReturn';
 import { Spinner, useToast } from './ui';
+import { SetUpKeysLink } from './admin/ConnectionKeys';
 
 type Json = Record<string, any>;
-const APPS: { key: 'zoom' | 'gmeet' | 'msmeet'; provider: string; name: string; note: string; keys: string }[] = [
-  { key: 'zoom', provider: 'zoom_meet', name: 'Zoom', note: 'Cloud-recording transcripts (Pro plan or above, audio transcript switched on).', keys: 'ZOOM_CLIENT_ID and ZOOM_CLIENT_SECRET' },
-  { key: 'gmeet', provider: 'google_meet', name: 'Google Meet', note: 'Meet transcripts (Workspace editions with transcription).', keys: 'GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET' },
-  { key: 'msmeet', provider: 'ms_teams_meet', name: 'Microsoft Teams', note: 'Teams meeting transcripts (work or school account; your admin may need to approve).', keys: 'MS_CLIENT_ID and MS_CLIENT_SECRET' },
+const APPS: { key: 'zoom' | 'gmeet' | 'msmeet'; provider: string; name: string; note: string; group: string }[] = [
+  { key: 'zoom', provider: 'zoom_meet', name: 'Zoom', note: 'Cloud-recording transcripts (Pro plan or above, audio transcript switched on).', group: 'zoom' },
+  { key: 'gmeet', provider: 'google_meet', name: 'Google Meet', note: 'Meet transcripts (Workspace editions with transcription).', group: 'google' },
+  { key: 'msmeet', provider: 'ms_teams_meet', name: 'Microsoft Teams', note: 'Teams meeting transcripts (work or school account; your admin may need to approve).', group: 'microsoft' },
 ];
 const TOGGLES: [string, string][] = [
   ['autoFetch', 'Fetch transcripts after calls'],
@@ -64,7 +65,7 @@ export function MeetingAppsPanel({ returnTo = '/account' }: { returnTo?: '/accou
         </p>
         {data && !Object.values(data.available).some(Boolean) && (
           <div className="callout warn small">
-            The meeting apps are not set up on this server yet, so Connect is off. The platform admin registers Synapse with Zoom, Google and Microsoft and adds their app keys to the server (redirect addresses and scopes are in docs/INTEGRATIONS.md). Until then, schedule calls with a pasted meeting link and upload the transcript or the recording on each call.
+            <SetUpKeysLink group="zoom">The meeting apps are not set up yet, so Connect is off — Zoom, Google and Microsoft each need app keys (Settings → Connection keys has a step-by-step guide for each). Until then, schedule calls with a pasted meeting link and upload the transcript or the recording on each call.</SetUpKeysLink>
           </div>
         )}
         {!data ? (
@@ -79,7 +80,11 @@ export function MeetingAppsPanel({ returnTo = '/account' }: { returnTo?: '/accou
                   <div>
                     <span className={`meet-badge ${app.provider}`}>{app.name}</span>
                     <div className="muted small">{app.note}</div>
-                    {!can && <div className="small warn-text" style={{ marginTop: 4 }}>Not set up on this server: needs {app.keys}.</div>}
+                    {!can && (
+                      <div className="small warn-text" style={{ marginTop: 4 }}>
+                        <SetUpKeysLink group={app.group}>Not set up yet: needs the {app.group === 'zoom' ? 'Zoom' : app.group === 'google' ? 'Google' : 'Microsoft'} app keys.</SetUpKeysLink>
+                      </div>
+                    )}
                   </div>
                   <button className="btn small" disabled={!can || busy === app.key} title={can ? '' : 'Not set up for this workspace yet (the administrator adds the app keys)'} onClick={() => connect(app.key)}>
                     {mine.length ? 'Add another account' : 'Connect'}

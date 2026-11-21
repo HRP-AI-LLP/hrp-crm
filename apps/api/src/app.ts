@@ -35,11 +35,18 @@ import { developerRoutes } from './routes/developers';
 import { auditExportRoutes, privacyAdminRoutes, privacyPublicRoutes, privacyRoutes } from './routes/privacy';
 import { salesRoutes } from './routes/sales';
 import { securityRoutes } from './routes/security';
+import { connectionKeyRoutes } from './routes/connection-keys';
+import { withPlatformKeys } from './services/connection-keys';
 
 export function createApp() {
   const app = new Hono<AppEnv>();
 
   app.use('/api/*', requestContext);
+  // keys saved in Settings → Connection keys take the place of the .env values
+  app.use('/api/*', async (c, next) => {
+    c.env = await withPlatformKeys(c.env, c.var.db);
+    await next();
+  });
   app.use(
     '/api/*',
     secureHeaders({
@@ -117,6 +124,7 @@ export function createApp() {
   app.route('/api/admin', insightsAdminRoutes);
   app.route('/api/admin', tallyAdminRoutes);
   app.route('/api/admin', workAdminRoutes);
+  app.route('/api/admin', connectionKeyRoutes);
   app.route('/api/admin/intel', intelAdminRoutes);
 
   app.all('/api/*', () => {

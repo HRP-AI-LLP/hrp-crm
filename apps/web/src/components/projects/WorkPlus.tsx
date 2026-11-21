@@ -10,6 +10,7 @@ import { date } from '../../lib/format';
 import { Chart } from '../charts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 import { type Json, MentionBox, typeIcon, TYPES, useTeam, useWorkSetup } from './WorkItem';
+import { SetUpKeysLink } from '../admin/ConnectionKeys';
 
 function useRun() {
   const toast = useToast();
@@ -1034,7 +1035,11 @@ export function WorkAlertPrefs() {
         <h3 style={{ margin: 0 }}>Work item emails</h3>
       </div>
       <div className="panel-body stack">
-        {!data.emailOn && <div className="callout warn small">Email sending is not set up on this server yet — you get these in the app only.</div>}
+        {!data.emailOn && (
+          <div className="callout warn small">
+            <SetUpKeysLink group="mail">Email sending is not set up yet — you get these in the app only.</SetUpKeysLink>
+          </div>
+        )}
         <table className="data compact">
           <tbody>
             {row('assigned', 'Assigned to me', 'An item is assigned to you')}
@@ -1070,8 +1075,7 @@ export function GitHubAppSection() {
       <h3 className="section-label">GitHub App (whole workspace)</h3>
       {data && !data.configured ? (
         <div className="callout small">
-          The GitHub App is not set up on this server. Register one (see docs/INTEGRATIONS.md → GitHub App) and set <span className="mono">GITHUB_APP_ID</span>, <span className="mono">GITHUB_APP_SLUG</span>, <span className="mono">GITHUB_APP_PRIVATE_KEY</span> and{' '}
-          <span className="mono">GITHUB_APP_WEBHOOK_SECRET</span>. Until then, link repositories by name and use the webhook connections below.
+          <SetUpKeysLink group="github_app">The GitHub App is not set up yet (its app ID, slug, private key and webhook secret). Until then, link repositories by name and use the webhook connections below.</SetUpKeysLink>
         </div>
       ) : data ? (
         <div className="stack" style={{ gap: 6 }}>

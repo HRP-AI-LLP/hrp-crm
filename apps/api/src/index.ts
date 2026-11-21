@@ -28,15 +28,20 @@ import { itDailySweep } from './services/it/sweep';
 import { queueDueSoon, workMailSweep } from './services/it/alerts';
 import { scheduledRulesSweep } from './services/it/rules';
 import { processJob } from './services/worker';
+import { withPlatformKeys, withTenantKeys } from './services/connection-keys';
 
 const app = createApp();
 
 export default {
   fetch: app.fetch,
 
-  async queue(batch: MessageBatch<Job>, env: Env, ctx: ExecutionContext): Promise<void> {
+  async queue(batch: MessageBatch<Job>, rawEnv: Env, ctx: ExecutionContext): Promise<void> {
+    // keys saved in Settings → Connection keys (platform, then the job's workspace)
+    const keysDb = Db.fromEnv(rawEnv);
+    const platformEnv = await withPlatformKeys(rawEnv, keysDb);
     for (const msg of batch.messages) {
       try {
+        const env = msg.body.tenantId ? await withTenantKeys(platformEnv, keysDb, msg.body.tenantId) : platformEnv;
         await processJob(env, msg.body, ctx);
         msg.ack();
       } catch (e) {
@@ -44,11 +49,14 @@ export default {
         msg.retry({ delaySeconds: Math.min(300, 10 * 2 ** msg.attempts) });
       }
     }
+    await keysDb.close();
   },
 
-  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+  async scheduled(controller: ScheduledController, rawEnv: Env): Promise<void> {
     // Platform housekeeping runs per tenant under RLS (no bypass role exists).
-    const db = Db.fromEnv(env);
+    const db = Db.fromEnv(rawEnv);
+    // keys saved in Settings → Connection keys take the place of the .env values
+    const env = await withPlatformKeys(rawEnv, db);
     try {
       if (controller.cron === '*/5 * * * *') {
         // reminders: a KV read decides whether the database needs waking at all

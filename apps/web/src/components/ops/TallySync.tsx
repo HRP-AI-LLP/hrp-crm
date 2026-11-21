@@ -1,5 +1,6 @@
 /** Billing & GST → Tally: automatic two-way sync through the connector on the accountant's PC. */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Guide } from '../admin/ConnectionKeys';
 import { useState } from 'react';
 import { del, get, patch, post } from '../../lib/api';
 import { relative } from '../../lib/format';
@@ -50,6 +51,9 @@ export function TallySync() {
             In Tally: F1 Help → Settings → Connectivity → set TallyPrime to act as <b>Server</b> (or Both) on port 9000.
           </li>
           <li>Click Connect below, download the connector and run the command it shows.</li>
+          <li style={{ listStyle: 'none' }}>
+            <Guide id="tally" />
+          </li>
           <li>
             <button className="btn primary" onClick={connect}>
               Connect Tally

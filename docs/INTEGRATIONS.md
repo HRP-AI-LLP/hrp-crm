@@ -21,6 +21,16 @@ All provider credentials are stored encrypted (AES-GCM, with the workspace id as
 
 ## 1. Platform setup (HRP AI, once per environment)
 
+**Every key below is set in the app: Settings → Connection keys** (platform admins). Each connection there has a step-by-step guide (with the redirect and webhook addresses to copy), a *Save and test* button that checks the keys with the provider, and generators for VAPID key pairs, webhook secrets and verify tokens. Secret keys are encrypted with `DATA_ENCRYPTION_KEY` and only their last characters are shown afterwards. A key saved there takes the place of the same name in `.env` / Worker secrets (those still work as a fallback; *Remove* brings them back). Changes reach every server instance within 30 seconds.
+
+Platform admins: the people listed in Settings → Connection keys → Platform admins; while nobody is listed, the owners of the first workspace created (on a local server, any workspace owner).
+
+A workspace may use **its own GSP account** for GST (Settings → Connection keys → This workspace only); every other connection's keys are platform-wide. Connections a workspace makes itself (Razorpay, Exotel, WhatsApp, channels, connectors, RazorpayX, Tally, code webhooks) each show their own setup guide where they are connected.
+
+Only these must stay in the server's environment: the database address, `JWT_SECRET` and `DATA_ENCRYPTION_KEY` (needed before anything in the database can be read) and the Cloudflare bindings in `wrangler.jsonc`.
+
+The steps below are the same as the in-app guides.
+
 The callback and webhook hosts are `https://hrpsynapse.hrpai.in` for prod and `https://hrpsynapse-dev.hrpai.in` for dev. For local testing with `pnpm local`, also add `http://localhost:5173` and `http://localhost:8787`.
 
 ### Google (Gmail + Calendar)
@@ -91,9 +101,9 @@ Set `GITHUB_APP_ID`, `GITHUB_APP_SLUG` (the app's URL name), `GITHUB_APP_PRIVATE
 
 Repositories linked through the app get the **Synapse work items** check run on every push and PR; webhooks from the app also link branches, commits, PRs and builds exactly as the per-workspace webhook connections below do (use one or the other per repository).
 
-### Secrets
+### Secrets (fallback)
 
-These values are required to turn the features on: without Google or Microsoft keys the mailbox buttons stay hidden, and without Meta keys the Facebook card says "not set up".
+Preferably set these in Settings → Connection keys. The environment route below still works; a value saved in the app wins. These values are required to turn the features on: without Google or Microsoft keys the mailbox buttons stay hidden, and without Meta keys the Facebook card says "not set up".
 
 Either export the variables and rerun `pnpm setup`, which uploads them as Worker secrets, or set them directly:
 

@@ -3,6 +3,7 @@ import { post } from '../lib/api';
 import { relative } from '../lib/format';
 import { enablePush, forgetDevice, isStandalone, pushConfig, pushSupported, removeDevice, useCurrentEndpoint, useInstallPrompt } from '../lib/pwa';
 import { useToast } from './ui';
+import { SetUpKeysLink } from './admin/ConnectionKeys';
 import { enableNativePush, forgetNativeToken, hasNativeToken, nativePushAvailable } from '../lib/native';
 
 /** "Phone & notifications" panel on My account: install the app, enrol devices for push. */
@@ -42,7 +43,9 @@ export function PushDevices() {
         {nativePushAvailable() ? (
           <NativeToggle enabled={!!(cfg.data as { nativeEnabled?: boolean } | undefined)?.nativeEnabled} onChange={reload} />
         ) : !cfg.data?.enabled ? (
-          <p className="muted small">Push notifications are not configured for this server yet.</p>
+          <p className="muted small">
+            <SetUpKeysLink group="push">Push notifications are not set up yet.</SetUpKeysLink>
+          </p>
         ) : !pushSupported() ? (
           <p className="muted small">This browser cannot receive push notifications.</p>
         ) : blocked ? (
@@ -133,7 +136,12 @@ export function PushDevices() {
 /** Inside the Android app: real notifications through Firebase. */
 function NativeToggle({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
   const toast = useToast();
-  if (!enabled) return <p className="muted small">App notifications are not configured for this server yet.</p>;
+  if (!enabled)
+    return (
+      <p className="muted small">
+        <SetUpKeysLink group="push">App notifications are not set up yet.</SetUpKeysLink>
+      </p>
+    );
   return hasNativeToken() ? (
     <div className="row">
       <span className="chip good">On for this phone</span>

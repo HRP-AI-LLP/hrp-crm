@@ -11,6 +11,7 @@ import { date } from '../../lib/format';
 import { Chart } from '../charts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 import { AppRepoPicker, BurnupView, GitHubAppSection, RequireCheckButton, SprintReportView, TemplatesSection, TimeInStatusView } from './WorkPlus';
+import { Guide } from '../admin/ConnectionKeys';
 import { CAT_CLS, CreateItemModal, type Json, priIcon, PRIORITIES, Progress, StateChip, typeIcon, typeLabel, TYPES, usePlanning, useTeam, useWorkSetup, WorkItemModal } from './WorkItem';
 
 const CATS: [string, string][] = [['todo', 'To do'], ['in_progress', 'In progress'], ['review', 'Review'], ['blocked', 'Blocked'], ['done', 'Done'], ['cancelled', 'Cancelled']];
@@ -2113,7 +2114,7 @@ function DevConnections() {
                   <div className="section-label">Secret</div>
                   <code className="mono">{made.secret}</code>
                 </div>
-                <p style={{ margin: 0 }}>In GitHub: repository or organisation → Settings → Webhooks → Add webhook. Content type application/json; events: Pushes, Branch or tag creation, Pull requests, Workflow runs.</p>
+                <Guide id="dev_github" open />
               </>
             ) : (
               <>
@@ -2121,7 +2122,7 @@ function DevConnections() {
                   <div className="section-label">Basic authentication</div>
                   user <code className="mono">synapse</code> · password <code className="mono">{made.secret}</code>
                 </div>
-                <p style={{ margin: 0 }}>In Azure DevOps: Project settings → Service hooks → Web Hooks, once per event: Code pushed, Pull request created / updated / merged, Build completed.</p>
+                <Guide id="dev_azure" open />
               </>
             )}
           </div>

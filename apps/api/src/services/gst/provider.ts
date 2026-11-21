@@ -138,7 +138,7 @@ export function requireProvider(env: Env): GspProvider {
     throw new ApiError(
       503,
       'gsp_not_configured',
-      'No GST provider is set up on this server. Add GSTINAPI_KEY (gstinapi.in) to .env and restart (or INDIA_COMPLIANCE_API_SECRET / the WHITEBOOKS_* keys).',
+      'No GST provider is set up yet. Add the keys of gstinapi.in, India Compliance or WhiteBooks in Settings → Connection keys → GST portal (the guide there shows how to get them).',
     );
   return p;
 }

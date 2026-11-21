@@ -7,6 +7,7 @@ import { date, number, relative } from '../../lib/format';
 import { useMeta, useUsers } from '../../lib/hooks';
 import { describeFilter, type Filter, FilterBuilder } from '../ListTools';
 import { Empty, Modal, Spinner, useToast } from '../ui';
+import { SetUpKeysLink } from './ConnectionKeys';
 
 type Json = Record<string, any>;
 
@@ -78,7 +79,7 @@ export function SecurityPolicyTab() {
               <li>Five wrong passwords lock the account for 15 minutes; every attempt is in the audit log.</li>
               <li>Sessions rotate on every refresh; a reused refresh token signs that device out.</li>
               <li>Every workspace is isolated by Postgres row-level security.</li>
-              <li>Email delivery for invitations: {data.mailer ? 'configured' : <>not configured — links are shown to admins instead (add <code>RESEND_API_KEY</code> to enable)</>}.</li>
+              <li>Email delivery for invitations: {data.mailer ? 'configured' : <>not configured — links are shown to admins instead (<SetUpKeysLink group="mail">Platform email is off.</SetUpKeysLink>)</>}.</li>
             </ul>
           </div>
         </div>

@@ -4,6 +4,7 @@ import { api, del, get, patch, post, put } from '../lib/api';
 import { relative } from '../lib/format';
 import { useOAuthReturn } from '../lib/oauthReturn';
 import { Spinner, useToast } from './ui';
+import { SetUpKeysLink } from './admin/ConnectionKeys';
 
 export interface IntegrationStatus {
   mailbox: { id: string; provider: 'google' | 'microsoft'; account: string; status: string; lastSyncAt: string | null; lastError: string | null; config: { calendar?: boolean; ignore?: string[] } } | null;
@@ -138,7 +139,7 @@ export function MailboxPanel() {
           </>
         ) : (
           <p className="muted small" style={{ margin: 0 }}>
-            Gmail and Outlook sync are not set up on this server yet.
+            <SetUpKeysLink group="google">Gmail and Outlook sync are not set up yet.</SetUpKeysLink>
           </p>
         )}
         <hr className="sep" />

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { del, get, post, put } from '../../lib/api';
 import { type Json, label, useAct } from '../industry/kit';
 import { Modal, Spinner } from '../ui';
+import { Guide } from './ConnectionKeys';
 
 const CARDS: { kind: string; name: string; group: string; blurb: string }[] = [
   { kind: 'teams', name: 'Microsoft Teams', group: 'Alerts', blurb: 'Deal won / lost, big new deals, urgent tickets, orders and payments posted to a channel.' },
@@ -94,6 +95,7 @@ export function ConnectorsTab() {
           }
         >
           <div className="modal-body stack">
+            <Guide id={edit.kind} open={!edit.id} />
             <label className="field">
               Name it (optional)
               <input value={edit.label ?? ''} onChange={(e) => setEdit({ ...edit, label: e.target.value })} placeholder={edit.name} />
