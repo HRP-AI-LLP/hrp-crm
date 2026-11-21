@@ -19,6 +19,7 @@
     "local": "node scripts/local/local-dev.mjs",
     "local:cloud": "node scripts/local/cloud-dev.mjs",
     "local:stop": "node scripts/local/stop.mjs",
+    "local:admin": "node scripts/local/admin.mjs",
     "local:test": "node scripts/local/local-test.mjs",
     "dsc": "node scripts/local/dsc-signer.mjs",
     "deploy:dev": "pnpm --filter @synapse/web build && pnpm --filter @synapse/api deploy:dev",
