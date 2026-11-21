@@ -319,6 +319,11 @@ export const GUIDES: Record<string, Guide> = {
       'On the app’s page: copy the App ID; the slug is the last part of its public link (github.com/apps/<slug>). Private keys → Generate a private key → open the downloaded .pem and paste it here.',
       'Save and Test. Then each workspace admin installs it from Projects → Work setup → GitHub App.',
     ],
+    notes: [
+      'Leave “Callback URL”, “Request user authorization (OAuth) during installation” and “Device flow” alone — Synapse does not sign people in with GitHub; the Setup URL is what brings an installation back.',
+      'Give only the permissions listed above: no organisation or account permissions. Customers see the list when they install, and every extra permission is access you would hold to their code.',
+      'GitHub cannot deliver webhooks to localhost. On your computer run a tunnel — `cloudflared tunnel --url http://localhost:8787` — and use its https address (…trycloudflare.com/api/public/github/app) as the Webhook URL; it changes each time unless you make a named tunnel on your own domain. The Setup URL may stay on localhost (your browser follows it).',
+    ],
     copy: [
       { label: 'Setup URL', path: '/api/public/github/setup' },
       { label: 'Webhook URL', path: '/api/public/github/app' },
