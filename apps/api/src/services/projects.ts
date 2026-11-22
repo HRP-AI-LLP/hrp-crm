@@ -119,7 +119,7 @@ export async function getProject(ctx: RecordCtx, id: string) {
   const { project, level } = await projectAccess(ctx, id);
   const obj = ctx.meta.objects.find((o) => o.key === 'project')!;
   const members = await ctx.tx.query(
-    `select m.user_id, u.full_name, u.email, m.role, m.bill_rate::float8 as bill_rate, m.cost_rate::float8 as cost_rate from project_members m join users u on u.tenant_id = m.tenant_id and u.id = m.user_id
+    `select m.user_id, u.full_name, u.email, m.role, m.bill_rate::float8 as bill_rate, m.cost_rate::float8 as cost_rate, m.pay_basis, m.pay_amount::float8 as pay_amount, m.commission_pct::float8 as commission_pct, m.commission_on from project_members m join users u on u.tenant_id = m.tenant_id and u.id = m.user_id
       where m.tenant_id = $1 and m.project_id = $2 order by m.role, u.full_name`,
     [ctx.tenantId, id],
   );
@@ -141,7 +141,7 @@ export async function getProject(ctx: RecordCtx, id: string) {
   return {
     project: dto,
     level,
-    members: members.map((m: any) => (showRates ? m : { ...m, bill_rate: undefined, cost_rate: undefined })),
+    members: members.map((m: any) => (showRates ? m : { ...m, bill_rate: undefined, cost_rate: undefined, pay_basis: undefined, pay_amount: undefined, commission_pct: undefined, commission_on: undefined })),
     milestones,
     lists,
   };
@@ -153,7 +153,20 @@ async function workers(tx: Tx, tenantId: string, project: Record<string, any>) {
   return new Set([...rows.map((r) => r.user_id), ...(project.owner_id ? [project.owner_id] : [])]);
 }
 
-export async function setMembers(ctx: RecordCtx, id: string, members: { userId: string; role: 'manager' | 'member' | 'viewer'; billRate?: number | null; costRate?: number | null }[]) {
+export type PayBasis = 'hourly' | 'daily' | 'monthly' | 'fixed' | 'commission' | 'none';
+export type MemberInput = {
+  userId: string;
+  role: 'manager' | 'member' | 'viewer';
+  billRate?: number | null;
+  costRate?: number | null;
+  /** how they are paid for this project; hourly uses costRate, daily / monthly / fixed use payAmount, commission uses commissionPct */
+  payBasis?: PayBasis;
+  payAmount?: number | null;
+  commissionPct?: number | null;
+  commissionOn?: 'invoiced' | 'collected';
+};
+
+export async function setMembers(ctx: RecordCtx, id: string, members: MemberInput[]) {
   const { project } = await projectAccess(ctx, id, 'manage');
   const ids = [...new Set(members.map((m) => m.userId))];
   if (ids.length !== members.length) throw badRequest('Each person once');
@@ -161,8 +174,15 @@ export async function setMembers(ctx: RecordCtx, id: string, members: { userId: 
   if (users.length !== ids.length) throw badRequest('Add people from this workspace (active or invited)');
   const before = await ctx.tx.query<{ user_id: string }>(`select user_id from project_members where tenant_id = $1 and project_id = $2`, [ctx.tenantId, id]);
   await ctx.tx.query(`delete from project_members where tenant_id = $1 and project_id = $2`, [ctx.tenantId, id]);
-  for (const m of members)
-    await ctx.tx.query(`insert into project_members (tenant_id, project_id, user_id, role, bill_rate, cost_rate) values ($1,$2,$3,$4,$5,$6)`, [ctx.tenantId, id, m.userId, m.role, m.billRate ?? null, m.costRate ?? null]);
+  for (const m of members) {
+    const basis = m.payBasis ?? 'hourly';
+    if (['daily', 'monthly', 'fixed'].includes(basis) && m.payAmount == null) throw badRequest(`Enter the ${basis === 'daily' ? 'day rate' : basis === 'monthly' ? 'monthly salary' : 'fixed amount'} for each person paid that way`);
+    if (basis === 'commission' && m.commissionPct == null) throw badRequest('Enter the commission % for each person paid on commission');
+    await ctx.tx.query(
+      `insert into project_members (tenant_id, project_id, user_id, role, bill_rate, cost_rate, pay_basis, pay_amount, commission_pct, commission_on) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [ctx.tenantId, id, m.userId, m.role, m.billRate ?? null, basis === 'hourly' ? (m.costRate ?? null) : null, basis, ['daily', 'monthly', 'fixed'].includes(basis) ? m.payAmount : null, basis === 'commission' ? m.commissionPct : null, m.commissionOn ?? 'invoiced'],
+    );
+  }
   const added = ids.filter((u) => !before.some((b) => b.user_id === u));
   await notify(ctx, added, `You were added to project ${project.name}`, `/projects/${id}`);
 }
@@ -721,7 +741,10 @@ export async function saveIssue(ctx: RecordCtx, projectId: string, id: string | 
 
 /** Bill and cost rate for a person's hour on a project (and task), by the project's billing method. */
 export async function rates(tx: Tx, tenantId: string, project: Record<string, any>, userId: string, taskId: string | null) {
-  const m = await tx.one<{ bill_rate: string | null; cost_rate: string | null }>(`select bill_rate, cost_rate from project_members where tenant_id = $1 and project_id = $2 and user_id = $3`, [tenantId, project.id, userId]);
+  const m = await tx.one<{ bill_rate: string | null; cost_rate: string | null; pay_basis: PayBasis; pay_amount: string | null }>(
+    `select bill_rate, cost_rate, pay_basis, pay_amount from project_members where tenant_id = $1 and project_id = $2 and user_id = $3`,
+    [tenantId, project.id, userId],
+  );
   const task = taskId ? await tx.one<{ rate: string | null; billable: boolean }>(`select rate, billable from project_tasks where tenant_id = $1 and id = $2`, [tenantId, taskId]) : null;
   const pr = Number(project.project_rate ?? 0);
   const bill =
@@ -729,7 +752,26 @@ export async function rates(tx: Tx, tenantId: string, project: Record<string, an
     : project.billing_method === 'time_staff_rate' ? Number(m?.bill_rate ?? pr)
     : project.billing_method === 'time_task_rate' ? Number(task?.rate ?? pr)
     : 0;
-  return { bill, cost: Number(m?.cost_rate ?? 0), billableDefault: project.billing_method !== 'non_billable' && project.billing_method !== 'fixed_price' && (task ? task.billable : true) };
+  return { bill, cost: await hourCost(tx, tenantId, userId, m), billableDefault: project.billing_method !== 'non_billable' && project.billing_method !== 'fixed_price' && (task ? task.billable : true) };
+}
+
+/**
+ * What one logged hour costs, by how the person is paid on the project: the cost rate; a day rate over
+ * their hours a day; a monthly salary over a month's working hours (the work calendar). Fixed amounts
+ * and commissions are not per hour: they are added to the project's labour cost as a whole.
+ */
+export async function hourCost(tx: Tx, tenantId: string, userId: string, m: { cost_rate: string | null; pay_basis: PayBasis; pay_amount: string | null } | null) {
+  if (!m) return 0;
+  if (m.pay_basis === 'hourly') return Number(m.cost_rate ?? 0);
+  if (m.pay_basis !== 'daily' && m.pay_basis !== 'monthly') return 0;
+  const cal = await tx.one<{ h: number; d: number }>(
+    `select coalesce(s.hours_per_day, c.hours_per_day, 8)::float8 as h, coalesce(array_length(coalesce(s.work_days, c.work_days), 1), 5)::int as d
+       from (select 1) x left join work_calendar c on c.tenant_id = $1 left join user_work_settings s on s.tenant_id = $1 and s.user_id = $2`,
+    [tenantId, userId],
+  );
+  const h = cal?.h || 8;
+  const pay = Number(m.pay_amount ?? 0);
+  return m.pay_basis === 'daily' ? r2(pay / h) : r2(pay / (h * (cal?.d || 5) * (52 / 12)));
 }
 
 export interface TimeInput {
@@ -1017,7 +1059,13 @@ export async function unbilled(ctx: RecordCtx, projectId: string, upTo = today()
     `select coalesce(sum(case when doc_type = 'credit_note' then -taxable_total else taxable_total end), 0)::float8 as v from invoices where tenant_id = $1 and project_id = $2 and status not in ('draft','cancelled') and deleted_at is null`,
     [ctx.tenantId, projectId],
   );
-  return { project: { id: project.id, billing_method: project.billing_method, fixed_fee: Number(project.fixed_fee ?? 0), account_id: project.account_id }, time, expenses, milestones, invoicedToDate: invoiced?.v ?? 0 };
+  // milestones already invoiced: their invoice and what is still due on it
+  const invoicedMilestones = await ctx.tx.query(
+    `select m.id, m.name, m.amount::float8 as amount, i.id as invoice_id, i.invoice_number, i.status as invoice_status, i.grand_total::float8 as grand_total, i.balance_due::float8 as balance_due
+       from project_milestones m join invoices i on i.tenant_id = m.tenant_id and i.id = m.invoice_id where m.tenant_id = $1 and m.project_id = $2 order by m.position`,
+    [ctx.tenantId, projectId],
+  );
+  return { project: { id: project.id, billing_method: project.billing_method, fixed_fee: Number(project.fixed_fee ?? 0), account_id: project.account_id }, time, expenses, milestones, invoicedMilestones, invoicedToDate: invoiced?.v ?? 0 };
 }
 
 /**
@@ -1139,13 +1187,32 @@ export async function projectSummary(ctx: RecordCtx, projectId: string) {
        from time_entries where tenant_id = $1 and project_id = $2 and work_date >= current_date - 7 * 12 group by 1 order by 1`,
     [ctx.tenantId, projectId],
   );
+  // people paid a fixed amount for the project, or a commission on what it earns (invoiced or collected, before GST)
+  const pay = await ctx.tx.one<{ fixed: number; on_invoiced: number; on_collected: number }>(
+    `select coalesce(sum(pay_amount) filter (where pay_basis = 'fixed'), 0)::float8 as fixed,
+            coalesce(sum(commission_pct) filter (where pay_basis = 'commission' and commission_on = 'invoiced'), 0)::float8 as on_invoiced,
+            coalesce(sum(commission_pct) filter (where pay_basis = 'commission' and commission_on = 'collected'), 0)::float8 as on_collected
+       from project_members where tenant_id = $1 and project_id = $2`,
+    [ctx.tenantId, projectId],
+  );
+  const collected = pay?.on_collected
+    ? ((
+        await ctx.tx.one<{ v: number }>(
+          `select coalesce(sum(case when grand_total > 0 then amount_paid * taxable_total / grand_total else 0 end * exchange_rate), 0)::float8 as v from invoices where tenant_id = $1 and project_id = $2 and doc_type = 'tax_invoice' and status not in ('draft','cancelled') and deleted_at is null`,
+          [ctx.tenantId, projectId],
+        )
+      )?.v ?? 0)
+    : 0;
+  const commission = r2(((pay?.on_invoiced ?? 0) * revenue!.v + (pay?.on_collected ?? 0) * collected) / 100);
+  const fixedPay = r2(pay?.fixed ?? 0);
+  time!.labour_cost = r2(time!.labour_cost + fixedPay + commission);
   const cost = r2(time!.labour_cost + otherCosts!.expenses + otherCosts!.bills);
   const budget =
     project.budget_type === 'hours' ? { type: 'hours', planned: Number(project.budget_hours ?? 0), used: r2(time!.hours) }
     : project.budget_type === 'cost' ? { type: 'cost', planned: Number(project.budget_amount ?? 0), used: cost }
     : project.budget_type === 'revenue' ? { type: 'revenue', planned: Number(project.budget_amount ?? 0), used: r2(revenue!.v + time!.unbilled_amount) }
     : null;
-  const money = level === 'manage' ? { revenue: r2(revenue!.v), unbilled: r2(time!.unbilled_amount), labourCost: r2(time!.labour_cost), expenses: r2(otherCosts!.expenses), bills: r2(otherCosts!.bills), cost, profit: r2(revenue!.v - cost), margin: revenue!.v ? r2(((revenue!.v - cost) / revenue!.v) * 100) : null } : null;
+  const money = level === 'manage' ? { revenue: r2(revenue!.v), unbilled: r2(time!.unbilled_amount), labourCost: r2(time!.labour_cost), fixedPay, commission, expenses: r2(otherCosts!.expenses), bills: r2(otherCosts!.bills), cost, profit: r2(revenue!.v - cost), margin: revenue!.v ? r2(((revenue!.v - cost) / revenue!.v) * 100) : null } : null;
   // cost and revenue budgets reveal money: only managers see them
   const showBudget = budget && (level === 'manage' || budget.type === 'hours');
   return {

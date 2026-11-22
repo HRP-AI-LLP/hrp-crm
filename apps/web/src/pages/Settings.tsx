@@ -23,6 +23,7 @@ import { ServiceSettingsTab } from '../components/ops/ServicePanels';
 import { ApiKeysTab, SecurityPolicyTab, SharingRulesTab, TeamsTab, UsageTab } from '../components/admin/SecurityAdmin';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { UsageCostsTab } from '../components/admin/UsageCosts';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
 import { del, download, get, patch, post, put } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -70,6 +71,7 @@ const GROUPS: [string, [string, string, string][]][] = [
   ['Monitor', [
     ['privacy', 'Privacy & DPDP', 'privacy'],
     ['usage', 'Usage', 'users'],
+    ['costs', 'Usage & costs', 'metadata'],
     ['audit', 'Audit log', 'audit'],
   ]],
 ];
@@ -138,6 +140,7 @@ export function SettingsPage() {
           {tab === 'security' && <SecurityPolicyTab />}
           {tab === 'apikeys' && <ApiKeysTab />}
           {tab === 'usage' && <UsageTab />}
+          {tab === 'costs' && <UsageCostsTab />}
           {tab === 'roles' && <RolesTab />}
           {tab === 'modules' && <ModulesTab />}
           {tab === 'apps' && <AppsTab />}

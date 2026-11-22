@@ -12,6 +12,8 @@ import { enqueue, eventJobs } from '../services/jobs';
 import * as at from '../services/autotime';
 import * as calls from '../services/calls';
 import * as mt from '../services/mail-threads';
+import * as mb from '../services/milestone-billing';
+import * as docs from '../services/books/doc-import';
 import * as pj from '../services/projects';
 import type { RecordCtx, RecordEvent } from '../services/records';
 import { safeCtx } from './public';
@@ -207,7 +209,22 @@ export const projectRoutes = new Hono<AppEnv>()
   .get('/projects/:id/summary', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pj.projectSummary(rctx(c, tx), id(c)))))
   .put('/projects/:id/members', async (c) => {
     const b = z
-      .object({ members: z.array(z.object({ userId: uuid, role: z.enum(['manager', 'member', 'viewer']), billRate: z.number().min(0).max(1e9).nullish(), costRate: z.number().min(0).max(1e9).nullish() })).max(200) })
+      .object({
+        members: z
+          .array(
+            z.object({
+              userId: uuid,
+              role: z.enum(['manager', 'member', 'viewer']),
+              billRate: z.number().min(0).max(1e9).nullish(),
+              costRate: z.number().min(0).max(1e9).nullish(),
+              payBasis: z.enum(['hourly', 'daily', 'monthly', 'fixed', 'commission', 'none']).optional(),
+              payAmount: z.number().min(0).max(1e12).nullish(),
+              commissionPct: z.number().min(0).max(100).nullish(),
+              commissionOn: z.enum(['invoiced', 'collected']).optional(),
+            }),
+          )
+          .max(200),
+      })
       .parse(await c.req.json());
     await c.var.db.tx(scope(c), (tx) => pj.setMembers(rctx(c, tx), id(c), b.members));
     return c.json({ ok: true });
@@ -265,6 +282,40 @@ export const projectRoutes = new Hono<AppEnv>()
       console.error(JSON.stringify({ level: 'error', msg: 'keeping a mail thread failed', error: (e as Error).message, stack: (e as Error).stack?.split('\n').slice(0, 5) }));
       throw new ApiError(500, 'internal', `Could not keep the thread: ${(e as Error).message.slice(0, 200)}`);
     }
+  })
+  /* ───── a milestone's invoice and money: found, approved, mapped ───── */
+  .get('/projects/:id/milestones/:mid/billing', async (c) =>
+    c.json(await c.var.db.tx(scope(c, true), (tx) => mb.milestoneBilling(rctx(c, tx), id(c), id(c, 'mid'), { q: c.req.query('q')?.slice(0, 100) ?? null }))),
+  )
+  .post('/projects/:id/milestones/:mid/billing/link', async (c) => {
+    const b = z.object({ invoiceId: uuid }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => mb.linkInvoice(rctx(c, tx), id(c), id(c, 'mid'), b.invoiceId)));
+  })
+  .post('/projects/:id/milestones/:mid/billing/unlink', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => mb.unlinkInvoice(rctx(c, tx), id(c), id(c, 'mid')))))
+  .post('/projects/:id/milestones/:mid/billing/map', async (c) => {
+    const b = mb.mapSchema.parse(await c.req.json());
+    const r = await c.var.db.tx(scope(c), (tx) => mb.mapMoney(rctx(c, tx), id(c), id(c, 'mid'), b));
+    await emit(c, r.events);
+    return c.json({ results: r.results, invoice: r.invoice });
+  })
+  .post('/projects/:id/milestones/:mid/billing/import', async (c) => {
+    // an invoice that exists only as a PDF in the milestone's mail: read it into the books, approve it, link it
+    const b = z.object({ fileId: uuid }).parse(await c.req.json());
+    const file = await c.var.db.tx(scope(c, true), (tx) => mb.pdfForImport(rctx(c, tx), c.env, id(c), id(c, 'mid'), b.fileId));
+    const batch = await c.var.db.tx(scope(c), (tx) => docs.createBatch(rctx(c, tx), `Milestone invoice: ${file.fileName}`));
+    const run = <T,>(fn: (ctx: RecordCtx) => Promise<T>) => c.var.db.tx(scope(c), (tx) => fn(rctx(c, tx)));
+    const ai = { env: c.env, db: c.var.db, tenantId: c.var.tenant.id, userId: c.var.principal.user.id, requestId: c.var.requestId, meta: c.var.meta };
+    const staged = await docs.stageFile({ run, ai }, batch.id, { fileName: file.fileName, pdf: file.pdf });
+    if (!staged.ids.length) throw badRequest(staged.note ?? 'No invoice could be read from that PDF');
+    const out = await c.var.db.tx(scope(c), async (tx) => {
+      const r = await docs.approveMany(rctx(c, tx), staged.ids);
+      const invoiceId = r.results.map((x) => (x.created?.invoice as { id?: string } | undefined)?.id).find(Boolean) ?? null;
+      if (!invoiceId) return { ok: false, error: r.results.find((x) => !x.ok)?.error ?? 'The invoice could not be created', batchId: batch.id };
+      await mb.linkInvoice(rctx(c, tx), id(c), id(c, 'mid'), invoiceId);
+      return { ok: true, invoiceId, events: r.events };
+    });
+    if ('events' in out && out.events) await emit(c, out.events as RecordEvent[]);
+    return c.json({ ok: out.ok, invoiceId: 'invoiceId' in out ? out.invoiceId : null, error: 'error' in out ? out.error : null, batchId: 'batchId' in out ? out.batchId : null });
   })
   .get('/projects/:id/milestones/:mid/mail', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => mt.milestoneMail(rctx(c, tx), id(c), id(c, 'mid')))))
   .delete('/projects/:id/milestones/:mid', async (c) => {

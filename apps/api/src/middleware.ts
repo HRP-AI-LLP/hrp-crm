@@ -11,6 +11,7 @@ import { verifyAccessToken } from './lib/jwt';
 import { dispatchPush, pushEnabled } from './services/webpush';
 import { withTenantKeys } from './services/connection-keys';
 import { invalidateTenantCache, loadMeta, loadPrincipal, resolveTenant } from './services/tenancy';
+import { flushMeter, meter, meterTenant, metered, takeCounts } from './lib/meter';
 
 /** Request id + per-request DB handle (closed after the response is produced). */
 export const requestContext: MiddlewareHandler<AppEnv> = async (c, next) => {
@@ -19,13 +20,26 @@ export const requestContext: MiddlewareHandler<AppEnv> = async (c, next) => {
   // Db connects lazily on first query, so requests that never touch Postgres cost nothing.
   const db = Db.fromEnv(c.env);
   c.set('db', db);
+  // the request's calls to outside services and database queries, counted for Usage & costs
+  let counts: ReturnType<typeof takeCounts> = [];
   try {
-    await next();
+    await metered(null, async () => {
+      try {
+        await next();
+      } finally {
+        meterTenant(c.var.tenant?.id ?? null);
+        meter('workers', 'request', { errors: c.res.status >= 500 ? 1 : 0 });
+        counts = takeCounts();
+      }
+    });
   } finally {
     // writes may have produced notifications: push them to the users' devices on the same connection
     const tenant = c.var.tenant;
     const pushAfter = tenant && pushEnabled(c.env) && !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) && c.res.status < 400;
-    const closing = (pushAfter ? dispatchPush(c.env, db, tenant.id).catch(() => 0) : Promise.resolve(0)).then(() => db.close());
+    const closing = flushMeter(db, counts)
+      .catch(() => undefined)
+      .then(() => (pushAfter ? dispatchPush(c.env, db, tenant.id).catch(() => 0) : 0))
+      .then(() => db.close());
     try {
       c.executionCtx.waitUntil(closing);
     } catch {

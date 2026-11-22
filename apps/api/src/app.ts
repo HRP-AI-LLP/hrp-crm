@@ -36,6 +36,7 @@ import { auditExportRoutes, privacyAdminRoutes, privacyPublicRoutes, privacyRout
 import { salesRoutes } from './routes/sales';
 import { securityRoutes } from './routes/security';
 import { connectionKeyRoutes } from './routes/connection-keys';
+import { usageRoutes } from './routes/usage';
 import { withPlatformKeys } from './services/connection-keys';
 import { Db } from './lib/db';
 import { projectChatRoutes } from './routes/project-chats';
@@ -144,6 +145,7 @@ export function createApp() {
   app.route('/api/admin', tallyAdminRoutes);
   app.route('/api/admin', workAdminRoutes);
   app.route('/api/admin', connectionKeyRoutes);
+  app.route('/api/admin', usageRoutes);
   app.route('/api/admin/intel', intelAdminRoutes);
 
   app.all('/api/*', () => {

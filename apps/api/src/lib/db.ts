@@ -13,6 +13,7 @@
  */
 import pg from 'pg';
 import type { Env } from '../env';
+import { meter } from './meter';
 
 // DATE columns come back as 'YYYY-MM-DD' strings. The default turns them into a Date at local
 // midnight, which shifts the day by one when serialised from a process east of UTC (e.g. IST).
@@ -71,8 +72,8 @@ export class Db {
         );
         const tx: Tx = {
           scope,
-          query: async (sql, params) => (await c.query(sql, params as unknown[])).rows,
-          one: async (sql, params) => (await c.query(sql, params as unknown[])).rows[0] ?? null,
+          query: async (sql, params) => (meter('neon', 'query'), (await c.query(sql, params as unknown[])).rows),
+          one: async (sql, params) => (meter('neon', 'query'), (await c.query(sql, params as unknown[])).rows[0] ?? null),
         };
         const result = await fn(tx);
         await c.query('commit');

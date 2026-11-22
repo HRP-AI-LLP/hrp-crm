@@ -33,8 +33,12 @@ import { withPlatformKeys, withTenantKeys } from './services/connection-keys';
 import { cronPlan } from './services/cron-plan';
 import { chatSweep } from './services/project-chats';
 import { autoTimeSweep } from './services/autotime';
+import { flushMeter, installMeter, meter, metered, takeCounts } from './lib/meter';
+import { storageGauges } from './services/usage';
 
 const app = createApp();
+
+installMeter();
 
 export default {
   fetch: app.fetch,
@@ -47,7 +51,12 @@ export default {
     for (const msg of batch.messages) {
       try {
         const env = msg.body.tenantId ? await withTenantKeys(platformEnv, keysDb, msg.body.tenantId) : platformEnv;
-        await processJob(env, msg.body, ctx);
+        const counts = await metered(msg.body.tenantId ?? null, async () => {
+          meter('workers', 'job');
+          await processJob(env, msg.body, ctx);
+          return takeCounts();
+        });
+        await flushMeter(keysDb, counts).catch(() => undefined);
         msg.ack();
       } catch (e) {
         console.error(JSON.stringify({ level: 'error', job: msg.body.type, tenant: msg.body.tenantId, attempt: msg.attempts, msg: (e as Error).message }));
@@ -66,6 +75,9 @@ export default {
     // keys saved in Settings → Connection keys take the place of the .env values
     const env = await withPlatformKeys(rawEnv, db);
     const log = (job: string) => (e: unknown) => console.error(JSON.stringify({ level: 'error', job, msg: (e as Error).message }));
+    // the background work's own outside calls and queries count as the platform's (no workspace)
+    return metered(null, async () => {
+    meter('workers', 'cron');
     try {
       if (plan) {
         // reminders: each sweep also stores when the next one is due
@@ -123,8 +135,12 @@ export default {
       await autoTimeSweep(env, db).catch(log('auto-time'));
       // automatic backups are off unless the platform turns them on (Settings → Connection keys → Options)
       if (env.AUTO_BACKUPS === 'true') await dailyBackups(env, db).catch(log('daily-backups'));
+      // Usage & costs: what each workspace stores, and the database's size
+      await storageGauges(db, tenants.map((t) => t.tenant_id)).catch(log('usage-gauges'));
     } finally {
+      await flushMeter(db).catch(() => undefined);
       await db.close();
     }
+    });
   },
 } satisfies ExportedHandler<Env, Job>;

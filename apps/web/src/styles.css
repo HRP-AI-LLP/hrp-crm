@@ -1601,3 +1601,11 @@ span.rm-nodate { border: 0; cursor: default; }
   .asst-page { grid-template-columns: 1fr; }
   .asst-fab { bottom: calc(72px + env(safe-area-inset-bottom)); right: 16px; }
 }
+
+/* ───── usage & costs ───── */
+.usage-key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.usage-key.est, .usage-bar.est { background: var(--accent); fill: var(--accent); }
+.usage-key.bill, .usage-bar.bill { background: #d97757; fill: #d97757; }
+.usage-grid { stroke: var(--line); stroke-dasharray: 2 4; }
+.usage-base { stroke: var(--line-strong); }
+.usage-axis { font-size: 11px; fill: var(--ink-3); }

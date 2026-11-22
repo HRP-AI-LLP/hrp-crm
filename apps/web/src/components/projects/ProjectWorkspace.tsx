@@ -18,6 +18,7 @@ import { ProjectChats } from './ProjectChats';
 import { BoardsTab, DashboardsTab, HierarchyTab, QueriesView, TestsTab, WorkSetupTab } from './Work';
 import { AutomationTab, useLiveWork } from './WorkPlus';
 import { WorkItemModal } from './WorkItem';
+import { MilestoneMoney } from './MilestoneMoney';
 
 type Json = Record<string, any>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -153,7 +154,7 @@ function Overview({ id, data }: { id: string; data: Json }) {
       {s.money && (
         <div className="kpis" style={{ margin: 0 }}>
           <Kpi l="Invoiced" v={money2(s.money.revenue)} sub={`${money2(s.money.unbilled)} approved, not billed`} />
-          <Kpi l="Cost" v={money2(s.money.cost)} sub={`Labour ${money2(s.money.labourCost)} · expenses ${money2(s.money.expenses)} · bills ${money2(s.money.bills)}`} />
+          <Kpi l="Cost" v={money2(s.money.cost)} sub={`Labour ${money2(s.money.labourCost)}${s.money.fixedPay ? ` (fixed pay ${money2(s.money.fixedPay)})` : ''}${s.money.commission ? ` (commission ${money2(s.money.commission)})` : ''} · expenses ${money2(s.money.expenses)} · bills ${money2(s.money.bills)}`} />
           <Kpi l="Profit" v={money2(s.money.profit)} tone={s.money.profit < 0 ? 'bad' : 'good'} sub={s.money.margin != null ? `Margin ${s.money.margin}%` : undefined} />
         </div>
       )}
@@ -1599,6 +1600,7 @@ function Billing({ id }: { id: string }) {
   const [sel, setSel] = useState<{ t: Set<string>; e: Set<string>; m: Set<string> } | null>(null);
   const [groupBy, setGroupBy] = useState('task');
   const [fixed, setFixed] = useState('');
+  const [money, setMoney] = useState<string | null>(null);
   const nav = useNavigate();
   const toast = useToast();
   if (!data) return <Spinner />;
@@ -1681,12 +1683,40 @@ function Billing({ id }: { id: string }) {
                   </td>
                   <td>{x.status === 'done' ? <span className="chip good">done</span> : <span className="chip">open</span>}</td>
                   <td className="num">{money2(x.amount)}</td>
+                  <td style={{ width: 1, whiteSpace: 'nowrap' }}>
+                    <button className="btn sm ghost" title="Invoiced already (here or elsewhere)? Find the invoice and its payments" onClick={() => setMoney(x.id)}>
+                      Already invoiced?
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </>
       )}
+      {(data.invoicedMilestones as Json[] | undefined)?.length ? (
+        <>
+          <h3 style={{ margin: 0 }}>Invoiced milestones</h3>
+          <table className="data">
+            <tbody>
+              {(data.invoicedMilestones as Json[]).map((x) => (
+                <tr key={x.id}>
+                  <td>{x.name}</td>
+                  <td className="small">Invoice {x.invoice_number ?? '(draft)'}</td>
+                  <td>{x.balance_due > 0 ? <span className="chip warn">{money2(x.balance_due)} due</span> : <span className="chip good">paid</span>}</td>
+                  <td className="num">{money2(x.grand_total)}</td>
+                  <td style={{ width: 1, whiteSpace: 'nowrap' }}>
+                    <button className="btn sm ghost" onClick={() => setMoney(x.id)}>
+                      Payments
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      ) : null}
+      {money && <MilestoneMoney projectId={id} milestoneId={money} onClose={() => (setMoney(null), refetch())} />}
       <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <label className="field">
           Time lines
@@ -1728,7 +1758,33 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
   const { data: users } = useUsers();
   const act = useAct([['project', id]]);
   const [rows, setRows] = useState<Json[] | null>(null);
-  const list = rows ?? (data.members as Json[]).map((m) => ({ userId: m.user_id, role: m.role, billRate: m.bill_rate ?? '', costRate: m.cost_rate ?? '' }));
+  const list =
+    rows ??
+    (data.members as Json[]).map((m) => ({
+      userId: m.user_id,
+      role: m.role,
+      billRate: m.bill_rate ?? '',
+      costRate: m.cost_rate ?? '',
+      payBasis: m.pay_basis ?? 'hourly',
+      payAmount: m.pay_amount ?? '',
+      commissionPct: m.commission_pct ?? '',
+      commissionOn: m.commission_on ?? 'invoiced',
+    }));
+  const set = (i: number, p: Json) => setRows(list.map((x, j) => (j === i ? { ...x, ...p } : x)));
+  const num = (v: unknown) => (v === '' || v == null ? null : Number(v));
+  const payload = (l: Json[]) => ({
+    members: l.map((m) => ({
+      userId: m.userId,
+      role: m.role,
+      billRate: num(m.billRate),
+      costRate: num(m.costRate),
+      payBasis: m.payBasis ?? 'hourly',
+      payAmount: num(m.payAmount),
+      commissionPct: num(m.commissionPct),
+      commissionOn: m.commissionOn ?? 'invoiced',
+    })),
+  });
+  const blank = { billRate: '', costRate: '', payBasis: 'hourly', payAmount: '', commissionPct: '', commissionOn: 'invoiced' };
   const [add, setAdd] = useState('');
   const [invite, setInvite] = useState(false);
   const nameOf = (u: string) => users?.items.find((x) => x.id === u)?.full_name ?? (data.members as Json[]).find((m) => m.user_id === u)?.full_name ?? '—';
@@ -1742,8 +1798,9 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
           <tr>
             <th>Person</th>
             <th>Role</th>
-            {manage && <th className="num">Bill rate / h</th>}
-            {manage && <th className="num">Cost rate / h</th>}
+            {manage && <th className="num" title="What the customer is charged per hour (projects billed by staff rate)">Bill rate / h</th>}
+            {manage && <th title="How this person is paid for the project: it decides the project's labour cost">Paid by</th>}
+            {manage && <th>Pay</th>}
             <th />
           </tr>
         </thead>
@@ -1764,8 +1821,44 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
                 </td>
               )}
               {manage && (
-                <td style={{ width: 130 }}>
-                  <input inputMode="decimal" value={m.costRate} onChange={(e) => setRows(list.map((x, j) => (j === i ? { ...x, costRate: e.target.value } : x)))} />
+                <td style={{ width: 150 }}>
+                  <select value={m.payBasis} onChange={(e) => set(i, { payBasis: e.target.value })} aria-label="Paid by">
+                    <option value="hourly">Hourly rate</option>
+                    <option value="daily">Day rate</option>
+                    <option value="monthly">Monthly salary</option>
+                    <option value="fixed">Fixed for the project</option>
+                    <option value="commission">Commission</option>
+                    <option value="none">Not paid here</option>
+                  </select>
+                </td>
+              )}
+              {manage && (
+                <td style={{ minWidth: 220 }}>
+                  {m.payBasis === 'hourly' && (
+                    <div className="row" style={{ gap: 4 }}>
+                      <span className="muted small">₹</span>
+                      <input inputMode="decimal" value={m.costRate} onChange={(e) => set(i, { costRate: e.target.value })} aria-label="Cost per hour" style={{ width: 110 }} />
+                      <span className="muted small">/ hour</span>
+                    </div>
+                  )}
+                  {(m.payBasis === 'daily' || m.payBasis === 'monthly' || m.payBasis === 'fixed') && (
+                    <div className="row" style={{ gap: 4 }}>
+                      <span className="muted small">₹</span>
+                      <input inputMode="decimal" value={m.payAmount} onChange={(e) => set(i, { payAmount: e.target.value })} aria-label="Amount" style={{ width: 120 }} />
+                      <span className="muted small">{m.payBasis === 'daily' ? '/ day' : m.payBasis === 'monthly' ? '/ month' : 'for the project'}</span>
+                    </div>
+                  )}
+                  {m.payBasis === 'commission' && (
+                    <div className="row" style={{ gap: 4 }}>
+                      <input inputMode="decimal" value={m.commissionPct} onChange={(e) => set(i, { commissionPct: e.target.value })} aria-label="Commission %" style={{ width: 70 }} />
+                      <span className="muted small">% of</span>
+                      <select value={m.commissionOn} onChange={(e) => set(i, { commissionOn: e.target.value })} aria-label="Commission on" style={{ width: 'auto' }}>
+                        <option value="invoiced">invoiced</option>
+                        <option value="collected">collected</option>
+                      </select>
+                    </div>
+                  )}
+                  {m.payBasis === 'none' && <span className="muted small">No cost on this project</span>}
                 </td>
               )}
               <td>
@@ -1799,7 +1892,7 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
                 </option>
               ))}
           </select>
-          <button className="btn sm" disabled={!add} onClick={() => (setRows([...list, { userId: add, role: 'member', billRate: '', costRate: '' }]), setAdd(''))}>
+          <button className="btn sm" disabled={!add} onClick={() => (setRows([...list, { userId: add, role: 'member', ...blank }]), setAdd(''))}>
             Add
           </button>
           <button
@@ -1807,7 +1900,7 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
             disabled={!rows}
             onClick={async () =>
               (await act(
-                () => put(`/api/v1/projects/${id}/members`, { members: list.map((m) => ({ userId: m.userId, role: m.role, billRate: m.billRate === '' ? null : Number(m.billRate), costRate: m.costRate === '' ? null : Number(m.costRate) })) }),
+                () => put(`/api/v1/projects/${id}/members`, payload(list)),
                 'Team saved',
               )) && setRows(null)
             }
@@ -1821,10 +1914,10 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
           onClose={() => setInvite(false)}
           onInvited={async (userId) => {
             // added to the team and saved straight away
-            const next = [...list, { userId, role: 'member', billRate: '', costRate: '' }];
+            const next = [...list, { userId, role: 'member', ...blank }];
             setRows(null);
             await act(
-              () => put(`/api/v1/projects/${id}/members`, { members: next.map((m) => ({ userId: m.userId, role: m.role, billRate: m.billRate === '' ? null : Number(m.billRate), costRate: m.costRate === '' ? null : Number(m.costRate) })) }),
+              () => put(`/api/v1/projects/${id}/members`, payload(next)),
               'Invited and added to the team',
             );
           }}

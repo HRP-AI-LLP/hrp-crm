@@ -128,3 +128,25 @@ describe('workspace assistant', () => {
     expect(r.json.messages.at(-1)).toMatchObject({ role: 'assistant', data: { error: true } });
   });
 });
+
+describe('assistant follow-through', () => {
+  it('takes the step it announced instead of stopping, and gets route hints when a read fails', async () => {
+    replies = [
+      JSON.stringify({ say: 'To count the paid bills I need to read the bills for this month. Let me first find the bills.' }),
+      (msgs) => {
+        expect(String(msgs.at(-1)!.content)).toContain('take it now');
+        return JSON.stringify({ read: ['/api/v1/bills/paid'] });
+      },
+      (msgs) => {
+        expect(String(msgs.at(-1)!.content)).toMatch(/not a readable route|GET \/api\/v1\/bills\/paid → 4/);
+        return JSON.stringify({ read: [`/api/v1/records/lead?count=1&filters=${encodeURIComponent(JSON.stringify([{ field: 'email', op: 'not_null' }]))}`] });
+      },
+      (msgs) => {
+        expect(String(msgs.at(-1)!.content)).toMatch(/GET \/api\/v1\/records\/lead\?count=1&filters=.* → 200/);
+        return JSON.stringify({ say: 'There are 0 new leads.' });
+      },
+    ];
+    const r = await api('POST', '/api/v1/assistant/chat', { message: 'how many new leads?' });
+    expect(r.json.messages.at(-1).content).toBe('There are 0 new leads.');
+  });
+});

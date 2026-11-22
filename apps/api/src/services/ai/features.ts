@@ -10,6 +10,7 @@ import type { Db, Tx } from '../../lib/db';
 import { notFound, tooMany } from '../../lib/errors';
 import { type AttemptLog, AiUnavailableError, type ChatMessage, type ChatRequest, chatWith, embed, extractJson, platformProviders, type Provider, tenantProvider } from './router';
 import { loadTenantProviders, tenantAiSettings } from './tenant-providers';
+import { meter } from '../../lib/meter';
 
 export interface AiCtx {
   env: Env;
@@ -58,6 +59,11 @@ export async function guardedChat(ctx: AiCtx, req: ChatRequest) {
       await ctx.db
         .tx(scope(ctx), async (tx) => {
           for (const a of attempts) {
+            // Usage & costs: tokens per model service (the workspace's own key is billed to the workspace, marked so)
+            const svc = `ai:${a.kind}${a.tenantOwned ? ':own_key' : ''}`;
+            meter(svc, 'request', { errors: a.ok ? 0 : 1, ms: a.latencyMs });
+            if (a.inputTokens) meter(svc, 'input_tokens', { calls: 0, units: a.inputTokens });
+            if (a.outputTokens) meter(svc, 'output_tokens', { calls: 0, units: a.outputTokens });
             await tx.query(
               `insert into ai_usage (tenant_id, task, provider, model, input_tokens, output_tokens, latency_ms, ok) values ($1,$2,$3,$4,$5,$6,$7,$8)`,
               [ctx.tenantId, req.task, a.tenantOwned ? `tenant:${a.kind}` : a.provider, a.model, a.inputTokens ?? null, a.outputTokens ?? null, a.latencyMs, a.ok],
