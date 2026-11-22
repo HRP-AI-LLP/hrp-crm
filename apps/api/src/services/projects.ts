@@ -78,7 +78,7 @@ async function managedProjectIds(ctx: RecordCtx): Promise<string[] | 'all'> {
   return ids;
 }
 
-async function notify(ctx: RecordCtx, userIds: (string | null | undefined)[], title: string, link: string, body: string | null = null, mail: 'assigned' | 'watching' | null = null) {
+export async function notify(ctx: RecordCtx, userIds: (string | null | undefined)[], title: string, link: string, body: string | null = null, mail: 'assigned' | 'watching' | null = null) {
   const me = ctx.principal.user.id;
   for (const u of new Set(userIds.filter((x): x is string => !!x && x !== me))) {
     await ctx.tx.query(`insert into notifications (tenant_id, user_id, kind, title, body, link) values ($1,$2,'project',$3,$4,$5)`, [ctx.tenantId, u, title.slice(0, 200), body, link]);

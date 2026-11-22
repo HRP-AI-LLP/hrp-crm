@@ -52,7 +52,7 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…`
 
 // never reachable from the assistant: sign-in, secrets, keys, webhooks, exports, the assistant itself
 const BLOCKED =
-  /^\/api\/(auth|public)\/|\/(hooks|oauth)\/|password|\/mfa|api-keys|\/developers|\/sessions|connection-keys|\/assistant\/|impersonat|backup|\/erase|\/security|\/export\b|\/query\/export|\/audit-export|\/integrations\/(razorpay|exotel|google-leads)|\/integrations\/[^/]+\/key$|\/rotate$|\/content$/i;
+  /^\/api\/(auth|public)\/|\/(hooks|oauth)\/|password|\/mfa|api-keys|\/developers|\/sessions|connection-keys|\/assistant\/|\/mcp$|impersonat|backup|\/erase|\/security|\/export\b|\/query\/export|\/audit-export|\/integrations\/(razorpay|exotel|google-leads)|\/integrations\/[^/]+\/key$|\/rotate$|\/content$/i;
 
 type Entry = { m: string; p: string; re: RegExp; src: string; schemas: string[]; words: string };
 let catalogue: Entry[] | null = null;

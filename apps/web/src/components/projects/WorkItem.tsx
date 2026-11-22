@@ -10,6 +10,7 @@ import { del, get, patch, post, put } from '../../lib/api';
 import { date } from '../../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 import { Attachments, CreateBranch, RichEditor, RichText, useItemFiles } from './WorkPlus';
+import { SendToAgent } from './CodingAgent';
 
 export type Json = Record<string, any>;
 
@@ -221,6 +222,7 @@ export function WorkItemModal({ projectId, id, onClose, onOpen }: { projectId: s
             {it.externalKey && <> · synced from {it.externalUrl ? <a href={it.externalUrl} target="_blank" rel="noreferrer">{it.externalKey}</a> : it.externalKey}</>}
           </span>
           <span className="row" style={{ gap: 6 }}>
+            {it.workType !== 'epic' && <SendToAgent projectId={projectId} taskId={id} />}
             <button className="btn small" onClick={() => run(() => put(`/api/v1/projects/${projectId}/work/items/${id}/watch`, { on: !d.watching }), d.watching ? 'Stopped watching' : 'Watching')}>
               {d.watching ? '👁 Watching' : 'Watch'} · {d.watchers.length}
             </button>

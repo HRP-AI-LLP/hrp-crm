@@ -37,6 +37,7 @@ import { salesRoutes } from './routes/sales';
 import { securityRoutes } from './routes/security';
 import { connectionKeyRoutes } from './routes/connection-keys';
 import { usageRoutes } from './routes/usage';
+import { agentRoutes, mcpRoutes } from './routes/mcp';
 import { withPlatformKeys } from './services/connection-keys';
 import { Db } from './lib/db';
 import { projectChatRoutes } from './routes/project-chats';
@@ -117,6 +118,8 @@ export function createApp() {
   app.route('/api/v1', workRoutes);
   app.route('/api/v1', projectChatRoutes);
   app.route('/api/v1', assistantRoutes);
+  app.route('/api/v1', mcpRoutes);
+  app.route('/api/v1', agentRoutes);
   app.route('/api/v1', industryRoutes);
   app.route('/api/v1', intakeRoutes);
   app.route('/api/v1', manufacturingRoutes);
