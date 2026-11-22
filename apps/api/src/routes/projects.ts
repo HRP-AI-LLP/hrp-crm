@@ -9,6 +9,7 @@ import { badRequest, notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import { enqueue, eventJobs } from '../services/jobs';
+import * as at from '../services/autotime';
 import * as calls from '../services/calls';
 import * as mt from '../services/mail-threads';
 import * as pj from '../services/projects';
@@ -382,6 +383,36 @@ export const projectRoutes = new Hono<AppEnv>()
   .post('/timesheet/submit', async (c) => {
     const b = z.object({ date: dateStr }).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => pj.submitWeek(rctx(c, tx), b.date)));
+  })
+  /* ───── work calendar & automatic timesheets ───── */
+  .get('/timesheet/calendar', async (c) => {
+    const y = c.req.query('year') ? z.coerce.number().int().min(2000).max(2100).parse(c.req.query('year')) : undefined;
+    return c.json(await c.var.db.tx(scope(c, true), (tx) => at.getCalendar(rctx(c, tx), y)));
+  })
+  .put('/timesheet/calendar', async (c) => {
+    const b = at.calendarSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => at.saveCalendar(rctx(c, tx), b)));
+  })
+  .post('/timesheet/holidays', async (c) => {
+    const b = at.holidaySchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => at.addHoliday(rctx(c, tx), b)), 201);
+  })
+  .post('/timesheet/holidays/national', async (c) => {
+    const b = z.object({ year: z.number().int().min(2000).max(2100) }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => at.addNationalHolidays(rctx(c, tx), b.year)));
+  })
+  .delete('/timesheet/holidays/:id', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => at.deleteHoliday(rctx(c, tx), id(c)))))
+  .put('/timesheet/people/:id', async (c) => {
+    const b = at.personSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => at.savePerson(rctx(c, tx), id(c), b)));
+  })
+  .post('/timesheet/fill-week', async (c) => {
+    const b = z.object({ date: dateStr }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => at.fillMyWeek(rctx(c, tx), b.date)));
+  })
+  .post('/timesheet/fill-everyone', async (c) => {
+    const b = z.object({ from: dateStr, to: dateStr }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => at.fillEveryone(rctx(c, tx), b.from, b.to)));
   })
   .get('/timesheet/approvals', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pj.pendingApprovals(rctx(c, tx)))))
   .post('/timesheet/decide', async (c) => {

@@ -720,7 +720,7 @@ export async function saveIssue(ctx: RecordCtx, projectId: string, id: string | 
 /* ───────────────────────── time ───────────────────────── */
 
 /** Bill and cost rate for a person's hour on a project (and task), by the project's billing method. */
-async function rates(tx: Tx, tenantId: string, project: Record<string, any>, userId: string, taskId: string | null) {
+export async function rates(tx: Tx, tenantId: string, project: Record<string, any>, userId: string, taskId: string | null) {
   const m = await tx.one<{ bill_rate: string | null; cost_rate: string | null }>(`select bill_rate, cost_rate from project_members where tenant_id = $1 and project_id = $2 and user_id = $3`, [tenantId, project.id, userId]);
   const task = taskId ? await tx.one<{ rate: string | null; billable: boolean }>(`select rate, billable from project_tasks where tenant_id = $1 and id = $2`, [tenantId, taskId]) : null;
   const pr = Number(project.project_rate ?? 0);
@@ -858,7 +858,7 @@ export async function getWeek(ctx: RecordCtx, date: string, userId?: string | nu
     }
   }
   const entries = await ctx.tx.query(
-    `select e.id, e.project_id, p.name as project, p.project_code, e.task_id, t.name as task, t.task_number, e.issue_id, e.work_date, e.minutes, e.notes, e.billable, e.status, e.timer_started_at, e.invoice_id
+    `select e.id, e.project_id, p.name as project, p.project_code, e.task_id, t.name as task, t.task_number, e.issue_id, e.work_date, e.minutes, e.notes, e.billable, e.status, e.timer_started_at, e.invoice_id, e.auto
        from time_entries e join projects p on p.tenant_id = e.tenant_id and p.id = e.project_id left join project_tasks t on t.tenant_id = e.tenant_id and t.id = e.task_id
       where e.tenant_id = $1 and e.user_id = $2 and e.work_date between $3::date and $4::date and ($5::uuid[] is null or e.project_id = any($5::uuid[])) order by e.work_date, p.name, t.task_number`,
     [ctx.tenantId, who, ws, addDays(ws, 6), projectFilter],

@@ -32,6 +32,7 @@ import { processJob } from './services/worker';
 import { withPlatformKeys, withTenantKeys } from './services/connection-keys';
 import { cronPlan } from './services/cron-plan';
 import { chatSweep } from './services/project-chats';
+import { autoTimeSweep } from './services/autotime';
 
 const app = createApp();
 
@@ -118,6 +119,8 @@ export default {
         // work items due tomorrow or overdue go into each assignee's morning digest
         await queueDueSoon(db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'work-due', tenant: t.tenant_id, msg: (e as Error).message })));
       }
+      // automatic timesheets: yesterday's empty working days, from assignments and allocations
+      await autoTimeSweep(env, db).catch(log('auto-time'));
       // automatic backups are off unless the platform turns them on (Settings → Connection keys → Options)
       if (env.AUTO_BACKUPS === 'true') await dailyBackups(env, db).catch(log('daily-backups'));
     } finally {

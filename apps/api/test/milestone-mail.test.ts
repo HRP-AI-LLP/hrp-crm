@@ -69,11 +69,11 @@ beforeAll(async () => {
   ids.ms = ms.json.id;
   const db = Db.fromEnv(h.env);
   try {
-    await db.tx({ tenantId: ids.tenant }, async (tx) =>
+    await db.tx({ tenantId: ids.tenant! }, async (tx) =>
       tx.query(`insert into integrations (tenant_id, provider, user_id, label, account_ref, secret_ciphertext, config) values ($1,'google',$2,'Gmail','harsha.rani@hrpai.in',$3,'{}')`, [
         ids.tenant,
         ids.owner,
-        await sealSecret(h.env, ids.tenant, { accessToken: 'g', refreshToken: 'r', expiresAt: Date.now() + 3_600_000 }),
+        await sealSecret(h.env, ids.tenant!, { accessToken: 'g', refreshToken: 'r', expiresAt: Date.now() + 3_600_000 }),
       ]),
     );
   } finally {
