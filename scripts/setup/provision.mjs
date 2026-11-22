@@ -15,9 +15,11 @@
  *   GOOGLE_CLIENT_ID/SECRET, MS_CLIENT_ID/SECRET, META_APP_ID/SECRET, META_VERIFY_TOKEN, FCM_SERVICE_ACCOUNT (JSON)
  *                            optional: Gmail/Outlook sync and Facebook lead ads (docs/INTEGRATIONS.md)
  *   SKIP_DEPLOY        "true" to provision without deploying
- *   REMOVE_OLD         "true" to delete what the old setup made and is no longer used: the cloud
- *                      "dev" environment (Neon branch dev, Hyperdrive/KV/queues/worker synapse-dev)
- *                      and the worker synapse-prod (now "sanchalanos")
+ *   REMOVE_OLD         "true" to delete the old cloud "dev" environment (Neon branch dev,
+ *                      Hyperdrive/KV/queues/worker synapse-dev). The old worker synapse-prod is
+ *                      always removed: "sanchalanos" takes over its queue.
+ *
+ * Run it as  pnpm run setup  (or pnpm cloud:setup). Plain `pnpm setup` is pnpm's own command (it only edits PATH).
  *
  * Environments: dev runs on this computer (`pnpm local`); prod runs on Cloudflare + Neon.
  *
@@ -58,7 +60,7 @@ function need(name) {
   const v = (process.env[name] ?? '').trim().replace(/^["']|["']$/g, '').trim();
   if (!v) {
     console.error(c.err(`Missing environment variable ${name}.`));
-    console.error(`In PowerShell:  $env:${name}="..."   then run  pnpm run setup  again.`);
+    console.error(`In PowerShell:  $env:${name}="..."   then run  pnpm cloud:setup  again.`);
     process.exit(1);
   }
   return v;
@@ -355,6 +357,15 @@ async function main() {
   };
   const oldWorkers = [];
   for await (const w of cf.workers.scripts.list({ account_id })) if (['synapse-dev', 'synapse-prod'].includes(/** @type {any} */ (w).id)) oldWorkers.push(/** @type {any} */ (w).id);
+  // the old production Worker still consumes synapse-jobs-prod and a queue takes only one
+  // consumer, so it always goes: "sanchalanos" replaces it with the same database, KV and queue
+  if (oldWorkers.includes('synapse-prod')) {
+    await cf.workers.scripts.delete('synapse-prod', { account_id, force: true }).then(
+      () => info(`${c.ok('✓')} deleted the old Worker synapse-prod (replaced by sanchalanos)`),
+      (e) => info(c.warn(`could not delete the old Worker synapse-prod (${e.message}); delete it in the dashboard (Workers & Pages), then run setup again`)),
+    );
+    oldWorkers.splice(oldWorkers.indexOf('synapse-prod'), 1);
+  }
   const leftovers = [
     oldDev.neonBranch && 'Neon branch "dev"',
     oldDev.hyperdrive && 'Hyperdrive synapse-dev',
@@ -512,7 +523,7 @@ export function uploadSecrets(bulk) {
   }
 }
 
-// run directly (`pnpm setup`), not when another script imports the helpers above
+// run directly (`pnpm cloud:setup`), not when another script imports the helpers above
 if (process.argv[1] && resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase()) {
   main().catch((e) => {
     console.error(c.err(`\nSetup failed: ${e?.message ?? e}`));

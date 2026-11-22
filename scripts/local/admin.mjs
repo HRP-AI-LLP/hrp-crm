@@ -38,10 +38,10 @@ if (cloudArg === 'dev') fail('there is no cloud dev environment any more: dev ru
 if (!conn && cloud) {
   // the Neon branch of that environment, as its owner role (infra/state.json + the Neon API)
   const key = (process.env.NEON_API_KEY ?? '').trim();
-  if (!key) fail('set $env:NEON_API_KEY first (the same key `pnpm setup` uses)');
+  if (!key) fail('set $env:NEON_API_KEY first (the same key `pnpm cloud:setup` uses)');
   const state = JSON.parse(readFileSync(join(ROOT, 'infra', 'state.json'), 'utf8'));
   const branch = state.neon?.branches?.prod;
-  if (!state.neon?.projectId || !branch) fail('infra/state.json has no Neon project yet — run `pnpm setup` first');
+  if (!state.neon?.projectId || !branch) fail('infra/state.json has no Neon project yet — run `pnpm cloud:setup` first');
   const { createApiClient } = await import('@neondatabase/api-client');
   const neon = createApiClient({ apiKey: key });
   const r = await neon

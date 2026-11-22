@@ -47,8 +47,8 @@ Write-Host "`nProvisioning Neon + Cloudflare and deploying..." -ForegroundColor 
 node scripts/setup/provision.mjs
 if ($LASTEXITCODE -ne 0) { Fail 'Provisioning failed. Fix the error above and run this script again (it is safe to re-run).' }
 
-Write-Host "`nAll set. Next: commit, create the dev and prod branches, and push:" -ForegroundColor Green
-Write-Host '  git add -A; git commit -m "SanchalanOS bootstrap"'
-Write-Host '  git branch dev; git branch prod'
-Write-Host '  git remote add origin https://github.com/<you>/hrp-crm.git'
-Write-Host '  git push -u origin main dev prod'
+Write-Host "`nAll set. Next: copy your local data, then commit and push:" -ForegroundColor Green
+Write-Host '  pnpm cloud:import                  (local database and files -> production)'
+Write-Host '  git add -A; git commit -m "Production setup"'
+Write-Host '  git branch dev                     (everyday work; pushing it runs nothing)'
+Write-Host '  git push -u origin main dev        (a push to main deploys www.sanchalan.hrpai.in)'

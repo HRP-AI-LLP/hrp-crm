@@ -45,8 +45,10 @@ docs/                     Architecture, security model, free-tier budget, roadma
    $env:ZONE_NAME="hrpai.in"
    $env:PROD_APP_HOST="www.sanchalan.hrpai.in"
 
-   .\scripts\setup.ps1
+   .\scripts\setup.ps1      # or: pnpm cloud:setup
    ```
+
+   Note: `pnpm setup` (without `cloud:`) is pnpm's own command — it only edits your PATH.
 
 The script is safe to re-run. It:
 
@@ -151,7 +153,7 @@ The sender is `MAIL_FROM` in `wrangler.jsonc` (default `SanchalanOS <no-reply@hr
 
 - **R2 (attachments, signatures, backups):** enable R2 once in the Cloudflare dashboard (R2 Object Storage → Get started), then run `pnpm setup:r2` and deploy. Until then the app works without uploads.
 - **Backups:** nightly workspace backups are **off** (Settings → Connection keys → Options → "Nightly backups" turns them on); "Back up now" still works once R2 is on. Deploys take no database snapshot.
-- **Push notifications:** `pnpm setup` generates a VAPID key pair and stores it as Worker secrets. Nothing else to do; people turn notifications on per device from My day or My account.
+- **Push notifications:** `pnpm cloud:setup` generates a VAPID key pair and stores it as Worker secrets. Nothing else to do; people turn notifications on per device from My day or My account.
 - **Play Store app:** follow `mobile/README.md`, then set `ANDROID_APP_ID` and `ANDROID_CERT_SHA256` in the production vars so `/.well-known/assetlinks.json` vouches for the app.
 
 ### API for integrations

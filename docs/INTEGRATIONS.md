@@ -104,7 +104,7 @@ Repositories linked through the app get the **SanchalanOS work items** check run
 
 Preferably set these in Settings → Connection keys. The environment route below still works; a value saved in the app wins. These values are required to turn the features on: without Google or Microsoft keys the mailbox buttons stay hidden, and without Meta keys the Facebook card says "not set up".
 
-Either export the variables and rerun `pnpm setup`, which uploads them as Worker secrets, or set them directly:
+Either export the variables and rerun `pnpm cloud:setup`, which uploads them as Worker secrets, or set them directly:
 
 ```powershell
 cd apps/api

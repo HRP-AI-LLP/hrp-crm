@@ -13,7 +13,7 @@ Both store apps load the live site (`https://www.sanchalan.hrpai.in`). A web dep
 ## 1. Installable web app (already done)
 
 - The manifest is `apps/web/public/manifest.webmanifest`. The service worker is generated at build time from `apps/web/sw/sw.js`.
-- **Push:** `pnpm setup` generates a VAPID key pair per environment and uploads it as Worker secrets (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`).
+- **Push:** `pnpm cloud:setup` generates a VAPID key pair per environment and uploads it as Worker secrets (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`).
   - Users turn push on per device from **My day** or **My account → Phone & notifications**.
   - Every in-app notification (follow-ups, assignments, SLA breaches, approvals, job updates) is also pushed.
 - **Offline:** the app shell is cached.

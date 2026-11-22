@@ -7,7 +7,7 @@
  *   pnpm cloud:import --no-files   database only (files stay on this computer)
  *
  * What it does:
- *   1. checks the local database is up and fully migrated, and that `pnpm setup` has run
+ *   1. checks the local database is up and fully migrated, and that `pnpm cloud:setup` has run
  *   2. dumps the local database inside its Postgres container (pg_dump, nothing to install)
  *   3. empties the production database and restores the dump into it (owner "neondb_owner";
  *      the app's role synapse_app keeps its password); then ANALYZE and a migration check
@@ -81,7 +81,7 @@ async function main() {
   }
   if (!hostTools && !ENGINE) fail('neither podman nor docker was found; start Podman Desktop (or set SYNAPSE_PG_TOOLS=host with pg_dump 17 on PATH)');
   const state = readJson(STATE, {});
-  if (!state.neon?.projectId || !state.cloudflare?.prod?.hyperdriveId) fail('run `pnpm setup` first: production must exist before data can go into it');
+  if (!state.neon?.projectId || !state.cloudflare?.prod?.hyperdriveId) fail('run `pnpm cloud:setup` first: production must exist before data can go into it');
 
   // ---------------------------------------------------------------------------- local side
   step('Checking the local database');
@@ -108,7 +108,7 @@ async function main() {
   await dst.connect().catch((e) => fail(`cannot reach the production database (${e.message})`));
   const dstTenants = (await dst.query(`select count(*)::int as n from app.list_active_tenant_ids()`).catch(() => ({ rows: [{ n: 0 }] }))).rows[0].n;
   const hasRole = (await dst.query(`select 1 from pg_roles where rolname = 'synapse_app' and rolcanlogin`)).rowCount;
-  if (!hasRole) fail('production has no login for the app yet — run `pnpm setup` first');
+  if (!hasRole) fail('production has no login for the app yet — run `pnpm cloud:setup` first');
   if (dstTenants > 0 && !args.has('--replace')) {
     await dst.end();
     fail(`production already has ${dstTenants} workspace(s). To wipe them and copy this computer's data instead, run:  pnpm cloud:import --replace`);
@@ -179,7 +179,7 @@ async function main() {
     uploadSecrets({ DATA_ENCRYPTION_KEY: local.DATA_ENCRYPTION_KEY });
     console.log(`  ${c.ok('✓')} Worker secret DATA_ENCRYPTION_KEY updated (kept in infra/.local/secrets.json)`);
   } catch {
-    console.log(c.warn('  The Worker secret could not be updated (is the Worker deployed? `pnpm setup`). Run this again after deploying, or:'));
+    console.log(c.warn('  The Worker secret could not be updated (is the Worker deployed? `pnpm cloud:setup`). Run this again after deploying, or:'));
     console.log(c.warn('  pnpm --filter @synapse/api exec wrangler secret put DATA_ENCRYPTION_KEY --env production   (value: DATA_ENCRYPTION_KEY in infra/.local/local.json)'));
   }
 
