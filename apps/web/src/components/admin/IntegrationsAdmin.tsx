@@ -89,6 +89,7 @@ export function IntegrationsTab() {
   const users = useUsers();
   const { data, isLoading } = useQuery({ queryKey: ['admin-integrations'], queryFn: () => get<{ items: Item[]; available: { google: boolean; microsoft: boolean; meta: boolean } }>('/api/admin/integrations') });
   const [modal, setModal] = useState<null | 'razorpay' | 'exotel'>(null);
+  const [exoEdit, setExoEdit] = useState<Item | undefined>(undefined);
   const [revealed, setRevealed] = useState<Record<string, string>>({});
   const reload = () => qc.invalidateQueries({ queryKey: ['admin-integrations'] });
   const run = async (fn: () => Promise<unknown>, ok: string) => {
@@ -104,8 +105,18 @@ export function IntegrationsTab() {
   };
   if (isLoading || !data) return <Spinner />;
   const of = (p: Item['provider']) => data.items.filter((i) => i.provider === p && i.status !== 'disabled');
-  const rzp = of('razorpay')[0];
-  const exo = of('exotel')[0];
+  const byDefault = (a: Item, b: Item) => Number(!!b.config.default) - Number(!!a.config.default);
+  const rzps = of('razorpay').sort(byDefault);
+  const exos = of('exotel').sort(byDefault);
+  const defaultChip = (i: Item, list: Item[], what: string) =>
+    list.length > 1 &&
+    (i.config.default || list[0] === i ? (
+      <span className="chip info">default</span>
+    ) : (
+      <button className="btn sm ghost" onClick={() => run(() => patch(`/api/admin/integrations/${i.id}`, { makeDefault: true }), `${i.account} now takes ${what}`)}>
+        Make default
+      </button>
+    ));
   const pages = of('meta_leads');
   const gads = of('google_leads');
   const mailboxes = data.items.filter((i) => i.userId);
@@ -136,34 +147,32 @@ export function IntegrationsTab() {
         logo="₹"
         intro="Send payment links for invoices and order milestones (UPI, cards, net banking). Paid links record the receipt automatically."
         action={
-          rzp ? (
-            <div className="row">
-              <StatusChip i={rzp} />
-              <button className="btn sm" onClick={() => setModal('razorpay')}>
-                Change keys
-              </button>
-              <button className="btn sm danger" onClick={() => run(() => del(`/api/admin/integrations/${rzp.id}`), 'Razorpay disconnected')}>
-                Disconnect
-              </button>
-            </div>
-          ) : (
-            <button className="btn primary" onClick={() => setModal('razorpay')}>
-              Connect Razorpay
-            </button>
-          )
+          <button className={`btn ${rzps.length ? 'sm' : 'primary'}`} onClick={() => setModal('razorpay')}>
+            {rzps.length ? '+ Add another account' : 'Connect Razorpay'}
+          </button>
         }
       >
-        {rzp && (
-          <div className="integ-body">
-            <div className="small">
-              {rzp.label} · Key <code>{rzp.account}</code> · <Activity i={rzp} />
+        {rzps.map((rzp) => (
+          <div key={rzp.id} className="integ-body">
+            <div className="spread">
+              <div className="small">
+                {rzp.label} · Key <code>{rzp.account}</code> · <Activity i={rzp} />
+              </div>
+              <div className="row">
+                <StatusChip i={rzp} />
+                {defaultChip(rzp, rzps, 'new payment links')}
+                <button className="btn sm danger" onClick={() => run(() => del(`/api/admin/integrations/${rzp.id}`), 'Razorpay account disconnected')}>
+                  Disconnect
+                </button>
+              </div>
             </div>
             <CopyField label="Webhook URL — add it in Razorpay Dashboard → Accounts & Settings → Webhooks" value={rzp.urls.webhook!} />
             <p className="muted small" style={{ margin: 0 }}>
-              Use the same webhook secret you entered here and tick the events <code>payment_link.paid</code>, <code>payment_link.partially_paid</code>, <code>payment_link.cancelled</code> and <code>payment_link.expired</code>.
+              Use the same webhook secret you entered here and tick the events <code>payment_link.paid</code>, <code>payment_link.partially_paid</code>, <code>payment_link.cancelled</code> and <code>payment_link.expired</code>. To change keys, connect the account again with the new keys.
             </p>
           </div>
-        )}
+        ))}
+        {rzps.length > 1 && <p className="muted small" style={{ margin: 0 }}>New payment links use the default account; payments on older links still arrive on their own account.</p>}
       </Card>
 
       {/* --------------------------------------------------------------- telephony */}
@@ -173,27 +182,27 @@ export function IntegrationsTab() {
         logo="☎"
         intro="Click-to-call from any lead, contact or account: Exotel rings the salesperson's phone, then connects the customer from your ExoPhone. Calls, recordings and missed calls are logged automatically."
         action={
-          exo ? (
-            <div className="row">
-              <StatusChip i={exo} />
-              <button className="btn sm" onClick={() => setModal('exotel')}>
-                Change
-              </button>
-              <button className="btn sm danger" onClick={() => run(() => del(`/api/admin/integrations/${exo.id}`), 'Exotel disconnected')}>
-                Disconnect
-              </button>
-            </div>
-          ) : (
-            <button className="btn primary" onClick={() => setModal('exotel')}>
-              Connect Exotel
-            </button>
-          )
+          <button className={`btn ${exos.length ? 'sm' : 'primary'}`} onClick={() => (setExoEdit(undefined), setModal('exotel'))}>
+            {exos.length ? '+ Add another account' : 'Connect Exotel'}
+          </button>
         }
       >
-        {exo && (
-          <div className="integ-body">
-            <div className="small">
-              SID <code>{exo.account}</code> · ExoPhone <code>{exo.config.callerId}</code> · recording {exo.config.record === false ? 'off' : 'on'} · <Activity i={exo} />
+        {exos.map((exo) => (
+          <div key={exo.id} className="integ-body">
+            <div className="spread">
+              <div className="small">
+                SID <code>{exo.account}</code> · ExoPhone <code>{exo.config.callerId}</code> · recording {exo.config.record === false ? 'off' : 'on'} · <Activity i={exo} />
+              </div>
+              <div className="row">
+                <StatusChip i={exo} />
+                {defaultChip(exo, exos, 'outgoing calls')}
+                <button className="btn sm" onClick={() => (setExoEdit(exo), setModal('exotel'))}>
+                  Change
+                </button>
+                <button className="btn sm danger" onClick={() => run(() => del(`/api/admin/integrations/${exo.id}`), 'Exotel account disconnected')}>
+                  Disconnect
+                </button>
+              </div>
             </div>
             <CopyField label="Incoming calls — add a Passthru applet with this URL at the end of your call flow (App Bazaar)" value={exo.urls.incoming!} />
             <div className="grid2">
@@ -215,7 +224,7 @@ export function IntegrationsTab() {
               Each salesperson adds their own mobile number in My account; that phone rings first. Missed calls create a high-priority call-back task for the record owner.
             </p>
           </div>
-        )}
+        ))}
       </Card>
 
       {/* --------------------------------------------------------------- Meta lead ads */}
@@ -352,7 +361,7 @@ export function IntegrationsTab() {
       </Card>
 
       {modal === 'razorpay' && <RazorpayModal onClose={() => setModal(null)} onDone={() => { setModal(null); reload(); }} />}
-      {modal === 'exotel' && <ExotelModal current={exo} onClose={() => setModal(null)} onDone={() => { setModal(null); reload(); }} />}
+      {modal === 'exotel' && <ExotelModal current={exoEdit} onClose={() => setModal(null)} onDone={() => { setModal(null); reload(); }} />}
     </div>
   );
 }

@@ -8,7 +8,7 @@
 import type { Env } from '../env';
 import type { Db, Tx } from '../lib/db';
 import { parseJoinUrl } from './calls';
-import { type Integration, mailboxToken, providerFetch } from './integrations';
+import { type Integration, mailboxOf, mailboxToken, providerFetch } from './integrations';
 import { matchProject, type OnlineMeeting } from './meetings';
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
@@ -422,7 +422,7 @@ export async function syncInvites(env: Env, tx: Tx, i: Integration): Promise<{ f
 /** "Check my invites now" from the Calls page. */
 export async function syncMyInvites(env: Env, db: Db, tenantId: string, userId: string) {
   return db.tx({ tenantId, userId }, async (tx) => {
-    const mb = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft') and status <> 'disabled' limit 1`, [tenantId, userId]);
+    const mb = await mailboxOf(tx, tenantId, userId, true);
     if (!mb) return { mailbox: false, found: 0, added: 0, updated: 0, fromEmail: 0 };
     return { mailbox: true, ...(await syncInvites(env, tx, mb)) };
   });

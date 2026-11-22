@@ -107,7 +107,12 @@ export async function runReport(ctx: RecordCtx, objectKey: string, d: ReportDefi
 const canSeeShared = (c: { var: AppEnv['Variables'] }) => hasAdmin(c.var.principal.permissions, 'reports');
 
 /** Mail goes out through the sender's own Gmail / Outlook when connected, else the workspace channel. */
-async function pickSender(tx: RecordCtx['tx'], tenantId: string, userId: string) {
+async function pickSender(tx: RecordCtx['tx'], tenantId: string, userId: string, fromMailboxId?: string | null) {
+  const chosen = fromMailboxId
+    ? await tx.one<{ id: string; account_ref: string }>(`select id, account_ref from integrations where tenant_id = $1 and id = $2 and user_id = $3 and provider in ('google','microsoft') and status = 'active'`, [tenantId, fromMailboxId, userId])
+    : null;
+  if (fromMailboxId && !chosen) throw badRequest('That mailbox is not connected (or needs reconnecting) in My account');
+  if (chosen) return { mailboxId: chosen.id, channelAccountId: null, from: chosen.account_ref };
   const mb = await mailboxOf(tx, tenantId, userId);
   if (mb) return { mailboxId: mb.id, channelAccountId: null, from: mb.account_ref };
   const acc = await tx.one<{ id: string }>(`select id from channel_accounts where tenant_id = $1 and channel = 'email' and status = 'active' order by created_at limit 1`, [tenantId]);
@@ -285,10 +290,10 @@ export const salesRoutes = new Hono<AppEnv>()
   })
   .post('/records/:object/:id/send-email', async (c) => {
     const { object, id } = c.req.param();
-    const b = z.object({ to: z.string().trim().email(), cc: z.string().max(500).nullish(), subject: z.string().trim().min(1).max(300), body: z.string().min(1).max(20_000), templateId: uuid.nullish() }).parse(await c.req.json());
+    const b = z.object({ to: z.string().trim().email(), cc: z.string().max(500).nullish(), subject: z.string().trim().min(1).max(300), body: z.string().min(1).max(20_000), templateId: uuid.nullish(), fromMailboxId: uuid.nullish() }).parse(await c.req.json());
     const out = await c.var.db.tx(scope(c), async (tx) => {
       await loadRow(rctx(c, tx), object, id, 'read');
-      const sender = await pickSender(tx, c.var.tenant.id, c.var.principal.user.id);
+      const sender = await pickSender(tx, c.var.tenant.id, c.var.principal.user.id, b.fromMailboxId);
       if (!sender) throw badRequest('Connect your Gmail or Outlook in My account (or ask an admin to add an email channel) to send from SanchalanOS');
       // a reply continues the conversation thread in the person's mailbox
       const thread = sender.mailboxId

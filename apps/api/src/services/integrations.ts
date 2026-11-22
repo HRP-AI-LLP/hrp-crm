@@ -43,6 +43,8 @@ export function publicView(i: Integration) {
     label: i.label,
     account: i.account_ref,
     config: i.config,
+    primary: !!(i.config as Record<string, unknown> | null)?.primary,
+    isDefault: !!(i.config as Record<string, unknown> | null)?.default,
     status: i.status,
     lastSyncAt: i.last_sync_at,
     lastEventAt: i.last_event_at,
@@ -69,14 +71,34 @@ export async function getIntegration(tx: Tx, tenantId: string, id: string): Prom
   if (!i) throw notFound('Integration not found');
   return i;
 }
+/** The workspace's account for a provider: the one marked default, else the oldest active one. */
 export async function activeOf(tx: Tx, tenantId: string, provider: Provider): Promise<Integration | null> {
-  return tx.one<Integration>(`select * from integrations where tenant_id = $1 and provider = $2 and status = 'active' order by created_at limit 1`, [tenantId, provider]);
-}
-export async function mailboxOf(tx: Tx, tenantId: string, userId: string): Promise<Integration | null> {
   return tx.one<Integration>(
-    `select * from integrations where tenant_id = $1 and user_id = $2 and provider in ('google', 'microsoft') and status = 'active' order by created_at limit 1`,
+    `select * from integrations where tenant_id = $1 and provider = $2 and status = 'active' order by coalesce((config ->> 'default')::boolean, false) desc, created_at limit 1`,
+    [tenantId, provider],
+  );
+}
+const PRIMARY_FIRST = `order by coalesce((config ->> 'primary')::boolean, false) desc, created_at`;
+/** A person's primary mailbox (calendar mirroring, invites, the default "From"): marked primary, else the first connected. */
+export async function mailboxOf(tx: Tx, tenantId: string, userId: string, anyStatus = false): Promise<Integration | null> {
+  return tx.one<Integration>(
+    `select * from integrations where tenant_id = $1 and user_id = $2 and provider in ('google', 'microsoft') and ${anyStatus ? `status <> 'disabled'` : `status = 'active'`} ${PRIMARY_FIRST} limit 1`,
     [tenantId, userId],
   );
+}
+/** All of a person's mailboxes, primary first. */
+export async function mailboxesOf(tx: Tx, tenantId: string, userId: string): Promise<Integration[]> {
+  return tx.query<Integration>(`select * from integrations where tenant_id = $1 and user_id = $2 and provider in ('google', 'microsoft') ${PRIMARY_FIRST}`, [tenantId, userId]);
+}
+/** Marks one account primary (per person) or default (per workspace provider), clearing the others. */
+export async function markPreferred(tx: Tx, tenantId: string, i: Integration) {
+  if (i.user_id && (i.provider === 'google' || i.provider === 'microsoft')) {
+    await tx.query(`update integrations set config = config - 'primary' where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft') and id <> $3`, [tenantId, i.user_id, i.id]);
+    await tx.query(`update integrations set config = config || '{"primary":true}' where tenant_id = $1 and id = $2`, [tenantId, i.id]);
+  } else {
+    await tx.query(`update integrations set config = config - 'default' where tenant_id = $1 and provider = $2 and id <> $3`, [tenantId, i.provider, i.id]);
+    await tx.query(`update integrations set config = config || '{"default":true}' where tenant_id = $1 and id = $2`, [tenantId, i.id]);
+  }
 }
 
 /** Records a provider failure; after repeated failures the integration is flagged for attention. */

@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { ApiError, get, post } from '../lib/api';
+import { useIntegrationStatus } from './MailboxPanel';
 import { Modal, useToast } from './ui';
 
 interface Template {
@@ -43,6 +44,9 @@ export function EmailComposer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveAs, setSaveAs] = useState('');
+  const status = useIntegrationStatus();
+  const boxes = (status.data?.mailboxes ?? []).filter((m) => m.status === 'active');
+  const [from, setFrom] = useState('');
 
   const apply = async (id: string | null) => {
     try {
@@ -78,7 +82,7 @@ export function EmailComposer({
       }
       if (onSend) await onSend({ to, subject, body });
       else {
-        await post(`/api/v1/records/${object}/${recordId}/send-email`, { to, subject, body, templateId: templateId || null });
+        await post(`/api/v1/records/${object}/${recordId}/send-email`, { to, subject, body, templateId: templateId || null, fromMailboxId: from || null });
         toast('Email queued');
       }
       qc.invalidateQueries({ queryKey: ['timeline', object, recordId] });
@@ -134,6 +138,19 @@ export function EmailComposer({
             ))}
           </select>
         </label>
+        {!onSend && boxes.length > 1 && (
+          <label className="field wide">
+            From
+            <select value={from} onChange={(e) => setFrom(e.target.value)}>
+              {boxes.map((m) => (
+                <option key={m.id} value={m.primary ? '' : m.id}>
+                  {m.account}
+                  {m.primary ? ' (primary)' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="field wide">
           To
           <input type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="name@company.in" />

@@ -18,7 +18,9 @@ import {
   exchangeCode,
   getIntegration,
   type Integration,
+  mailboxesOf,
   mailboxOf,
+  markPreferred,
   type OAuthProvider,
   oauthConfigured,
   providerFetch,
@@ -59,19 +61,24 @@ function hookUrls(c: { req: { url: string }; env: AppEnv['Bindings'] }, i: Integ
   return {};
 }
 
+async function myMailbox(tx: RecordCtx['tx'], tenantId: string, userId: string, id: string) {
+  const mb = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and id = $2 and user_id = $3 and provider in ('google','microsoft')`, [tenantId, id, userId]);
+  if (!mb) throw notFound('Mailbox not found');
+  return mb;
+}
+
 export const integrationRoutes = new Hono<AppEnv>()
   /** What this person can use: their mailbox, and whether calling / online payments are available. */
   .get('/integrations/status', async (c) => {
     const out = await c.var.db.tx(scope(c, true), async (tx) => {
-      const mb = await tx.one<Integration>(
-        `select * from integrations where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft') order by created_at limit 1`,
-        [c.var.tenant.id, c.var.principal.user.id],
-      );
+      const boxes = await mailboxesOf(tx, c.var.tenant.id, c.var.principal.user.id);
+      const mb = boxes[0] ?? null;
       const exotel = await activeOf(tx, c.var.tenant.id, 'exotel');
       const rzp = await activeOf(tx, c.var.tenant.id, 'razorpay');
       const me = await tx.one<{ phone: string | null }>(`select phone from users where tenant_id = $1 and id = $2`, [c.var.tenant.id, c.var.principal.user.id]);
       return {
-        mailbox: mb ? publicView(mb) : null,
+        mailbox: mb ? { ...publicView(mb), primary: true } : null,
+        mailboxes: boxes.map((b, i) => ({ ...publicView(b), primary: i === 0 })),
         available: { google: oauthConfigured(c.env, 'google'), microsoft: oauthConfigured(c.env, 'microsoft'), meta: oauthConfigured(c.env, 'meta'), zoom: oauthConfigured(c.env, 'zoom'), gmeet: oauthConfigured(c.env, 'gmeet'), msmeet: oauthConfigured(c.env, 'msmeet') },
         telephony: !!exotel,
         payments: !!rzp,
@@ -94,7 +101,7 @@ export const integrationRoutes = new Hono<AppEnv>()
   .patch('/integrations/mailbox', async (c) => {
     const b = z.object({ calendar: z.boolean().optional(), invites: z.boolean().optional(), ignore: z.array(z.string().trim().toLowerCase().max(200)).max(200).optional() }).parse(await c.req.json());
     const out = await c.var.db.tx(scope(c), async (tx) => {
-      const mb = await mailboxOf(tx, c.var.tenant.id, c.var.principal.user.id);
+      const mb = await mailboxOf(tx, c.var.tenant.id, c.var.principal.user.id, true);
       if (!mb) throw notFound('No mailbox connected');
       const r = await tx.one<Integration>(`update integrations set config = config || $3::jsonb where tenant_id = $1 and id = $2 returning *`, [c.var.tenant.id, mb.id, JSON.stringify(b)]);
       return publicView(r!);
@@ -102,7 +109,7 @@ export const integrationRoutes = new Hono<AppEnv>()
     return c.json(out);
   })
   .post('/integrations/mailbox/sync', async (c) => {
-    const mb = await c.var.db.tx(scope(c, true), (tx) => tx.one<Integration>(`select * from integrations where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft') and status <> 'disabled' limit 1`, [c.var.tenant.id, c.var.principal.user.id]));
+    const mb = await c.var.db.tx(scope(c, true), (tx) => mailboxOf(tx, c.var.tenant.id, c.var.principal.user.id, true));
     if (!mb) throw notFound('No mailbox connected');
     const r = await syncMailbox(c.env, c.var.db, c.var.tenant.id, mb.id);
     return c.json(r);
@@ -111,6 +118,38 @@ export const integrationRoutes = new Hono<AppEnv>()
     await c.var.db.tx(scope(c), async (tx) => {
       const rows = await tx.query<Integration>(`delete from integrations where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft') returning *`, [c.var.tenant.id, c.var.principal.user.id]);
       for (const r of rows) await revokeTokens(c.env, r);
+    });
+    return c.body(null, 204);
+  })
+  /* ───── one of my mailboxes (several Gmail / Outlook accounts per person) ───── */
+  .patch('/integrations/mailboxes/:id', async (c) => {
+    const b = z
+      .object({ calendar: z.boolean().optional(), invites: z.boolean().optional(), ignore: z.array(z.string().trim().toLowerCase().max(200)).max(200).optional(), primary: z.literal(true).optional() })
+      .parse(await c.req.json());
+    const out = await c.var.db.tx(scope(c), async (tx) => {
+      const mb = await myMailbox(tx, c.var.tenant.id, c.var.principal.user.id, uuid.parse(c.req.param('id')));
+      const { primary, ...cfg } = b;
+      if (primary) await markPreferred(tx, c.var.tenant.id, mb);
+      const r = await tx.one<Integration>(`update integrations set config = config || $3::jsonb where tenant_id = $1 and id = $2 returning *`, [c.var.tenant.id, mb.id, JSON.stringify(cfg)]);
+      return publicView(r!);
+    });
+    return c.json(out);
+  })
+  .post('/integrations/mailboxes/:id/sync', async (c) => {
+    const mb = await c.var.db.tx(scope(c, true), (tx) => myMailbox(tx, c.var.tenant.id, c.var.principal.user.id, uuid.parse(c.req.param('id'))));
+    if (mb.status === 'disabled') throw badRequest('This mailbox is switched off');
+    return c.json(await syncMailbox(c.env, c.var.db, c.var.tenant.id, mb.id));
+  })
+  .delete('/integrations/mailboxes/:id', async (c) => {
+    await c.var.db.tx(scope(c), async (tx) => {
+      const mb = await myMailbox(tx, c.var.tenant.id, c.var.principal.user.id, uuid.parse(c.req.param('id')));
+      await tx.query(`delete from integrations where tenant_id = $1 and id = $2`, [c.var.tenant.id, mb.id]);
+      await revokeTokens(c.env, mb);
+      // the next one becomes primary
+      if (mb.config?.primary) {
+        const next = (await mailboxesOf(tx, c.var.tenant.id, c.var.principal.user.id))[0];
+        if (next) await markPreferred(tx, c.var.tenant.id, next);
+      }
     });
     return c.body(null, 204);
   })
@@ -225,15 +264,16 @@ export const integrationAdminRoutes = new Hono<AppEnv>()
     await verifyRazorpayKeys(b.keyId, b.keySecret);
     const secret = await sealSecret(c.env, c.var.tenant.id, { keySecret: b.keySecret, webhookSecret: b.webhookSecret });
     const row = await c.var.db.tx(scope(c), async (tx) => {
-      // one Razorpay account per workspace: a new key replaces the old one
-      const old = await activeOf(tx, c.var.tenant.id, 'razorpay');
-      if (old && old.account_ref !== b.keyId) await tx.query(`update integrations set status = 'disabled' where tenant_id = $1 and id = $2`, [c.var.tenant.id, old.id]);
-      return tx.one<Integration>(
+      // several Razorpay accounts may be kept: the first (or the one marked default) takes new payment links
+      const first = !(await activeOf(tx, c.var.tenant.id, 'razorpay'));
+      const row = await tx.one<Integration>(
         `insert into integrations (tenant_id, provider, label, account_ref, secret_ciphertext, config) values ($1,'razorpay',$2,$3,$4,$5)
          on conflict (tenant_id, provider, account_ref) do update set secret_ciphertext = excluded.secret_ciphertext, status = 'active', config = excluded.config, last_error = null, error_count = 0
          returning *`,
         [c.var.tenant.id, b.keyId.startsWith('rzp_test_') ? 'Razorpay (test mode)' : 'Razorpay', b.keyId, secret, JSON.stringify({ mode: b.keyId.startsWith('rzp_test_') ? 'test' : 'live' })],
       );
+      if (first) await markPreferred(tx, c.var.tenant.id, row!);
+      return row;
     });
     await audit(c, row!, 'credentials_saved');
     return c.json({ ...publicView(row!), urls: hookUrls(c, row!) }, 201);
@@ -243,14 +283,16 @@ export const integrationAdminRoutes = new Hono<AppEnv>()
     await verifyExotel(b.sid, { apiKey: b.apiKey, apiToken: b.apiToken }, b.subdomain);
     const secret = await sealSecret(c.env, c.var.tenant.id, { apiKey: b.apiKey, apiToken: b.apiToken });
     const row = await c.var.db.tx(scope(c), async (tx) => {
-      const old = await activeOf(tx, c.var.tenant.id, 'exotel');
-      if (old && old.account_ref !== b.sid) await tx.query(`update integrations set status = 'disabled' where tenant_id = $1 and id = $2`, [c.var.tenant.id, old.id]);
-      return tx.one<Integration>(
+      // several Exotel accounts may be kept: calls go out through the default one; each number's calls come in on its own URL
+      const first = !(await activeOf(tx, c.var.tenant.id, 'exotel'));
+      const row = await tx.one<Integration>(
         `insert into integrations (tenant_id, provider, label, account_ref, secret_ciphertext, config) values ($1,'exotel','Exotel',$2,$3,$4)
          on conflict (tenant_id, provider, account_ref) do update set secret_ciphertext = excluded.secret_ciphertext, status = 'active', config = excluded.config, last_error = null, error_count = 0
          returning *`,
         [c.var.tenant.id, b.sid, secret, JSON.stringify({ subdomain: b.subdomain, callerId: b.callerId, record: b.record, createLeads: b.createLeads, ownerId: b.ownerId ?? null })],
       );
+      if (first) await markPreferred(tx, c.var.tenant.id, row!);
+      return row;
     });
     await audit(c, row!, 'credentials_saved');
     return c.json({ ...publicView(row!), urls: hookUrls(c, row!) }, 201);
@@ -286,12 +328,14 @@ export const integrationAdminRoutes = new Hono<AppEnv>()
         allowInternational: z.boolean().optional(),
         maxCallsPerHour: z.number().int().min(1).max(500).optional(),
         enabled: z.boolean().optional(),
+        makeDefault: z.literal(true).optional(),
       })
       .parse(await c.req.json());
     const row = await c.var.db.tx(scope(c), async (tx) => {
       const i = await getIntegration(tx, c.var.tenant.id, uuid.parse(c.req.param('id')));
       if (i.user_id) throw forbidden('Mailboxes are managed by their owner in My account');
-      const { label, enabled, ...cfg } = b;
+      const { label, enabled, makeDefault, ...cfg } = b;
+      if (makeDefault) await markPreferred(tx, c.var.tenant.id, i);
       if (cfg.ownerId) {
         const u = await tx.one(`select 1 from users where tenant_id = $1 and id = $2 and status = 'active'`, [c.var.tenant.id, cfg.ownerId]);
         if (!u) throw badRequest('Choose an active person as the default owner');
@@ -394,11 +438,14 @@ export const integrationPublicRoutes = new Hono<AppEnv>()
         if (!address) throw badRequest('The mailbox address could not be read');
         const taken = await tx.one<{ user_id: string | null }>(`select user_id from integrations where tenant_id = $1 and provider = $2 and account_ref = $3`, [s.t, provider, address.toLowerCase()]);
         if (taken && taken.user_id !== s.u) throw badRequest(`${address} is already connected by a colleague`);
-        // one mailbox per person: connecting another replaces the previous one
-        await tx.query(`delete from integrations where tenant_id = $1 and user_id = $2 and provider in ('google','microsoft')`, [s.t, s.u]);
+        // several mailboxes per person: the same address reconnects (keeping its settings), a new one is added;
+        // the first one is the primary (calendar, invites, default "From")
+        const first = !(await mailboxOf(tx, s.t, s.u, true));
         await tx.query(
-          `insert into integrations (tenant_id, provider, user_id, label, account_ref, secret_ciphertext, config, created_by) values ($1,$2,$3,$4,$5,$6,$7,$3)`,
-          [s.t, provider, s.u, provider === 'google' ? 'Gmail' : 'Outlook', address.toLowerCase(), await sealSecret(c.env, s.t, tokens as unknown as Record<string, unknown>), JSON.stringify({ calendar: true, ignore: [], addresses: msAliases })],
+          `insert into integrations (tenant_id, provider, user_id, label, account_ref, secret_ciphertext, config, created_by) values ($1,$2,$3,$4,$5,$6,$7,$3)
+           on conflict (tenant_id, provider, account_ref) do update set secret_ciphertext = excluded.secret_ciphertext, status = 'active', last_error = null, error_count = 0,
+             config = integrations.config || jsonb_build_object('addresses', excluded.config -> 'addresses')`,
+          [s.t, provider, s.u, provider === 'google' ? 'Gmail' : 'Outlook', address.toLowerCase(), await sealSecret(c.env, s.t, tokens as unknown as Record<string, unknown>), JSON.stringify({ calendar: true, ignore: [], addresses: msAliases, ...(first ? { primary: true } : {}) })],
         );
         return { connected: [address], failed: [] as string[] };
       });
