@@ -284,9 +284,20 @@ async function main() {
   // (free plan: 100 CU-hours a month; 0.25 CU ≈ 400 awake hours)
   try {
     const eps = (await neon.listProjectBranchEndpoints(projectId, main.id)).data.endpoints;
+    // a project that was just created answers 423 (locked) until its first operations finish
+    const retry = async (fn) => {
+      for (let i = 1; ; i++) {
+        try {
+          return await fn();
+        } catch (e) {
+          if (/** @type {any} */ (e)?.response?.status !== 423 || i >= 20) throw e;
+          await sleep(3000);
+        }
+      }
+    };
     for (const ep of eps) {
-      await neon.updateProjectEndpoint(projectId, ep.id, { endpoint: { autoscaling_limit_min_cu: 0.25, autoscaling_limit_max_cu: 1, suspend_timeout_seconds: 300 } }).catch(() =>
-        neon.updateProjectEndpoint(projectId, ep.id, { endpoint: { autoscaling_limit_min_cu: 0.25, autoscaling_limit_max_cu: 1 } }),
+      await retry(() => neon.updateProjectEndpoint(projectId, ep.id, { endpoint: { autoscaling_limit_min_cu: 0.25, autoscaling_limit_max_cu: 1, suspend_timeout_seconds: 300 } })).catch(() =>
+        retry(() => neon.updateProjectEndpoint(projectId, ep.id, { endpoint: { autoscaling_limit_min_cu: 0.25, autoscaling_limit_max_cu: 1 } })),
       );
     }
     info(`${c.ok('✓')} compute 0.25–1 CU, sleeps after 5 idle minutes`);
@@ -357,8 +368,31 @@ async function main() {
   };
   const oldWorkers = [];
   for await (const w of cf.workers.scripts.list({ account_id })) if (['synapse-dev', 'synapse-prod'].includes(/** @type {any} */ (w).id)) oldWorkers.push(/** @type {any} */ (w).id);
-  // the old production Worker still consumes synapse-jobs-prod and a queue takes only one
-  // consumer, so it always goes: "sanchalanos" replaces it with the same database, KV and queue
+  // a Worker can't be deleted while it consumes a queue, and a queue takes only one consumer:
+  // detach the old Workers from every queue first
+  /** @param {string[]} scripts */
+  const detachConsumers = async (scripts) => {
+    for (const q of queueList) {
+      if (!q.queue_id) continue;
+      const consumers = [];
+      try {
+        for await (const con of cf.queues.consumers.list(q.queue_id, { account_id })) consumers.push(/** @type {any} */ (con));
+      } catch {
+        continue;
+      }
+      for (const con of consumers) {
+        const script = con.script_name ?? con.script ?? con.service;
+        if (!scripts.includes(script) || !con.consumer_id) continue;
+        await cf.queues.consumers.delete(con.consumer_id, { account_id, queue_id: q.queue_id }).then(
+          () => info(`${c.ok('✓')} ${script} no longer reads queue ${q.queue_name}`),
+          (e) => info(c.warn(`could not detach ${script} from ${q.queue_name}: ${e.message}`)),
+        );
+      }
+    }
+  };
+  const retiring = oldWorkers.filter((w) => w === 'synapse-prod' || (removeOld && w === 'synapse-dev'));
+  if (retiring.length) await detachConsumers(retiring);
+  // the old production Worker always goes: "sanchalanos" replaces it with the same database, KV and queue
   if (oldWorkers.includes('synapse-prod')) {
     await cf.workers.scripts.delete('synapse-prod', { account_id, force: true }).then(
       () => info(`${c.ok('✓')} deleted the old Worker synapse-prod (replaced by sanchalanos)`),
@@ -396,7 +430,14 @@ async function main() {
   for await (const z of cf.zones.list({ name: zoneName, account: { id: account_id } })) if (z.name === zoneName) zoneId = z.id;
   if (zoneId) {
     info(`${c.ok('✓')} Zone ${zoneName} found — https://${appHost}${baseDomain !== appHost ? ` (https://${baseDomain} redirects there)` : ''}`);
+    const attached = new Set();
+    try {
+      for await (const d of cf.workers.domains.list({ account_id })) attached.add(/** @type {any} */ (d).hostname);
+    } catch {
+      /* token without Workers read: wrangler reports conflicts itself */
+    }
     for (const h of hosts) {
+      if (attached.has(h)) continue; // its records belong to the Worker's custom domain
       try {
         const existing = [];
         for await (const r of cf.dns.records.list({ zone_id: zoneId, name: { exact: h } })) existing.push(r);
