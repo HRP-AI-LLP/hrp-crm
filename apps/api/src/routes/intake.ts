@@ -65,6 +65,10 @@ export const intakeRoutes = new Hono<AppEnv>()
     await c.var.db.tx(scope(c), (tx) => ik.setItemStatus(rctx(c, tx), id(c), b.status, b.note));
     return c.json({ ok: true });
   })
+  .post('/intake/items/:id/whose', async (c) => {
+    const b = z.object({ whose: z.enum(['ours', 'theirs']) }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => ik.setWhose(rctx(c, tx), id(c), b.whose)));
+  })
   .post('/intake/items/:id/read', async (c) => {
     const b = z.object({ fileId: uuid, pages }).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => ik.readAttachment(rctx(c, tx), id(c), b.fileId, b.pages)));

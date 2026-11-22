@@ -952,6 +952,16 @@ function OurInvoice({ id, p, onDone }: { id: string; p: Json; onDone: () => void
         >
           {busy ? 'Importing…' : 'Import as our invoice'}
         </button>
+        <button
+          className="btn"
+          disabled={busy}
+          title="It is addressed to us: a supplier's invoice or a receipt for something we paid"
+          onClick={async () => {
+            if ((await act(() => post(`/api/v1/intake/items/${id}/whose`, { whose: 'theirs' }), 'Treated as a bill we paid')) !== null) qc.invalidateQueries({ queryKey: ['intake', 'proposal', id] });
+          }}
+        >
+          Not ours — it's a bill we paid
+        </button>
         <button className="btn ghost" onClick={async () => (await act(() => post(`/api/v1/intake/items/${id}/status`, { status: 'ignored' }), 'Ignored')) !== null && onDone()}>
           Ignore
         </button>
@@ -969,6 +979,7 @@ const num = (v: string) => (v.trim() === '' ? null : Number(v));
  * charge for a supplier abroad) and the payment recorded through the card or bank that paid.
  */
 function ApproveMail({ id, onDone }: { id: string; onDone: () => void }) {
+  const qc = useQueryClient();
   const { data: p, error, isLoading } = useQuery({ queryKey: ['intake', 'proposal', id], queryFn: () => post<Json>(`/api/v1/intake/items/${id}/proposal`), staleTime: Infinity, retry: false });
   const act = useAct([['intake'], ['books']]);
   const nav = useNavigate();
@@ -1248,6 +1259,16 @@ function ApproveMail({ id, onDone }: { id: string; onDone: () => void }) {
         </button>
         <button className="btn ghost" onClick={async () => (await act(() => post(`/api/v1/intake/items/${id}/status`, { status: 'ignored' }), 'Ignored')) !== null && onDone()}>
           Not the business's — ignore
+        </button>
+        <button
+          className="btn ghost"
+          disabled={busy}
+          title="We issued it: bring it in as a sales invoice under its own number instead of a bill"
+          onClick={async () => {
+            if ((await act(() => post(`/api/v1/intake/items/${id}/whose`, { whose: 'ours' }), 'Treated as our own invoice')) !== null) qc.invalidateQueries({ queryKey: ['intake', 'proposal', id] });
+          }}
+        >
+          It's our own invoice to a customer
         </button>
       </div>
     </div>

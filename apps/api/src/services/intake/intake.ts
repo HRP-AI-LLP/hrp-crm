@@ -457,7 +457,7 @@ export async function setItemStatus(ctx: RecordCtx, id: string, status: 'new' | 
 /* ───────────────────────── bills from mail ───────────────────────── */
 
 /** Bumped when the reading of mailed documents improves: files read before are read again. */
-export const READ_VERSION = 3;
+export const READ_VERSION = 4;
 
 export async function ownGstins(ctx: RecordCtx) {
   const t = await ctx.tx.one<{ settings: any }>(`select settings from tenants where id = $1`, [ctx.tenantId]);
@@ -482,7 +482,11 @@ export async function readAttachment(ctx: RecordCtx, id: string, fileId: string,
   const receipt = text.trim().length > 40 ? readReceipt(text, [names?.n, names?.l].filter((x): x is string => !!x)) : null;
   // our own invoice (made in Zoho or elsewhere) to a customer, not a supplier's bill
   const whose = text.trim().length > 40 ? whoseDocument(text, own, [names?.n, names?.l].filter((x): x is string => !!x)) : null;
-  if (whose === 'ours') await ctx.tx.query(`update intake_items set kind = 'invoice' where tenant_id = $1 and id = $2 and kind in ('bill','payment')`, [ctx.tenantId, id]);
+  // (a choice made by hand on this mail — data.whose — always wins over the reading)
+  const chosen = it.data.whose as 'ours' | 'theirs' | undefined;
+  if (!chosen && whose === 'ours') await ctx.tx.query(`update intake_items set kind = 'invoice' where tenant_id = $1 and id = $2 and kind in ('bill','payment')`, [ctx.tenantId, id]);
+  // read again and found to be addressed to us: back to a bill (an earlier reading may have called it ours)
+  if (!chosen && whose === 'theirs') await ctx.tx.query(`update intake_items set kind = 'bill' where tenant_id = $1 and id = $2 and kind = 'invoice'`, [ctx.tenantId, id]);
   if (r && receipt && whose !== 'ours') {
     const d = r.data as Record<string, any>;
     // a number read under its heading wins over a heading word or a cut-short one ("INVOICE", "F13F9483")
@@ -583,4 +587,21 @@ export async function billFromMail(ctx: RecordCtx, env: Env, id: string, input: 
   }
   await ctx.tx.query(`update intake_items set status = 'done', link_object = 'bill', link_id = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, billId]);
   return { billId, vendorId, lines: lines.length, events };
+}
+
+/** Settles by hand whose document a mail is: "theirs" (a bill or receipt we paid) or "ours" (our invoice to a customer). */
+export async function setWhose(ctx: RecordCtx, id: string, whose: 'ours' | 'theirs') {
+  assertIntake(ctx);
+  const it = await ctx.tx.one<{ data: Record<string, any>; status: string }>(`select data, status from intake_items where tenant_id = $1 and id = $2 for update`, [ctx.tenantId, id]);
+  if (!it) throw notFound('Mail not found');
+  if (it.status === 'done') throw badRequest('This mail was already imported');
+  const data = { ...it.data, whose };
+  if (whose === 'theirs' && Array.isArray(it.data.importItemIds)) {
+    // the sales-invoice import prepared for it is dropped
+    await ctx.tx.query(`update doc_import_items set status = 'rejected' where tenant_id = $1 and id = any($2::uuid[]) and status in ('pending','failed')`, [ctx.tenantId, it.data.importItemIds]);
+    delete data.importId;
+    delete data.importItemIds;
+  }
+  await ctx.tx.query(`update intake_items set kind = $3, data = $4 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, whose === 'ours' ? 'invoice' : 'bill', jsonSafe(data)]);
+  return { ok: true, whose };
 }

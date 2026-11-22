@@ -33,7 +33,7 @@ export async function listBankAccounts(ctx: RecordCtx) {
     [ctx.tenantId],
   );
   return ctx.tx.query(
-    `select b.id, b.gl_account_id, b.kind, b.bank_name, b.account_last4, b.ifsc, b.is_active, b.last_statement_date, a.name, a.code,
+    `select b.id, b.gl_account_id, b.kind, b.bank_name, b.account_last4, b.ifsc, b.is_active, b.last_statement_date, a.name, a.code, (a.system_key is not null) as is_default,
             b.holder, b.person_id, (select p.name from acct_persons p where p.tenant_id = b.tenant_id and p.id = b.person_id) as person_name, b.card_network,
             b.credit_limit::float8 as credit_limit, b.statement_day, b.due_day, b.card_label, (b.statement_password_ciphertext is not null) as has_statement_password, b.statement_senders,
             coalesce((select sum(l.debit - l.credit) from journal_lines l where l.tenant_id = b.tenant_id and l.account_id = b.gl_account_id and l.posted), 0)::float8 as book_balance,
@@ -42,7 +42,7 @@ export async function listBankAccounts(ctx: RecordCtx) {
             (select t.balance::float8 from bank_transactions t where t.tenant_id = b.tenant_id and t.bank_account_id = b.id and t.balance is not null order by t.txn_date desc, t.created_at desc limit 1) as statement_balance,
             (select max(r.statement_date) from bank_reconciliations r where r.tenant_id = b.tenant_id and r.bank_account_id = b.id and r.status = 'completed') as reconciled_to
        from bank_accounts b join gl_accounts a on a.tenant_id = b.tenant_id and a.id = b.gl_account_id
-      where b.tenant_id = $1 order by b.kind, a.name`,
+      where b.tenant_id = $1 and b.is_active order by b.kind, a.name`,
     [ctx.tenantId],
   );
 }
@@ -334,6 +334,74 @@ export async function transfer(ctx: RecordCtx, input: { fromId: string; toId: st
       { accountId: input.fromId, credit: r2(input.amount) },
     ],
   });
+}
+
+const FAMILY: Record<string, string> = { bank: 'bank', wallet: 'bank', cash: 'cash', credit_card: 'credit_card' };
+
+/**
+ * Removes a bank, cash or card account that is not real (or no longer used). Its history stays in
+ * the books, untouched: a balance left on it is moved by a transfer entry to the account chosen,
+ * and if it was the books' default for its kind (the "Bank" that payments go to when none is
+ * named, say) the chosen account takes that role. Then it is closed and leaves the lists.
+ */
+export async function removeBankAccount(ctx: RecordCtx, id: string, input: { moveToId?: string | null; date?: string | null }) {
+  const b = await ctx.tx.one<{ id: string; gl_account_id: string; kind: string; name: string; is_active: boolean; system_key: string | null; balance: number; unmatched: number }>(
+    `select b.id, b.gl_account_id, b.kind, a.name, b.is_active, a.system_key,
+            coalesce((select sum(l.debit - l.credit) from journal_lines l where l.tenant_id = b.tenant_id and l.account_id = b.gl_account_id and l.posted), 0)::float8 as balance,
+            (select count(*)::int from bank_transactions t where t.tenant_id = b.tenant_id and t.bank_account_id = b.id and t.status = 'unmatched') as unmatched
+       from bank_accounts b join gl_accounts a on a.tenant_id = b.tenant_id and a.id = b.gl_account_id
+      where b.tenant_id = $1 and b.id = $2 for update of b`,
+    [ctx.tenantId, id],
+  );
+  if (!b) throw notFound('Bank account not found');
+  if (!b.is_active) throw badRequest('This account is already removed');
+  if (b.unmatched) throw badRequest(`${b.unmatched} statement line(s) on this account are still to match: match or delete them first`);
+  const balance = r2(b.balance);
+  const needsTarget = balance !== 0 || !!b.system_key;
+  let target: { id: string; gl_account_id: string; name: string; kind: string; system_key: string | null } | null = null;
+  if (input.moveToId) {
+    target = await ctx.tx.one(
+      `select b.id, b.gl_account_id, a.name, b.kind, a.system_key from bank_accounts b join gl_accounts a on a.tenant_id = b.tenant_id and a.id = b.gl_account_id
+        where b.tenant_id = $1 and b.id = $2 and b.is_active and a.is_active`,
+      [ctx.tenantId, input.moveToId],
+    );
+    if (!target || target.id === b.id) throw badRequest('Choose another active account to move it to');
+    if (FAMILY[target.kind] !== FAMILY[b.kind]) throw badRequest(`Move it to another ${b.kind === 'credit_card' ? 'card' : b.kind === 'cash' ? 'cash' : 'bank'} account`);
+  }
+  if (needsTarget && !target) {
+    throw badRequest(
+      [balance !== 0 ? `It holds ${balance.toLocaleString('en-IN', { minimumFractionDigits: 2 })} in the books` : null, b.system_key ? 'it is the default account for its kind' : null].filter(Boolean).join(' and ') +
+        ': choose the account to move that to',
+    );
+  }
+  let journalId: string | null = null;
+  if (balance !== 0 && target) {
+    // a debit balance moves out by crediting this account (a card's credit balance the other way round)
+    journalId = await postJournal(ctx.tx, ctx.tenantId, {
+      date: input.date ?? new Date().toISOString().slice(0, 10),
+      sourceType: 'transfer',
+      reference: null,
+      narration: `Closing ${b.name}: balance moved to ${target.name}`,
+      lines:
+        balance > 0
+          ? [
+              { accountId: target.gl_account_id, debit: balance },
+              { accountId: b.gl_account_id, credit: balance },
+            ]
+          : [
+              { accountId: b.gl_account_id, debit: -balance },
+              { accountId: target.gl_account_id, credit: -balance },
+            ],
+    });
+  }
+  if (b.system_key && target) {
+    if (target.system_key) throw badRequest(`${target.name} is itself a default account; choose an ordinary ${FAMILY[b.kind]} account`);
+    await ctx.tx.query(`update gl_accounts set system_key = null, updated_at = now() where tenant_id = $1 and id = $2`, [ctx.tenantId, b.gl_account_id]);
+    await ctx.tx.query(`update gl_accounts set system_key = $3, updated_at = now() where tenant_id = $1 and id = $2`, [ctx.tenantId, target.gl_account_id, b.system_key]);
+  }
+  await ctx.tx.query(`update gl_accounts set is_active = false, updated_at = now() where tenant_id = $1 and id = $2`, [ctx.tenantId, b.gl_account_id]);
+  await ctx.tx.query(`update bank_accounts set is_active = false where tenant_id = $1 and id = $2`, [ctx.tenantId, b.id]);
+  return { ok: true, moved: balance !== 0 ? balance : 0, journalId, defaultMovedTo: b.system_key && target ? target.name : null };
 }
 
 /** Ledger lines on the account not yet reconciled, up to a date. */

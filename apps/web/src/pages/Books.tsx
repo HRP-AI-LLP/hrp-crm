@@ -308,6 +308,7 @@ function Banking() {
   const [sel, setSel] = useState<string | null>(null);
   const [modal, setModal] = useState<null | 'new' | 'transfer' | 'rules'>(null);
   const [card, setCard] = useState<Json | null>(null);
+  const [removing, setRemoving] = useState<Json | null>(null);
   if (!data) return <Spinner />;
   const acc = data.find((a) => a.id === sel) ?? null;
   if (acc) return <BankAccountView acc={acc} back={() => { setSel(null); refetch(); }} />;
@@ -335,6 +336,7 @@ function Banking() {
               <th className="num">Cleared</th>
               <th>Reconciled to</th>
               <th className="num">To match</th>
+              <th />
             </tr>
           </thead>
           <tbody>
@@ -376,6 +378,18 @@ function Banking() {
                 <td className="num">{money2(a.kind === 'credit_card' ? -a.cleared_balance || 0 : a.cleared_balance)}</td>
                 <td>{date(a.reconciled_to)}</td>
                 <td className="num">{a.unmatched ? <span className="chip warn">{a.unmatched}</span> : '—'}</td>
+                <td className="num">
+                  <button
+                    className="btn sm ghost"
+                    title="Remove this account (its history stays in the books)"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRemoving(a);
+                    }}
+                  >
+                    Remove
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -385,7 +399,84 @@ function Banking() {
       {card && <CardDetails acc={card} onClose={() => setCard(null)} onDone={() => refetch()} />}
       {modal === 'transfer' && <TransferModal accounts={data} onClose={() => setModal(null)} onDone={() => refetch()} />}
       {modal === 'rules' && <RulesModal accounts={data} onClose={() => setModal(null)} />}
+      {removing && <RemoveAccount acc={removing} accounts={data} onClose={() => setRemoving(null)} onDone={() => refetch()} />}
     </div>
+  );
+}
+
+const FAMILY: Record<string, string> = { bank: 'bank', wallet: 'bank', cash: 'cash', credit_card: 'credit_card' };
+
+/**
+ * Removes an account that isn't real or isn't used any more. Its past entries stay in the books;
+ * a balance left on it moves to the account chosen (by a transfer entry), and so does its role as
+ * the default account for its kind.
+ */
+function RemoveAccount({ acc, accounts, onClose, onDone }: { acc: Json; accounts: Json[]; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [moveToId, setMoveToId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const balance = Math.round((Number(acc.book_balance) || 0) * 100) / 100;
+  const shown = acc.kind === 'credit_card' ? -balance : balance;
+  const others = accounts.filter((a) => a.id !== acc.id && FAMILY[a.kind] === FAMILY[acc.kind]);
+  const needTarget = balance !== 0 || acc.is_default;
+  return (
+    <Modal
+      title={`Remove ${acc.name}`}
+      onClose={onClose}
+      footer={
+        <button
+          className="btn danger"
+          disabled={busy || (needTarget && !moveToId) || acc.unmatched > 0}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              const r = await post<Json>(`/api/v1/books/bank-accounts/${acc.id}/remove`, { moveToId: moveToId || null });
+              toast(r.moved ? `Removed; ${money2(Math.abs(r.moved))} moved to the account chosen` : 'Removed');
+              onDone();
+              onClose();
+            } catch (e) {
+              toast((e as Error).message, true);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? 'Removing…' : 'Remove the account'}
+        </button>
+      }
+    >
+      <div className="modal-body stack">
+        <p className="small">
+          It disappears from Banking and from the lists you pay from. Entries already posted to it stay in the books as they are (reports for past periods don't change).
+        </p>
+        {acc.unmatched > 0 && <p className="small" style={{ color: 'var(--bad)' }}>{acc.unmatched} statement line(s) on it are still to match: match or delete them first.</p>}
+        {balance !== 0 && (
+          <p className="small">
+            It holds <b>{money2(shown)}</b> in the books — if those receipts and payments really went through another account, move the balance there. One transfer entry dated today does it.
+          </p>
+        )}
+        {needTarget && (
+          <label className="field">
+            {balance !== 0 ? 'Move its balance' : 'Make this the default instead'}
+            {acc.is_default && balance !== 0 ? ' (and its role as the default account)' : ''} to
+            <select value={moveToId} onChange={(e) => setMoveToId(e.target.value)}>
+              <option value="">Choose…</option>
+              {others.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                  {a.account_last4 ? ` ••${a.account_last4}` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {acc.is_default && (
+          <p className="small muted">
+            "{acc.name}" is where the books put money when no account is named (a payment marked "bank", say). The account you choose takes over that role.
+          </p>
+        )}
+      </div>
+    </Modal>
   );
 }
 

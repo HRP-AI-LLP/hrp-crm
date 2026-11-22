@@ -272,28 +272,47 @@ export function readReceipt(text: string, ownNames: string[] = []): ReceiptRead 
 
 /**
  * Whose document is it: our own invoice to a customer (our name or GSTIN at the top, someone else under
- * "Bill to"), or a supplier's bill to us (our name or GSTIN under "Bill to" / "Buyer").
+ * "Bill to"), or a supplier's bill / receipt to us (our name or GSTIN as the buyer: under "Bill to",
+ * "Account billed: …", "Receipt for …", "Sold to", "Customer: …"; or paid with our card).
+ * Our name alone at the top is not enough to call it ours: receipts are addressed to us by name
+ * ("Payment Receipt for HRP-AI-LLP"); our own invoices carry our GSTIN or a "Bill to" for the customer.
  */
+const BUYER = /\b(bill(?:ed)?\s+to|account\s+billed|billing\s+(?:account|address|details)|sold\s+to|issued\s+to|invoice(?:d)?\s+to|charged\s+to|paid\s+by|prepared\s+for|buyer|customer(?:\s*(?:name|details))?|client(?:\s*name)?|recipient|consignee|ship\s+to|deliver(?:ed|y)?\s+to)\b/i;
+const FOR_US = /\b(receipt|invoice|bill|statement|order|subscription)\s+(?:for|to)\b/i;
+const PAID_BY_CARD = /\b(payment\s+method|charged\s+to|card\s+(?:ending|ending\s+in|no\.?|number)|(?:visa|mastercard|master\s*card|amex|american\s+express|rupay|discover)\b[^\n]{0,24}?(?:\*{2,}|x{2,}|ending|•{2,})\s*\d{4})/i;
+
 export function whoseDocument(text: string, ownGstins: string[], ownNames: string[]): 'ours' | 'theirs' | null {
   const lines = text.replace(/\r/g, '').split('\n').map((l) => l.trim()).filter(Boolean);
   const names = ownNames.map((n) => n.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()).filter((n) => n.length >= 4);
   const gst = ownGstins.map((g) => g.toUpperCase());
+  const hasGst = (l: string) => gst.some((g) => l.toUpperCase().includes(g));
   const isOwn = (l: string) => {
-    const up = l.toUpperCase();
     const low = ` ${l.toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `;
-    return gst.some((g) => up.includes(g)) || names.some((n) => low.includes(` ${n} `));
+    return hasGst(l) || names.some((n) => low.includes(` ${n} `));
   };
-  const billIdx = lines.findIndex((l) => /\b(bill(?:ed)?\s+to|buyer|customer\s*(?:name|details)?\s*:?$|recipient|consignee|invoice\s+to)\b/i.test(l));
-  if (billIdx < 0) return lines.slice(0, 6).some(isOwn) ? 'ours' : null;
-  // the heading line can carry the supplier's column too ("Anthropic, PBC <tab> Bill to"): only cells from the heading on count
-  const head = lines[billIdx]!.split('\t');
-  const at = head.findIndex((c) => /\b(bill(?:ed)?\s+to|buyer|customer|recipient|consignee|invoice\s+to)\b/i.test(c));
-  const after = lines.slice(billIdx + 1, billIdx + 9).map((l) => {
-    const cells = l.split('\t');
-    return head.length > 1 && cells.length > 1 ? cells.slice(Math.min(at, cells.length - 1)).join(' ') : l;
-  });
-  const top = lines.slice(0, billIdx).concat(head.slice(0, Math.max(0, at)).join(' '));
-  if (after.some(isOwn)) return 'theirs';
-  if (top.some(isOwn)) return 'ours';
+  // "Account billed: HRP-AI-LLP", "Payment Receipt for HRP-AI-LLP", "Customer: HRP AI LLP" — label and us on one line
+  for (const l of lines) {
+    for (const re of [BUYER, FOR_US]) {
+      const m = re.exec(l);
+      if (m && isOwn(l.slice(m.index + m[0].length))) return 'theirs';
+    }
+  }
+  const billIdx = lines.findIndex((l) => /\b(bill(?:ed)?\s+to|account\s+billed|sold\s+to|issued\s+to|buyer|customer\s*(?:name|details)?\s*:?$|recipient|consignee|invoice\s+to)\b/i.test(l));
+  if (billIdx >= 0) {
+    // the heading line can carry the supplier's column too ("Anthropic, PBC <tab> Bill to"): only cells from the heading on count
+    const head = lines[billIdx]!.split('\t');
+    const at = head.findIndex((c) => /\b(bill(?:ed)?\s+to|account\s+billed|sold\s+to|issued\s+to|buyer|customer|recipient|consignee|invoice\s+to)\b/i.test(c));
+    const after = lines.slice(billIdx + 1, billIdx + 9).map((l) => {
+      const cells = l.split('\t');
+      return head.length > 1 && cells.length > 1 ? cells.slice(Math.min(at, cells.length - 1)).join(' ') : l;
+    });
+    const top = lines.slice(0, billIdx).concat(head.slice(0, Math.max(0, at)).join(' '));
+    if (after.some(isOwn)) return 'theirs';
+    if (top.some(isOwn)) return 'ours';
+  }
+  // paid with a card: something we bought
+  if (PAID_BY_CARD.test(text)) return 'theirs';
+  // no buyer heading: ours only when our GSTIN is at the top (a name alone is how receipts address us)
+  if (billIdx < 0 && lines.slice(0, 8).some(hasGst)) return 'ours';
   return null;
 }

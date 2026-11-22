@@ -76,7 +76,9 @@ export async function proposal(ctx: RecordCtx, env: Env, id: string, f: typeof f
   const it = await loadItem(ctx, id);
   const reads = Object.entries((it.data.reads ?? {}) as Record<string, Read>).filter(([, r]) => r.data || r.receipt);
   // our own invoice to a customer (e.g. sent from Zoho): imported as a sales invoice, not a bill
-  if (reads.some(([, r]) => r.whose === 'ours') && !reads.some(([, r]) => r.whose === 'theirs')) return ourInvoice(ctx, env, id, it);
+  // (settled by hand on this mail, or else as read: ours when a file says so and none says it is addressed to us)
+  const chosen = it.data.whose as 'ours' | 'theirs' | undefined;
+  if (chosen === 'ours' || (!chosen && reads.some(([, r]) => r.whose === 'ours') && !reads.some(([, r]) => r.whose === 'theirs'))) return ourInvoice(ctx, env, id, it);
   const nameOf = (fid: string) => it.attachments.find((a) => a.fileId === fid)?.name ?? '';
   // the invoice: a file not named a receipt, with the most read off it; the receipt: one that says paid
   const score = ([fid, r]: [string, Read]) => (/receipt/i.test(nameOf(fid)) ? -5 : 0) + (r.data?.lines?.length ? 3 : 0) + (r.data?.number ? 2 : 0) + (r.confidence ?? 0);
