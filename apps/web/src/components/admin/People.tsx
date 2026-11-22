@@ -1,3 +1,4 @@
+import { WORK_AREAS } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { get, patch, post, put } from '../../lib/api';
@@ -80,7 +81,7 @@ export function PeopleTab() {
         <p className="muted small" style={{ margin: 0 }}>
           {sec?.mailer ? 'Invitations and reset links are emailed.' : 'Email is not configured, so you will get a link to share for invitations and password resets.'} Attributes like region or branch drive attribute-based access.
         </p>
-        <button className="btn primary" onClick={() => setInv({ email: '', fullName: '', role: 'sales_rep', teamIds: [], invite: true })}>
+        <button className="btn primary" onClick={() => setInv({ email: '', fullName: '', role: roles?.items.some((r) => r.key === 'project_member') ? 'project_member' : '', teamIds: [], invite: true })}>
           Add people
         </button>
       </div>
@@ -242,7 +243,7 @@ export function PeopleTab() {
           footer={
             <button
               className="btn primary"
-              disabled={!inv.fullName.trim() || (inv.email.trim() !== '' && !/^\S+@\S+\.\S+$/.test(inv.email.trim()))}
+              disabled={!inv.fullName.trim() || !inv.role || (inv.email.trim() !== '' && !/^\S+@\S+\.\S+$/.test(inv.email.trim()))}
               onClick={async () => {
                 const onboard = inv.invite && !!inv.email.trim();
                 const r = (await act(() => post<{ id: string; inviteUrl: string | null; emailed: boolean }>('/api/admin/users/invite', { email: inv.email.trim() || null, fullName: inv.fullName, roles: [inv.role], teamIds: inv.teamIds, invite: onboard }), onboard ? 'Invitation created' : `${inv.fullName} added to the team`)) as { id: string; inviteUrl: string | null; emailed: boolean } | null;
@@ -278,12 +279,25 @@ export function PeopleTab() {
             <label className="field">
               Role
               <select value={inv.role} onChange={(e) => setInv({ ...inv, role: e.target.value })}>
+                {!inv.role && <option value="">Choose a role…</option>}
                 {roles?.items.map((r) => (
                   <option key={r.id} value={r.key}>
                     {r.name}
                   </option>
                 ))}
               </select>
+              {(() => {
+                const r = roles?.items.find((x) => x.key === inv.role);
+                const areas: string[] = r?.permissions?.apps ?? ['*'];
+                return (
+                  r && (
+                    <small className="muted">
+                      {r.description}
+                      {areas.includes('*') ? ' · Reaches every part of the workspace.' : ` · Areas: ${areas.map((a) => WORK_AREAS.find((w) => w.key === a)?.label ?? a).join(', ') || 'only home, tasks and their own things'}.`}
+                    </small>
+                  )
+                );
+              })()}
             </label>
             {!!teams?.items.length && (
               <div className="field">

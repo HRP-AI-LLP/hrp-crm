@@ -434,7 +434,7 @@ function RolesTab() {
           Record access: none, own, team (you and your direct reports) or all. Fields can be hidden or read-only per role, and conditions like <code>{'{"field":"city","op":"eq","value":"$user.region"}'}</code> limit rows by user attributes.
         </p>
         <button className="btn primary" onClick={() => {
-            const perms: RolePermissions = { objects: { '*': { read: 'all', create: true, update: 'own', delete: 'none' } }, fields: {}, conditions: {}, admin: [] };
+            const perms: RolePermissions = { objects: { '*': { read: 'all', create: true, update: 'own', delete: 'none' } }, fields: {}, conditions: {}, admin: [], apps: ['crm'] };
             setEdit({ key: '', name: '', perms, json: JSON.stringify(perms, null, 2), advanced: false });
           }}>
           New role

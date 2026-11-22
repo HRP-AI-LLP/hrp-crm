@@ -5,7 +5,7 @@
  * under "Advanced".
  */
 import type { ObjectMeta, RolePermissions } from '@synapse/shared';
-import { APPS, PERMISSION_GROUPS } from '@synapse/shared';
+import { APPS, PERMISSION_GROUPS, WORK_AREAS } from '@synapse/shared';
 import { Fragment, useMemo, useState } from 'react';
 import { useMeta } from '../../lib/hooks';
 
@@ -72,8 +72,40 @@ export function RoleEditor({ value, onChange }: { value: RolePermissions; onChan
     </select>
   );
 
+  const areas = value.apps ?? ['*'];
+  const everyArea = areas.includes('*');
+  const setArea = (k: string, on: boolean) => {
+    const cur = everyArea ? WORK_AREAS.map((a) => a.key as string) : areas;
+    const n = new Set(cur);
+    if (on) n.add(k);
+    else n.delete(k);
+    onChange({ ...value, apps: n.size === WORK_AREAS.length ? ['*'] : [...n] });
+  };
+
   return (
     <div className="stack">
+      <section>
+        <div className="spread" style={{ marginBottom: 6 }}>
+          <h3 style={{ margin: 0, fontSize: 15 }}>Work areas</h3>
+          <label className="check-row">
+            <input type="checkbox" checked={everyArea} onChange={(e) => onChange({ ...value, apps: e.target.checked ? ['*'] : [] })} /> Every area
+          </label>
+        </div>
+        <p className="muted small" style={{ margin: '0 0 8px' }}>
+          What this role can open. Outside these areas people see no menus, no screens and no records, whatever the record rights below say. Home, tasks, calendar, approvals, their own expenses and the assistant are always there.
+        </p>
+        <div className="perm-work-areas">
+          {WORK_AREAS.map((a) => (
+            <label key={a.key} className="check-row" title={a.help}>
+              <input type="checkbox" checked={everyArea || areas.includes(a.key)} onChange={(e) => setArea(a.key, e.target.checked)} />
+              <span>
+                <b>{a.label}</b>
+                <span className="muted small"> — {a.help}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </section>
       <section>
         <div className="spread" style={{ marginBottom: 6 }}>
           <h3 style={{ margin: 0, fontSize: 15 }}>Records</h3>

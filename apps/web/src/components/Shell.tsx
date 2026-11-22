@@ -1,4 +1,4 @@
-import { BRAND, hasAdmin } from '@synapse/shared';
+import { areaOfObject, BRAND, canUseArea, hasAdmin, objectPerm } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -16,6 +16,15 @@ import { NI, OBJECT_ICON } from './NavIcons';
 import { useTheme } from '../lib/theme';
 import { NavTrail } from './NavTrail';
 import { AssistantLauncher } from './assistant/Assistant';
+
+/** Which work area each screen belongs to (screens not listed are for everyone). */
+const NAV_AREAS: [string, string][] = [
+  ['/copilot', 'crm'], ['/sales-ops', 'sales'], ['/forecast', 'crm'], ['/field', 'operations'], ['/inventory', 'operations'], ['/schedule', 'operations'],
+  ['/after-sales', 'service'], ['/billing', 'billing'], ['/books', 'books'], ['/ca', 'gst'], ['/manufacturing', 'manufacturing'],
+  ['/projects', 'projects'], ['/work', 'projects'], ['/sdlc', 'projects'], ['/timesheet', 'projects'], ['/calls', 'calls'], ['/it', 'it'],
+  ['/inbox', 'inbox'], ['/campaigns', 'marketing'], ['/intake', 'intake'], ['/health', 'insights'], ['/reports', 'insights'], ['/dashboards', 'insights'],
+  ['/knowledge', 'knowledge'],
+];
 
 const svg = (d: string) => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -250,6 +259,14 @@ export function Shell() {
       }
       return n;
     });
+  const areas = me?.permissions.apps;
+  const mayOpen = (to: string) => {
+    const path = to.split(/[?#]/)[0]!;
+    const obj = /^\/o\/([a-z0-9_]+)/.exec(path)?.[1] ?? /^\/pipeline\/([a-z0-9_]+)/.exec(path)?.[1];
+    if (obj) return !!me && objectPerm(me.permissions, obj).read !== 'none' && canUseArea(areas, areaOfObject(obj));
+    const area = NAV_AREAS.find(([prefix]) => path === prefix || path.startsWith(`${prefix}/`))?.[1];
+    return !area || canUseArea(areas, area);
+  };
   const admin = me && (can('organisation') || can('metadata') || can('users') || can('roles') || can('modules') || can('workflows') || can('audit') || can('channels') || can('domains') || can('privacy') || can('developers') || can('ai'));
 
   // the sidebar, as data: drawn below and offered in the command palette
@@ -345,7 +362,10 @@ export function Shell() {
         ...(admin ? [{ to: '/settings', label: 'Settings', icon: 'gear' }] : []),
       ],
     },
-  ].filter((g) => g.items.length);
+  ]
+    // only the work areas the person's role includes (Settings → Roles), and objects they can read
+    .map((g) => ({ ...g, items: g.items.filter((i) => mayOpen(i.to)) }))
+    .filter((g) => g.items.length);
   if (caOnly)
     groups.splice(0, groups.length,
       { key: 'top', label: null, items: [{ to: '/ca', label: 'Filings', icon: 'stamp', end: false } as Item] },
@@ -434,7 +454,17 @@ export function Shell() {
         {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
         <main className="content">
           <Suspense fallback={<Spinner />}>
-            <Outlet />
+            {me && !mayOpen(loc.pathname) ? (
+              <div className="panel panel-body" style={{ maxWidth: 560 }}>
+                <h2 style={{ marginTop: 0 }}>Not part of your role</h2>
+                <p className="muted">This part of SanchalanOS is not included in your role. If you need it, ask an administrator to add it in Settings → Roles.</p>
+                <Link className="btn" to="/">
+                  Go home
+                </Link>
+              </div>
+            ) : (
+              <Outlet />
+            )}
           </Suspense>
         </main>
         <TabBar onMenu={() => setNavOpen(true)} />

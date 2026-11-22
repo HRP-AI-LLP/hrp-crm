@@ -1,7 +1,7 @@
 import type { Context, MiddlewareHandler } from 'hono';
 import type { AdminArea } from '@synapse/shared';
 import { takeToken } from './lib/ratelimit';
-import { hasAdmin, type SecurityPolicy } from '@synapse/shared';
+import { areaOfPath, canUseArea, hasAdmin, type SecurityPolicy, WORK_AREAS } from '@synapse/shared';
 import { assertNetworkAllowed } from './lib/ip';
 import type { AppEnv } from './env';
 import { Db } from './lib/db';
@@ -159,6 +159,23 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
   c.set('meta', meta);
   c.set('principal', principal);
+  await next();
+};
+
+/**
+ * Work areas: a role only reaches the parts of the product it is given (Settings → Roles → Areas).
+ * Runs after authenticate on /api/v1 and /api/ai; admin routes have their own checks.
+ */
+export const areaGuard: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const apps = c.var.principal?.permissions.apps;
+  if (apps && !apps.includes('*')) {
+    const path = new URL(c.req.url).pathname.replace(/^\/api\/(v1|ai)/, '');
+    const area = areaOfPath(path);
+    if (area === null || !canUseArea(apps, area)) {
+      const label = WORK_AREAS.find((a) => a.key === area)?.label;
+      throw forbidden(label ? `Your role does not include ${label}. Ask an administrator to add it in Settings → Roles.` : 'Your role does not include this part of SanchalanOS');
+    }
+  }
   await next();
 };
 

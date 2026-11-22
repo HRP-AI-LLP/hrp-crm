@@ -210,7 +210,7 @@ export async function readMeta(tx: Tx, tenant: TenantInfo): Promise<TenantMeta> 
 // ------------------------------------------------------------------------------------------------
 export async function loadPrincipal(env: Env, tx: Tx, tenant: TenantInfo, meta: TenantMeta, userId: string, sessionId: string): Promise<Principal | null> {
   const cache = new EdgeCache(env);
-  const key = `t:${tenant.id}:principal:${userId}:v${tenant.metaVersion}`;
+  const key = `t:${tenant.id}:principal2:${userId}:v${tenant.metaVersion}`;
   const cached = await cache.get<Omit<Principal, 'sessionId'>>(key);
   if (cached) return { ...cached, sessionId };
 
@@ -242,9 +242,15 @@ export async function loadPrincipal(env: Env, tx: Tx, tenant: TenantInfo, meta: 
       where tenant_id = $1 and is_active and (team_id = any($2::uuid[]) or role_key = any($3::text[]))`,
     [tenant.id, teams.map((t) => t.team_id), roleKeys],
   );
+  const permissions = mergePermissions(parsed, meta.objects.map((o) => o.key).concat(['task', 'activity']));
+  // being on a project's team opens Projects (projectAccess still limits it to their projects)
+  if (!permissions.apps.includes('*') && !permissions.apps.includes('projects')) {
+    const onTeam = await tx.one(`select 1 from project_members where tenant_id = $1 and user_id = $2 limit 1`, [tenant.id, userId]);
+    if (onTeam) permissions.apps = [...permissions.apps, 'projects'].sort();
+  }
   const value: Omit<Principal, 'sessionId'> = {
     user: { id: user.id, email: user.email, fullName: user.full_name, isOwner: user.is_owner, status: user.status, attributes: user.attributes ?? {}, roles: roleKeys, mfaEnabled: user.mfa },
-    permissions: mergePermissions(parsed, meta.objects.map((o) => o.key).concat(['task', 'activity'])),
+    permissions,
     teams: [...new Set(teams.map((t) => t.team_id))],
     leads: [...new Set(teams.filter((t) => t.is_lead).map((t) => t.team_id))],
     shares: rules.map((r) => ({ objectKey: r.object_key, criteria: Array.isArray(r.criteria) ? r.criteria : [], access: r.access })),
@@ -254,5 +260,5 @@ export async function loadPrincipal(env: Env, tx: Tx, tenant: TenantInfo, meta: 
 }
 
 export async function invalidatePrincipal(env: Env, tenant: TenantInfo, userId: string) {
-  await new EdgeCache(env).delete(`t:${tenant.id}:principal:${userId}:v${tenant.metaVersion}`);
+  await new EdgeCache(env).delete(`t:${tenant.id}:principal2:${userId}:v${tenant.metaVersion}`);
 }

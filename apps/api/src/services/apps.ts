@@ -13,6 +13,7 @@ export function listApps(meta: TenantMeta) {
   return Object.values(APPS).map((a) => ({ key: a.key, name: a.name, description: a.description, requires: a.requires, enabled: on.has(a.key), objects: a.objects.map((o) => o.plural) }));
 }
 import { ensureBooks } from './books/ledger';
+import { ROLE_AREAS } from '@synapse/shared';
 
 export async function enableApp(ctx: RecordCtx, key: string) {
   const app = APPS[key];
@@ -34,7 +35,7 @@ export async function enableApp(ctx: RecordCtx, key: string) {
   );
   for (const r of app.roles ?? []) {
     await ctx.tx.query(`insert into roles (tenant_id, key, name, description, is_system, permissions) values ($1,$2,$3,$4,true,$5) on conflict (tenant_id, key) do nothing`, [
-      ctx.tenantId, r.key, r.name, r.description, JSON.stringify(r.permissions),
+      ctx.tenantId, r.key, r.name, r.description, JSON.stringify({ ...r.permissions, apps: ROLE_AREAS[r.key] ?? [] }),
     ]);
   }
   // sales reps work on their own orders; everyone else follows their role's "*" rule

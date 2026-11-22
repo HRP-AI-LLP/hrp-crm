@@ -226,7 +226,14 @@ export const projectRoutes = new Hono<AppEnv>()
           .max(200),
       })
       .parse(await c.req.json());
-    await c.var.db.tx(scope(c), (tx) => pj.setMembers(rctx(c, tx), id(c), b.members));
+    const before = await c.var.db.tx(scope(c), async (tx) => {
+      const was = await tx.query<{ user_id: string }>(`select user_id from project_members where tenant_id = $1 and project_id = $2`, [c.var.tenant.id, id(c)]);
+      await pj.setMembers(rctx(c, tx), id(c), b.members);
+      return was.map((w) => w.user_id);
+    });
+    // joining or leaving a team opens or closes Projects for them right away
+    const { invalidatePrincipal } = await import('../services/tenancy');
+    for (const u of new Set([...before, ...b.members.map((m) => m.userId)])) await invalidatePrincipal(c.env, c.var.tenant, u).catch(() => undefined);
     return c.json({ ok: true });
   })
   .post('/projects/:id/duplicate', async (c) => {

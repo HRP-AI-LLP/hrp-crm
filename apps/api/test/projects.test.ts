@@ -59,7 +59,7 @@ describe('projects', () => {
     const all = await api('GET', '/api/v1/projects');
     expect(all.status, JSON.stringify(all.json)).toBe(200);
     expect(all.json).toHaveLength(1);
-    expect((await outsider('GET', '/api/v1/projects')).json).toHaveLength(0);
+    expect((await outsider('GET', '/api/v1/projects')).status).toBe(403); // not on any project: Projects is not part of their role
   });
 
   it('milestones, lists, tasks, sub-tasks, dependencies and progress', async () => {
@@ -94,7 +94,7 @@ describe('projects', () => {
     const p = (await pm('GET', `/api/v1/projects/${ids.project}`)).json.project;
     expect(p.progress).toBe(50); // two top-level tasks of 8h, one done
     // the outsider cannot see the project's insides
-    expect((await outsider('GET', `/api/v1/projects/${ids.project}/tasks`)).status).toBe(404);
+    expect((await outsider('GET', `/api/v1/projects/${ids.project}/tasks`)).status).toBe(403);
     // assignees are notified
     const n = await dev('GET', '/api/v1/notifications');
     expect(JSON.stringify(n.json)).toContain('Site survey');
@@ -109,7 +109,7 @@ describe('projects', () => {
     expect((await pm('POST', `/api/v1/projects/${ids.project}/tasks/${ids.taskB}/comments`, { body: 'Use the 3D view' })).status).toBe(201);
     const c = await dev('GET', `/api/v1/projects/${ids.project}/tasks/${ids.taskB}/comments`);
     expect(c.json[0].body).toBe('Use the 3D view');
-    expect((await outsider('POST', `/api/v1/projects/${ids.project}/tasks/${ids.taskB}/comments`, { body: 'hi' })).status).toBe(404);
+    expect((await outsider('POST', `/api/v1/projects/${ids.project}/tasks/${ids.taskB}/comments`, { body: 'hi' })).status).toBe(403);
   });
 });
 
@@ -118,7 +118,7 @@ describe('time and timesheets', () => {
     const t = await dev('POST', '/api/v1/time', { projectId: ids.project, taskId: ids.taskA, date: monday, minutes: 240, notes: 'Survey' });
     expect(t.status, JSON.stringify(t.json)).toBe(201);
     ids.entry1 = t.json.id;
-    expect((await outsider('POST', '/api/v1/time', { projectId: ids.project, date: monday, minutes: 60 })).status).toBe(404);
+    expect((await outsider('POST', '/api/v1/time', { projectId: ids.project, date: monday, minutes: 60 })).status).toBe(403);
     expect((await dev('POST', '/api/v1/time', { projectId: ids.project, date: monday, minutes: 60, userId: ids.pm })).status).toBe(403);
     expect((await dev('POST', '/api/v1/time', { projectId: ids.project, date: monday, minutes: 1300 })).status).toBe(400); // over 24h with the 4h above
     // timer
@@ -191,7 +191,7 @@ describe('billing and reports', () => {
     expect(r.status).toBe(200);
     expect(r.json[0]).toMatchObject({ label: 'DEV', hours: 5.5 });
     const mine = await outsider('GET', `/api/v1/project-reports/time?from=${monday}&to=${addDays(monday, 6)}&groupBy=person`);
-    expect(mine.json).toHaveLength(0);
+    expect(mine.status).toBe(403);
     const ut = await pm('GET', `/api/v1/project-reports/utilisation?from=${monday}&to=${addDays(monday, 6)}`);
     expect(ut.status).toBe(200);
     expect(ut.json.find((x: any) => x.full_name === 'DEV')).toMatchObject({ capacity: 40, logged: 5.5 });

@@ -138,7 +138,7 @@ export const securityRoutes = new Hono<AppEnv>()
         email: z.string().trim().toLowerCase().pipe(z.email()).nullish().or(z.literal('').transform(() => null)),
         fullName: z.string().trim().min(1).max(120),
         phone: z.string().trim().regex(/^\+?[0-9 ()-]{6,20}$/, 'Use digits, e.g. +91 98100 00000').nullish().or(z.literal('').transform(() => null)),
-        roles: z.array(z.string()).min(1).default(['sales_rep']),
+        roles: z.array(z.string()).min(1).optional(),
         managerId: uuid.nullish(),
         teamIds: z.array(uuid).max(20).default([]),
         invite: z.boolean().default(true),
@@ -153,8 +153,10 @@ export const securityRoutes = new Hono<AppEnv>()
       const u = await tx.one<{ id: string }>(`insert into users (tenant_id, email, full_name, status, manager_id, phone) values ($1,$2,$3,$4,$5,$6) returning id`, [
         c.var.tenant.id, b.email ?? null, b.fullName, onboard ? 'invited' : 'profile', b.managerId ?? null, b.phone ?? null,
       ]);
-      const roles = await tx.query<{ id: string }>(`select id from roles where tenant_id = $1 and key = any($2)`, [c.var.tenant.id, b.roles]);
-      if (roles.length !== b.roles.length) throw badRequest('Unknown role');
+      // no role chosen: the least one (a project team member where projects are on)
+      const wanted = b.roles ?? [(await tx.one(`select 1 from roles where tenant_id = $1 and key = 'project_member'`, [c.var.tenant.id])) ? 'project_member' : 'sales_rep'];
+      const roles = await tx.query<{ id: string }>(`select id from roles where tenant_id = $1 and key = any($2)`, [c.var.tenant.id, wanted]);
+      if (roles.length !== wanted.length) throw badRequest('Unknown role');
       for (const role of roles) await tx.query(`insert into user_roles (tenant_id, user_id, role_id) values ($1,$2,$3)`, [c.var.tenant.id, u!.id, role.id]);
       for (const t of b.teamIds) await tx.query(`insert into team_members (tenant_id, team_id, user_id) values ($1,$2,$3) on conflict do nothing`, [c.var.tenant.id, t, u!.id]);
       return { id: u!.id, token: onboard ? await createUserToken(tx, c.var.tenant.id, u!.id, 'invite', 7 * 86_400) : null };

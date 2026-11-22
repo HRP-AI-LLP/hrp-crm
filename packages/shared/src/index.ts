@@ -17,3 +17,4 @@ export * from './books';
 export * from './statement';
 export * from './connection-keys';
 export * from './brand';
+export * from './access';

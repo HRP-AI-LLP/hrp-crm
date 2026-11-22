@@ -1945,7 +1945,9 @@ function InvitePerson({ onClose, onInvited }: { onClose: () => void; onInvited: 
   const [busy, setBusy] = useState(false);
   const [link, setLink] = useState<string | null>(null);
   const choices = (roles?.items ?? []).filter((r) => r.key !== 'admin');
-  const role = f.role || choices.find((r) => /member|project|staff|employee|user/i.test(`${r.key} ${r.name}`))?.key || choices[0]?.key || '';
+  // the least access by default: only the projects they are added to
+  const role = f.role || choices.find((r) => r.key === 'project_member')?.key || choices.find((r) => /member/i.test(`${r.key} ${r.name}`))?.key || '';
+  const chosen = choices.find((r) => r.key === role);
   if (link)
     return (
       <Modal title="Invitation link" onClose={onClose}>
@@ -2018,7 +2020,12 @@ function InvitePerson({ onClose, onInvited }: { onClose: () => void; onInvited: 
                     {r.name ?? r.key}
                   </option>
                 ))}
+                {!role && <option value="">Choose…</option>}
               </select>
+              {chosen?.description && <small className="muted">{chosen.description}</small>}
+              {chosen && (chosen.permissions?.apps ?? ['*']).includes('*') && (
+                <small style={{ color: 'var(--bad)' }}>This role reaches every part of the workspace (CRM, billing, books…). For someone working only on projects choose “Project team member”.</small>
+              )}
             </label>
             <p className="small muted" style={{ margin: 0 }}>
               Without an email they join the team as a profile (time, tasks and rates work); add the email and onboard them to the CRM any time from Settings → People. Their role on this project (member, manager, viewer) and their rates are set in the team list.

@@ -3,7 +3,7 @@ import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import type { AppEnv } from './env';
 import { notFound, onError } from './lib/errors';
-import { authenticate, requestContext, tenantResolver } from './middleware';
+import { areaGuard, authenticate, requestContext, tenantResolver } from './middleware';
 import { adminRoutes } from './routes/admin';
 import { aiRoutes } from './routes/ai';
 import { authRoutes } from './routes/auth';
@@ -104,6 +104,7 @@ export function createApp() {
   for (const path of ['/api/v1/*', '/api/ai/*', '/api/admin/*']) {
     app.use(path, tenantResolver, authenticate);
   }
+  for (const path of ['/api/v1/*', '/api/ai/*']) app.use(path, areaGuard);
   app.route('/api/v1', crmRoutes);
   app.route('/api/v1', dataRoutes);
   app.route('/api/v1', salesRoutes);

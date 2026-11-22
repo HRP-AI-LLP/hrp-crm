@@ -241,9 +241,8 @@ describe('review hardening', () => {
     const rec = (await rep('GET', `/api/v1/records/work_order/${ids.woTable}`)).json;
     expect(rec.material_cost).toBeUndefined();
     expect(wo.materials[0].issued_value).toBeNull();
-    expect((await rep('GET', `/api/v1/mfg/boms/${ids.tableBom}`)).json.cost).toBeNull();
-    expect((await rep('GET', '/api/v1/mfg/reports/production')).json[0].material).toBeNull();
-    expect((await rep('GET', '/api/v1/mfg/work-centers')).json[0].cost_per_hour).toBeNull();
+    // the rest of manufacturing is not part of a sales role at all
+    for (const path of [`/api/v1/mfg/boms/${ids.tableBom}`, '/api/v1/mfg/reports/production', '/api/v1/mfg/work-centers']) expect((await rep('GET', path)).status, path).toBe(403);
     expect((await api('GET', `/api/v1/mfg/work-orders/${ids.woTable}`)).json.costs).not.toBeNull();
   });
 

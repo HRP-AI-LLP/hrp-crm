@@ -1,3 +1,4 @@
+import { areaOfObject, canUseArea } from './access';
 /**
  * RBAC + ABAC permission model.
  *
@@ -44,6 +45,8 @@ export const rolePermissionsSchema = z.object({
   fields: z.record(z.string(), z.record(z.string(), z.enum(['hidden', 'read', 'edit']))).optional(),
   conditions: z.record(z.string(), z.array(conditionSchema)).optional(),
   admin: z.array(z.string()).optional(),
+  /** work areas the role may use (see access.ts); missing = every area */
+  apps: z.array(z.string()).optional(),
 });
 export type RolePermissions = z.infer<typeof rolePermissionsSchema>;
 
@@ -54,6 +57,8 @@ export interface EffectivePermissions {
   /** null = unrestricted; [] would mean "no access" */
   conditions: Record<string, Condition[][] | null>;
   admin: string[];
+  /** work areas: ['*'] = all */
+  apps: string[];
 }
 
 const NONE: ObjectPerm = { read: 'none', create: false, update: 'none', delete: 'none' };
@@ -73,10 +78,13 @@ function objectPermFor(role: RolePermissions, objectKey: string): ObjectPerm {
 }
 
 export function mergePermissions(roles: RolePermissions[], objectKeys: string[]): EffectivePermissions {
-  const out: EffectivePermissions = { objects: {}, fields: {}, conditions: {}, admin: [] };
+  const out: EffectivePermissions = { objects: {}, fields: {}, conditions: {}, admin: [], apps: [] };
   const admin = new Set<string>();
   for (const r of roles) for (const a of r.admin ?? []) admin.add(a);
   out.admin = admin.has('*') ? ['*'] : [...admin].sort();
+  const apps = new Set<string>();
+  for (const r of roles) for (const a of r.apps ?? ['*']) apps.add(a);
+  out.apps = apps.has('*') ? ['*'] : [...apps].sort();
 
   for (const obj of objectKeys) {
     let merged: ObjectPerm = { ...NONE };
@@ -85,8 +93,10 @@ export function mergePermissions(roles: RolePermissions[], objectKeys: string[])
     const fieldAcc: Record<string, FieldAccess> = {};
     const granting: RolePermissions[] = [];
 
+    const area = areaOfObject(obj);
     for (const r of roles) {
-      const p = objectPermFor(r, obj);
+      // outside its work areas a role grants nothing on records, unless it names the record type itself
+      const p = canUseArea(r.apps, area) || r.objects?.[obj] !== undefined ? objectPermFor(r, obj) : NONE;
       merged = {
         read: maxAccess(merged.read, p.read),
         create: merged.create || p.create,

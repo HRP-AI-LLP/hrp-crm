@@ -227,7 +227,8 @@ export const adminRoutes = new Hono<AppEnv>()
   .post('/roles', requireAdmin('roles'), async (c) => {
     const b = z.object({ key: z.string().regex(KEY_PATTERN), name: z.string().min(1).max(80), description: z.string().max(300).optional(), permissions: rolePermissionsSchema }).parse(await c.req.json());
     const row = await c.var.db.tx(scope(c), (tx) =>
-      tx.one(`insert into roles (tenant_id, key, name, description, permissions) values ($1,$2,$3,$4,$5) returning *`, [c.var.tenant.id, b.key, b.name, b.description ?? null, JSON.stringify(b.permissions)]),
+      // areas not given: every area (record rights still apply); the role editor always sends them
+      tx.one(`insert into roles (tenant_id, key, name, description, permissions) values ($1,$2,$3,$4,$5) returning *`, [c.var.tenant.id, b.key, b.name, b.description ?? null, JSON.stringify({ apps: ['*'], ...b.permissions })]),
     );
     return c.json(row, 201);
   })
@@ -239,7 +240,10 @@ export const adminRoutes = new Hono<AppEnv>()
       if (!r) throw notFound();
       if (r.key === 'admin' && b.permissions) throw badRequest('The Administrator role permissions are fixed');
       const out = await tx.one(
-        `update roles set name = coalesce($3,name), description = coalesce($4,description), permissions = coalesce($5::jsonb, permissions) where tenant_id = $1 and id = $2 returning *`,
+        `update roles set name = coalesce($3,name), description = coalesce($4,description), permissions = case when $5::jsonb is null then permissions
+               -- an edit that does not mention areas keeps the role's areas
+               when not ($5::jsonb ? 'apps') and permissions ? 'apps' then $5::jsonb || jsonb_build_object('apps', permissions -> 'apps') else $5::jsonb end
+         where tenant_id = $1 and id = $2 returning *`,
         [c.var.tenant.id, id, b.name ?? null, b.description ?? null, b.permissions ? JSON.stringify(b.permissions) : null],
       );
       await tx.query(`insert into audit_logs (tenant_id, action, object_key, record_id, changes) values ($1,'permission_change','role',$2,$3)`, [c.var.tenant.id, id, JSON.stringify(b)]);
