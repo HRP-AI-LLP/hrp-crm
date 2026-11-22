@@ -39,6 +39,8 @@ import { connectionKeyRoutes } from './routes/connection-keys';
 import { withPlatformKeys } from './services/connection-keys';
 import { Db } from './lib/db';
 import { projectChatRoutes } from './routes/project-chats';
+import { assistantRoutes } from './routes/assistant';
+import { setAssistantApp } from './services/assistant';
 import { markDbAwake } from './services/cron-plan';
 
 export function createApp() {
@@ -113,6 +115,7 @@ export function createApp() {
   app.route('/api/v1', itRoutes);
   app.route('/api/v1', workRoutes);
   app.route('/api/v1', projectChatRoutes);
+  app.route('/api/v1', assistantRoutes);
   app.route('/api/v1', industryRoutes);
   app.route('/api/v1', intakeRoutes);
   app.route('/api/v1', manufacturingRoutes);
@@ -172,5 +175,7 @@ export function createApp() {
   });
 
   app.onError(onError);
+  // the workspace assistant calls this same API in-process, as the person it works for
+  setAssistantApp(app as never);
   return app;
 }

@@ -8,7 +8,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "build": "wrangler deploy --dry-run --outdir dist --env production",
-    "deploy:prod": "wrangler deploy --env production"
+    "deploy:prod": "wrangler deploy --env production",
+    "catalogue": "node scripts/assistant-catalogue.mjs"
   },
   "dependencies": {
     "@synapse/shared": "workspace:*",

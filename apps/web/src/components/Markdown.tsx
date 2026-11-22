@@ -1,15 +1,23 @@
 import { Fragment, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 
-/** Bold (**x**) and links ([text](https://…)) inside one line; everything else is plain text. */
+/** Bold (**x**), `code` and links ([text](https://…) or [text](/a/page/in/the/app)) inside one line; everything else is plain text. */
 function inline(text: string): ReactNode[] {
   const out: ReactNode[] = [];
-  const re = /\*\*([^*]+)\*\*|\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+)\)/g;
+  const re = /\*\*([^*]+)\*\*|\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+|\/(?!\/)[^)\s]*)\)|`([^`]+)`/g;
   let last = 0;
   let m: RegExpExecArray | null;
   let i = 0;
   while ((m = re.exec(text))) {
     if (m.index > last) out.push(text.slice(last, m.index));
     if (m[1]) out.push(<b key={i++}>{m[1]}</b>);
+    else if (m[4]) out.push(<code key={i++}>{m[4]}</code>);
+    else if (m[3]!.startsWith('/'))
+      out.push(
+        <Link key={i++} to={m[3]!}>
+          {m[2]}
+        </Link>,
+      );
     else
       out.push(
         <a key={i++} href={m[3]} target="_blank" rel="noopener noreferrer">

@@ -15,6 +15,7 @@ import { CommandPalette, type Command, useCommandPaletteShortcut } from './Comma
 import { NI, OBJECT_ICON } from './NavIcons';
 import { useTheme } from '../lib/theme';
 import { NavTrail } from './NavTrail';
+import { AssistantLauncher } from './assistant/Assistant';
 
 const svg = (d: string) => (
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -259,6 +260,7 @@ export function Shell() {
       label: null,
       items: [
         { to: '/', label: 'Home', icon: 'home', end: true },
+        { to: '/assistant', label: 'Assistant', icon: 'spark' },
         { to: '/copilot', label: 'Copilot', icon: 'spark', badge: copilot.data?.insights?.length || null },
         { to: '/field', label: 'My day', icon: 'sun' },
         { to: '/tasks', label: 'My tasks', icon: 'check' },
@@ -435,6 +437,7 @@ export function Shell() {
           </Suspense>
         </main>
         <TabBar onMenu={() => setNavOpen(true)} />
+        {!caOnly && <AssistantLauncher />}
       </div>
     </div>
   );
