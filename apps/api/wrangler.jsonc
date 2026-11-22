@@ -67,6 +67,7 @@
         "consumers": [{ "queue": "synapse-jobs-prod", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 5, "dead_letter_queue": "synapse-jobs-dlq-prod" }]
       },
       "ai": { "binding": "AI" },
+      "r2_buckets": [{ "binding": "FILES", "bucket_name": "synapse-files-prod" }],
       "vectorize": [{ "binding": "VECTORIZE", "index_name": "synapse-kb-prod" }],
       // 03:17 UTC daily housekeeping + a 5-minute tick that reads KV first and wakes the database
       // only when something is due (see apps/api/src/services/cron-plan.ts)
