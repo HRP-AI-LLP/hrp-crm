@@ -11,6 +11,8 @@ import type { AppEnv } from '../env';
 import { ApiError } from '../lib/errors';
 import { scope } from '../middleware';
 import * as ag from '../services/coding-agent';
+import * as sd from '../services/sdlc';
+import { DIAGRAM_TYPES, type DiagramType, specGuide } from '@synapse/shared/diagrams';
 import type { RecordCtx } from '../services/records';
 
 const PROTOCOL = '2025-06-18';
@@ -125,6 +127,44 @@ const TOOLS: Tool[] = [
       ['project', 'type', 'title'],
     ),
     run: (c, a) => run(c, (ctx) => ag.agentCreateItem(ctx, ag.newItemSchema.parse(a))),
+  },
+  {
+    name: 'project_documents',
+    description: 'The project\'s documents (BRD, SRS, HLD, LLD, API spec, test plan, runbook …) and diagrams made by the AI delivery agents or people — approved ones first. Read the relevant ones before implementing.',
+    inputSchema: obj({ project: str('Project id, key or name') }, ['project']),
+    run: (c, a) => run(c, async (ctx) => ({ documents: await sd.projectDocs(ctx, (await ag.projectSetup(ctx, String(a.project))).project.id) }), true),
+  },
+  {
+    name: 'read_document',
+    description: 'A document (markdown) or diagram (Mermaid and its spec) by id, from project_documents.',
+    inputSchema: obj({ id: str('Document or diagram id') }, ['id']),
+    run: (c, a) => run(c, (ctx) => sd.readDoc(ctx, String(a.id)), true),
+  },
+  {
+    name: 'diagram_format',
+    description: 'The JSON format for a diagram of one kind, to use with render_diagram / save_diagram. Kinds: flowchart, architecture, data_flow, block, network, deployment, c4_context, c4_container, use_case, mindmap, org_chart, swimlane, state, class, er, sequence, user_journey, and Mermaid-only gantt, timeline, pie, quadrant, gitgraph, sankey, requirement, kanban, mermaid.',
+    inputSchema: obj({ type: str('Diagram kind, e.g. er, sequence, architecture') }, ['type']),
+    run: async (_c, a) => ({ format: specGuide((DIAGRAM_TYPES as readonly string[]).includes(String(a.type)) ? (String(a.type) as DiagramType) : 'architecture') }),
+  },
+  {
+    name: 'render_diagram',
+    description: 'Turns a diagram spec (see diagram_format) into Mermaid source and a draw.io (.drawio) file with laid-out, editable shapes. Write the results into the repository (docs/diagrams/*.mmd, *.drawio) when useful.',
+    inputSchema: obj({ spec: { type: 'object', description: 'The diagram spec' } }, ['spec']),
+    run: async (_c, a) => sd.renderDiagram(a.spec),
+  },
+  {
+    name: 'save_diagram',
+    description: 'Saves a diagram to the project\'s documents (e.g. the architecture you implemented), from a spec or Mermaid source. People see it under AI delivery, with PNG / JPG / SVG / draw.io downloads.',
+    inputSchema: obj({ project: str('Project id, key or name'), title: str('Title'), spec: { type: 'object', description: 'Diagram spec (see diagram_format)' }, mermaid: str('Or: Mermaid source') }, ['project', 'title']),
+    run: (c, a) =>
+      run(c, async (ctx) => sd.createArtifact(ctx, { kind: 'diagram', projectId: (await ag.projectSetup(ctx, String(a.project))).project.id, title: String(a.title).slice(0, 200), subtype: 'custom', spec: a.spec, mermaid: a.mermaid ? String(a.mermaid) : null })),
+  },
+  {
+    name: 'save_document',
+    description: 'Saves a markdown document to the project\'s documents (design notes, ADRs, API docs, release notes). Mermaid in ```mermaid blocks is drawn.',
+    inputSchema: obj({ project: str('Project id, key or name'), title: str('Title'), markdown: str('The document'), type: str('Kind: hld, lld, api_spec, adr, release_notes, runbook, user_manual, custom') }, ['project', 'title', 'markdown']),
+    run: (c, a) =>
+      run(c, async (ctx) => sd.createArtifact(ctx, { kind: 'document', projectId: (await ag.projectSetup(ctx, String(a.project))).project.id, title: String(a.title).slice(0, 200), subtype: String(a.type ?? 'custom'), body: String(a.markdown ?? '').slice(0, 400000) })),
   },
 ];
 

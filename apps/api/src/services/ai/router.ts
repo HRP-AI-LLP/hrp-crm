@@ -15,7 +15,7 @@
  */
 import type { Env } from '../../env';
 
-export type AiTask = 'lead_score' | 'sentiment' | 'summary' | 'email_draft' | 'next_best_action' | 'rag_answer' | 'provider_test' | 'agent' | 'document';
+export type AiTask = 'lead_score' | 'sentiment' | 'summary' | 'email_draft' | 'next_best_action' | 'rag_answer' | 'provider_test' | 'agent' | 'document' | 'sdlc' | 'sdlc_plan' | 'sdlc_document' | 'sdlc_diagram' | 'sdlc_backlog' | 'sdlc_tests';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';

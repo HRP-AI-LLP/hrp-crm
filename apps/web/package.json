@@ -17,6 +17,8 @@
     "html-to-image": "1.11.13",
     "jspdf": "2.5.2",
     "jspdf-autotable": "3.8.4",
+    "marked": "15.0.6",
+    "mermaid": "11.4.1",
     "mustache": "4.2.0",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "4.10.38",

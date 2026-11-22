@@ -24,7 +24,8 @@ export type Job =
   | { type: 'leadads.meta'; tenantId: string; integrationId: string; leadgenId: string }
   | { type: 'leadads.google'; tenantId: string; integrationId: string; body: unknown }
   | { type: 'payment.razorpay'; tenantId: string; integrationId: string; event: unknown }
-  | { type: 'telephony.incoming'; tenantId: string; integrationId: string; params: Record<string, string> };
+  | { type: 'telephony.incoming'; tenantId: string; integrationId: string; params: Record<string, string> }
+  | { type: 'sdlc.advance'; tenantId: string; runId: string };
 
 export interface Waiter {
   waitUntil(p: Promise<unknown>): void;

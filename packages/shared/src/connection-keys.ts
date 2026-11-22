@@ -772,6 +772,22 @@ export const GUIDES: Record<string, Guide> = {
       'Options: PROJECT=FLEET (one project), ONCE=1 (one job, then stop), WORK_DIR=D:\\work, CLAUDE_ARGS / CODEX_ARGS (the agent’s permissions). Keep the runner open, or run it as a scheduled task at log-on.',
     ],
   },
+  ai_delivery: {
+    title: 'AI delivery: agents, documents and diagrams',
+    links: [
+      { label: 'diagrams.net (draw.io)', url: 'https://app.diagrams.net/' },
+      { label: 'Mermaid syntax', url: 'https://mermaid.js.org/intro/' },
+    ],
+    steps: [
+      'Needs an AI model: Settings → AI models (your own OpenAI / Anthropic / Gemini key gives the best documents), or the platform model.',
+      'AI delivery → New run: describe the goal, pick a project (needed for backlog, test cases and code), let the AI plan it or pick a ready-made plan (feature, new product, design pack, client proposal, bug fix, documentation).',
+      'Check the plan: add, remove or reorder steps, choose each step’s agent and document or diagram kind, and where the agents stop for you (key steps, every step, or only before changing the project). Start.',
+      'Each step waits for you as needed: Approve, Request changes (the agent redoes it with your note, and redoes the documents after it), or Skip. Backlog, test cases and code always wait for your approval — the backlog editor lets you untick or rename items first.',
+      'Documents download as Word, PDF, HTML or Markdown with their figures; diagrams as PNG, JPG, SVG, Mermaid (.mmd) or draw.io (.drawio), or open in draw.io to edit (structural diagrams arrive as editable shapes).',
+      'Diagram studio: describe any diagram (architecture, data flow, ER, sequence, user journey, block, network, deployment, C4, use case, class, state, swimlane, mind map, org chart, gantt, timeline, pie, quadrant, git, sankey, kanban…) or paste Mermaid.',
+      'Code: the approved stories go to the coding agent (Project → Coding agent); Claude Code / Codex read the project documents over MCP (project_documents, read_document) and can save diagrams and documents back (render_diagram, save_diagram, save_document).',
+    ],
+  },
   usage_costs: {
     title: 'How usage and costs are counted',
     links: [

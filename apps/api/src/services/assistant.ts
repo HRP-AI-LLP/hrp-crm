@@ -248,6 +248,7 @@ Map of the API (find gives the details):
 - Objects you can see: ${objects.join(', ')}.
 - Projects: GET /api/v1/projects, /api/v1/projects/{id}, /summary; tasks /api/v1/projects/{id}/tasks; milestones POST /api/v1/projects/{id}/milestones; task lists, issues, members, time.
 - Work management (boards, backlog, epics, stories, bugs, workflows): /api/v1/projects/{id}/work/... (items, board, boards, query, hierarchy, rules); agile sprints and releases: /api/v1/projects/{id}/agile/sprints, /agile/releases, /agile/backlog; my work: /api/v1/work/mine, /api/v1/my-tasks.
+- AI delivery (agents writing BRD / SRS / HLD / test plans, diagrams in Mermaid + draw.io, backlog, test cases, code): /api/v1/sdlc/runs, /api/v1/sdlc/artifacts, /api/v1/sdlc/diagrams/generate {prompt, type}, /api/v1/sdlc/documents/generate {prompt, docType}.
 - Timesheets: /api/v1/time, /api/v1/timesheet; calls and meetings: /api/v1/calls, /api/v1/projects/{id}/calls; project WhatsApp chats: /api/v1/projects/{id}/chats.
 - Books, GST, sales, billing, inventory, manufacturing, IT, field service, insights, intake: find them by name.
 Apps switched on: ${apps.join(', ') || 'CRM'}.`;

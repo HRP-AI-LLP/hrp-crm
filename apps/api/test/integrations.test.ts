@@ -136,7 +136,7 @@ describe('Gmail / Outlook mailbox', () => {
     expect(u.searchParams.get('scope')).toContain('gmail.readonly');
     expect(u.searchParams.get('access_type')).toBe('offline');
     // a forged or altered state is refused
-    expect((await callback('google', state.slice(0, -2) + 'aa', cookie)).status).toBe(400);
+    expect((await callback('google', state.slice(0, -2) + (state.endsWith('aa') ? 'bb' : 'aa'), cookie)).status).toBe(400);
     // the link only completes in the browser that started it (a forwarded link cannot attach someone else's mailbox)
     expect((await callback('google', state, null)).status).toBe(400);
     const other = await startOAuth(api, 'google', { returnTo: '/account' });

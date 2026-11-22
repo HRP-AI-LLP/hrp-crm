@@ -2,7 +2,7 @@
 import { SideTabs } from '../SideTabs';
 import { ViewSignButton } from '../DocumentViewer';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { uploadFile } from '../Files';
 import { del, get, patch, post, put } from '../../lib/api';
@@ -20,6 +20,8 @@ import { BoardsTab, DashboardsTab, HierarchyTab, QueriesView, TestsTab, WorkSetu
 import { AutomationTab, useLiveWork } from './WorkPlus';
 import { WorkItemModal } from './WorkItem';
 import { MilestoneMoney } from './MilestoneMoney';
+
+const SdlcPanel = lazy(() => import('../sdlc/Sdlc').then((m) => ({ default: m.SdlcPanel })));
 
 type Json = Record<string, any>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -46,9 +48,9 @@ function useAct(keys: unknown[][]) {
   };
 }
 
-type Tab = 'overview' | 'tasks' | 'boards' | 'agile' | 'hierarchy' | 'queries' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'whatsapp' | 'agent' | 'issues' | 'tests' | 'dashboards' | 'time' | 'billing' | 'team' | 'worksetup' | 'automation';
+type Tab = 'overview' | 'tasks' | 'boards' | 'agile' | 'hierarchy' | 'queries' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'whatsapp' | 'agent' | 'delivery' | 'issues' | 'tests' | 'dashboards' | 'time' | 'billing' | 'team' | 'worksetup' | 'automation';
 
-const PROJECT_ICON: Record<string, string> = { boards: 'board', hierarchy: 'layers', queries: 'search', tests: 'check', dashboards: 'chart', worksetup: 'gear', automation: 'repeat', overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', whatsapp: 'inbox', agent: 'spark', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
+const PROJECT_ICON: Record<string, string> = { boards: 'board', hierarchy: 'layers', queries: 'search', tests: 'check', dashboards: 'chart', worksetup: 'gear', automation: 'repeat', overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', whatsapp: 'inbox', agent: 'spark', delivery: 'layers', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
 
 export function ProjectWorkspace({ id }: { id: string }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`) });
@@ -73,10 +75,10 @@ export function ProjectWorkspace({ id }: { id: string }) {
   const member = manage || data.level === 'member';
   const tabs: [Tab, string][] = [
     ['overview', 'Overview'], ['tasks', 'Tasks'], ['boards', 'Boards'], ['agile', 'Backlog & sprints'], ['hierarchy', 'Epics & hierarchy'], ['queries', 'Queries'], ['releases', 'Releases'], ['gantt', 'Gantt'],
-    ['milestones', 'Milestones'], ['changes', 'Changes & portal'], ['calls', 'Calls'], ['whatsapp', 'WhatsApp'], ['agent', 'Coding agent'], ['issues', 'Issues'], ['tests', 'Test plans'], ['dashboards', 'Dashboards'], ['time', 'Time'],
+    ['milestones', 'Milestones'], ['changes', 'Changes & portal'], ['calls', 'Calls'], ['whatsapp', 'WhatsApp'], ['delivery', 'AI delivery'], ['agent', 'Coding agent'], ['issues', 'Issues'], ['tests', 'Test plans'], ['dashboards', 'Dashboards'], ['time', 'Time'],
     ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'], ['automation', 'Automation'], ['worksetup', 'Work setup'],
   ];
-  const GROUP: Record<string, string> = { overview: 'Work', tasks: 'Work', boards: 'Work', agile: 'Work', hierarchy: 'Work', queries: 'Work', releases: 'Work', gantt: 'Work', milestones: 'Delivery', changes: 'Delivery', calls: 'Delivery', whatsapp: 'Delivery', agent: 'Delivery', issues: 'Delivery', tests: 'Delivery', dashboards: 'Insights', time: 'People & money', billing: 'People & money', team: 'People & money', automation: 'Settings', worksetup: 'Settings' };
+  const GROUP: Record<string, string> = { overview: 'Work', tasks: 'Work', boards: 'Work', agile: 'Work', hierarchy: 'Work', queries: 'Work', releases: 'Work', gantt: 'Work', milestones: 'Delivery', changes: 'Delivery', calls: 'Delivery', whatsapp: 'Delivery', agent: 'Delivery', delivery: 'Delivery', issues: 'Delivery', tests: 'Delivery', dashboards: 'Insights', time: 'People & money', billing: 'People & money', team: 'People & money', automation: 'Settings', worksetup: 'Settings' };
   return (
     <div style={{ marginBottom: 20 }}>
     <RepoBanner id={id} manage={manage} status={data.project.status} onOpen={() => setTab('worksetup')} />
@@ -98,6 +100,11 @@ export function ProjectWorkspace({ id }: { id: string }) {
         {tab === 'calls' && <ProjectCalls id={id} />}
         {tab === 'whatsapp' && <ProjectChats id={id} />}
         {tab === 'agent' && <CodingAgent id={id} manage={manage} />}
+        {tab === 'delivery' && (
+          <Suspense fallback={<Spinner />}>
+            <SdlcPanel projectId={id} />
+          </Suspense>
+        )}
         {tab === 'boards' && <BoardsTab id={id} manage={manage} member={member} onOpen={openItem} />}
         {tab === 'hierarchy' && <HierarchyTab id={id} member={member} onOpen={openItem} />}
         {tab === 'queries' && <QueriesView projectId={id} member={member} />}

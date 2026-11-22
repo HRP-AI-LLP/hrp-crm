@@ -188,6 +188,9 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
         await enqueue(env, waiter, eventJobs(tenant.id, null, events));
         return;
       }
+      case 'sdlc.advance':
+        await (await import('./sdlc')).advance(env, db, job.runId, tenant.id, waiter);
+        return;
       case 'telephony.incoming': {
         const events = await db.tx(sc, async (tx) => {
           const i = await tx.one<Integration>(`select * from integrations where tenant_id = $1 and id = $2 and provider = 'exotel' and status <> 'disabled'`, [tenant.id, job.integrationId]);

@@ -299,6 +299,7 @@ export function Shell() {
               { to: '/projects', label: 'Projects', icon: 'folder' },
               { to: '/work', label: 'Work items', icon: 'search', end: true },
               { to: '/work/roadmap', label: 'Roadmap', icon: 'layers' },
+              { to: '/sdlc', label: 'AI delivery', icon: 'spark' },
               { to: '/calls', label: 'Calls', icon: 'video' },
               { to: '/timesheet', label: 'Timesheet', icon: 'clock' },
               { to: '/it/subscriptions', label: 'Subscriptions', icon: 'repeat' },
