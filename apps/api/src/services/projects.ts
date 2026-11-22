@@ -391,7 +391,7 @@ export async function approvalEmails(ctx: RecordCtx, projectId: string, q: { mil
     return { ...r, body: r.body, score, looksLikeApproval: score >= 3 };
   });
   const list = q.scan ? scored.filter((r) => r.score >= 3).sort((a, b) => b.score - a.score) : scored;
-  return { items: list.slice(0, 100), mailboxConnected: !!(await ctx.tx.one(`select 1 from integrations where tenant_id = $1 and provider in ('google','microsoft') and status = 'active' and user_id is not null limit 1`, [ctx.tenantId])) };
+  return { items: list.slice(0, 100), mailboxConnected: !!(await ctx.tx.one(`select 1 from integrations where tenant_id = $1 and provider in ('google','microsoft') and status = 'active' and user_id is not null union all select 1 from intake_mailboxes where tenant_id = $1 limit 1`, [ctx.tenantId])) };
 }
 
 export async function deleteMilestone(ctx: RecordCtx, projectId: string, id: string) {

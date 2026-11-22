@@ -164,12 +164,44 @@ export class ImapClient {
     const out: { uid: number; size: number; header: Uint8Array }[] = [];
     for (let i = 0; i < uids.length; i += 100) {
       const set = uids.slice(i, i + 100).join(',');
-      const r = this.ok(await this.cmd(`UID FETCH ${set} (UID RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID CONTENT-TYPE)])`), 'Reading headers');
+      const r = this.ok(await this.cmd(`UID FETCH ${set} (UID RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID IN-REPLY-TO REFERENCES CONTENT-TYPE)])`), 'Reading headers');
       for (const u of r.untagged) {
         const uid = /UID (\d+)/i.exec(u.line);
         if (!uid || !/FETCH/i.test(u.line)) continue;
         out.push({ uid: Number(uid[1]), size: Number(/RFC822\.SIZE (\d+)/i.exec(u.line)?.[1] ?? 0), header: u.literals[0] ?? new Uint8Array() });
       }
+    }
+    return out;
+  }
+
+  /** UIDs whose subject (and, with `body`, text) contains the words: newest last. */
+  async searchText(text: string, opts: { body?: boolean; since?: string } = {}) {
+    // plain ASCII words only: every server takes those without a CHARSET literal
+    const t = text.replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (!t) return [];
+    const since = opts.since ? (() => {
+      const d = new Date(`${opts.since}T00:00:00Z`);
+      return ` SINCE ${d.getUTCDate()}-${MONTHS[d.getUTCMonth()]}-${d.getUTCFullYear()}`;
+    })() : '';
+    const crit = opts.body ? `OR SUBJECT ${quote(t)} TEXT ${quote(t)}` : `SUBJECT ${quote(t)}`;
+    const r = this.ok(await this.cmd(`UID SEARCH ${crit}${since}`), 'Searching');
+    return r.untagged
+      .flatMap((u) => (/^\* SEARCH/i.test(u.line) ? u.line.replace(/^\* SEARCH/i, '').trim().split(/\s+/).filter(Boolean).map(Number) : []))
+      .filter((x) => Number.isFinite(x))
+      .sort((a, b) => a - b);
+  }
+
+  /** The mailbox's folders with their flags (\\Sent, \\Archive…). */
+  async folders(): Promise<{ name: string; flags: string[] }[]> {
+    const r = this.ok(await this.cmd('LIST "" "*"'), 'Listing folders');
+    const out: { name: string; flags: string[] }[] = [];
+    for (const u of r.untagged) {
+      const m = /^\* LIST \(([^)]*)\) (?:"[^"]*"|NIL) (.+)$/i.exec(u.line);
+      if (!m) continue;
+      let name = m[2]!.trim();
+      if (name.startsWith('"') && name.endsWith('"')) name = name.slice(1, -1).replace(/\\(.)/g, '$1');
+      else if (u.literals[0]) name = new TextDecoder().decode(u.literals[0]);
+      out.push({ name, flags: m[1]!.split(/\s+/).filter(Boolean) });
     }
     return out;
   }

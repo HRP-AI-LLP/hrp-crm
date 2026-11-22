@@ -10,6 +10,7 @@ import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import { enqueue, eventJobs } from '../services/jobs';
 import * as calls from '../services/calls';
+import * as mt from '../services/mail-threads';
 import * as pj from '../services/projects';
 import type { RecordCtx, RecordEvent } from '../services/records';
 import { safeCtx } from './public';
@@ -239,6 +240,26 @@ export const projectRoutes = new Hono<AppEnv>()
     const q = z.object({ milestone: uuid.optional(), q: z.string().max(200).optional(), scan: z.enum(['1', '0']).optional() }).parse(c.req.query());
     return c.json(await c.var.db.tx(scope(c, true), (tx) => pj.approvalEmails(rctx(c, tx), id(c), { milestoneId: q.milestone ?? null, search: q.q ?? null, scan: q.scan === '1' })));
   })
+  // every mailbox this person may search (mail intake, own Gmail / Outlook), any date; then the whole thread kept on the milestone
+  .get('/projects/:id/mail-search', async (c) => {
+    const q = z.object({ q: z.string().trim().min(3).max(200) }).parse(c.req.query());
+    const sources = await c.var.db.tx(scope(c, true), async (tx) => {
+      await pj.projectAccess(rctx(c, tx), id(c));
+      return mt.mailSources(rctx(c, tx));
+    });
+    return c.json(await mt.searchThreads(c.env, c.var.db, c.var.tenant.id, sources, q.q));
+  })
+  .post('/projects/:id/milestones/:mid/mail-thread', async (c) => {
+    const b = mt.attachSchema.parse(await c.req.json());
+    const sources = await c.var.db.tx(scope(c, true), async (tx) => {
+      await pj.projectAccess(rctx(c, tx), id(c), 'manage');
+      return mt.mailSources(rctx(c, tx));
+    });
+    const raws = await mt.fetchThread(c.env, c.var.db, c.var.tenant.id, sources, b.source, b.key);
+    if (!raws.length) throw badRequest('No messages found in that thread');
+    return c.json(await c.var.db.tx(scope(c), (tx) => mt.saveThread(rctx(c, tx), c.env, id(c), id(c, 'mid'), b.key, raws)));
+  })
+  .get('/projects/:id/milestones/:mid/mail', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => mt.milestoneMail(rctx(c, tx), id(c), id(c, 'mid')))))
   .delete('/projects/:id/milestones/:mid', async (c) => {
     await c.var.db.tx(scope(c), (tx) => pj.deleteMilestone(rctx(c, tx), id(c), id(c, 'mid')));
     return c.json({ ok: true });

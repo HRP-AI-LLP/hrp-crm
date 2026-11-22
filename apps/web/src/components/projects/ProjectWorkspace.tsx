@@ -13,6 +13,7 @@ import { BarChart } from '../charts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 import { AgileTab, ChangesTab, ReleasesTab } from './Agile';
 import { ProjectCalls } from './ProjectCalls';
+import { MailThreadSearch, MilestoneMailList } from './MilestoneMail';
 import { ProjectChats } from './ProjectChats';
 import { BoardsTab, DashboardsTab, HierarchyTab, QueriesView, TestsTab, WorkSetupTab } from './Work';
 import { AutomationTab, useLiveWork } from './WorkPlus';
@@ -784,6 +785,7 @@ function MilestoneModal({ m, who, onClose, onSave, projectId }: { m: Json; who: 
   const detail = useQuery({ queryKey: ['milestone', m.id], queryFn: () => get<Json>(`/api/v1/projects/${projectId}/milestones/${m.id}`), enabled: !!m.id });
   const files = useQuery({ queryKey: ['files', 'project', projectId], queryFn: () => get<{ items: Json[] }>(`/api/v1/files?object=project&id=${projectId}`) });
   const [mails, setMails] = useState<{ scan: boolean; q: string } | null>(null);
+  const [thread, setThread] = useState(false);
   const [reading, setReading] = useState<Json | null>(null);
   const [busy, setBusy] = useState(false);
   const det = detail.data?.milestone;
@@ -929,9 +931,15 @@ function MilestoneModal({ m, who, onClose, onSave, projectId }: { m: Json; who: 
                   <button type="button" className="btn sm" onClick={() => setMails({ scan: false, q: '' })}>
                     Browse emails
                   </button>
+                  {m.id && (
+                    <button type="button" className="btn sm" title="Search every mailbox, any date, and keep the whole thread with its attachments on this milestone" onClick={() => setThread(true)}>
+                      Find the mail thread
+                    </button>
+                  )}
                 </div>
               )}
             </div>
+            {m.id && <MilestoneMailList projectId={projectId} milestoneId={m.id} />}
             <label className="field">
               Accepted by the customer on
               <input type="date" value={f.acceptedOn} onChange={(e) => setF({ ...f, acceptedOn: e.target.value })} />
@@ -971,6 +979,18 @@ function MilestoneModal({ m, who, onClose, onSave, projectId }: { m: Json; who: 
         />
       )}
       {reading && <ReadMail mail={reading} projectId={projectId} onClose={() => setReading(null)} />}
+      {thread && m.id && (
+        <MailThreadSearch
+          projectId={projectId}
+          milestoneId={m.id}
+          initial={m.name ?? ''}
+          onClose={() => setThread(false)}
+          onApproval={(x) => {
+            setF((v) => ({ ...v, approvalActivityId: x.id, acceptedOn: v.acceptedOn || String(x.date ?? '').slice(0, 10) }));
+            pickedMails.set(x.id, x.subject || '(no subject)');
+          }}
+        />
+      )}
     </Modal>
   );
 }
@@ -999,6 +1019,7 @@ function ApprovalMailPicker({ projectId, milestoneId, scan: scan0, onClose, onPi
           </label>
         </div>
         {data && !data.mailboxConnected && <p className="notice small">Connect your Gmail or Outlook (Settings → Integrations) so customer emails sync here automatically. Emails logged by hand also appear.</p>}
+        {data && <p className="small muted" style={{ margin: 0 }}>Only emails already on the timeline are listed here. Not finding it? Close this and use <b>Find the mail thread</b>: it searches every mailbox, any date, and keeps the whole thread with its attachments.</p>}
         {isFetching && !data ? <Spinner /> : null}
         {data && !data.items.length && <p className="muted small">No {scan ? 'approval-looking ' : ''}emails from this customer yet.</p>}
         {(data?.items ?? []).map((x) => (
