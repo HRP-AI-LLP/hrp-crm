@@ -8,6 +8,7 @@ import { PrivacyTab } from '../components/admin/PrivacyAdmin';
 import { SolutionsPanel } from '../components/admin/SolutionsAdmin';
 import { AgentsAdmin, CompetitorsAdmin } from '../components/admin/IntelAdmin';
 import { QuickReplies, TemplatesModal } from '../components/admin/WhatsAppAdmin';
+import { ChannelActions, ChannelStatus } from '../components/admin/ChannelManage';
 import { useOAuthReturn } from '../lib/oauthReturn';
 import { OrganisationTab } from './Organisation';
 import { DocTemplatesTab } from '../components/admin/DocTemplates';
@@ -675,25 +676,24 @@ function ChannelsTab() {
       <table className="data">
         <tbody>
           {data?.items.map((x) => (
-            <tr key={x.id}>
-              <td>
+            <tr key={x.id} style={x.status === 'disabled' ? { opacity: 0.6 } : undefined}>
+              <td style={{ whiteSpace: 'normal' }}>
                 <b>{x.name}</b>
                 <div className="muted small">
                   {x.channel} via {x.provider}
                 </div>
+                <ChannelStatus x={x} />
               </td>
-              <td className="small" style={{ whiteSpace: 'normal' }}>
+              <td className="small" style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>
                 Inbound URL: <code>{x.inboundUrl}</code>
               </td>
-              <td className="row" style={{ justifyContent: 'flex-end' }}>
-                {x.channel === 'whatsapp' && (
-                  <button className="btn sm" onClick={() => setTemplatesFor(x)}>
-                    Templates
+              <td>
+                <div className="row" style={{ justifyContent: 'flex-end', flexWrap: 'wrap', gap: 6 }}>
+                  <ChannelActions x={x} onTemplates={x.channel === 'whatsapp' ? () => setTemplatesFor(x) : undefined} />
+                  <button className="btn sm danger" onClick={() => confirm(`Remove ${x.name}? Its conversations stay; it stops sending and receiving.`) && run(() => del(`/api/admin/channels/${x.id}`), 'Channel removed', [['admin-channels']])}>
+                    Remove
                   </button>
-                )}
-                <button className="btn sm danger" onClick={() => run(() => del(`/api/admin/channels/${x.id}`), 'Channel removed', [['admin-channels']])}>
-                  Remove
-                </button>
+                </div>
               </td>
             </tr>
           ))}

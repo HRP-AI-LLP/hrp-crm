@@ -16,6 +16,7 @@ import { checkFormula, layoutSchema, validationRuleSchema } from '@synapse/share
 import { formulaFieldNames } from '../services/computed';
 import { enqueue } from '../services/jobs';
 import { safeCtx } from './public';
+import * as ca from '../services/channel-admin';
 import { chatWith, tenantProvider } from '../services/ai/router';
 import { createProviderSchema, encryptKey, hint, loadTenantProviders, normaliseCreate, assertSafeBaseUrl, tenantAiSettings, updateProviderSchema } from '../services/ai/tenant-providers';
 
@@ -436,8 +437,28 @@ export const adminRoutes = new Hono<AppEnv>()
   // ------------------------------------------------------------------ channels
   .get('/channels', requireAdmin('channels'), async (c) => {
     const origin = new URL(c.req.url).origin;
-    const rows = await c.var.db.tx(scope(c, true), (tx) => tx.query<{ inbound_key: string }>(`select id, channel, name, provider, config, status, inbound_key, created_at, (secret_ciphertext is not null) as has_secret from channel_accounts where tenant_id = $1 order by created_at`, [c.var.tenant.id]));
-    return c.json({ items: rows.map((r) => ({ ...r, inboundUrl: `${origin}/api/public/inbound/${r.inbound_key}` })) });
+    const rows = await c.var.db.tx(scope(c, true), (tx) => tx.query<{ inbound_key: string }>(`select id, channel, name, provider, config, status, inbound_key, created_at, (secret_ciphertext is not null) as has_secret, secret_ciphertext, updated_at from channel_accounts where tenant_id = $1 order by created_at`, [c.var.tenant.id]));
+    const items = [];
+    for (const r of rows as (Record<string, any> & { inbound_key: string })[]) {
+      const { secret_ciphertext, ...rest } = r;
+      const secretsSet = secret_ciphertext ? await ca.storedSecretNames(c.env, { ...r, tenant_id: c.var.tenant.id } as never).catch(() => []) : [];
+      items.push({ ...rest, secretsSet, inboundUrl: `${origin}/api/public/inbound/${r.inbound_key}` });
+    }
+    return c.json({ items });
+  })
+  .patch('/channels/:id', requireAdmin('channels'), async (c) => {
+    const b = ca.updateChannelSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => ca.updateChannel(c.env, tx, c.var.tenant.id, uuid.parse(c.req.param('id')), b)));
+  })
+  .post('/channels/:id/check', requireAdmin('channels'), async (c) => c.json(await ca.checkChannel(c.env, c.var.db, c.var.tenant.id, c.var.principal.user.id, uuid.parse(c.req.param('id')))))
+  .post('/channels/:id/subscribe', requireAdmin('channels'), async (c) => c.json(await ca.subscribeApp(c.env, c.var.db, c.var.tenant.id, c.var.principal.user.id, uuid.parse(c.req.param('id')))))
+  .post('/channels/:id/numbers', requireAdmin('channels'), async (c) => {
+    const b = ca.addNumberSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => ca.addNumber(tx, c.var.tenant.id, uuid.parse(c.req.param('id')), b)), 201);
+  })
+  .post('/channels/:id/inbound-address', requireAdmin('channels'), async (c) => {
+    const r = await c.var.db.tx(scope(c), (tx) => ca.newInboundAddress(tx, c.var.tenant.id, uuid.parse(c.req.param('id'))));
+    return c.json({ inboundUrl: `${new URL(c.req.url).origin}/api/public/inbound/${r.inbound_key}` });
   })
   .post('/channels', requireAdmin('channels'), async (c) => {
     const b = z

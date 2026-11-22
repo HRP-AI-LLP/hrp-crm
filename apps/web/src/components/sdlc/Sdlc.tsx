@@ -13,7 +13,7 @@ import { Empty, Modal, Spinner, useToast } from '../ui';
 import { ArtifactModal, ArtifactPanel, DiagramView } from './Viewers';
 
 type Json = Record<string, any>;
-type Catalogue = { agents: Json[]; docTypes: Json[]; diagramTypes: Json[]; templates: Json[] };
+type Catalogue = { agents: Json[]; agentGroups: string[]; docTypes: Json[]; diagramTypes: Json[]; templates: Json[]; testLevels: Json[]; reviewModes: Json[] };
 
 const RUN_STATUS: Record<string, [string, string]> = {
   planning: ['planning…', 'info'],
@@ -32,7 +32,7 @@ const STEP_STATUS: Record<string, [string, string]> = {
   skipped: ['skipped', ''],
   failed: ['failed', 'bad'],
 };
-const KIND_LABEL: Record<string, string> = { document: 'Document', diagram: 'Diagram', backlog: 'Backlog', test_cases: 'Test cases', code: 'Code' };
+const KIND_LABEL: Record<string, string> = { document: 'Document', diagram: 'Diagram', backlog: 'Backlog', test_cases: 'Test cases', review: 'Review gate', code: 'Code' };
 
 const useCatalogue = () => useQuery({ queryKey: ['sdlc-catalogue'], queryFn: () => get<Catalogue>('/api/v1/sdlc/catalogue'), staleTime: Infinity });
 const useProjects = () => useQuery({ queryKey: ['projects', 'all-list'], queryFn: () => get<Json[]>('/api/v1/projects?status=active') });
@@ -375,7 +375,11 @@ function RunView({ id, onBack }: { id: string; onBack: () => void }) {
   );
 }
 
-const AGENT_LABELS: Record<string, string> = { ba: 'Business analyst', po: 'Product owner', architect: 'Architect', ux: 'UX designer', security: 'Security', qa: 'QA', devops: 'DevOps', writer: 'Technical writer', pm: 'Project manager', developer: 'Developer' };
+const AGENT_LABELS: Record<string, string> = {
+  ba: 'Business analyst', po: 'Product owner', architect: 'Architect', ux: 'UX designer', security: 'Security', qa: 'QA', devops: 'DevOps', writer: 'Technical writer', pm: 'Project manager', developer: 'Developer',
+  backend: 'Backend engineer', frontend: 'Frontend engineer', api_designer: 'API designer', data_engineer: 'Data engineer', unit_tester: 'Unit tester', system_tester: 'System tester', perf_tester: 'Performance tester',
+  evaluator: 'Evaluator', validator: 'Validation checker', code_reviewer: 'Code reviewer', code_quality: 'Code quality',
+};
 const agentLabel = (k: string) => AGENT_LABELS[k] ?? k;
 
 function ReviewBar({ step, output, children }: { step: Json; output?: Json | null; children?: ReactNode }) {
@@ -473,6 +477,18 @@ function StepDetail({ step, data }: { step: Json; data: Json }) {
       {step.kind === 'backlog' && output && <BacklogView output={output} editable={reviewing} onChange={setOutput} />}
       {step.kind === 'test_cases' && output && <TestsView output={output} editable={reviewing} onChange={setOutput} />}
       {step.kind === 'code' && <CodeView step={step} projectId={data.run.project_id} />}
+      {step.kind === 'review' && step.output?.score !== undefined && (
+        <div className="row small" style={{ gap: 8 }}>
+          <span className={`chip ${step.output.verdict === 'pass' ? 'good' : 'warn'}`}>
+            {step.output.score}/10 · {step.output.verdict === 'pass' ? 'pass' : 'needs revision'}
+          </span>
+          <span className="muted">
+            round {step.output.rounds}
+            {step.status === 'pending' ? ' — the agents are revising what it found; it reviews again after them' : ''}
+            {step.status === 'awaiting_review' ? ' — still failing after the agents revised twice: decide, or ask for changes on the steps above' : ''}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -711,10 +727,16 @@ function PlanEditor({ run, steps, onDone }: { run: Json; steps: Json[]; onDone: 
                 <td className="muted">{locked.length + i + 1}</td>
                 <td>
                   <select value={r.agent} onChange={(e) => set(i, { agent: e.target.value })}>
-                    {cat.data.agents.map((a) => (
-                      <option key={a.key} value={a.key}>
-                        {a.name}
-                      </option>
+                    {cat.data.agentGroups.map((g) => (
+                      <optgroup key={g} label={g}>
+                        {cat.data!.agents
+                          .filter((a) => a.group === g)
+                          .map((a) => (
+                            <option key={a.key} value={a.key}>
+                              {a.name}
+                            </option>
+                          ))}
+                      </optgroup>
                     ))}
                   </select>
                 </td>
@@ -731,6 +753,24 @@ function PlanEditor({ run, steps, onDone }: { run: Json; steps: Json[]; onDone: 
                       {cat.data.docTypes.map((d) => (
                         <option key={d.key} value={d.key}>
                           {d.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {r.kind === 'test_cases' && (
+                    <select value={r.docType ?? 'functional'} onChange={(e) => set(i, { docType: e.target.value, agent: cat.data!.testLevels.find((t) => t.key === e.target.value)?.agent ?? r.agent })}>
+                      {cat.data.testLevels.map((t) => (
+                        <option key={t.key} value={t.key}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {r.kind === 'review' && (
+                    <select value={r.docType ?? 'evaluate'} onChange={(e) => set(i, { docType: e.target.value, agent: cat.data!.reviewModes.find((t) => t.key === e.target.value)?.agent ?? r.agent })}>
+                      {cat.data.reviewModes.map((t) => (
+                        <option key={t.key} value={t.key}>
+                          {t.label}
                         </option>
                       ))}
                     </select>
@@ -774,6 +814,14 @@ function PlanEditor({ run, steps, onDone }: { run: Json; steps: Json[]; onDone: 
             </button>
             <button type="button" className="btn sm" onClick={() => setRows((x) => [...x, { agent: 'architect', kind: 'diagram', diagramType: 'architecture', title: 'Diagram', instructions: '', needsReview: false }])}>
               + Diagram
+            </button>
+            {run.project_id && (
+              <button type="button" className="btn sm" onClick={() => setRows((x) => [...x, { agent: 'unit_tester', kind: 'test_cases', docType: 'unit', title: 'Unit test cases', instructions: '', needsReview: true }])}>
+                + Test cases
+              </button>
+            )}
+            <button type="button" className="btn sm" onClick={() => setRows((x) => [...x, { agent: 'evaluator', kind: 'review', docType: 'evaluate', title: 'Evaluator', instructions: '', needsReview: false }])}>
+              + Review gate
             </button>
           </div>
           <div className="row" style={{ gap: 6 }}>
@@ -1077,15 +1125,32 @@ function AgentsInfo() {
   return (
     <div className="stack">
       <Guide id="ai_delivery" label="How AI delivery works" />
-      <div className="sd-agents">
-        {cat.data.agents.map((a) => (
-          <div key={a.key} className="sd-agent">
-            <b>{a.name}</b>
-            <span className="small muted">{a.does}</span>
-            <span className="small">{cat.data.docTypes.filter((d) => d.agent === a.key).map((d) => d.label).join(' · ')}</span>
+      {cat.data.agentGroups.map((g) => (
+        <div key={g} className="stack" style={{ gap: 6 }}>
+          <h4 style={{ margin: '6px 0 0' }}>{g}</h4>
+          <div className="sd-agents">
+            {cat.data.agents
+              .filter((a) => a.group === g)
+              .map((a) => {
+                const makes = [
+                  ...cat.data!.docTypes.filter((d) => d.agent === a.key).map((d) => d.label),
+                  ...cat.data!.testLevels.filter((t) => t.agent === a.key).map((t) => `${t.label} test cases`),
+                  ...cat.data!.reviewModes.filter((t) => t.agent === a.key).map((t) => `Gate: ${t.label.toLowerCase()}`),
+                ];
+                return (
+                  <div key={a.key} className="sd-agent">
+                    <b>{a.name}</b>
+                    <span className="small muted">{a.does}</span>
+                    {makes.length > 0 && <span className="small">{makes.join(' · ')}</span>}
+                  </div>
+                );
+              })}
           </div>
-        ))}
-      </div>
+        </div>
+      ))}
+      <p className="small muted" style={{ margin: 0 }}>
+        Review gates read everything before them; when work is weak they send their findings back to the agent who wrote it, which redoes it, and review again (up to two rounds) before a person decides.
+      </p>
       <div className="grid-2">
         <div>
           <h4>Diagrams</h4>

@@ -11,6 +11,7 @@ const ids = {} as Record<string, string> & { run: string; diagram: string; proje
 const prompts: string[] = [];
 let down = false;
 let plan: unknown = null;
+let evaluations = 0;
 
 const SPECS: Record<string, Json> = {
   architecture: {
@@ -63,7 +64,13 @@ function reply(messages: Json[]) {
     return JSON.stringify({
       epics: [{ name: 'Live tracking', description: 'See vehicles on a map', stories: [{ name: 'As a manager I want a live map', acceptance: ['Given a trip when GPS pings then the map moves'], points: 5, priority: 'high', tasks: [{ name: 'Backend: positions API', hours: 6 }] }, { name: 'As a driver I want to start a trip', points: 3 }] }],
     });
-  if (u.startsWith('Write test cases')) {
+  if (u.startsWith('Evaluate each output')) {
+    evaluations++;
+    return JSON.stringify(evaluations === 1 ? { score: 5, summary: 'The design misses e-invoicing.', findings: [{ step: 'High-level design (HLD)', severity: 'high', issue: 'No GST IRP integration', fix: 'Add the IRP flow' }, { step: 'User journey', severity: 'low', issue: 'Could show the driver too', fix: '' }] } : { score: 9, summary: 'Good.', findings: [] });
+  }
+  if (u.startsWith('Validate consistency'))
+    return JSON.stringify({ score: 8, summary: 'Consistent.', findings: [{ step: 'Unit test cases', severity: 'low', issue: 'Add a boundary | case', fix: 'zero km trip' }], matrix: [{ requirement: 'BR-1 Live map', design: 'HLD §2', backlog: 'FLEET-2', tests: 'TC-1', status: 'covered' }] });
+  if (/^Write \w+ test cases/.test(u)) {
     const key = /(\w+-\d+) — As a manager/.exec(u)?.[1] ?? 'X-1';
     return JSON.stringify({ cases: [{ title: 'Map moves on GPS ping', suite: 'Tracking', steps: [{ action: 'Send a ping', expected: 'Marker moves' }], covers: [key] }, { title: 'Invalid vehicle number', steps: [{ action: 'Enter MH12', expected: 'Rejected' }] }] });
   }
@@ -169,12 +176,16 @@ describe('agents delivering a feature', () => {
     ids.run = c.json.id;
     let r = await getRun(ids.run);
     expect(r.run.status).toBe('awaiting_plan');
-    expect(r.steps.map((s: Json) => [s.kind, s.needs_review])).toEqual([
-      ['document', true], ['diagram', false], ['document', true], ['diagram', false], ['diagram', false], ['backlog', true], ['test_cases', true], ['code', true],
+    expect(r.steps.map((s: Json) => [s.kind, s.agent, s.needs_review])).toEqual([
+      ['document', 'ba', true], ['diagram', 'ux', false], ['document', 'architect', true], ['document', 'api_designer', false], ['diagram', 'architect', false], ['diagram', 'data_engineer', false],
+      ['review', 'evaluator', false], ['backlog', 'po', true], ['test_cases', 'qa', true], ['test_cases', 'unit_tester', true], ['test_cases', 'system_tester', true], ['review', 'validator', false], ['code', 'developer', true],
     ]);
-    // the plan can be changed before starting: drop the sequence diagram
-    const plan2 = r.steps.filter((s: Json) => s.diagram_type !== 'sequence').map((s: Json) => ({ agent: s.agent, kind: s.kind, title: s.title, docType: s.doc_type, diagramType: s.diagram_type, needsReview: s.needs_review }));
-    expect((await api('PUT', `/api/v1/sdlc/runs/${ids.run}/plan`, { steps: plan2 })).json.steps).toHaveLength(7);
+    expect(r.steps.filter((s: Json) => s.kind !== 'document').map((s: Json) => s.doc_type).filter(Boolean)).toEqual(['evaluate', 'functional', 'unit', 'integration', 'validate']);
+    // the plan can be changed before starting: drop the API spec, the sequence diagram and the integration tests
+    const plan2 = r.steps
+      .filter((s: Json) => s.diagram_type !== 'sequence' && s.doc_type !== 'api_spec' && s.doc_type !== 'integration')
+      .map((s: Json) => ({ agent: s.agent, kind: s.kind, title: s.title, docType: s.doc_type, diagramType: s.diagram_type, needsReview: s.needs_review }));
+    expect((await api('PUT', `/api/v1/sdlc/runs/${ids.run}/plan`, { steps: plan2 })).json.steps).toHaveLength(10);
 
     expect((await api('POST', `/api/v1/sdlc/runs/${ids.run}/start`)).status).toBe(200);
     r = await getRun(ids.run);
@@ -204,11 +215,27 @@ describe('agents delivering a feature', () => {
     r = await getRun(ids.run);
     // the journey diagram needs no review in "key" mode; the HLD does
     expect(stepOf(r, 'User journey').status).toBe('approved');
-    expect(stepOf(r, 'High-level design (HLD)').status).toBe('awaiting_review');
+    const hld = stepOf(r, 'High-level design (HLD)');
+    expect(hld.status).toBe('awaiting_review');
     expect(prompts.find((p) => p.startsWith('Write the "High-level design'))).toContain('Business requirements (BRD)'); // it saw the BRD
-    await review(stepOf(r, 'High-level design (HLD)').id, 'approve');
+    await review(hld.id, 'approve');
 
+    // the evaluator finds a gap in the HLD and sends it back to the architect, with its finding as the note
     r = await getRun(ids.run);
+    const redone = stepOf(r, 'High-level design (HLD)');
+    expect(redone).toMatchObject({ status: 'awaiting_review', attempts: 2, feedback: expect.stringContaining('Evaluator (round 1): No GST IRP integration → Add the IRP flow') });
+    expect(stepOf(r, 'User journey').status).toBe('approved'); // low findings are not sent back
+    const evalStep = stepOf(r, 'Evaluator: requirements and design');
+    expect(evalStep).toMatchObject({ status: 'pending', output: { rounds: 1, verdict: 'revise', score: 5 } });
+    const hldDoc = r.artifacts.find((a: Json) => a.step_id === redone.id && a.kind === 'document');
+    expect((await api('GET', `/api/v1/sdlc/artifacts/${hldDoc.id}`)).json.artifact.body).toContain('Now with GST e-invoicing');
+    await review(redone.id, 'approve');
+    r = await getRun(ids.run);
+    expect(stepOf(r, 'Evaluator: requirements and design')).toMatchObject({ status: 'approved', output: { rounds: 2, verdict: 'pass', score: 9 } });
+    const report = r.artifacts.find((a: Json) => a.step_id === evalStep.id);
+    expect(report).toMatchObject({ subtype: 'review_report' });
+    expect(evaluations).toBe(2);
+
     const backlog = stepOf(r, 'Epics, user stories and tasks');
     expect(backlog.status).toBe('awaiting_review');
     expect(backlog.output.epics[0].stories).toHaveLength(2);
@@ -222,14 +249,29 @@ describe('agents delivering a feature', () => {
     expect(story[0]!.description).toContain('- [ ] Given a trip when GPS pings then the map moves');
 
     r = await getRun(ids.run);
-    const tests = stepOf(r, 'Test cases');
+    const tests = stepOf(r, 'Functional test cases');
     expect(tests.status).toBe('awaiting_review');
-    expect(prompts.find((p) => p.startsWith('Write test cases'))).toContain('FLEET-2 — As a manager I want a live map');
+    expect(prompts.find((p) => p.startsWith('Write functional test cases'))).toContain('FLEET-2 — As a manager I want a live map');
     await review(tests.id, 'approve');
-    const cases = await sql(`select title, item_ids from pm_test_cases where project_id = $1 order by case_number`, [ids.project]);
-    expect(cases.map((x) => [x.title, x.item_ids.length])).toEqual([['Map moves on GPS ping', 1], ['Invalid vehicle number', 0]]);
-
     r = await getRun(ids.run);
+    const unit = stepOf(r, 'Unit test cases');
+    expect(unit).toMatchObject({ status: 'awaiting_review', agent: 'unit_tester', output: { level: 'unit' } });
+    expect(prompts.some((p) => p.startsWith('Write unit test cases: unit test cases per module'))).toBe(true);
+    await review(unit.id, 'approve');
+    const cases = await sql(`select title, suite, item_ids from pm_test_cases where project_id = $1 order by case_number`, [ids.project]);
+    expect(cases.map((x) => [x.title, x.suite, x.item_ids.length])).toEqual([
+      ['Map moves on GPS ping', 'Tracking', 1], ['Invalid vehicle number', null, 0], ['Map moves on GPS ping', 'Unit — Tracking', 1], ['Invalid vehicle number', 'Unit', 0],
+    ]);
+
+    // the validator passes; its report has the findings and the traceability matrix as tables
+    r = await getRun(ids.run);
+    const val = stepOf(r, 'Validation: requirement → design → story → test');
+    expect(val).toMatchObject({ status: 'approved', output: { verdict: 'pass', rounds: 1 } });
+    expect(prompts.find((p) => p.startsWith('Validate consistency'))).toMatch(/Unit test cases \(test cases, unit\)[\s\S]*covers FLEET-2/);
+    const valDoc = (await api('GET', `/api/v1/sdlc/artifacts/${r.artifacts.find((a: Json) => a.step_id === val.id).id}`)).json.artifact.body;
+    expect(valDoc).toContain('| Unit test cases | low | Add a boundary \\| case | zero km trip |');
+    expect(valDoc).toContain('| BR-1 Live map | HLD §2 | FLEET-2 | TC-1 | covered |');
+
     const code = stepOf(r, 'Implement with the coding agent');
     expect(code.status).toBe('awaiting_review');
     const done = await review(code.id, 'approve');
@@ -237,7 +279,7 @@ describe('agents delivering a feature', () => {
     expect(await sql(`select status, reason from coding_agent_jobs`)).toEqual([{ status: 'queued', reason: 'requested' }]);
     r = await getRun(ids.run);
     expect(r.run.status).toBe('done');
-    expect((await api('GET', `/api/v1/sdlc/runs?projectId=${ids.project}`)).json.items[0]).toMatchObject({ status: 'done', steps: 7, done: 7 });
+    expect((await api('GET', `/api/v1/sdlc/runs?projectId=${ids.project}`)).json.items[0]).toMatchObject({ status: 'done', steps: 10, done: 10 });
     expect((await sql(`select count(*)::int n from notifications where link = $1`, [`/sdlc?run=${ids.run}`]))[0]!.n).toBeGreaterThan(3);
   });
 

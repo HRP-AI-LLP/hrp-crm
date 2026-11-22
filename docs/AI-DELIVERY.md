@@ -20,9 +20,22 @@ goal ──► plan (AI or ready-made) ──► person checks / edits the plan 
    review: Approve · Request changes (the agent redoes it with the note, and the documents after it) · Skip
 ```
 
-Agents: business analyst, product owner, solution architect, UX designer, security engineer, QA,
-DevOps, technical writer, project manager, developer. Each step sees the goal, the project and what
-earlier steps produced (most recent first, within a budget).
+Agents (22): business analyst, product owner, UX designer, project manager; solution architect, API
+designer, data engineer / DBA, backend engineer, frontend engineer, DevOps, security engineer,
+developer (the coding agent); QA, unit test engineer, integration & system tester, performance
+tester; evaluator, validation checker, code reviewer, code quality engineer; technical writer. Each
+step sees the goal, the project and what earlier steps produced.
+
+Test-case steps have a level — functional, unit, integration & API, system / end-to-end, UAT,
+regression, performance, security — written by that level's specialist and saved in a suite named
+after it.
+
+Review gates (step kind `review`): evaluate (quality against the goal), validate (consistency and a
+requirement → design → story → test traceability matrix), code & design review, code quality. A
+gate reads everything before it and scores it; when there is a high finding or the score is under 7
+it sends each finding back to the step that wrote that document or diagram, those agents redo their
+work, and the gate reviews again — up to two rounds — before a person decides. Its report (findings
+and matrix as tables) is a document of the run.
 
 Review modes: *key steps* (BRD, PRD, SRS, HLD, architecture, SOW, threat model), *every step*, or
 *only before changing the project*. Backlog, test cases and code always wait for a person.

@@ -1671,3 +1671,9 @@ textarea.dg-code { min-height: 260px; resize: vertical; }
 .doc-preview { max-height: 600px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
 @media (max-width: 900px) { .doc-edit { grid-template-columns: 1fr; } }
 .sd-epic .sd-list { list-style: none; padding-left: 8px; }
+.md ol { padding-left: 22px; margin: 6px 0; }
+.md-table { overflow-x: auto; margin: 8px 0; border: 1px solid var(--line); border-radius: 8px; }
+.md-table table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.md-table th, .md-table td { padding: 6px 10px; border-bottom: 1px solid var(--line-2); text-align: left; vertical-align: top; }
+.md-table th { background: var(--line-2); font-weight: 600; white-space: nowrap; }
+.md-table tr:last-child td { border-bottom: 0; }

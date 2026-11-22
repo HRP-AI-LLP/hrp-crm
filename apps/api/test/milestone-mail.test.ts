@@ -69,6 +69,8 @@ beforeAll(async () => {
   ids.ms = ms.json.id;
   const db = Db.fromEnv(h.env);
   try {
+    // a team member without a sign-in (no email) must not break keeping a thread
+    await db.tx({ tenantId: ids.tenant! }, (tx) => tx.query(`insert into users (tenant_id, email, full_name, status) values ($1, null, 'Site supervisor', 'active')`, [ids.tenant]));
     await db.tx({ tenantId: ids.tenant! }, async (tx) =>
       tx.query(`insert into integrations (tenant_id, provider, user_id, label, account_ref, secret_ciphertext, config) values ($1,'google',$2,'Gmail','harsha.rani@hrpai.in',$3,'{}')`, [
         ids.tenant,

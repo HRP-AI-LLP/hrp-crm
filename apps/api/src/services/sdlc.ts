@@ -43,8 +43,28 @@ export const AGENTS = {
   devops: { name: 'DevOps engineer', does: 'Environments, CI/CD, deployment, monitoring, runbooks', voice: 'a DevOps / SRE engineer who automates builds, deployments and monitoring and writes runbooks people can follow at 3 a.m.' },
   writer: { name: 'Technical writer', does: 'User manuals, guides, release notes', voice: 'a technical writer who writes clear, task-based documentation for the reader' },
   pm: { name: 'Project manager', does: 'Plans, milestones, risks, status, statements of work', voice: 'a delivery / project manager who plans realistically and is candid about risks' },
+  backend: { name: 'Backend engineer', does: 'Services, modules, business logic, jobs, integrations', voice: 'a senior backend engineer (TypeScript / Node, Python, Java, Postgres) who designs clean modules, idempotent jobs and safe migrations' },
+  frontend: { name: 'Frontend engineer', does: 'Screens, components, state, routing, accessibility', voice: 'a senior frontend engineer (React, TypeScript) who builds accessible, fast, mobile-first screens' },
+  api_designer: { name: 'API designer', does: 'REST / webhook contracts, OpenAPI, versioning, errors', voice: 'an API designer who writes consistent, versioned REST contracts in OpenAPI 3 with clear errors, pagination and idempotency' },
+  data_engineer: { name: 'Data engineer / DBA', does: 'Data model, SQL, indexes, migrations, reporting data', voice: 'a database engineer (Postgres) who designs normalised schemas, indexes, row-level security and zero-downtime migrations' },
+  unit_tester: { name: 'Unit test engineer', does: 'Unit tests per module and function, mocks, coverage', voice: 'an engineer who writes fast, isolated unit tests with clear arrange / act / assert and good edge-case coverage' },
+  system_tester: { name: 'Integration & system tester', does: 'Integration, API, end-to-end and system tests, UAT', voice: 'a system test lead who tests whole flows across services, APIs and integrations end to end, and prepares UAT with the business' },
+  perf_tester: { name: 'Performance tester', does: 'Load, stress and soak tests, budgets', voice: 'a performance engineer who sets response-time budgets and designs load, stress and soak tests (k6, JMeter)' },
+  evaluator: { name: 'Evaluator', does: 'Scores each output against the goal and sends weak work back', voice: 'a demanding but fair delivery reviewer who scores work against the goal and gives specific, actionable fixes' },
+  validator: { name: 'Validation checker', does: 'Consistency and traceability: requirement → design → story → test', voice: 'a quality auditor who checks that documents agree with each other and every requirement is designed, planned and tested' },
+  code_reviewer: { name: 'Code reviewer', does: 'Reviews designs and the coding agent\'s work: correctness, security, performance', voice: 'a principal engineer doing code and design review: correctness, security (OWASP), performance, maintainability' },
+  code_quality: { name: 'Code quality engineer', does: 'Coding standards, linting, static analysis, definition of done', voice: 'a code quality engineer who sets coding standards, lint and static-analysis rules, test coverage gates and a definition of done' },
   developer: { name: 'Developer (coding agent)', does: 'Implements the backlog: code, tests, review, commit, push', voice: 'a senior software engineer' },
 } as const;
+
+/** Groups for showing the agents. */
+export const AGENT_GROUPS: [string, AgentKey[]][] = [
+  ['Business & product', ['ba', 'po', 'ux', 'pm']],
+  ['Architecture & engineering', ['architect', 'api_designer', 'data_engineer', 'backend', 'frontend', 'devops', 'security', 'developer']],
+  ['Testing', ['qa', 'unit_tester', 'system_tester', 'perf_tester']],
+  ['Review & quality gates', ['evaluator', 'validator', 'code_reviewer', 'code_quality']],
+  ['Documentation', ['writer']],
+];
 export type AgentKey = keyof typeof AGENTS;
 const AGENT_KEYS = Object.keys(AGENTS) as [AgentKey, ...AgentKey[]];
 
@@ -58,8 +78,8 @@ export const DOC_TYPES: Record<string, { label: string; agent: AgentKey; outline
   hld: { label: 'High-level design (HLD)', agent: 'architect', outline: ['Context and goals', 'Architecture overview', 'Components and responsibilities', 'Technology stack (with reasons)', 'Data architecture', 'Integrations', 'Security architecture', 'Scalability, availability and performance', 'Deployment architecture', 'Key decisions and trade-offs'], diagrams: ['architecture', 'c4_container', 'data_flow', 'deployment'] },
   lld: { label: 'Low-level design (LLD)', agent: 'architect', outline: ['Modules and classes', 'Detailed data model (tables, columns, keys, indexes)', 'API endpoints (request / response)', 'Key algorithms and logic', 'Sequence of main flows', 'Error handling and logging', 'Configuration'], diagrams: ['class', 'sequence', 'er'] },
   architecture: { label: 'Solution architecture document', agent: 'architect', outline: ['Business context', 'Architecture principles', 'System context', 'Containers / components', 'Data and integration', 'Security', 'Infrastructure and deployment', 'Quality attributes', 'Risks and technical debt', 'Architecture decisions'], diagrams: ['c4_context', 'c4_container', 'deployment'] },
-  api_spec: { label: 'API specification', agent: 'architect', outline: ['Overview, base URL and versioning', 'Authentication', 'Conventions (errors, pagination, idempotency)', 'Endpoints (method, path, request, response, errors) — with an OpenAPI 3 YAML block', 'Webhooks / events', 'Rate limits'], diagrams: ['sequence'] },
-  db_design: { label: 'Database design', agent: 'architect', outline: ['Entities and relationships', 'Tables (columns, types, keys, constraints)', 'Indexes', 'Multi-tenancy and row-level security', 'Data retention and archival', 'Migrations', 'SQL DDL'], diagrams: ['er'] },
+  api_spec: { label: 'API specification', agent: 'api_designer', outline: ['Overview, base URL and versioning', 'Authentication', 'Conventions (errors, pagination, idempotency)', 'Endpoints (method, path, request, response, errors) — with an OpenAPI 3 YAML block', 'Webhooks / events', 'Rate limits'], diagrams: ['sequence'] },
+  db_design: { label: 'Database design', agent: 'data_engineer', outline: ['Entities and relationships', 'Tables (columns, types, keys, constraints)', 'Indexes', 'Multi-tenancy and row-level security', 'Data retention and archival', 'Migrations', 'SQL DDL'], diagrams: ['er'] },
   ux_spec: { label: 'UX specification', agent: 'ux', outline: ['Personas', 'User goals', 'Journeys', 'Information architecture / navigation', 'Screens (purpose, content, actions, states)', 'Accessibility', 'Content and microcopy'], diagrams: ['user_journey', 'flowchart', 'mindmap'] },
   threat_model: { label: 'Threat model & security', agent: 'security', outline: ['System and trust boundaries', 'Assets', 'Threats by STRIDE category (threat, impact, likelihood, mitigation)', 'OWASP Top 10 checks', 'Data protection (DPDP Act 2023: consent, purpose, retention, rights)', 'Security requirements', 'Residual risks'], diagrams: ['data_flow'] },
   test_strategy: { label: 'Test strategy', agent: 'qa', outline: ['Objectives', 'Scope', 'Test levels and types (unit, integration, system, UAT, performance, security)', 'Environments and data', 'Tools and automation', 'Entry and exit criteria', 'Defect management', 'Risks'] },
@@ -75,10 +95,41 @@ export const DOC_TYPES: Record<string, { label: string; agent: AgentKey; outline
   feasibility: { label: 'Feasibility study', agent: 'ba', outline: ['Problem and opportunity', 'Options', 'Technical feasibility', 'Operational feasibility', 'Cost and benefit (INR)', 'Risks', 'Recommendation'] },
   rca: { label: 'Root cause analysis', agent: 'developer', outline: ['Summary', 'Impact', 'Timeline', 'Root cause (5 whys)', 'Fix', 'Prevention'], diagrams: ['sequence'] },
   review_report: { label: 'Review report', agent: 'qa', outline: ['What was reviewed', 'Findings (severity, item, issue, recommendation)', 'Gaps and inconsistencies across documents', 'Verdict'] },
+  backend_design: { label: 'Backend design', agent: 'backend', outline: ['Modules and responsibilities', 'Folder / package structure', 'Domain logic and rules (per module)', 'Background jobs and schedules (idempotency, retries)', 'Integrations (GST, payments, WhatsApp, mail…) with failure handling', 'Configuration and secrets', 'Logging, metrics and tracing', 'Error handling'], diagrams: ['class', 'sequence'] },
+  frontend_design: { label: 'Frontend design', agent: 'frontend', outline: ['Screens and routes', 'Component tree', 'State and data fetching (caching, optimistic updates)', 'Forms and validation (Indian formats)', 'Responsive / mobile behaviour', 'Accessibility (WCAG 2.1 AA)', 'Performance budgets', 'Error and empty states'], diagrams: ['flowchart', 'mindmap'] },
+  data_migration: { label: 'Data migration plan', agent: 'data_engineer', outline: ['Sources and volumes', 'Mapping (source field → target field, transforms)', 'Cleansing rules', 'Order of loading', 'Validation and reconciliation counts', 'Cut-over and rollback'], diagrams: ['data_flow'] },
+  unit_test_plan: { label: 'Unit test plan', agent: 'unit_tester', outline: ['Scope (modules, functions)', 'Framework and conventions (Vitest / Jest / pytest / JUnit)', 'Test list per module (function, cases, mocks)', 'Coverage targets', 'Running in CI'] },
+  integration_test_plan: { label: 'Integration & API test plan', agent: 'system_tester', outline: ['Interfaces under test (APIs, webhooks, third parties)', 'Environments, sandboxes and test data', 'Scenarios per interface (happy, error, timeout, retry, idempotency)', 'Contract tests', 'Automation (Postman / Newman, Playwright API, REST Assured)'], diagrams: ['sequence'] },
+  system_test_plan: { label: 'System & end-to-end test plan', agent: 'system_tester', outline: ['End-to-end business flows', 'Scenarios with data', 'Cross-browser / device matrix', 'Non-functional checks (security, accessibility, localisation)', 'Automation (Playwright / Cypress)', 'Entry / exit criteria'], diagrams: ['flowchart'] },
+  uat_plan: { label: 'UAT plan', agent: 'system_tester', outline: ['Business users and roles', 'Scenarios in business language', 'Data and environment', 'Sign-off criteria and template', 'Defect triage'] },
+  performance_test_plan: { label: 'Performance test plan', agent: 'perf_tester', outline: ['Goals and budgets (p95 response, throughput, error rate)', 'Workload model (users, peaks — month-end, GST filing dates)', 'Scenarios: load, stress, soak, spike', 'Environment and data volumes', 'Tools (k6 / JMeter) and scripts outline', 'Monitoring and pass / fail criteria'] },
+  coding_standards: { label: 'Coding standards & quality gates', agent: 'code_quality', outline: ['Language and framework conventions', 'Project structure', 'Naming', 'Error handling and logging', 'Security rules (secrets, input validation, SQL)', 'Lint / format / static analysis (ESLint, Biome, Sonar, Semgrep) with rule sets', 'Test coverage gates', 'Pull request checklist', 'Definition of done'] },
+  code_review_checklist: { label: 'Code review checklist', agent: 'code_reviewer', outline: ['Correctness', 'Security (OWASP Top 10, authz, secrets)', 'Performance (N+1, indexes, caching)', 'Readability and maintainability', 'Tests', 'Observability', 'Docs and migrations'] },
+  traceability_matrix: { label: 'Requirements traceability matrix', agent: 'validator', outline: ['Matrix: requirement id → design section → backlog item → test cases → status', 'Gaps (requirements without design, story or test)', 'Orphans (stories or tests without a requirement)'] },
   custom: { label: 'Document', agent: 'writer', outline: [] },
 };
 
-export const STEP_KINDS = ['document', 'diagram', 'backlog', 'test_cases', 'code'] as const;
+/** Test levels a test-case step can write. */
+export const TEST_LEVELS: Record<string, { label: string; agent: AgentKey; ask: string }> = {
+  functional: { label: 'Functional', agent: 'qa', ask: 'functional test cases through the UI: happy paths, validations, negative cases, permissions and edge cases' },
+  unit: { label: 'Unit', agent: 'unit_tester', ask: 'unit test cases per module / function: inputs, expected outputs, boundaries, error paths and what to mock; the "action" names the function and inputs' },
+  integration: { label: 'Integration & API', agent: 'system_tester', ask: 'integration and API test cases: each endpoint or third-party interface with request, expected response / status, errors, timeouts, retries and idempotency' },
+  system: { label: 'System / end-to-end', agent: 'system_tester', ask: 'end-to-end system test cases across the whole flow, from the user\'s first step to the final record, report or message' },
+  uat: { label: 'UAT', agent: 'system_tester', ask: 'user acceptance test scenarios in business language, for business users to sign off' },
+  regression: { label: 'Regression', agent: 'qa', ask: 'regression test cases protecting existing behaviour around the change' },
+  performance: { label: 'Performance', agent: 'perf_tester', ask: 'performance test cases: load, stress, soak and spike scenarios with users, duration and pass / fail budgets' },
+  security: { label: 'Security', agent: 'security', ask: 'security test cases: authentication, authorisation, injection, XSS, CSRF, secrets, rate limits and personal data (DPDP)' },
+};
+
+/** What a review step checks. */
+export const REVIEW_MODES: Record<string, { label: string; agent: AgentKey }> = {
+  evaluate: { label: 'Evaluate quality against the goal', agent: 'evaluator' },
+  validate: { label: 'Validate consistency & traceability', agent: 'validator' },
+  code_review: { label: 'Code & design review', agent: 'code_reviewer' },
+  quality: { label: 'Code quality & standards check', agent: 'code_quality' },
+};
+
+export const STEP_KINDS = ['document', 'diagram', 'backlog', 'test_cases', 'review', 'code'] as const;
 type StepKind = (typeof STEP_KINDS)[number];
 
 const stepSchema = z.object({
@@ -96,19 +147,26 @@ export type StepInput = z.infer<typeof stepSchema>;
 
 const d = (agent: AgentKey, docType: string, extra: Partial<StepInput> = {}): StepInput => ({ agent, kind: 'document', title: DOC_TYPES[docType]!.label, docType, ...extra });
 const g = (agent: AgentKey, diagramType: DiagramType, title?: string, extra: Partial<StepInput> = {}): StepInput => ({ agent, kind: 'diagram', title: title ?? DIAGRAM_LABELS[diagramType], diagramType, ...extra });
+const tc = (level: string, title: string): StepInput => ({ agent: TEST_LEVELS[level]!.agent, kind: 'test_cases', title, docType: level });
+const r = (mode: string, title: string): StepInput => ({ agent: REVIEW_MODES[mode]!.agent, kind: 'review', title, docType: mode });
 
 export const TEMPLATES: Record<string, { label: string; description: string; steps: StepInput[] }> = {
   feature: {
-    label: 'Feature: requirements → design → backlog → tests → code',
+    label: 'Feature: requirements → design → backlog → tests → code, with quality gates',
     description: 'For a new feature or module of an existing product.',
     steps: [
       d('ba', 'brd'),
       g('ux', 'user_journey'),
       d('architect', 'hld'),
+      d('api_designer', 'api_spec'),
       g('architect', 'sequence', 'Main flow — sequence'),
-      g('architect', 'er', 'Data model — ER'),
+      g('data_engineer', 'er', 'Data model — ER'),
+      r('evaluate', 'Evaluator: requirements and design'),
       { agent: 'po', kind: 'backlog', title: 'Epics, user stories and tasks' },
-      { agent: 'qa', kind: 'test_cases', title: 'Test cases' },
+      tc('functional', 'Functional test cases'),
+      tc('unit', 'Unit test cases'),
+      tc('integration', 'Integration & API test cases'),
+      r('validate', 'Validation: requirement → design → story → test'),
       { agent: 'developer', kind: 'code', title: 'Implement with the coding agent' },
     ],
   },
@@ -123,17 +181,64 @@ export const TEMPLATES: Record<string, { label: string; description: string; ste
       g('architect', 'c4_context'),
       g('architect', 'c4_container'),
       g('architect', 'data_flow'),
-      d('architect', 'db_design'),
-      d('architect', 'api_spec'),
+      d('data_engineer', 'db_design'),
+      d('api_designer', 'api_spec'),
+      d('backend', 'backend_design'),
+      d('frontend', 'frontend_design'),
       d('security', 'threat_model'),
+      d('code_quality', 'coding_standards'),
+      r('evaluate', 'Evaluator: product, requirements and design'),
       { agent: 'po', kind: 'backlog', title: 'Epics, user stories and tasks' },
-      d('qa', 'test_plan'),
-      { agent: 'qa', kind: 'test_cases', title: 'Test cases' },
+      d('qa', 'test_strategy'),
+      tc('functional', 'Functional test cases'),
+      tc('unit', 'Unit test cases'),
+      tc('integration', 'Integration & API test cases'),
+      tc('system', 'System / end-to-end test cases'),
+      d('perf_tester', 'performance_test_plan'),
+      d('system_tester', 'uat_plan'),
+      d('validator', 'traceability_matrix'),
+      r('validate', 'Validation: consistency and traceability'),
       d('pm', 'project_plan'),
       d('devops', 'deployment_plan'),
       d('devops', 'runbook'),
       { agent: 'developer', kind: 'code', title: 'Implement with the coding agent' },
       d('writer', 'user_manual'),
+    ],
+  },
+  engineering: {
+    label: 'Engineering design: backend, frontend, APIs, data, standards',
+    description: 'For the engineering team before building.',
+    steps: [
+      d('architect', 'hld'),
+      d('api_designer', 'api_spec'),
+      d('data_engineer', 'db_design'),
+      g('data_engineer', 'er'),
+      d('backend', 'backend_design'),
+      g('backend', 'sequence', 'Key flows — sequence'),
+      d('frontend', 'frontend_design'),
+      d('code_quality', 'coding_standards'),
+      d('code_reviewer', 'code_review_checklist'),
+      r('code_review', 'Code & design review'),
+    ],
+  },
+  quality: {
+    label: 'Quality pack: test strategy, unit, integration, system, performance, UAT',
+    description: 'Everything QA needs for a release, with test cases at every level.',
+    steps: [
+      d('qa', 'test_strategy'),
+      d('unit_tester', 'unit_test_plan'),
+      tc('unit', 'Unit test cases'),
+      d('system_tester', 'integration_test_plan'),
+      tc('integration', 'Integration & API test cases'),
+      d('system_tester', 'system_test_plan'),
+      tc('system', 'System / end-to-end test cases'),
+      tc('security', 'Security test cases'),
+      d('perf_tester', 'performance_test_plan'),
+      tc('performance', 'Performance test cases'),
+      d('system_tester', 'uat_plan'),
+      tc('uat', 'UAT scenarios'),
+      d('validator', 'traceability_matrix'),
+      r('validate', 'Validation: every requirement tested'),
     ],
   },
   design: {
@@ -149,7 +254,7 @@ export const TEMPLATES: Record<string, { label: string; description: string; ste
   bugfix: {
     label: 'Bug fix: root cause → tests → fix',
     description: 'For a production issue or a bug.',
-    steps: [d('developer', 'rca'), { agent: 'qa', kind: 'backlog', title: 'Bug and fix tasks' }, { agent: 'qa', kind: 'test_cases', title: 'Regression test cases' }, { agent: 'developer', kind: 'code', title: 'Fix with the coding agent' }],
+    steps: [d('developer', 'rca'), g('developer', 'sequence', 'Where it fails — sequence'), { agent: 'qa', kind: 'backlog', title: 'Bug and fix tasks' }, tc('regression', 'Regression test cases'), tc('unit', 'Unit tests for the fix'), { agent: 'developer', kind: 'code', title: 'Fix with the coding agent' }, r('code_review', 'Review of the fix')],
   },
   docs: {
     label: 'Documentation: manual, release notes, runbook',
@@ -160,7 +265,7 @@ export const TEMPLATES: Record<string, { label: string; description: string; ste
 
 /** Steps that wait for a person in "key steps" mode. */
 const KEY_DOCS = new Set(['brd', 'prd', 'srs', 'hld', 'architecture', 'sow', 'threat_model']);
-const isKey = (s: StepInput) => s.kind !== 'document' && s.kind !== 'diagram' ? true : s.kind === 'document' && KEY_DOCS.has(s.docType ?? '');
+const isKey = (s: StepInput) => (s.kind === 'review' ? false : s.kind !== 'document' && s.kind !== 'diagram' ? true : s.kind === 'document' && KEY_DOCS.has(s.docType ?? ''));
 const ALWAYS_REVIEW: StepKind[] = ['backlog', 'test_cases', 'code'];
 
 /* ───────────────────────── access ───────────────────────── */
@@ -216,6 +321,8 @@ async function writeSteps(tx: Tx, tenantId: string, runId: string, steps: StepIn
   for (const s of steps) {
     if (s.kind === 'document' && s.docType && !DOC_TYPES[s.docType]) s.docType = 'custom';
     if (s.kind === 'diagram' && !s.diagramType) s.diagramType = 'architecture';
+    if (s.kind === 'test_cases' && !TEST_LEVELS[s.docType ?? '']) s.docType = 'functional';
+    if (s.kind === 'review' && !REVIEW_MODES[s.docType ?? '']) s.docType = 'evaluate';
     if ((s.kind === 'backlog' || s.kind === 'test_cases' || s.kind === 'code') && !projectId) throw badRequest(`"${s.title}" creates work in a project: choose the project first, or remove the step`);
   }
   await tx.query(`delete from sdlc_steps where tenant_id = $1 and run_id = $2 and status = 'pending'`, [tenantId, runId]);
@@ -225,7 +332,7 @@ async function writeSteps(tx: Tx, tenantId: string, runId: string, steps: StepIn
     const review = ALWAYS_REVIEW.includes(s.kind) ? true : mode === 'each' ? true : mode === 'none' ? false : s.needsReview ?? isKey(s);
     await tx.query(
       `insert into sdlc_steps (tenant_id, run_id, position, agent, kind, title, doc_type, diagram_type, instructions, needs_review) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [tenantId, runId, ++i, s.kind === 'code' ? 'developer' : s.agent, s.kind, s.title, s.kind === 'document' ? (s.docType ?? 'custom') : null, s.kind === 'diagram' ? s.diagramType : null, s.instructions ?? null, review],
+      [tenantId, runId, ++i, s.kind === 'code' ? 'developer' : s.agent, s.kind, s.title, s.kind === 'document' ? (s.docType ?? 'custom') : s.kind === 'test_cases' || s.kind === 'review' ? s.docType : null, s.kind === 'diagram' ? s.diagramType : null, s.instructions ?? null, review],
     );
   }
 }
@@ -448,10 +555,12 @@ async function applyTests(ctx: RecordCtx, run: Run, raw: Record<string, any>) {
   for (const c of t.cases) {
     if (c.skip) continue;
     const itemIds = c.covers.map((x) => byKey.get(x.toLowerCase()) ?? byName.get(x.toLowerCase())).filter((x): x is string => !!x);
-    const r = await saveCase(ctx, run.project_id, null, { title: c.title, suite: c.suite ?? null, preconditions: c.preconditions ?? null, steps: c.steps.map((x) => ({ action: x.action ?? '', expected: x.expected ?? null })), priority: c.priority, status: 'ready', itemIds });
+    const level = TEST_LEVELS[String(raw.level ?? '')];
+    const suite = level && level.label !== 'Functional' ? `${level.label}${c.suite ? ` — ${c.suite}` : ''}` : (c.suite ?? null);
+    const r = await saveCase(ctx, run.project_id, null, { title: c.title, suite, preconditions: c.preconditions ?? null, steps: c.steps.map((x) => ({ action: x.action ?? '', expected: x.expected ?? null })), priority: c.priority, status: 'ready', itemIds });
     created.push({ id: r.id, key: (r as { key?: string }).key ?? "", title: c.title });
   }
-  return { ...t, created };
+  return { ...t, level: raw.level, created };
 }
 
 async function applyCode(ctx: RecordCtx, run: Run, output: Record<string, any>) {
@@ -731,20 +840,106 @@ Reply with JSON only:
   return backlogSchema.parse(extractJson(text));
 }
 
-async function aiTests(ai: AiCtx, goal: string, context: string, items: { key: string; name: string }[], instructions?: string | null, feedback?: string | null, previous?: unknown) {
+async function aiTests(ai: AiCtx, goal: string, context: string, items: { key: string; name: string }[], instructions?: string | null, feedback?: string | null, previous?: unknown, level = 'functional', agent: AgentKey = 'qa') {
+  const lv = TEST_LEVELS[level] ?? TEST_LEVELS.functional!;
   const text = await ask(
     ai,
-    SYSTEM(AGENTS.qa.voice),
-    `Write test cases.
+    SYSTEM(AGENTS[agent]?.voice ?? AGENTS.qa.voice),
+    `Write ${lv.label.toLowerCase()} test cases: ${lv.ask}.
 Goal: ${goal}
 ${instructions ? `Instructions: ${instructions}\n` : ''}${items.length ? `Work items to cover (key — name):\n${items.map((i) => `${i.key} — ${i.name}`).join('\n')}\n` : ''}${context ? `<context>\n${context}\n</context>\n` : ''}${feedback ? `The reviewer asked for changes: "${feedback}"\nPrevious:\n<context>${JSON.stringify(previous).slice(0, 12000)}</context>\n` : ''}
 Reply with JSON only:
 {"cases":[{"title":"…","suite":"module or feature","preconditions":"…","priority":"high|medium|low|critical","steps":[{"action":"…","expected":"…"}],"covers":["<item key>"]}]}
-Cover happy paths, validations, negative cases, permissions and edge cases (Indian formats: GSTIN, PAN, phone, PIN code, INR amounts) — usually 10 to 40 cases.`,
+Cover the cases that matter at this level, including Indian formats where relevant (GSTIN, PAN, phone, PIN code, INR amounts) — usually 10 to 40 cases. Use the design documents in the context for real names (endpoints, functions, screens).`,
     { json: true, maxTokens: 8000, task: 'sdlc_tests' },
   );
   return testsSchema.parse(extractJson(text));
 }
+
+const reviewSchema2 = z.object({
+  score: z.coerce.number().min(0).max(10).catch(5),
+  summary: z.string().max(4000).catch(''),
+  findings: z
+    .array(z.object({ step: z.string().max(200).catch(''), severity: z.enum(['high', 'medium', 'low']).catch('medium'), issue: z.string().max(1500), fix: z.string().max(1500).catch('') }))
+    .max(60)
+    .catch([]),
+  matrix: z.array(z.object({ requirement: z.string().max(300), design: z.string().max(300).catch(''), backlog: z.string().max(300).catch(''), tests: z.string().max(300).catch(''), status: z.string().max(40).catch('') })).max(150).optional().catch(undefined),
+});
+type ReviewOut = z.infer<typeof reviewSchema2> & { verdict: 'pass' | 'revise' };
+
+const REVIEW_ASK: Record<string, string> = {
+  evaluate: 'Evaluate each output against the goal: is it complete, correct, specific to this business (not generic), feasible, and fit for an Indian business (GST, INR, DPDP)? Score 0-10 overall.',
+  validate: 'Validate consistency and traceability: do the documents agree with each other (names, numbers, ids, flows, data fields)? Is every requirement designed, planned in the backlog and covered by tests? List gaps and contradictions, and give a traceability matrix (requirement → design → backlog → tests → status: covered / partial / missing).',
+  code_review: 'Review the design and engineering outputs (API spec, data model, backend / frontend design, test cases, and the coding agent\'s reports if any) as a principal engineer: correctness, security (OWASP Top 10, authorisation, secrets), performance (N+1, indexes, caching), maintainability, error handling, observability.',
+  quality: 'Check the outputs against good engineering standards: coding standards and quality gates exist and are concrete (lint, static analysis, coverage), tests exist at unit / integration / system level, definition of done is testable.',
+};
+
+async function aiReview(ai: AiCtx, mode: string, agent: AgentKey, goal: string, context: string, steps: string[], instructions?: string | null): Promise<ReviewOut> {
+  const text = await ask(
+    ai,
+    SYSTEM(AGENTS[agent]?.voice ?? AGENTS.evaluator.voice),
+    `${REVIEW_ASK[mode] ?? REVIEW_ASK.evaluate}
+Goal: ${goal}
+${instructions ? `Focus: ${instructions}\n` : ''}Steps done so far (use these exact titles in "step"): ${steps.map((x) => `"${x}"`).join(', ')}
+<context>
+${context}
+</context>
+Reply with JSON only:
+{"score":8,"summary":"two or three sentences","findings":[{"step":"<exact step title>","severity":"high|medium|low","issue":"what is wrong, specifically","fix":"what to change"}]${mode === 'validate' ? ',"matrix":[{"requirement":"BR-1 …","design":"HLD §3","backlog":"FLEET-2","tests":"TC-4","status":"covered|partial|missing"}]' : ''}}
+High = wrong, missing or contradictory in a way that would hurt delivery; medium = should be fixed; low = nice to have. Only real problems — no praise, no padding.`,
+    { json: true, maxTokens: 6000, task: 'sdlc_review' },
+  );
+  const r = reviewSchema2.parse(extractJson(text));
+  const verdict = r.findings.some((f) => f.severity === 'high') || r.score < 7 ? 'revise' : 'pass';
+  return { ...r, verdict };
+}
+
+function reviewMarkdown(title: string, r: ReviewOut, round: number, sentBack: string[]) {
+  const esc = (x: string) => x.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  const lines = [`# ${title}`, '', `**Score: ${r.score}/10 — ${r.verdict === 'pass' ? 'pass' : 'needs revision'}**${round > 1 ? ` (round ${round})` : ''}`, '', r.summary];
+  if (sentBack.length) lines.push('', `Sent back to the agents for revision: ${sentBack.join(', ')}.`);
+  if (r.findings.length) {
+    lines.push('', '## Findings', '', '| Step | Severity | Issue | Fix |', '|---|---|---|---|');
+    for (const f of r.findings) lines.push(`| ${esc(f.step || '—')} | ${f.severity} | ${esc(f.issue)} | ${esc(f.fix)} |`);
+  }
+  if (r.matrix?.length) {
+    lines.push('', '## Traceability', '', '| Requirement | Design | Backlog | Tests | Status |', '|---|---|---|---|---|');
+    for (const m of r.matrix) lines.push(`| ${esc(m.requirement)} | ${esc(m.design)} | ${esc(m.backlog)} | ${esc(m.tests)} | ${esc(m.status)} |`);
+  }
+  return lines.join('\n');
+}
+
+/** What a reviewer reads: everything before it (bigger budget than a writer), test cases, and the coding agent's reports. */
+async function reviewContextFor(tx: Tx, tenantId: string, run: Run, before: number, mode: string) {
+  const parts: string[] = [];
+  const arts = await tx.query<{ kind: string; subtype: string; title: string; body: string | null }>(
+    `select a.kind, a.subtype, a.title, a.body from sdlc_artifacts a join sdlc_steps s on s.tenant_id = a.tenant_id and s.id = a.step_id
+      where a.tenant_id = $1 and a.run_id = $2 and s.position < $3 and s.status in ('approved', 'awaiting_review') and s.kind <> 'review' order by s.position`,
+    [tenantId, run.id, before],
+  );
+  let budget = 48000;
+  for (const a of arts) {
+    const body = (a.body ?? '').replace(/\`\`\`mermaid[\s\S]*?\`\`\`/g, a.kind === 'document' ? '[figure]' : '$&');
+    const take = body.slice(0, Math.min(Math.max(budget, 0), a.kind === 'document' ? 10000 : 2500));
+    budget -= take.length;
+    parts.push(`## ${a.title} (${a.kind === 'diagram' ? 'diagram' : a.subtype})\n${take}`);
+  }
+  const outs = await tx.query<{ kind: string; title: string; output: Record<string, any> }>(`select kind, title, output from sdlc_steps where tenant_id = $1 and run_id = $2 and position < $3 and kind in ('backlog', 'test_cases') and status in ('approved', 'awaiting_review')`, [tenantId, run.id, before]);
+  for (const o of outs) {
+    if (o.kind === 'backlog') parts.push(`## ${o.title} (backlog)\n${((o.output.epics as any[]) ?? []).map((e) => `Epic: ${e.name}\n${(e.stories ?? []).map((st: any) => `- ${st.name} [${st.points ?? '?'} pts] ${(st.acceptance ?? []).join(' / ')}`).join('\n')}`).join('\n').slice(0, 8000)}`);
+    else parts.push(`## ${o.title} (test cases, ${o.output.level ?? 'functional'})\n${((o.output.cases as any[]) ?? []).map((c) => `- ${c.title} → covers ${(c.covers ?? []).join(', ') || '—'}`).join('\n').slice(0, 6000)}`);
+  }
+  if (mode === 'code_review' && run.project_id) {
+    const jobs = await tx.query<Record<string, any>>(
+      `select t.name, j.status, j.branch, j.summary, j.test_report from coding_agent_jobs j join project_tasks t on t.tenant_id = j.tenant_id and t.id = j.task_id where j.tenant_id = $1 and j.project_id = $2 and j.summary is not null order by j.updated_at desc limit 10`,
+      [tenantId, run.project_id],
+    );
+    for (const j of jobs) parts.push(`## Coding agent: ${j.name} (${j.status}${j.branch ? `, branch ${j.branch}` : ''})\n${String(j.summary).slice(0, 3000)}\nTests: ${String(j.test_report ?? '').slice(0, 1500)}`);
+  }
+  return parts.join('\n\n');
+}
+
+const MAX_REVIEW_ROUNDS = 2;
 
 async function aiPlan(ai: AiCtx, goal: string, hasProject: boolean, context: string) {
   const text = await ask(
@@ -757,10 +952,11 @@ Agents: ${Object.entries(AGENTS).map(([k, v]) => `${k} (${v.name}: ${v.does})`).
 Step kinds:
 - document: docType one of ${Object.keys(DOC_TYPES).join(', ')} (it includes its own diagrams)
 - diagram: diagramType one of ${DIAGRAM_TYPES.join(', ')} (a diagram on its own)
-${hasProject ? '- backlog: epics, stories and tasks created in the project\n- test_cases: test cases for the stories\n- code: the coding agent implements the stories (after backlog)' : '(No project is chosen, so no backlog, test_cases or code steps.)'}
+- review: a quality gate — docType one of ${Object.entries(REVIEW_MODES).map(([k, v]) => `${k} (${v.label}, agent ${v.agent})`).join(', ')}; it reads everything before it and sends weak documents and diagrams back to their agents automatically (up to ${MAX_REVIEW_ROUNDS} rounds)
+${hasProject ? `- backlog: epics, stories and tasks created in the project\n- test_cases: docType = the level, one of ${Object.entries(TEST_LEVELS).map(([k, v]) => `${k} (agent ${v.agent})`).join(', ')}\n- code: the coding agent implements the stories (after backlog)` : '(No project is chosen, so no backlog, test_cases or code steps.)'}
 Reply with JSON only:
 {"title":"short name for this piece of work","steps":[{"agent":"ba","kind":"document","title":"…","docType":"brd","instructions":"what this step must focus on"},{"agent":"architect","kind":"diagram","title":"…","diagramType":"sequence","instructions":"…"}]}
-Use only the steps this goal needs (usually 4 to 12), in a sensible order: requirements before design, design before backlog, backlog before tests and code.`,
+Use only the steps this goal needs (usually 5 to 15), in a sensible order: requirements before design, design before backlog, backlog before tests and code. Pick the specialist for each step (backend, frontend, API designer, data engineer, unit / system / performance testers…). Put an evaluate review after the requirements and design, and a validate review after the tests.`,
     { json: true, maxTokens: 3000, task: 'sdlc_plan' },
   );
   const raw = extractJson(text) as { title?: string; steps?: unknown[] };
@@ -895,9 +1091,51 @@ export async function advance(env: Env, db: Db, runId: string, tenantId: string,
     } else if (s.kind === 'backlog') {
       output = await aiBacklog(ai, run.goal, context, s.instructions, s.feedback, s.output);
     } else if (s.kind === 'test_cases') {
-      output = await aiTests(ai, run.goal, context, items, s.instructions, s.feedback, s.output);
+      output = { ...(await aiTests(ai, run.goal, context, items, s.instructions, s.feedback, s.output, s.doc_type ?? 'functional', s.agent)), level: s.doc_type ?? 'functional' };
     } else if (s.kind === 'code') {
       output = { items: items.filter((i) => ['story', 'bug', 'task', 'spike'].includes(i.type)) };
+    } else if (s.kind === 'review') {
+      const mode = s.doc_type ?? 'evaluate';
+      const { rctx, titles } = await db.tx({ ...sc, readOnly: true }, async (tx) => ({
+        rctx: await reviewContextFor(tx, tenantId, run, s.position, mode),
+        titles: (await tx.query<{ title: string }>(`select title from sdlc_steps where tenant_id = $1 and run_id = $2 and position < $3 and status in ('approved', 'awaiting_review') and kind <> 'review' order by position`, [tenantId, runId, s.position])).map((x) => x.title),
+      }));
+      const rv = await aiReview(ai, mode, s.agent, run.goal, rctx, titles, s.instructions);
+      const round = Number((s.output as Record<string, unknown>)?.rounds ?? 0) + 1;
+      output = { ...rv, mode, rounds: round };
+      artifact = { id: prev?.id ?? null, projectId: run.project_id, runId, stepId: s.id, kind: 'document', subtype: 'review_report', title: s.title, body: reviewMarkdown(s.title, rv, round, []), spec: null, drawio: null, note: `Round ${round}: ${rv.score}/10` };
+    }
+    // a failing review sends its findings back to the agents that wrote the documents and diagrams, then reviews again
+    if (s.kind === 'review' && artifact && (output as ReviewOut).verdict === 'revise' && Number(output.rounds) <= MAX_REVIEW_ROUNDS) {
+      const rv = output as ReviewOut & { rounds: number };
+      const sent = await db.tx(sc, async (tx) => {
+        const targets = await tx.query<{ id: string; title: string; position: number }>(
+          `select id, title, position from sdlc_steps where tenant_id = $1 and run_id = $2 and position < $3 and status = 'approved' and kind in ('document', 'diagram') order by position`,
+          [tenantId, runId, s.position],
+        );
+        const byTitle = new Map(targets.map((t) => [t.title.toLowerCase(), t]));
+        const notes = new Map<string, string[]>();
+        for (const f of rv.findings.filter((x) => x.severity !== 'low')) {
+          const t = byTitle.get(f.step.toLowerCase()) ?? targets.find((x) => f.step && x.title.toLowerCase().includes(f.step.toLowerCase()));
+          if (t) notes.set(t.id, [...(notes.get(t.id) ?? []), `${f.issue}${f.fix ? ` → ${f.fix}` : ''}`]);
+        }
+        if (!notes.size) return [];
+        const who = AGENTS[s.agent as AgentKey]?.name ?? 'Reviewer';
+        for (const [id, list] of notes) {
+          await tx.query(`update sdlc_steps set status = 'pending', feedback = $3, error = null where tenant_id = $1 and id = $2`, [tenantId, id, `${who} (round ${rv.rounds}): ${list.join(' · ')}`.slice(0, 8000)]);
+        }
+        const names = targets.filter((t) => notes.has(t.id)).map((t) => t.title);
+        artifact!.body = reviewMarkdown(s.title, rv, rv.rounds, names);
+        await writeArtifact(tx, tenantId, artifact!);
+        // the review runs again after the revised steps (they come before it)
+        await tx.query(`update sdlc_steps set status = 'pending', output = $3, finished_at = now() where tenant_id = $1 and id = $2`, [tenantId, s.id, JSON.stringify(output)]);
+        await tx.query(`update sdlc_runs set updated_at = now() where tenant_id = $1 and id = $2`, [tenantId, runId]);
+        return names;
+      });
+      if (sent.length) {
+        await again();
+        return;
+      }
     }
     await db.tx(sc, async (tx) => {
       if (artifact) {
@@ -914,7 +1152,8 @@ export async function advance(env: Env, db: Db, runId: string, tenantId: string,
           await tx.query(`update sdlc_artifact_versions set body = $4 where tenant_id = $1 and artifact_id = $2 and version = $3`, [tenantId, main.id, main.version, body]);
         }
       }
-      const review = s.needs_review || ALWAYS_REVIEW.includes(s.kind);
+      // a review still failing after its rounds stops for a person
+      const review = s.needs_review || ALWAYS_REVIEW.includes(s.kind) || (s.kind === 'review' && (output as Partial<ReviewOut>).verdict === 'revise');
       await tx.query(`update sdlc_steps set status = $3, output = $4, finished_at = now(), feedback = case when $3 = 'approved' then null else feedback end where tenant_id = $1 and id = $2`, [
         tenantId, s.id, review ? 'awaiting_review' : 'approved', JSON.stringify(output),
       ]);
@@ -1004,7 +1243,10 @@ export async function createArtifact(ctx: RecordCtx, input: z.infer<typeof newAr
 /** What the UI offers: agents, document kinds, diagram kinds, ready-made plans. */
 export function catalogue() {
   return {
-    agents: Object.entries(AGENTS).map(([key, a]) => ({ key, name: a.name, does: a.does })),
+    agents: Object.entries(AGENTS).map(([key, a]) => ({ key, name: a.name, does: a.does, group: AGENT_GROUPS.find(([, ks]) => ks.includes(key as AgentKey))?.[0] ?? 'Other' })),
+    agentGroups: AGENT_GROUPS.map(([label]) => label),
+    testLevels: Object.entries(TEST_LEVELS).map(([key, t]) => ({ key, label: t.label, agent: t.agent })),
+    reviewModes: Object.entries(REVIEW_MODES).map(([key, t]) => ({ key, label: t.label, agent: t.agent })),
     docTypes: Object.entries(DOC_TYPES).map(([key, t]) => ({ key, label: t.label, agent: t.agent })),
     diagramTypes: DIAGRAM_TYPES.map((key) => ({ key, label: DIAGRAM_LABELS[key], editable: !MERMAID_TYPES.includes(key as never) })),
     templates: Object.entries(TEMPLATES).map(([key, t]) => ({ key, label: t.label, description: t.description, steps: t.steps })),

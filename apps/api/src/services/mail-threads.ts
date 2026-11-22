@@ -231,9 +231,10 @@ export async function saveThread(ctx: RecordCtx, env: Env, projectId: string, mi
   const ms = await ctx.tx.one<{ name: string }>(`select name from project_milestones where tenant_id = $1 and id = $2 and project_id = $3`, [ctx.tenantId, milestoneId, projectId]);
   if (!ms) throw notFound('Milestone not found');
   const t = await ctx.tx.one<{ settings: any }>(`select settings from tenants where id = $1`, [ctx.tenantId]);
-  const users = await ctx.tx.query<{ email: string }>(`select lower(email) as email from users where tenant_id = $1`, [ctx.tenantId]);
+  // people without a sign-in have no email
+  const users = await ctx.tx.query<{ email: string }>(`select lower(email) as email from users where tenant_id = $1 and email is not null`, [ctx.tenantId]);
   const ownDomains = new Set(
-    [String(t?.settings?.company?.website ?? '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0], ...users.map((u) => u.email.split('@')[1])].filter((x): x is string => !!x).map((x) => x.toLowerCase()),
+    [String(t?.settings?.company?.website ?? '').replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0], ...users.map((u) => u.email?.split('@')[1])].filter((x): x is string => !!x).map((x) => x.toLowerCase()),
   );
   const parsed = raws.map((raw) => ({ raw, m: parseMail(raw) })).sort((a, b) => Date.parse(a.m.date ?? '') - Date.parse(b.m.date ?? ''));
   const words = /\b(approv|accept|sign[- ]?off|signed off|complet|crac|inspection|certif|go[- ]?ahead|satisf|confirm|acknowledg)/i;
