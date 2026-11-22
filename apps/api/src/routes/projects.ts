@@ -3,9 +3,9 @@
  * project (see services/projects.ts); the Projects app must be switched on.
  */
 import { Hono } from 'hono';
-import { z } from 'zod';
+import { ZodError, z } from 'zod';
 import type { AppEnv } from '../env';
-import { badRequest, notFound } from '../lib/errors';
+import { ApiError, badRequest, notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import { enqueue, eventJobs } from '../services/jobs';
@@ -258,7 +258,13 @@ export const projectRoutes = new Hono<AppEnv>()
     });
     const raws = await mt.fetchThread(c.env, c.var.db, c.var.tenant.id, sources, b.source, b.key);
     if (!raws.length) throw badRequest('No messages found in that thread');
-    return c.json(await c.var.db.tx(scope(c), (tx) => mt.saveThread(rctx(c, tx), c.env, id(c), id(c, 'mid'), b.key, raws)));
+    try {
+      return c.json(await c.var.db.tx(scope(c), (tx) => mt.saveThread(rctx(c, tx), c.env, id(c), id(c, 'mid'), b.key, raws)));
+    } catch (e) {
+      if (e instanceof ApiError || e instanceof ZodError) throw e;
+      console.error(JSON.stringify({ level: 'error', msg: 'keeping a mail thread failed', error: (e as Error).message, stack: (e as Error).stack?.split('\n').slice(0, 5) }));
+      throw new ApiError(500, 'internal', `Could not keep the thread: ${(e as Error).message.slice(0, 200)}`);
+    }
   })
   .get('/projects/:id/milestones/:mid/mail', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => mt.milestoneMail(rctx(c, tx), id(c), id(c, 'mid')))))
   .delete('/projects/:id/milestones/:mid', async (c) => {

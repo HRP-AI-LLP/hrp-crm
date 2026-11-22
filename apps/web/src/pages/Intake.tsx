@@ -3,7 +3,7 @@
  * invoices that arrived by mail (read and made into draft bills), and the mailboxes that are read.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ViewSignButton } from '../components/DocumentViewer';
+import { DocumentViewer, ViewSignButton } from '../components/DocumentViewer';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { Empty, Modal, Spinner, useToast } from '../components/ui';
@@ -712,6 +712,7 @@ function ItemModal({ item, onClose }: { item: Json; onClose: () => void }) {
   const { data } = useQuery({ queryKey: ['intake', 'item', item.id], queryFn: () => get<Json>(`/api/v1/intake/items/${item.id}`) });
   const act = useAct([['intake']]);
   const [fileId, setFileId] = useState<string>(item.attachments?.[0]?.fileId ?? '');
+  const [viewing, setViewing] = useState<string | null>(null);
   if (!data) return null;
   const att = (data.attachments as Json[]).find((a) => a.fileId === fileId);
   return (
@@ -722,7 +723,7 @@ function ItemModal({ item, onClose }: { item: Json; onClose: () => void }) {
         </div>
         <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
           {(data.attachments as Json[]).map((a) => (
-            <button key={a.fileId} className={`btn sm${a.fileId === fileId ? ' primary' : ' ghost'}`} onClick={() => setFileId(a.fileId)}>
+            <button key={a.fileId} className={`btn sm${a.fileId === fileId ? ' primary' : ' ghost'}`} title={`Open ${a.name}`} onClick={() => (setFileId(a.fileId), setViewing(a.fileId))}>
               📎 {a.name}
             </button>
           ))}
@@ -730,6 +731,7 @@ function ItemModal({ item, onClose }: { item: Json; onClose: () => void }) {
             <ViewSignButton fileId={att.fileId} name={att.name} label="View / sign" className="btn sm ghost" />
           )}
         </div>
+        {viewing && <DocumentViewer fileId={viewing} onClose={() => setViewing(null)} />}
         {data.status === 'new' && data.kind !== 'statement' && (data.attachments as Json[]).length > 0 && <ApproveMail id={item.id} onDone={onClose} />}
         {data.status === 'done' && data.link_object === 'bill' && (
           <p>

@@ -95,7 +95,8 @@ export async function proposal(ctx: RecordCtx, env: Env, id: string, f: typeof f
   const date = rc?.date ?? (d.date as string | undefined) ?? paidRead?.paidOn ?? null;
   const hsn = reads.map(([, r]) => r.receipt?.hsnSac).find(Boolean) ?? null;
   const tax = foreign ? (rc?.tax ?? 0) : Number(d.cgst ?? 0) + Number(d.sgst ?? 0) + Number(d.igst ?? 0);
-  const taxable = foreign ? (rc?.subtotal ?? d.taxable ?? null) : (d.taxable ?? null);
+  // a receipt with only a total ("Total $4.00 USD"): the total less any tax is the value
+  const taxable = foreign ? (rc?.subtotal ?? d.taxable ?? (rc?.total != null ? r2(rc.total - (rc.tax ?? 0)) : null)) : (d.taxable ?? null);
   // a foreign supplier charging no GST: import of services, GST paid by us under reverse charge
   const reverseCharge = (foreign && !tax) || (!foreign && d.reverseCharge === true);
   const rateGuess = (t: number | null) => (t ? [0, 5, 12, 18, 28, 40].reduce((best, r) => (Math.abs((t * r) / 100 - tax) < Math.abs((t * best) / 100 - tax) ? r : best), 18) : 18);

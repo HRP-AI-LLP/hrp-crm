@@ -457,7 +457,7 @@ export async function setItemStatus(ctx: RecordCtx, id: string, status: 'new' | 
 /* ───────────────────────── bills from mail ───────────────────────── */
 
 /** Bumped when the reading of mailed documents improves: files read before are read again. */
-export const READ_VERSION = 4;
+export const READ_VERSION = 5;
 
 export async function ownGstins(ctx: RecordCtx) {
   const t = await ctx.tx.one<{ settings: any }>(`select settings from tenants where id = $1`, [ctx.tenantId]);
@@ -520,7 +520,7 @@ export async function readAttachment(ctx: RecordCtx, id: string, fileId: string,
     r.confidence = Math.max(r.confidence ?? 0, got / 5);
   }
   const read = r
-    ? { ...r, v: READ_VERSION, whose, receipt, party: { gstin: receipt?.supplier.foreign ? null : party, name: receipt?.supplier.name ?? r.data.customer?.name ?? null }, ours: ours.length > 0, scanned: false }
+    ? { ...r, v: READ_VERSION, text: text.slice(0, 30000), whose, receipt, party: { gstin: receipt?.supplier.foreign ? null : party, name: receipt?.supplier.name ?? r.data.customer?.name ?? null }, ours: ours.length > 0, scanned: false }
     : { data: null, v: READ_VERSION, receipt: null, confidence: 0, warnings: ['No text in this file (a scan or photo): enter the bill by hand'], scanned: true };
   const data = { ...it.data, reads: { ...(it.data.reads ?? {}), [fileId]: read } };
   await ctx.tx.query(`update intake_items set data = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, jsonSafe(data)]);

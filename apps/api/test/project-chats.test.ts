@@ -262,3 +262,19 @@ describe('an exported chat', () => {
     expect((await api('POST', `${P()}/chats/import`, { text: 'nothing that looks like a chat here' })).status).toBe(400);
   });
 });
+
+describe('several WhatsApp numbers on one Meta app', () => {
+  it('sends each number’s messages to its own channel, though Meta posts them all to one URL', async () => {
+    const second = await api('POST', '/api/admin/channels', { channel: 'whatsapp', name: 'Sales WhatsApp', provider: 'meta_cloud', config: { phoneNumberId: '777888', wabaId: '99887766' }, secrets: { accessToken: 'EAAtoken2', appSecret: APP_SECRET, verifyToken: 'vt2' } });
+    expect(second.status, JSON.stringify(second.json)).toBeLessThan(300);
+    const msg = (pid: string, from: string, text: string) => ({ object: 'whatsapp_business_account', entry: [{ id: '99887766', changes: [{ field: 'messages', value: { metadata: { phone_number_id: pid }, contacts: [{ wa_id: from, profile: { name: 'Neha' } }], messages: [{ from, id: `wamid.m${n++}`, type: 'text', timestamp: ts(), text: { body: text } }] } }] }] });
+    // both arrive at the first channel's URL (the app's one callback)
+    await inbound(msg('777888', '919845500001', 'Price for 20 users?'));
+    await inbound(msg('123456', '919845500002', 'Support question'));
+    const rows = await sql(`select c.address, a.name from conversations c join channel_accounts a on a.tenant_id = c.tenant_id and a.id = c.channel_account_id where c.address in ('919845500001','919845500002') order by c.address`);
+    expect(rows.map((r) => [r.address, r.name])).toEqual([
+      ['919845500001', 'Sales WhatsApp'],
+      ['919845500002', 'Support WhatsApp'],
+    ]);
+  });
+});

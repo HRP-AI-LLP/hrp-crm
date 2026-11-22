@@ -11,6 +11,7 @@ import { enqueue, eventJobs } from '../services/jobs';
 import { runBookkeeper } from '../services/books/desk';
 import { assertBooksAdmin } from '../services/books/ledger';
 import { readMailedStatement, systemDeps } from '../services/books/statement-mail';
+import { aiFillMail } from '../services/intake/ai-read';
 import * as approve from '../services/intake/approve';
 import * as gem from '../services/intake/gem';
 import { fetchBidFromGem } from '../services/intake/gem-fetch';
@@ -94,7 +95,14 @@ export const intakeRoutes = new Hono<AppEnv>()
     await emit(c, r.events);
     return c.json({ results: r.results, approved: r.approved, invoiceId: r.invoiceId });
   })
-  .post('/intake/items/:id/proposal', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => approve.proposal(rctx(c, tx), c.env, id(c)))))
+  .post('/intake/items/:id/proposal', async (c) => {
+    // read the files by the rules, let the AI fill what they missed (outside the transaction), then propose
+    await c.var.db.tx(scope(c), (tx) => approve.readAll(rctx(c, tx), c.env, id(c)));
+    await aiFillMail({ env: c.env, db: c.var.db, tenantId: c.var.tenant.id, userId: c.var.principal.user.id, meta: c.var.meta, requestId: c.var.requestId }, id(c)).catch((e) =>
+      console.error(JSON.stringify({ level: 'warn', msg: 'intake ai read failed', error: (e as Error).message })),
+    );
+    return c.json(await c.var.db.tx(scope(c), (tx) => approve.proposal(rctx(c, tx), c.env, id(c))));
+  })
   .post('/intake/items/:id/approve', async (c) => {
     const b = approve.approveSchema.parse(await c.req.json());
     const r = await c.var.db.tx(scope(c), (tx) => approve.approveMail(rctx(c, tx), c.env, id(c), b));

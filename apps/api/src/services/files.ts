@@ -59,9 +59,10 @@ export function sniffType(bytes: Uint8Array, name: string): string | null {
   if (startsWith(bytes, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])) return ({ doc: 'application/msword', xls: 'application/vnd.ms-excel', ppt: 'application/vnd.ms-powerpoint' } as Record<string, string>)[ext] ?? null;
   // a saved email (.eml, kept from a mailbox): never shown inline, only downloaded
   if (ext === 'eml') {
-    const head = bytes.slice(0, 4096);
-    if (head.some((x) => x === 0)) return null;
-    return /^[\x21-\x7e]+:/.test(new TextDecoder().decode(head.slice(0, 200))) ? 'message/rfc822' : null;
+    // header lines first (after an optional BOM, blank lines or an mbox "From " line), no binary in the headers
+    const head = new TextDecoder().decode(bytes.slice(0, 2048)).replace(/^\uFEFF/, '').replace(/^\s+/, '').replace(/^From [^\n]*\n/, '');
+    if (head.includes('\u0000')) return null;
+    return /^[\x21-\x39\x3b-\x7e]+:/.test(head) ? 'message/rfc822' : null;
   }
   // plain text: CSV / TXT only (no markup), and no binary bytes in the first 4 KB
   if (['csv', 'txt'].includes(ext)) {

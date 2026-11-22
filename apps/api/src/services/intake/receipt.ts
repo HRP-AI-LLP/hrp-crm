@@ -140,6 +140,7 @@ function cellAmount(lines: string[], re: RegExp): number | null {
   return null;
 }
 
+const BUYER_LINE = /^(?:account\s+billed|bill(?:ed)?\s+to|billing\s+(?:account|address|details)|sold\s+to|issued\s+to|invoice(?:d)?\s+to|charged\s+to|paid\s+by|customer|client|ship\s+to|receipt\s+for)\b/i;
 const MONEY = String.raw`(?:Rs\.?|₹|INR|US\$|\$|€|£)?\s?-?\d[\d,]*(?:\.\d{1,2})?`;
 const LABELISH = /^(invoice|bill|tax|date|no\.?|number|receipt|original|duplicate)$/i;
 
@@ -175,7 +176,14 @@ export function readReceipt(text: string, ownNames: string[] = []): ReceiptRead 
 
   // the supplier: under a "Supplier / Seller / From" heading, else a company name in the header that is not the buyer
   const billIdx = flat.findIndex((l) => /\bbill(?:ed)?\s+to\b/i.test(l));
-  const notOwn = (n: string | null | undefined) => (n && !own.some((o) => n.toLowerCase().includes(o)) ? n.replace(/[,\s]+$/, '') : null);
+  // our own name in any spelling ("HRP AI LLP", "HRP-AI-LLP", "hrp ai llp."), and the buyer's lines ("Account billed …") are never the supplier
+  const squash = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const ownSquashed = own.map(squash).filter((o) => o.length >= 3);
+  const notOwn = (n: string | null | undefined) => {
+    const v = n?.replace(/[,\s]+$/, '').trim();
+    if (!v || ownSquashed.some((o) => squash(v).includes(o)) || BUYER_LINE.test(v)) return null;
+    return v;
+  };
   let supplierName = notOwn(column(lines, /^(?:supplier|seller|sold\s+by|vendor|service\s+provider|billed\s+by|from)(?:\s+details)?$/i));
   if (!supplierName)
     for (const l of flat.slice(0, billIdx > 0 ? billIdx + 1 : 25)) {

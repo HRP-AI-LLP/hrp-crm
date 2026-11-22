@@ -317,7 +317,7 @@ export const publicRoutes = new Hono<AppEnv>()
     } catch {
       throw badRequest('Expected JSON');
     }
-    await enqueue(c.env, safeCtx(c), [{ type: 'message.inbound', tenantId: route.tenant_id, channelAccountId: acc.id, payload }]);
+    await enqueue(c.env, safeCtx(c), await splitByNumber(c, route.tenant_id, acc, payload));
     return c.json({ ok: true });
   });
 
@@ -327,6 +327,36 @@ export async function resolveRoute(c: { var: AppEnv['Variables'] }, kind: 'form'
   const r = rows[0];
   if (!r || r.tenant_status !== 'active') throw notFound();
   return r;
+}
+
+/**
+ * Meta sends every number's messages to the app's one callback URL. Each change carries the number it
+ * was sent to (metadata.phone_number_id): it goes to the WhatsApp channel with that number, so a
+ * second (third…) number's chats are its own and replies leave from the number the customer wrote to.
+ */
+export async function splitByNumber(c: { var: AppEnv['Variables'] }, tenantId: string, acc: ChannelAccount, payload: unknown) {
+  type Change = { value?: { metadata?: { phone_number_id?: string } } };
+  type Entry = { changes?: Change[] } & Record<string, unknown>;
+  const p = payload as { object?: string; entry?: Entry[] } | null;
+  const one = [{ type: 'message.inbound' as const, tenantId, channelAccountId: acc.id, payload }];
+  if (acc.channel !== 'whatsapp' || !Array.isArray(p?.entry)) return one;
+  const ids = new Set(p.entry.flatMap((e) => (e.changes ?? []).map((ch) => ch.value?.metadata?.phone_number_id).filter((x): x is string => !!x)));
+  if (!ids.size || (ids.size === 1 && ids.has(String((acc.config as { phoneNumberId?: string }).phoneNumberId ?? '')))) return one;
+  const accounts = await c.var.db.tx({ tenantId, readOnly: true }, (tx) =>
+    tx.query<{ id: string; pid: string }>(`select id, config ->> 'phoneNumberId' as pid from channel_accounts where tenant_id = $1 and channel = 'whatsapp' and status = 'active' and config ->> 'phoneNumberId' = any($2::text[])`, [tenantId, [...ids]]),
+  );
+  const byPid = new Map(accounts.map((a) => [a.pid, a.id]));
+  // one payload per channel, holding only that number's changes; unknown numbers stay with the URL's channel
+  const groups = new Map<string, Entry[]>();
+  for (const e of p.entry) {
+    for (const ch of e.changes ?? []) {
+      const target = byPid.get(ch.value?.metadata?.phone_number_id ?? '') ?? acc.id;
+      const list = groups.get(target) ?? [];
+      list.push({ ...e, changes: [ch] });
+      groups.set(target, list);
+    }
+  }
+  return [...groups].map(([channelAccountId, entry]) => ({ type: 'message.inbound' as const, tenantId, channelAccountId, payload: { ...p, entry } }));
 }
 
 async function loadChannel(c: { var: AppEnv['Variables'] }, tenantId: string, id: string) {

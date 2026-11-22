@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Db } from '../src/lib/db';
 import { sealSecret } from '../src/services/integrations';
-import { threadSubject } from '../src/services/mail-threads';
+import { imapProbe, threadSubject } from '../src/services/mail-threads';
 import { type Json, makeHarness } from './harness';
 
 let h: Awaited<ReturnType<typeof makeHarness>>;
@@ -85,6 +85,8 @@ afterAll(() => vi.unstubAllGlobals());
 describe('milestone approval threads', () => {
   it('normalises thread subjects', () => {
     expect(threadSubject('RE: Fwd: [EXT] Approval of  Milestone 1')).toBe('approval of milestone 1');
+    // IMAP searches ASCII only: the longest plain stretch, not the subject with its dash dropped
+    expect(imapProbe('submission of invoice inv-2026000008 for 30% milestone payment – gem contract gemc-511687726792354')).toBe('submission of invoice inv-2026000008 for 30% milestone payment');
   });
 
   it('finds the thread in a mailbox without a date limit and keeps it, attachments included', async () => {

@@ -10,7 +10,7 @@ import { hasAdmin } from '@synapse/shared';
 import { z } from 'zod';
 import type { Env } from '../env';
 import type { Db } from '../lib/db';
-import { badRequest, notFound } from '../lib/errors';
+import { ApiError, badRequest, notFound } from '../lib/errors';
 import { ImapError, withImap } from '../lib/imap';
 import { parseMail } from '../lib/mime';
 import { saveFile, sniffType } from './files';
@@ -165,6 +165,21 @@ export async function fetchThread(env: Env, db: Db, tenantId: string, sources: A
   const [via, id] = source.split(':');
   const s = sources.find((x) => x.via === via && x.id === id);
   if (!s) throw notFound('That mailbox is not available to you');
+  try {
+    return await readThread(env, db, tenantId, s, key);
+  } catch (e) {
+    // the mailbox's own complaint, not a bare "Internal error"
+    if (e instanceof ApiError) throw e;
+    throw new ApiError(502, 'mailbox', `Could not read the thread from ${s.label}: ${(e as Error).message.slice(0, 200)}`);
+  }
+}
+
+/** The longest stretch of plain ASCII in a subject: IMAP SUBJECT search takes ASCII only, and "Payment – GeM" must not become "Payment GeM". */
+export function imapProbe(key: string) {
+  return key.split(/[^\x20-\x7e]+/).map((x) => x.trim()).sort((a, b) => b.length - a.length)[0] || key;
+}
+
+async function readThread(env: Env, db: Db, tenantId: string, s: Awaited<ReturnType<typeof mailSources>>[number], key: string): Promise<Uint8Array[]> {
   const ctx = { tenantId };
   const raws: Uint8Array[] = [];
   if (s.kind === 'imap') {
@@ -174,7 +189,7 @@ export async function fetchThread(env: Env, db: Db, tenantId: string, sources: A
       for (const f of await imapFolders(c, s.row.folder || 'INBOX')) {
         await c.examine(f);
         // the subject's words find the candidates; the normalised subject decides
-        const uids = await c.searchText(key.slice(0, 120));
+        const uids = await c.searchText(imapProbe(key).slice(0, 120));
         for (const h of await c.headers(uids.slice(-MAX_MESSAGES))) {
           if (threadSubject(parseMail(h.header).subject || '(no subject)') !== key || h.size > MAX_BYTES) continue;
           const raw = await c.message(h.uid, MAX_BYTES);
@@ -226,20 +241,26 @@ export async function saveThread(ctx: RecordCtx, env: Env, projectId: string, mi
   let saved = 0;
   let files = 0;
   const skippedFiles: string[] = [];
+  // Postgres takes no NUL characters in text: some mailers put them in bodies and names
+  const clean = (x: string | null | undefined) => (x ?? '').replace(/\u0000/g, '');
   for (const { raw, m } of parsed) {
-    const msgId = (m.messageId ?? '').slice(0, 500) || null;
+    m.subject = clean(m.subject);
+    m.text = clean(m.text);
+    const msgId = clean(m.messageId).slice(0, 500) || null;
     if (msgId && (await ctx.tx.one(`select 1 from milestone_attachments where tenant_id = $1 and milestone_id = $2 and kind = 'email' and message_id = $3`, [ctx.tenantId, milestoneId, msgId]))) continue;
     const from = m.from?.address?.toLowerCase() ?? null;
     const direction: 'in' | 'out' = from && ownDomains.has(from.split('@')[1] ?? '') ? 'out' : 'in';
     const at = m.date && !Number.isNaN(Date.parse(m.date)) ? new Date(m.date).toISOString() : new Date().toISOString();
     const act = await ctx.tx.one<{ id: string }>(
       `insert into activities (tenant_id, kind, subject, body, direction, related_object, related_id, occurred_at, metadata) values ($1,'email',$2,$3,$4,'project',$5,$6,$7) returning id`,
-      [ctx.tenantId, (m.subject || '(no subject)').slice(0, 200), (m.text || '').slice(0, 100_000), direction, projectId, at, JSON.stringify({ from: m.from?.address ?? null, fromName: m.from?.name ?? null, to: m.to.map((x) => x.address), cc: m.cc.map((x) => x.address), messageId: msgId, milestoneId, thread: key })],
+      [ctx.tenantId, (m.subject || '(no subject)').slice(0, 200), (m.text || '').slice(0, 100_000), direction, projectId, at, JSON.stringify({ from: clean(m.from?.address) || null, fromName: clean(m.from?.name) || null, to: m.to.map((x) => clean(x.address)), cc: m.cc.map((x) => clean(x.address)), messageId: msgId, milestoneId, thread: key })],
     );
     const day = at.slice(0, 10);
     const base = `${day} ${(m.subject || 'email').replace(/[^\w\- ]+/g, ' ').trim().slice(0, 80)}`;
-    const eml = await saveFile(ctx, env, { objectKey: 'project', recordId: projectId, name: `${base}.eml`, bytes: raw, kind: 'document', description: `Milestone “${ms.name}”: email from ${m.from?.address ?? 'unknown'}` }, { system: true });
-    await ctx.tx.query(`insert into milestone_attachments (tenant_id, milestone_id, file_id, activity_id, kind, message_id, thread_key) values ($1,$2,$3,$4,'email',$5,$6)`, [ctx.tenantId, milestoneId, (eml as { id: string }).id, act!.id, msgId, key.slice(0, 300)]);
+    // the email as a file; if it can't be kept (too big, odd bytes) the email itself still is
+    const eml = await saveFile(ctx, env, { objectKey: 'project', recordId: projectId, name: `${base || 'email'}.eml`, bytes: raw, kind: 'document', description: `Milestone “${ms.name}”: email from ${m.from?.address ?? 'unknown'}` }, { system: true }).catch(() => null);
+    if (!eml) skippedFiles.push(`${base || 'email'}.eml`);
+    await ctx.tx.query(`insert into milestone_attachments (tenant_id, milestone_id, file_id, activity_id, kind, message_id, thread_key) values ($1,$2,$3,$4,'email',$5,$6)`, [ctx.tenantId, milestoneId, (eml as { id: string } | null)?.id ?? null, act!.id, msgId, key.slice(0, 300)]);
     saved++;
     let n = 0;
     for (const a of m.attachments) {
@@ -248,7 +269,7 @@ export async function saveThread(ctx: RecordCtx, env: Env, projectId: string, mi
         skippedFiles.push(a.filename);
         continue;
       }
-      const f = await saveFile(ctx, env, { objectKey: 'project', recordId: projectId, name: a.filename, bytes: a.bytes, kind: 'document', description: `Milestone “${ms.name}”: attached to “${m.subject}” (${day})` }, { system: true }).catch(() => null);
+      const f = await saveFile(ctx, env, { objectKey: 'project', recordId: projectId, name: clean(a.filename).slice(0, 200) || 'attachment', bytes: a.bytes, kind: 'document', description: `Milestone “${ms.name}”: attached to “${m.subject}” (${day})` }, { system: true }).catch(() => null);
       if (!f) {
         skippedFiles.push(a.filename);
         continue;
