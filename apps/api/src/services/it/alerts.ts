@@ -94,7 +94,7 @@ ${[...groups.entries()]
 ${list.map((r) => `<div style="padding:8px 0;border-bottom:1px solid #e2e8f0"><a href="${esc(r.link ? new URL(r.link, origin).toString() : origin)}" style="color:#0b5cad;text-decoration:none;font-weight:600">${esc(r.title)}</a>${r.body ? `<div style="color:#475569;font-size:13px;margin-top:2px">${esc(r.body)}</div>` : ''}</div>`).join('\n')}`,
   )
   .join('\n')}
-<p style="color:#94a3b8;font-size:12px;margin-top:18px">Change what you get by email in Synapse → My account → Work alerts.</p></div>`;
+<p style="color:#94a3b8;font-size:12px;margin-top:18px">Change what you get by email in SanchalanOS → My account → Work alerts.</p></div>`;
   const text = [heading, '', ...rows.map((r) => `- ${r.title}${r.body ? ` — ${r.body}` : ''}${r.link ? `\n  ${new URL(r.link, origin).toString()}` : ''}`)].join('\n');
   return { html, text };
 }
@@ -140,7 +140,7 @@ export async function workMailSweep(env: Env, db: Db) {
         const digest = k.endsWith('|digest');
         const heading = digest ? `Your work digest — ${list.length} update${list.length > 1 ? 's' : ''}` : list.length === 1 ? list[0]!.title : `${list.length} work updates`;
         const m = mailOf(origin, heading, list);
-        await sendPlatformMail(env, { to: list[0]!.email!, subject: digest ? `Synapse digest: ${list.length} work update${list.length > 1 ? 's' : ''}` : list.length === 1 ? list[0]!.title : `Synapse: ${list.length} work updates`, html: m.html, text: m.text }).catch(() => false);
+        await sendPlatformMail(env, { to: list[0]!.email!, subject: digest ? `SanchalanOS digest: ${list.length} work update${list.length > 1 ? 's' : ''}` : list.length === 1 ? list[0]!.title : `SanchalanOS: ${list.length} work updates`, html: m.html, text: m.text }).catch(() => false);
       }
     if (batch.rows.some((r) => r.integration_id)) {
       const { postChat } = await import('../industry/connectors');

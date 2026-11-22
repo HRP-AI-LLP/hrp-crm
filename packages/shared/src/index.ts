@@ -16,3 +16,4 @@ export * from './agents';
 export * from './books';
 export * from './statement';
 export * from './connection-keys';
+export * from './brand';

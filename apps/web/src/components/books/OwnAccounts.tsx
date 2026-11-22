@@ -165,7 +165,7 @@ export function PersonModal({ person, defaultRole, onClose, onSaved, paths = DES
               <input type="date" value={f.joinedOn} onChange={(e) => setF({ ...f, joinedOn: e.target.value })} />
             </label>
             <label className="field">
-              Their Synapse user
+              Their SanchalanOS user
               <select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>
                 <option value="">—</option>
                 {users.map((u) => (

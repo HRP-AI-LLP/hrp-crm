@@ -1,5 +1,5 @@
 /**
- * Synapse formula language — a small, safe, side-effect-free expression evaluator shared by the
+ * SanchalanOS formula language — a small, safe, side-effect-free expression evaluator shared by the
  * API (formula fields, validation rules, conditional visibility/required, automation branches)
  * and the SPA (live preview, client-side visibility). No eval, no property access, no loops:
  * only literals, field references, operators and a fixed function library, with size and step

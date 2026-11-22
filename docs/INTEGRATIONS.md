@@ -1,6 +1,6 @@
 # Integrations
 
-Synapse connects to these outside services:
+SanchalanOS connects to these outside services:
 
 | Integration | What it does | Who sets it up |
 |---|---|---|
@@ -31,7 +31,7 @@ Only these must stay in the server's environment: the database address, `JWT_SEC
 
 The steps below are the same as the in-app guides.
 
-The callback and webhook hosts are `https://hrpsynapse.hrpai.in` for prod and `https://hrpsynapse-dev.hrpai.in` for dev. For local testing with `pnpm local`, also add `http://localhost:5173` and `http://localhost:8787`.
+The callback and webhook host is `https://www.sanchalan.hrpai.in`. For local testing with `pnpm local`, also add `http://localhost:5173` and `http://localhost:8787`.
 
 ### Google (Gmail + Calendar)
 
@@ -40,8 +40,7 @@ The callback and webhook hosts are `https://hrpsynapse.hrpai.in` for prod and `h
    - your app name, logo, the support email `info@hrpai.in`, and links to the privacy policy and terms on hrpai.in;
    - the scopes `gmail.readonly`, `gmail.send` and `calendar.events`.
 3. Under *Credentials*, create an **OAuth client ID** of type *Web application* with these authorised redirect URIs:
-   - `https://hrpsynapse.hrpai.in/api/public/oauth/google/callback`
-   - `https://hrpsynapse-dev.hrpai.in/api/public/oauth/google/callback`
+   - `https://www.sanchalan.hrpai.in/api/public/oauth/google/callback`
    - `http://localhost:5173/api/public/oauth/google/callback`
 4. Store the credentials as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (see *Secrets* below).
 
@@ -63,7 +62,7 @@ The callback and webhook hosts are `https://hrpsynapse.hrpai.in` for prod and `h
 1. At developers.facebook.com, create an app of type *Business* and add **Facebook Login for Business** and **Webhooks**.
 2. In the Facebook Login settings, set the *Valid OAuth redirect URIs* to the three callback URLs ending in `/api/public/oauth/meta/callback`.
 3. Under *Webhooks*, choose the *Page* object:
-   - *Callback URL:* `https://hrpsynapse.hrpai.in/api/public/hooks/meta-leads`. Use one URL for all workspaces; the dev app uses the dev host.
+   - *Callback URL:* `https://www.sanchalan.hrpai.in/api/public/hooks/meta-leads`. Use one URL for all workspaces; the dev app uses the dev host.
    - *Verify token:* any random string. Store it as `META_VERIFY_TOKEN`.
    - Subscribe to the **leadgen** field.
 4. Request these permissions through App Review: `pages_show_list`, `pages_read_engagement`, `pages_manage_metadata`, `pages_manage_ads`, `leads_retrieval` and `business_management`. Meta also requires **Business Verification** of HRP AI LLP.
@@ -77,11 +76,11 @@ Each person connects their own accounts (several per app) under **My account →
 
 - **Google Meet** reuses the Google OAuth client. Enable the **Google Meet REST API** and the **Google Calendar API**, add the scope `https://www.googleapis.com/auth/meetings.space.readonly` to the consent screen, and add redirect URIs ending in `/api/public/oauth/gmeet/callback`. Transcripts need a Workspace edition with Meet transcription, switched on in the meeting.
 - **Microsoft Teams** reuses the Microsoft app registration. Add redirect URIs ending in `/api/public/oauth/msmeet/callback` and the delegated Graph permissions `Calendars.ReadWrite`, `OnlineMeetings.ReadWrite` and `OnlineMeetingTranscript.Read.All`. The transcript permission needs **admin consent** in each customer tenant. Work or school accounts only.
-- **Zoom**: create a *General app* (user-managed OAuth) in the Zoom App Marketplace with the redirect URIs ending in `/api/public/oauth/zoom/callback` and the scopes `user:read:user`, `meeting:write:meeting`, `meeting:read:meeting`, `cloud_recording:read:list_user_recordings` and `cloud_recording:read:list_recording_files` (classic names: `user:read`, `meeting:write`, `recording:read`). Set the secrets `ZOOM_CLIENT_ID` and `ZOOM_CLIENT_SECRET`. Transcripts come from cloud recording with *Audio transcript* on (Pro plan or above); meetings created from Synapse turn cloud recording on.
+- **Zoom**: create a *General app* (user-managed OAuth) in the Zoom App Marketplace with the redirect URIs ending in `/api/public/oauth/zoom/callback` and the scopes `user:read:user`, `meeting:write:meeting`, `meeting:read:meeting`, `cloud_recording:read:list_user_recordings` and `cloud_recording:read:list_recording_files` (classic names: `user:read`, `meeting:write`, `recording:read`). Set the secrets `ZOOM_CLIENT_ID` and `ZOOM_CLIENT_SECRET`. Transcripts come from cloud recording with *Audio transcript* on (Pro plan or above); meetings created from SanchalanOS turn cloud recording on.
 
 ### GitHub and Azure DevOps (code links for work items)
 
-An admin with the *developers* permission adds a connection in any project's **Work setup → Code connections**. Synapse shows a payload URL and a secret once.
+An admin with the *developers* permission adds a connection in any project's **Work setup → Code connections**. SanchalanOS shows a payload URL and a secret once.
 
 - **GitHub**: repository or organisation → Settings → Webhooks → Add webhook; payload URL as shown, content type `application/json`, the secret; events *Pushes*, *Branch or tag creation*, *Pull requests*, *Workflow runs*. Requests are checked with `X-Hub-Signature-256`.
 - **Azure DevOps**: Project settings → Service hooks → *Web Hooks*, one subscription per event (*Code pushed*, *Pull request created*, *Pull request updated*, *Pull request merged*, *Build completed*), URL as shown, basic authentication user `synapse` with the secret as the password.
@@ -93,13 +92,13 @@ Any work item key (`FLEET-12`) in a branch name, commit message, PR title or des
 One app serves the whole platform. Create it at GitHub → Settings → Developer settings → GitHub Apps → New:
 
 - **Callback / Setup URL**: `https://<app host>/api/public/github/setup` (tick *Redirect on update*); **Webhook URL**: `https://<app host>/api/public/github/app` with a webhook secret.
-- **Repository permissions**: Checks *read & write*, Contents *read-only*, Metadata *read-only*, Pull requests *read-only*; Administration *read & write* only if Synapse should set branch protection (*Require check*). To create branches from work items Contents needs *read & write*.
+- **Repository permissions**: Checks *read & write*, Contents *read-only*, Metadata *read-only*, Pull requests *read-only*; Administration *read & write* only if SanchalanOS should set branch protection (*Require check*). To create branches from work items Contents needs *read & write*.
 - **Subscribe to events**: Push, Pull request, Create, Workflow run (installation events come by default).
 - Generate a private key (PEM).
 
-Set `GITHUB_APP_ID`, `GITHUB_APP_SLUG` (the app's URL name), `GITHUB_APP_PRIVATE_KEY` (the PEM; in `.env` on one line with `\n` for line breaks — `pnpm local` converts them) and `GITHUB_APP_WEBHOOK_SECRET` (`wrangler secret put …` in the cloud). A workspace admin then clicks **Install the GitHub App** (Work setup → GitHub App) and picks the organisation and repositories; GitHub returns to Synapse, which ties that installation to the workspace. Uninstalling in GitHub removes it here.
+Set `GITHUB_APP_ID`, `GITHUB_APP_SLUG` (the app's URL name), `GITHUB_APP_PRIVATE_KEY` (the PEM; in `.env` on one line with `\n` for line breaks — `pnpm local` converts them) and `GITHUB_APP_WEBHOOK_SECRET` (`wrangler secret put …` in the cloud). A workspace admin then clicks **Install the GitHub App** (Work setup → GitHub App) and picks the organisation and repositories; GitHub returns to SanchalanOS, which ties that installation to the workspace. Uninstalling in GitHub removes it here.
 
-Repositories linked through the app get the **Synapse work items** check run on every push and PR; webhooks from the app also link branches, commits, PRs and builds exactly as the per-workspace webhook connections below do (use one or the other per repository).
+Repositories linked through the app get the **SanchalanOS work items** check run on every push and PR; webhooks from the app also link branches, commits, PRs and builds exactly as the per-workspace webhook connections below do (use one or the other per repository).
 
 ### Secrets (fallback)
 
@@ -130,7 +129,7 @@ Providers call these paths without a browser, so the custom domains' managed cha
 ### Razorpay
 
 1. In the Razorpay Dashboard, go to *Accounts & Settings → API Keys* and generate a key pair. Use test mode (`rzp_test_…`) to try it first.
-2. In *Settings → Integrations → Connect Razorpay*, enter the key ID, the key secret and a webhook secret of your choice. Synapse checks the keys with Razorpay before saving them.
+2. In *Settings → Integrations → Connect Razorpay*, enter the key ID, the key secret and a webhook secret of your choice. SanchalanOS checks the keys with Razorpay before saving them.
 3. In Razorpay, go to *Webhooks → Add* and paste the webhook URL shown on the card. Use the same secret and tick the events `payment_link.paid`, `payment_link.partially_paid`, `payment_link.cancelled` and `payment_link.expired`.
 4. On any issued invoice (or order or milestone), use **Collect online** to send the link. Razorpay can also send it by SMS or email, or you can share it on WhatsApp.
    - Only one link per invoice or milestone can be open at a time.
@@ -171,10 +170,10 @@ The **UPI QR** needs no gateway. Set the UPI ID and payee name in *Billing & GST
 
 In *My account → Email, calendar & calls*, click **Connect Gmail** or **Connect Outlook**.
 
-- **What is logged:** only mail exchanged with people who are **contacts or open leads that this person can see** in Synapse. Mail between colleagues and mail with anyone else is never stored. Each person can add addresses or domains that are never logged.
+- **What is logged:** only mail exchanged with people who are **contacts or open leads that this person can see** in SanchalanOS. Mail between colleagues and mail with anyone else is never stored. Each person can add addresses or domains that are never logged.
 - **When it syncs:** about every 15 minutes during business hours (07:00–21:00 IST), whenever someone opens a customer's page, or immediately with *Sync now*. The first sync looks back 3 days.
-- **Sending:** mail written in Synapse goes out from the person's own mailbox and appears in their Sent folder. Replies stay in the same thread.
-- **Calendar:** their own Synapse meetings and site visits are mirrored to their calendar. This can be switched off.
+- **Sending:** mail written in SanchalanOS goes out from the person's own mailbox and appears in their Sent folder. Replies stay in the same thread.
+- **Calendar:** their own SanchalanOS meetings and site visits are mirrored to their calendar. This can be switched off.
 - **Disconnecting:** disconnecting, or an admin disabling the user, revokes access. If Google or Microsoft revoke access, the card shows *Reconnect*.
 
 ---
@@ -185,7 +184,7 @@ In *My account → Email, calendar & calls*, click **Connect Gmail** or **Connec
 2. In *Settings → Channels → Connect channel*, choose WhatsApp and enter the phone number ID, the business account ID, the token, the app secret and a verify token of your choice.
 3. In the Meta app's WhatsApp → Configuration, set the callback URL to the channel's *Inbound URL* with the same verify token, and subscribe to **messages**. Message status updates (delivered, read, failed) arrive on the same subscription.
 4. *Templates → Sync from WhatsApp* brings in approved templates; *New template* submits one for approval. Marketing templates always carry a **Stop promotions** button, and tapping it (or replying STOP) opts the number out.
-5. **Rules Synapse enforces:**
+5. **Rules SanchalanOS enforces:**
    - free text only within 24 hours of the customer's last message, templates otherwise;
    - marketing templates and campaigns only to people with recorded consent who have not opted out;
    - quotes go as their public link; invoices and orders as a signed link valid for 30 days, with *Pay online* when a Razorpay link is open.
@@ -200,7 +199,7 @@ In *My account → Email, calendar & calls*, click **Connect Gmail** or **Connec
    - customer ledgers go first (under *Sundry Debtors*, with GSTIN, state and address), then sales invoices and credit notes with bill references, then receipts allocated to invoices;
    - ledger names for sales, GST, round-off and bank come from *Billing & GST → Settings*; create those ledgers in Tally first;
    - anything Tally rejects shows under *Tally* with Tally's message; fix it in Tally and click *Retry failed*;
-   - an invoice cancelled in Synapse after it reached Tally is flagged *Check in Tally*, so the accountant cancels it there;
+   - an invoice cancelled in SanchalanOS after it reached Tally is flagged *Check in Tally*, so the accountant cancels it there;
    - receipts entered in Tally are recorded here and settle the invoices named in their bill references; parties that match no customer are listed.
 5. Only documents dated on or after *Sync documents dated from* (default: the start of the financial year) are synced.
 

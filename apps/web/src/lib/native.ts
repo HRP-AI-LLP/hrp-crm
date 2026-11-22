@@ -43,7 +43,7 @@ function remembered() {
   }
 }
 
-/** Registers with Firebase and hands the token to Synapse. Resolves once the server has it. */
+/** Registers with Firebase and hands the token to SanchalanOS. Resolves once the server has it. */
 async function registerToken(p: PushPlugin): Promise<string> {
   const token = await new Promise<string>((resolve, reject) => {
     const subs: Promise<Listener>[] = [];
@@ -62,8 +62,8 @@ export async function enableNativePush() {
   const p = cap()?.Plugins?.PushNotifications;
   if (!p) throw new Error('Notifications are not available in this app version');
   const perm = await p.requestPermissions();
-  if (perm.receive !== 'granted') throw new Error('Allow notifications for HRP Synapse in the phone’s settings');
-  await p.createChannel?.({ id: 'synapse', name: 'Synapse', importance: 4, description: 'Follow-ups, assignments and customer messages' }).catch(() => undefined);
+  if (perm.receive !== 'granted') throw new Error('Allow notifications for SanchalanOS in the phone’s settings');
+  await p.createChannel?.({ id: 'synapse', name: 'SanchalanOS', importance: 4, description: 'Follow-ups, assignments and customer messages' }).catch(() => undefined);
   return registerToken(p);
 }
 

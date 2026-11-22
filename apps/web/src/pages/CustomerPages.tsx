@@ -209,7 +209,7 @@ export function JobConfirmPage({ kind }: { kind: 'shipment' | 'installation' }) 
         </section>
       )}
       <p className="muted small" style={{ textAlign: 'center', margin: '24px 0' }}>
-        Sent with HRP Synapse
+        Sent with SanchalanOS
       </p>
     </div>
   );
@@ -306,7 +306,7 @@ export function TicketStatusPage() {
         </button>
       </section>
       <p className="muted small" style={{ textAlign: 'center', margin: '24px 0' }}>
-        Sent with HRP Synapse
+        Sent with SanchalanOS
       </p>
     </div>
   );
@@ -484,7 +484,7 @@ export function ProjectPortalPage() {
         </section>
       )}
       <p className="muted small" style={{ textAlign: 'center', margin: '24px 0' }}>
-        Sent with HRP Synapse
+        Sent with SanchalanOS
       </p>
     </div>
   );
@@ -613,7 +613,7 @@ export function PublicRoadmapPage() {
         )}
       </section>
       <p className="muted small" style={{ textAlign: 'center', margin: '24px 0' }}>
-        Sent with HRP Synapse
+        Sent with SanchalanOS
       </p>
     </div>
   );

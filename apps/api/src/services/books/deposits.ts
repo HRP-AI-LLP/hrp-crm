@@ -4,7 +4,7 @@
  * deposits. Each records the customer, project or order, instrument details, expiry and claim period,
  * and how much has been released or forfeited.
  *
- * Postings (when Synapse keeps the books; every movement is its own journal, source "deposit"):
+ * Postings (when SanchalanOS keeps the books; every movement is its own journal, source "deposit"):
  *   placed  (online / DD / FDR / cash)    Dr EMD and performance security (customer)   Cr bank
  *   placed  (bank guarantee, with margin)  Dr Margin money against bank guarantees      Cr bank
  *   retention withheld on a receipt        posted with the receipt (Dr Retention money with customers)
@@ -35,10 +35,10 @@ export function assertDepositAdmin(ctx: RecordCtx) {
   if (!hasAdmin(p, 'books') && !hasAdmin(p, 'billing')) throw forbidden('Deposits and guarantees need the books or billing permission');
 }
 
-/** Changes post journals when Synapse keeps the books: then they are for books admins only. */
+/** Changes post journals when SanchalanOS keeps the books: then they are for books admins only. */
 async function assertDepositWriter(ctx: RecordCtx) {
   assertDepositAdmin(ctx);
-  if ((await postingOn(ctx.tx, ctx.tenantId)) && !hasAdmin(ctx.principal.permissions, 'books')) throw forbidden('Synapse keeps the books: changing deposits needs the books permission');
+  if ((await postingOn(ctx.tx, ctx.tenantId)) && !hasAdmin(ctx.principal.permissions, 'books')) throw forbidden('SanchalanOS keeps the books: changing deposits needs the books permission');
 }
 
 function notBefore(date: string, issued: unknown) {

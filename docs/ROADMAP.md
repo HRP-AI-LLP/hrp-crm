@@ -10,7 +10,7 @@
 - Automation: workflows (create task, update field, assign round-robin, webhook, email, WhatsApp, AI score), outbound webhook subscriptions with HMAC signatures
 - Channels: WhatsApp Cloud API (signed inbound and outbound), Resend email, generic webhook. Inbound messages are matched to a contact or lead (a new lead is created if needed) and get a sentiment score.
 - Workspace-owned AI keys: OpenAI/Azure, Anthropic, Gemini, Groq, OpenRouter, OpenAI-compatible; priority order, PII switch, connection test, optional platform fallback
-- Hostnames: shared app hosts hrpsynapse.hrpai.in / hrpsynapse-dev.hrpai.in, optional per-workspace hosts, customer custom domains
+- Hostnames: shared app host www.sanchalan.hrpai.in, optional per-workspace hosts, customer custom domains
 - AI: lead scoring (rules blended with an LLM), sentiment, record summary, next-best-actions, email drafts with knowledge-base grounding, knowledge-base RAG, a PII-aware provider fallback chain, per-tenant quotas and usage metering
 - Industry modules: Real Estate, Healthcare, E-Commerce, Financial Services
 - Ops: idempotent provisioning, dev/prod CI/CD, Neon preview branches per PR, pre-deploy prod snapshot, audit log UI
@@ -54,17 +54,17 @@ Built to cover everything in the ELVM Homes proposal on top of the CRM.
 
 ## Sixth round: revenue intelligence (Nov 2026)
 
-An AI layer of the kind platforms such as Zambyl add on top of a CRM, built into Synapse and fitted to made-to-order businesses (see [INTELLIGENCE.md](INTELLIGENCE.md)):
+An AI layer of the kind platforms such as Zambyl add on top of a CRM, built into SanchalanOS and fitted to made-to-order businesses (see [INTELLIGENCE.md](INTELLIGENCE.md)):
 
 - **Context layer:** every lead, contact, account and deal is gathered with its customer, deals, quotes, orders, invoices, tickets, competitors, conversations, meetings and scores, as the viewer sees them. Facts are numbered and cited. Stray emails are linked by address or company domain.
 - **Eleven agents** across pipeline creation, deal execution, customer success and growth, and team performance. Each produces a rule-based result first and uses AI on top. Field changes need approval.
-- **Copilot workspace**, a record Copilot tab, meeting brief and debrief (with recording transcription), an hourly insights feed with notifications, deal-risk and account-health scores, competitors with battlecards, and Ask Synapse.
+- **Copilot workspace**, a record Copilot tab, meeting brief and debrief (with recording transcription), an hourly insights feed with notifications, deal-risk and account-health scores, competitors with battlecards, and Ask SanchalanOS.
 
 ## Seventh round: books, projects and manufacturing (Nov 2026)
 
 Three phases, each tested, reviewed and committed before the next:
 
-- **Books (done):** full double-entry accounting in the class of Zoho Books, with Synapse or Tally as the books of record per workspace. It covers the ledger, payables with TDS, expenses and claims, banking and reconciliation, financial and GST/TDS reports, budgets, fixed assets, recurring transactions and multi-currency (see [BOOKS.md](BOOKS.md)).
+- **Books (done):** full double-entry accounting in the class of Zoho Books, with SanchalanOS or Tally as the books of record per workspace. It covers the ledger, payables with TDS, expenses and claims, banking and reconciliation, financial and GST/TDS reports, budgets, fixed assets, recurring transactions and multi-currency (see [BOOKS.md](BOOKS.md)).
 - **Projects and timesheets (done):** projects with team rates, milestones, task lists, sub-tasks and dependencies (auto-rescheduling), list/board/Gantt, issues, comments, timers, weekly timesheets with approval, billing of time, milestones and expenses, budgets, profitability, utilisation and templates (see [PROJECTS.md](PROJECTS.md)).
 - **Manufacturing (done):** multi-level BOMs with routings, scrap, yield, by-products and versions; work centres and load; work orders costed through WIP with variances; make-to-order reservations; batches, expiry, FEFO and traceability; quality checks; job work with GST challans and ITC-04; MRP that raises purchase and work orders (see [MANUFACTURING.md](MANUFACTURING.md)).
 
@@ -76,7 +76,7 @@ Three phases, each tested, reviewed and committed before the next:
 4. **More telephony and payment providers:** Knowlarity, MyOperator and Ozonetel behind the same interface; Cashfree and PhonePe as alternatives to Razorpay.
 5. **Argon2id hashing service on Oracle ARM.** This removes the PBKDF2 CPU risk.
 6. **IMAP mailboxes** (Zoho Mail, GoDaddy, cPanel hosts) on the Oracle worker.
-7. **GST portal through WhiteBooks (done, Nov 2026): test end to end in the WhiteBooks sandbox**, then with a real GSTIN in production. Adjust any field the sandbox reports, and add GSTR-1 amendments (B2BA, CDNRA) built from Synapse.
+7. **GST portal through WhiteBooks (done, Nov 2026): test end to end in the WhiteBooks sandbox**, then with a real GSTIN in production. Adjust any field the sandbox reports, and add GSTR-1 amendments (B2BA, CDNRA) built from SanchalanOS.
 8. **iOS store build** with APNs through Firebase, and background location for field teams.
 9. **Restore from backup** (today: download and inspect; restore is done by HRP staff).
 10. **Platform admin console** for HRP staff, using a separate audited role.

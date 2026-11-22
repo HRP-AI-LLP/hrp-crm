@@ -194,7 +194,7 @@ export const authRoutes = new Hono<AppEnv>()
       tx.query(`update users set mfa_secret_ciphertext = $3, mfa_last_step = null where tenant_id = $1 and id = $2 and mfa_enabled_at is null returning id`, [c.var.tenant.id, p.user.id, ciphertext]),
     );
     if (!rows.length) throw badRequest('Two-factor sign-in is already on');
-    return c.json({ secret, uri: otpauthUri(secret, p.user.email, `HRP Synapse (${c.var.tenant.slug})`) });
+    return c.json({ secret, uri: otpauthUri(secret, p.user.email, `SanchalanOS (${c.var.tenant.slug})`) });
   })
   .post('/mfa/enable', authenticate, async (c) => {
     if (c.var.principal.apiKey) throw forbidden();
@@ -284,8 +284,8 @@ export const authRoutes = new Hono<AppEnv>()
       });
       if (found) {
         const url = `${appOrigin(c.env, c.req.url)}/reset-password?workspace=${c.var.tenant.slug}&token=${found.token}`;
-        const mail = actionEmail({ heading: 'Reset your password', intro: `Hi ${found.full_name}, someone asked to reset the password for your ${c.var.tenant.name} account on HRP Synapse.`, cta: 'Choose a new password', url, footer: 'The link works for one hour. If you did not ask for this, you can ignore this email.' });
-        const sending = sendPlatformMail(c.env, { to: found.email, subject: 'Reset your HRP Synapse password', ...mail });
+        const mail = actionEmail({ heading: 'Reset your password', intro: `Hi ${found.full_name}, someone asked to reset the password for your ${c.var.tenant.name} account on SanchalanOS.`, cta: 'Choose a new password', url, footer: 'The link works for one hour. If you did not ask for this, you can ignore this email.' });
+        const sending = sendPlatformMail(c.env, { to: found.email, subject: 'Reset your SanchalanOS password', ...mail });
         try {
           c.executionCtx.waitUntil(sending);
         } catch {

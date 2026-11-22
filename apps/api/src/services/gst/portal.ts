@@ -547,7 +547,7 @@ const fyOf = (d: Date) => {
 
 /**
  * Filing calendar for the GSTIN: due dates from April of this FY to next month, with status from
- * Synapse's own filings and, if fetched, the portal's return track. No portal call is made here.
+ * SanchalanOS's own filings and, if fetched, the portal's return track. No portal call is made here.
  */
 export async function overview(deps: GstDeps, id: string, today = new Date()) {
   return deps.run(async (ctx) => {
@@ -617,7 +617,7 @@ function portalRecords(track: { data: any; fetched_at: string }[]) {
 
 /**
  * One return for one period, as the calendar shows it: the portal's record of it (from the stored
- * filed-returns list, no provider call), Synapse's filing if there is one, and what the books show for
+ * filed-returns list, no provider call), SanchalanOS's filing if there is one, and what the books show for
  * that period (worked out here, free) so a return filed on the portal can be checked against the books.
  */
 export async function returnDetail(deps: GstDeps, id: string, returnType: string, period: string) {
@@ -798,7 +798,7 @@ export interface PrepareInput {
   to?: string;
 }
 
-/** Prepares a return from Synapse's records (GSTR-1, GSTR-3B, ITC-04) or from uploaded portal JSON. */
+/** Prepares a return from SanchalanOS's records (GSTR-1, GSTR-3B, ITC-04) or from uploaded portal JSON. */
 export async function prepareFiling(deps: GstDeps, connectionId: string, input: PrepareInput) {
   if (!FORMS[input.returnType]) throw badRequest('Unknown return type');
   fromRetPeriod(input.period);
@@ -835,7 +835,7 @@ export async function prepareFiling(deps: GstDeps, connectionId: string, input: 
       }
       source = 'synapse';
     } else {
-      throw badRequest(`${FORMS[input.returnType]!.label} is prepared outside Synapse: upload the portal JSON, or start from the portal's own figures`);
+      throw badRequest(`${FORMS[input.returnType]!.label} is prepared outside SanchalanOS: upload the portal JSON, or start from the portal's own figures`);
     }
     const old = await ctx.tx.one<FilingRow>(`select * from gst_filings where tenant_id = $1 and connection_id = $2 and return_type = $3 and period = $4 for update`, [
       ctx.tenantId,
@@ -854,7 +854,7 @@ export async function prepareFiling(deps: GstDeps, connectionId: string, input: 
           `insert into gst_filings (tenant_id, connection_id, return_type, period, payload, payload_source) values ($1,$2,$3,$4,$5,$6) returning *`,
           [ctx.tenantId, connectionId, input.returnType, input.period, JSON.stringify(payload), source],
         ))!;
-    await logEvent(ctx, { connectionId, filingId: row.id, action: 'prepare', ok: true, message: source === 'upload' ? 'From uploaded JSON' : 'From Synapse records' });
+    await logEvent(ctx, { connectionId, filingId: row.id, action: 'prepare', ok: true, message: source === 'upload' ? 'From uploaded JSON' : 'From SanchalanOS records' });
     return { ...filingDto(row, getProvider(deps.env), true), ...extra };
   });
 }

@@ -120,7 +120,7 @@ export const mobileRoutes = new Hono<AppEnv>()
       apps: fcmEnabled(c.env) ? await tx.query<{ token: string }>(`select token from native_push_tokens where tenant_id = $1 and user_id = $2`, [c.var.tenant.id, c.var.principal.user.id]) : [],
     }));
     let sent = 0;
-    const msg = { title: 'HRP Synapse', body: 'Notifications are working on this device.', link: '/field', tag: 'test' };
+    const msg = { title: 'SanchalanOS', body: 'Notifications are working on this device.', link: '/field', tag: 'test' };
     for (const s of subs) if ((await sendPush(c.env, s, msg)) === 'ok') sent++;
     for (const a of apps) if ((await sendNative(c.env, a.token, msg)) === 'ok') sent++;
     return c.json({ devices: subs.length + apps.length, sent });

@@ -1,0 +1,47 @@
+# Push to main → production (www.sanchalan.hrpai.in), about 3–4 minutes.
+# Pushes to dev run nothing: dev is tested on your computer with `pnpm local`.
+# Changes that touch only docs, the mobile shells or local tools don't deploy.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'mobile/**', 'tools/**', 'connectors/**', '.vscode/**', '.github/workflows/ci.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Migrate Neon and deploy the Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: production
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --prefer-offline
+      # a type error stops the deploy before anything changes
+      - name: Typecheck
+        run: pnpm --filter @synapse/api --filter @synapse/web typecheck
+      - name: Build the web app
+        run: pnpm --filter @synapse/web build
+      - name: Apply new database migrations
+        run: node scripts/setup/migrate-prod.mjs
+      - name: Deploy the Worker
+        working-directory: apps/api
+        run: pnpm exec wrangler deploy --env production

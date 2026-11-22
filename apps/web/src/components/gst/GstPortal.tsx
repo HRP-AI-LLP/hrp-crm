@@ -756,7 +756,7 @@ function ReturnDetail({
           )}
           {item.status === "filed" && f && (
             <button className="btn primary" onClick={() => onOpenFiling(item)}>
-              Open the filing in Synapse
+              Open the filing in SanchalanOS
             </button>
           )}
         </>
@@ -779,9 +779,9 @@ function ReturnDetail({
                 </div>
                 <div className="muted small">
                   {item.source === "portal"
-                    ? "Filed on the portal (outside Synapse)"
+                    ? "Filed on the portal (outside SanchalanOS)"
                     : item.source === "synapse"
-                      ? "Filed from Synapse"
+                      ? "Filed from SanchalanOS"
                       : `Due ${date(item.dueDate)}`}
                 </div>
               </div>
@@ -914,7 +914,7 @@ function ReturnDetail({
             {f && (
               <details className="panel" style={{ padding: 12 }}>
                 <summary>
-                  What Synapse sent{" "}
+                  What SanchalanOS sent{" "}
                   <span className="muted small">
                     · {STATUS[f.status]?.[0] ?? f.status}
                     {f.portalStatus === "TEST" ? " · test mode" : ""}
@@ -1005,7 +1005,7 @@ function Returns({ conn }: { conn: Json }) {
                   </td>
                   <td className="small">
                     {f.source === "synapse"
-                      ? "Synapse"
+                      ? "SanchalanOS"
                       : f.source === "portal"
                         ? "Portal"
                         : "Uploaded JSON"}
@@ -1172,7 +1172,7 @@ function NewReturn({
         )}
         <div className="wide muted small">
           {kind === "synapse" &&
-            "Built from issued invoices and credit notes, posted bills and expenses, and job work in Synapse. You can check and download the JSON before anything goes to the portal."}
+            "Built from issued invoices and credit notes, posted bills and expenses, and job work in SanchalanOS. You can check and download the JSON before anything goes to the portal."}
           {kind === "portal" &&
             (f.returnType === "GSTR9"
               ? "Starts from the portal's auto-calculated GSTR-9 (from your GSTR-1 and 3B). Needs a live portal session."
@@ -1298,7 +1298,7 @@ function FilingWizard({
             <span className="muted small">
               (
               {f.source === "synapse"
-                ? "from Synapse records"
+                ? "from SanchalanOS records"
                 : f.source === "portal"
                   ? "from the portal's figures"
                   : "uploaded JSON"}
@@ -1378,7 +1378,7 @@ function FilingWizard({
           {f.errorReport && (
             <div>
               <div className="small" style={{ color: "var(--bad)" }}>
-                The portal rejected some data. Fix it in Synapse, prepare again
+                The portal rejected some data. Fix it in SanchalanOS, prepare again
                 and save.
               </div>
               <JsonBox value={f.errorReport} height={180} />
@@ -2655,7 +2655,7 @@ function AddToBooks({
               Each document becomes a bill with the supplier's invoice number
               and date, and one line for the taxable value (
               {money2(total("taxable"))} in all) at the GST rate it implies (tax{" "}
-              {money2(total("tax"))}). A supplier not yet in Synapse is added
+              {money2(total("tax"))}). A supplier not yet in SanchalanOS is added
               from its GSTIN.
             </div>
             <label className="field">
@@ -3451,7 +3451,7 @@ function RegistrationForm({
             style={{ marginLeft: "auto" }}
             onClick={() =>
               window.confirm(
-                `Remove ${conn.gstin} from Synapse? Prepared returns for it are deleted too.`,
+                `Remove ${conn.gstin} from SanchalanOS? Prepared returns for it are deleted too.`,
               ) &&
               act(() => del(`/api/v1/gst/connections/${conn.id}`), "Removed")
             }
@@ -3800,7 +3800,7 @@ export function InvoiceGst({
             <div className="wide muted small">
               Allowed within 24 hours of generation.
               {modal === "cancel-irn"
-                ? " Cancel the invoice in Synapse afterwards."
+                ? " Cancel the invoice in SanchalanOS afterwards."
                 : ""}
             </div>
           </div>

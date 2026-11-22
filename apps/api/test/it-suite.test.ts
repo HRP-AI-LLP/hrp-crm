@@ -198,10 +198,10 @@ describe('service contracts', () => {
 
 describe('SaaS subscriptions', () => {
   it('plans, a trial that converts, invoicing in advance with seats, add-ons and usage', async () => {
-    const p = await api('POST', '/api/v1/it/plans', { name: 'Synapse Growth', code: 'GROWTH', product: 'Synapse CRM', interval: 'month', price: 4999, includedSeats: 5, seatPrice: 499, usageUnit: 'WhatsApp messages', includedUsage: 1000, usagePrice: 0.5, trialDays: 14 });
+    const p = await api('POST', '/api/v1/it/plans', { name: 'SanchalanOS Growth', code: 'GROWTH', product: 'SanchalanOS CRM', interval: 'month', price: 4999, includedSeats: 5, seatPrice: 499, usageUnit: 'WhatsApp messages', includedUsage: 1000, usagePrice: 0.5, trialDays: 14 });
     expect(p.status, JSON.stringify(p.json)).toBe(201);
     ids.plan = p.json.id;
-    ids.planPro = (await api('POST', '/api/v1/it/plans', { name: 'Synapse Pro', interval: 'year', price: 120000, includedSeats: 10, seatPrice: 4000 })).json.id;
+    ids.planPro = (await api('POST', '/api/v1/it/plans', { name: 'SanchalanOS Pro', interval: 'year', price: 120000, includedSeats: 10, seatPrice: 4000 })).json.id;
     const s = await api('POST', '/api/v1/it/subscriptions', { accountId: ids.customer, planId: ids.plan, startDate: addDays(today, -20), seats: 7, addons: [{ name: 'Priority support', quantity: 1, unitPrice: 1000 }] });
     expect(s.status, JSON.stringify(s.json)).toBe(201);
     expect(s.json).toMatchObject({ status: 'trial', number: expect.stringMatching(/^SUB\//) });
@@ -233,7 +233,7 @@ describe('SaaS subscriptions', () => {
     const month = m.months[m.months.length - 1];
     expect(month.new).toBeGreaterThan(0);
     expect(month.expansion).toBeGreaterThan(0);
-    expect(m.byPlan.map((x: any) => x.name)).toEqual(['Synapse Pro', 'Synapse Growth']);
+    expect(m.byPlan.map((x: any) => x.name)).toEqual(['SanchalanOS Pro', 'SanchalanOS Growth']);
     const c = await api('POST', `/api/v1/it/subscriptions/${second.json.id}/cancel`, { reason: 'Closed' });
     expect(c.json.status).toBe('cancelled');
     const m2 = (await api('GET', '/api/v1/it/saas-metrics')).json;

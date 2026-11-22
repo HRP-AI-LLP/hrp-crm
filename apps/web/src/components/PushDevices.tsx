@@ -28,7 +28,7 @@ export function PushDevices() {
           <p className="small">
             {inst.canInstall ? (
               <>
-                Install Synapse as an app for full-screen use, offline visit logging and reminders.{' '}
+                Install SanchalanOS as an app for full-screen use, offline visit logging and reminders.{' '}
                 <button className="link" onClick={() => void inst.install()}>
                   Install app
                 </button>
@@ -36,7 +36,7 @@ export function PushDevices() {
             ) : inst.iosHint ? (
               'On iPhone or iPad: open this site in Safari, tap Share and choose “Add to Home Screen”. Notifications need iOS 16.4 or later.'
             ) : (
-              'Open this site on your phone in Chrome and choose “Install app” (or “Add to Home screen”) to use Synapse as an app.'
+              'Open this site on your phone in Chrome and choose “Install app” (or “Add to Home screen”) to use SanchalanOS as an app.'
             )}
           </p>
         )}

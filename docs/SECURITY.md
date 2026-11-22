@@ -4,7 +4,7 @@
 
 | Layer | Control | Verified by |
 |---|---|---|
-| Edge | The hostname is checked first: a workspace host or verified custom domain always decides the tenant. On the shared app host (`hrpsynapse.hrpai.in`) the workspace chosen at sign-in is sent as `X-Tenant`. On any other production host that header is ignored, and unknown hosts get 404 before any tenant query runs. | `api.test.ts` ("shared app host") |
+| Edge | The hostname is checked first: a workspace host or verified custom domain always decides the tenant. On the shared app host (`www.sanchalan.hrpai.in`) the workspace chosen at sign-in is sent as `X-Tenant`. On any other production host that header is ignored, and unknown hosts get 404 before any tenant query runs. | `api.test.ts` ("shared app host") |
 | Token | The JWT audience is `tenant:{id}`. A token minted for tenant A fails verification on tenant B's host. | `api.test.ts` ("token from tenant A is rejected on tenant B") |
 | Query | The data layer always filters by `tenant_id`. Identifiers come only from a static registry or regex-validated metadata keys, and values are always bound parameters. | code review, `records.ts` |
 | Database | `ENABLE` + `FORCE ROW LEVEL SECURITY` on every tenant table. The runtime role `synapse_app` is `NOBYPASSRLS`, owns nothing, and gets transaction-scoped context. An empty or malformed context matches nothing or raises an error, so access fails closed. | `rls.test.ts` (21 tests) |
@@ -121,7 +121,7 @@ Because several workspaces can share one app host, refresh cookies are named per
 - **Shared inbox.** People see conversations assigned to them or about records they can see; inbox admins (`channels`) see all. Media is proxied from Meta only for allowed hosts and served with a sandboxing CSP.
 - **Campaigns** resolve their audience with the creator's permissions (record visibility and field-level security), at most 5,000 people, and re-check consent before each message. A broken token or paused number stops the campaign.
 - **Digests** run as each recipient, and only active workspace users can receive them.
-- **Tally connector** authenticates with a random token shown once; only its SHA-256 is stored. Vouchers carry a `REMOTEID`, so receipts Synapse sent are not imported back, and every Tally receipt is applied once (by GUID).
+- **Tally connector** authenticates with a random token shown once; only its SHA-256 is stored. Vouchers carry a `REMOTEID`, so receipts SanchalanOS sent are not imported back, and every Tally receipt is applied once (by GUID).
 - **Webhooks** carry `X-Synapse-Signature-V2: t=…,v1=HMAC(secret, "t.body")` (the v1 header remains). Targets must be public HTTPS hosts; redirects are not followed and deliveries time out after 10 seconds. Every attempt is logged for 30 days.
 - **API keys** have a per-minute limit (default 600) with `X-RateLimit-*` headers and 429 + `Retry-After`. An optional Workers rate-limiting binding (`API_RATE_LIMITER`) adds a ceiling shared across isolates.
 - **Native push** uses a Firebase service account (secret `FCM_SERVICE_ACCOUNT`); tokens of signed-out, disabled or uninstalled devices are dropped.

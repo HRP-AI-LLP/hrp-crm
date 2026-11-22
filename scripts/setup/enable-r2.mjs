@@ -5,10 +5,10 @@
  *   1. Enable R2 once in the Cloudflare dashboard (R2 Object Storage → "Get started"; the free
  *      tier needs a payment method on file but stays free up to 10 GB).
  *   2. Run:  pnpm setup:r2        (uses CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID from the env)
- *   3. Deploy (CI, or `pnpm deploy:dev` / `pnpm deploy:prod`).
+ *   3. Deploy (push to main, or `pnpm deploy:prod`).
  *
- * Creates the buckets synapse-files-dev / synapse-files-prod (idempotent) and adds the FILES
- * binding to the dev and production environments in wrangler.template.jsonc and wrangler.jsonc.
+ * Creates the bucket synapse-files-prod (idempotent) and adds the FILES
+ * binding to the production environment in wrangler.template.jsonc and wrangler.jsonc.
  * The token needs "Workers R2 Storage: Edit" in addition to the permissions setup already uses.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -23,7 +23,7 @@ if (!token || !account) {
   process.exit(1);
 }
 
-const BUCKETS = { dev: 'synapse-files-dev', production: 'synapse-files-prod' };
+const BUCKETS = { production: 'synapse-files-prod' };
 
 async function cf(path, init = {}) {
   const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}${path}`, {

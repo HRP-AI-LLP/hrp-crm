@@ -144,7 +144,7 @@ function wrap(company: string, title: string, inner: string, manage: string) {
 <table role="presentation" width="100%" style="max-width:620px;background:#fff;border-radius:12px;border:1px solid #e2e8f0">
 <tr><td style="background:#062f59;border-radius:12px 12px 0 0;padding:16px 24px;color:#fff"><b>${esc(company)}</b> · ${esc(title)}</td></tr>
 <tr><td style="padding:8px 24px 24px">${inner}</td></tr></table>
-<p style="color:#94a3b8;font-size:12px;margin:14px 0 0">HRP Synapse digest · <a href="${esc(manage)}" style="color:#94a3b8">manage digests</a></p>
+<p style="color:#94a3b8;font-size:12px;margin:14px 0 0">SanchalanOS digest · <a href="${esc(manage)}" style="color:#94a3b8">manage digests</a></p>
 </td></tr></table></body></html>`;
 }
 
@@ -155,7 +155,7 @@ export async function sendSchedule(env: Env, db: Db, tenantId: string, id: strin
   let sent = 0;
   let reachable = 0;
   let lastError: string | null = null;
-  const company = (await db.tx({ tenantId, readOnly: true }, (tx) => tx.one<{ name: string }>(`select name from tenants where id = $1`, [tenantId])))?.name ?? 'Synapse';
+  const company = (await db.tx({ tenantId, readOnly: true }, (tx) => tx.one<{ name: string }>(`select name from tenants where id = $1`, [tenantId])))?.name ?? 'SanchalanOS';
   for (const uid of s.recipients as string[]) {
     try {
       const out = await db.tx({ tenantId, userId: uid, readOnly: true }, async (tx) => {

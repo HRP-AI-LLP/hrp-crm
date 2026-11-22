@@ -67,7 +67,7 @@ describe('connecting', () => {
   });
 });
 
-describe('Synapse → Tally', () => {
+describe('SanchalanOS → Tally', () => {
   it('sends the customer ledger first, then the invoice with its bill reference', async () => {
     const p = await conn('/pull', { limit: 50 });
     expect(p.status, JSON.stringify(p.json)).toBe(200);
@@ -112,7 +112,7 @@ describe('Synapse → Tally', () => {
   });
 });
 
-describe('Tally → Synapse', () => {
+describe('Tally → SanchalanOS', () => {
   it('records receipts entered in Tally once, against the invoices they name', async () => {
     const before = Number((await sql(`select balance_due from invoices where id = $1`, [ids.inv]))[0]!.balance_due);
     const receipts = [

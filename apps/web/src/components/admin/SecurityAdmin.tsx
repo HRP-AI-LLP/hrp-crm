@@ -63,7 +63,7 @@ export function SecurityPolicyTab() {
             </span>
             <span>
               <b>Require two-factor sign-in for everyone</b>
-              <div className="muted small">People without it are asked to set it up before they can use Synapse. API keys are not affected.</div>
+              <div className="muted small">People without it are asked to set it up before they can use SanchalanOS. API keys are not affected.</div>
               {!me?.security?.mfaEnabled && (
                 <div className="small" style={{ marginTop: 4 }}>
                   Turn it on for yourself first in <Link to="/account">My account</Link>.
@@ -165,7 +165,7 @@ function Backups() {
   const toast = useToast();
   const { data } = useQuery({
     queryKey: ['admin-backups'],
-    queryFn: () => get<{ available: boolean; daily: boolean; items: BackupItem[] }>('/api/admin/backups'),
+    queryFn: () => get<{ available: boolean; daily: boolean; nightly?: boolean; items: BackupItem[] }>('/api/admin/backups'),
     refetchInterval: (q) => (q.state.data?.items.some((b) => b.status === 'running') ? 3000 : false),
   });
   const reload = () => qc.invalidateQueries({ queryKey: ['admin-backups'] });
@@ -220,6 +220,11 @@ function Backups() {
               </span>
               <span>
                 <b>Back up automatically every night</b>
+                {!data.nightly && (
+                  <span className="muted small" style={{ display: 'block' }}>
+                    Nightly backups are switched off on this server for now; use "Back up now" when you need one.
+                  </span>
+                )}
               </span>
             </label>
             {data.items.length ? (
@@ -798,7 +803,7 @@ export function UsageTab() {
         </section>
       </div>
       <p className="muted small">
-        Synapse runs on free tiers (Cloudflare Workers, Neon Postgres 0.5 GB, Workers AI). Usage here helps you see when a workspace is getting close to those limits.
+        SanchalanOS runs on free tiers (Cloudflare Workers, Neon Postgres 0.5 GB, Workers AI). Usage here helps you see when a workspace is getting close to those limits.
       </p>
     </div>
   );

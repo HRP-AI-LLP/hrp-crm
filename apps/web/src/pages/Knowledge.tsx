@@ -45,7 +45,7 @@ export function KnowledgePage() {
       <div className="page-head">
         <div>
           <h1>Knowledge base</h1>
-          <p>Price lists, policies and product notes your team and Synapse AI answer from.</p>
+          <p>Price lists, policies and product notes your team and SanchalanOS AI answer from.</p>
         </div>
         {can('ai') && (
           <button className="btn primary" onClick={() => setAdding(true)}>
@@ -62,7 +62,7 @@ export function KnowledgePage() {
             </label>
             <div>
               <button className="btn ai" disabled={asking || question.trim().length < 3}>
-                {asking ? 'Searching…' : 'Ask Synapse AI'}
+                {asking ? 'Searching…' : 'Ask SanchalanOS AI'}
               </button>
             </div>
           </form>

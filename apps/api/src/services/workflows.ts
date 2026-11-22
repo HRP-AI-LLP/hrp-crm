@@ -13,7 +13,7 @@ import { createRecord, readRowSystem, type RecordCtx, type RecordEvent, updateRe
 
 export const workflowConditionSchema = z.object({
   field: z.string().min(1),
-  // 'formula': value is a Synapse formula that must be true (field is ignored)
+  // 'formula': value is a SanchalanOS formula that must be true (field is ignored)
   op: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'contains', 'in', 'is_empty', 'not_empty', 'changed', 'changed_to', 'formula']),
   value: z.unknown().optional(),
 });

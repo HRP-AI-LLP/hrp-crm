@@ -1,17 +1,17 @@
 {
   "packageId": "in.hrpai.synapse",
-  "host": "hrpsynapse.hrpai.in",
-  "name": "HRP Synapse CRM",
-  "launcherName": "Synapse",
+  "host": "www.sanchalan.hrpai.in",
+  "name": "SanchalanOS",
+  "launcherName": "SanchalanOS",
   "display": "standalone",
   "themeColor": "#062f59",
   "navigationColor": "#062f59",
   "backgroundColor": "#ffffff",
   "enableNotifications": true,
   "startUrl": "/field?source=twa",
-  "iconUrl": "https://hrpsynapse.hrpai.in/icon-512.png",
-  "maskableIconUrl": "https://hrpsynapse.hrpai.in/icon-maskable-512.png",
-  "webManifestUrl": "https://hrpsynapse.hrpai.in/manifest.webmanifest",
+  "iconUrl": "https://www.sanchalan.hrpai.in/icon-512.png",
+  "maskableIconUrl": "https://www.sanchalan.hrpai.in/icon-maskable-512.png",
+  "webManifestUrl": "https://www.sanchalan.hrpai.in/manifest.webmanifest",
   "fallbackType": "customtabs",
   "features": { "locationDelegation": { "enabled": true } },
   "signingKey": { "path": "./synapse-upload.keystore", "alias": "synapse" },
@@ -19,9 +19,9 @@
   "appVersionCode": 1,
   "minSdkVersion": 23,
   "shortcuts": [
-    { "name": "My day", "shortName": "My day", "url": "/field", "chosenIconUrl": "https://hrpsynapse.hrpai.in/icon-192.png" },
-    { "name": "New walk-in lead", "shortName": "Walk-in", "url": "/field?new=lead", "chosenIconUrl": "https://hrpsynapse.hrpai.in/icon-192.png" },
-    { "name": "Log a visit", "shortName": "Check in", "url": "/field?new=visit", "chosenIconUrl": "https://hrpsynapse.hrpai.in/icon-192.png" }
+    { "name": "My day", "shortName": "My day", "url": "/field", "chosenIconUrl": "https://www.sanchalan.hrpai.in/icon-192.png" },
+    { "name": "New walk-in lead", "shortName": "Walk-in", "url": "/field?new=lead", "chosenIconUrl": "https://www.sanchalan.hrpai.in/icon-192.png" },
+    { "name": "Log a visit", "shortName": "Check in", "url": "/field?new=visit", "chosenIconUrl": "https://www.sanchalan.hrpai.in/icon-192.png" }
   ],
   "generatorApp": "bubblewrap-cli"
 }

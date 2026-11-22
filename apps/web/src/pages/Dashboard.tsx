@@ -49,7 +49,7 @@ export function DashboardPage() {
         <div className="panel kpi">
           <div className="l">Hot leads (score 70+)</div>
           <div className="v" style={{ color: 'var(--accent-ink)' }}>{data?.leads?.hot ?? '—'}</div>
-          <div className="muted small">Ranked by Synapse AI</div>
+          <div className="muted small">Ranked by SanchalanOS AI</div>
         </div>
         <div className="panel kpi">
           <div className="l">Weighted pipeline</div>

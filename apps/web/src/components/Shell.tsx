@@ -1,4 +1,4 @@
-import { hasAdmin } from '@synapse/shared';
+import { BRAND, hasAdmin } from '@synapse/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
@@ -374,7 +374,7 @@ export function Shell() {
         <div className="brand">
           <span className="brand-mark"><img src="/logo-mark.png" alt="HRP AI" /></span>
           <div>
-            <b>HRP Synapse</b>
+            <b>{BRAND.name}</b>
             <span>{me?.tenant.name}</span>
           </div>
         </div>

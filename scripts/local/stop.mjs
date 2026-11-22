@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * `pnpm local:stop`        stops a `pnpm local` / `pnpm local:cloud` that is still running (frees 8787 and 5173)
+ * `pnpm local:stop`        stops a `pnpm local` that is still running (frees 8787 and 5173)
  * `pnpm local:stop --db`   also stops the local Postgres container (its data is kept)
  */
 import { spawnSync } from 'node:child_process';

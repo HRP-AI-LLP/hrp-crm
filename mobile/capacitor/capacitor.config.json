@@ -1,13 +1,13 @@
 {
   "appId": "in.hrpai.synapse",
-  "appName": "HRP Synapse",
+  "appName": "SanchalanOS",
   "webDir": "www",
   "server": {
-    "url": "https://hrpsynapse.hrpai.in/field?source=app",
+    "url": "https://www.sanchalan.hrpai.in/field?source=app",
     "cleartext": false,
     "allowNavigation": [
-      "hrpsynapse.hrpai.in",
-      "*.hrpsynapse.hrpai.in"
+      "www.sanchalan.hrpai.in",
+      "*.sanchalan.hrpai.in"
     ]
   },
   "android": {

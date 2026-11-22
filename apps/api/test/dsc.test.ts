@@ -113,7 +113,7 @@ describe.skipIf(!canToken)('a DSC on a USB token, through the local signer', () 
   const origin = 'http://localhost:8787';
   afterAll(() => signer?.kill());
 
-  it('pairs, registers the token certificate, and signs a PDF that Synapse checks', async () => {
+  it('pairs, registers the token certificate, and signs a PDF that SanchalanOS checks', async () => {
     // a software token holding a key and certificate, like a Class 3 USB token
     const env = { ...process.env, SOFTHSM2_CONF: join(dir, 'softhsm2.conf'), SYNAPSE_DSC_CONFIG: join(dir, 'signer.json') };
     writeFileSync(env.SOFTHSM2_CONF, `directories.tokendir = ${dir}\nobjectstore.backend = file\nlog.level = ERROR\n`);

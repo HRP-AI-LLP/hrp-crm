@@ -82,7 +82,7 @@ export const developerRoutes = new Hono<AppEnv>()
     const id = uuid.parse(c.req.param('id'));
     const sub = await c.var.db.tx(scope(c, true), (tx) => tx.one(`select 1 from webhook_subscriptions where tenant_id = $1 and id = $2`, [c.var.tenant.id, id]));
     if (!sub) throw notFound();
-    await enqueue(c.env, safeCtx(c), [{ type: 'webhook.deliver', tenantId: c.var.tenant.id, subscriptionId: id, event: 'ping', payload: { message: 'Test delivery from HRP Synapse' }, redeliveryOf: id }]);
+    await enqueue(c.env, safeCtx(c), [{ type: 'webhook.deliver', tenantId: c.var.tenant.id, subscriptionId: id, event: 'ping', payload: { message: 'Test delivery from SanchalanOS' }, redeliveryOf: id }]);
     return c.json({ ok: true });
   })
   .post('/webhook-deliveries/:id/redeliver', async (c) => {

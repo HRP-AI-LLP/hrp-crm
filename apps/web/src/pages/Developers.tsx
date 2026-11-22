@@ -42,7 +42,7 @@ export function DevelopersPage() {
       <div className="page-head">
         <div>
           <h1>Developers</h1>
-          <p>Connect your website, Zapier, Make, n8n or your own code to Synapse.</p>
+          <p>Connect your website, Zapier, Make, n8n or your own code to SanchalanOS.</p>
         </div>
         <div className="row">
           <button className="btn" onClick={downloadSpec}>
@@ -230,7 +230,7 @@ function Webhooks({ events }: { events: Json[] }) {
       {secret && (
         <Modal title="Signing secret" onClose={() => setSecret(null)} footer={<button className="btn primary" onClick={() => setSecret(null)}>I have stored it</button>}>
           <div className="modal-body stack">
-            <p className="small">Use this to verify that deliveries come from Synapse. It is shown only once.</p>
+            <p className="small">Use this to verify that deliveries come from SanchalanOS. It is shown only once.</p>
             <Code>{secret}</Code>
           </div>
         </Modal>

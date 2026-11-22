@@ -5,8 +5,8 @@
 ```mermaid
 flowchart TB
   subgraph Clients
-    A0["hrpsynapse.hrpai.in (shared app host, workspace chosen at sign-in)"]
-    A1["acme.hrpsynapse.hrpai.in (optional workspace host)"]
+    A0["www.sanchalan.hrpai.in (shared app host, workspace chosen at sign-in)"]
+    A1["acme.sanchalan.hrpai.in (optional workspace host)"]
     A2["crm.customer.com (custom domain)"]
     A3["WhatsApp / email / web forms"]
   end
@@ -46,9 +46,9 @@ Static asset requests are free and don't count against Worker invocations.
 
 ### Hostnames
 
-`hrpsynapse.hrpai.in` (prod) and `hrpsynapse-dev.hrpai.in` (dev) are Workers Custom Domains. Cloudflare creates their DNS records and certificates.
+`www.sanchalan.hrpai.in` (the app) and `sanchalan.hrpai.in` (a redirect rule sends it to www) are Workers Custom Domains. Cloudflare creates their DNS records and certificates — the multi-level www host included. Development runs on this computer (`pnpm local`); there is no cloud dev environment.
 
-Workspace hosts like `acme.hrpsynapse.hrpai.in` sit two levels below `hrpai.in`. Cloudflare's free Universal SSL certificate only covers one level (`*.hrpai.in`), so a wildcard route would serve those hosts with an invalid certificate. Synapse avoids this in two ways:
+Workspace hosts like `acme.sanchalan.hrpai.in` sit two levels below `hrpai.in`. Cloudflare's free Universal SSL certificate only covers one level (`*.hrpai.in`), so a wildcard route would serve those hosts with an invalid certificate. SanchalanOS avoids this in two ways:
 
 - Every workspace works on the shared host, chosen at sign-in.
 - Optionally, each workspace host is attached as its own Workers Custom Domain, which gets a free certificate for that exact name.
@@ -57,12 +57,12 @@ Workspace hosts like `acme.hrpsynapse.hrpai.in` sit two levels below `hrpai.in`.
 
 ```mermaid
 sequenceDiagram
-  participant B as Browser (acme.hrpsynapse.com)
+  participant B as Browser (acme.sanchalan.hrpai.in)
   participant W as Worker
   participant C as Edge cache
   participant D as Postgres (Hyperdrive)
   B->>W: GET /api/v1/records/lead (Bearer JWT)
-  W->>C: p:host:acme.hrpsynapse.com
+  W->>C: p:host:acme.sanchalan.hrpai.in
   alt miss
     W->>D: app.resolve_tenant_by_host() (SECURITY DEFINER, narrow)
   end

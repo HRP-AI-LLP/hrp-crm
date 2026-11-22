@@ -2369,7 +2369,7 @@ function SetupFiles({ f, onClose }: { f: Json; onClose: () => void }) {
           {gh ? (
             <>
               <li>Commit the workflow below as <code className="mono">.github/workflows/synapse-work-items.yml</code>.</li>
-              <li>Settings → Branches → protect the main branch: <em>Require status checks to pass</em> and pick <strong>Synapse work items / work-item</strong>. Pull requests then cannot merge until every commit names a work item.</li>
+              <li>Settings → Branches → protect the main branch: <em>Require status checks to pass</em> and pick <strong>SanchalanOS work items / work-item</strong>. Pull requests then cannot merge until every commit names a work item.</li>
               <li>Optional, for instant feedback: install the commit hook on each developer machine (second tab). Commits on a branch like <code className="mono">{f.branchExample}</code> get the key added automatically.</li>
               <li>Add a GitHub connection under <em>Code connections</em> so pushes, PRs and builds also link in real time.</li>
             </>

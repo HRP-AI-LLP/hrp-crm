@@ -252,7 +252,7 @@ export function DealCompetitors({ dealId, canEdit }: { dealId: string; canEdit: 
   );
 }
 
-// ------------------------------------------------------------------------------- Ask Synapse
+// ------------------------------------------------------------------------------- Ask SanchalanOS
 export function AskBox({ object, id, placeholder }: { object?: string; id?: string; placeholder?: string }) {
   const toast = useToast();
   const [q, setQ] = useState('');
@@ -275,7 +275,7 @@ export function AskBox({ object, id, placeholder }: { object?: string; id?: stri
     <div className="ask">
       <form className="ask-form" onSubmit={ask}>
         <span className="ask-spark" aria-hidden="true">✦</span>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder ?? 'Ask Synapse about your customers, deals and conversations…'} aria-label="Ask Synapse" maxLength={800} />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder ?? 'Ask SanchalanOS about your customers, deals and conversations…'} aria-label="Ask SanchalanOS" maxLength={800} />
         <button className="btn ai" disabled={busy || q.trim().length < 3}>
           {busy ? 'Thinking…' : 'Ask'}
         </button>

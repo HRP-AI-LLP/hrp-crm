@@ -111,7 +111,7 @@ export function PublicQuotePage() {
       )}
       {done && <section className="respond no-print"><p>{done}</p></section>}
       <p className="muted small no-print" style={{ textAlign: 'center', margin: '24px 0' }}>
-        Sent with HRP Synapse
+        Sent with SanchalanOS
       </p>
     </div>
   );

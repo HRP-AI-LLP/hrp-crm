@@ -1,22 +1,25 @@
 // @ts-check
 /**
- * HRP Synapse — one-shot, idempotent infrastructure provisioning.
+ * SanchalanOS — one-shot, idempotent infrastructure provisioning.
  *
  * Reads credentials from the environment (never from files, never printed):
  *   NEON_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID         (required)
  *   ZONE_NAME          Cloudflare zone that hosts the app, default "hrpai.in"
- *   DEV_APP_HOST       default "hrpsynapse-dev.hrpai.in"
- *   PROD_APP_HOST      default "hrpsynapse.hrpai.in"
- *   CF_TENANT_DOMAINS_TOKEN  optional: lets the app give each workspace <slug>.<app host>
+ *   PROD_APP_HOST      default "www.sanchalan.hrpai.in" (the bare sanchalan.hrpai.in redirects to it)
+ *   CF_TENANT_DOMAINS_TOKEN  optional: lets the app give each workspace <slug>.sanchalan.hrpai.in
  *   NEON_ORG_ID        if your Neon account has several organisations
- *   NEON_PROJECT_NAME  default "hrp-synapse"
+ *   NEON_PROJECT_NAME  default "hrp-synapse" (the existing project is kept)
  *   NEON_REGION        default "aws-ap-southeast-1" (Singapore — lowest latency to India)
  *   GROQ_API_KEY, GEMINI_API_KEY   optional AI fallbacks, stored as Worker secrets
  *   RESEND_API_KEY           optional: emails invitations and password resets (resend.com free tier)
  *   GOOGLE_CLIENT_ID/SECRET, MS_CLIENT_ID/SECRET, META_APP_ID/SECRET, META_VERIFY_TOKEN, FCM_SERVICE_ACCOUNT (JSON)
  *                            optional: Gmail/Outlook sync and Facebook lead ads (docs/INTEGRATIONS.md)
- *   SEED_DEMO          "false" to skip the demo workspace on dev
  *   SKIP_DEPLOY        "true" to provision without deploying
+ *   REMOVE_OLD         "true" to delete what the old setup made and is no longer used: the cloud
+ *                      "dev" environment (Neon branch dev, Hyperdrive/KV/queues/worker synapse-dev)
+ *                      and the worker synapse-prod (now "sanchalanos")
+ *
+ * Environments: dev runs on this computer (`pnpm local`); prod runs on Cloudflare + Neon.
  *
  * Re-running is safe: every resource is looked up by name before being created. Generated
  * secrets (DB passwords, JWT keys) are kept in infra/.local/secrets.json (git-ignored) so reruns
@@ -24,10 +27,10 @@
  */
 import { spawnSync } from 'node:child_process';
 import { generateKeyPairSync, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createApiClient, EndpointType } from '@neondatabase/api-client';
+import { createApiClient } from '@neondatabase/api-client';
 import Cloudflare from 'cloudflare';
 import pg from 'pg';
 
@@ -45,7 +48,6 @@ const INFRA = join(ROOT, 'infra');
 const LOCAL = join(INFRA, '.local');
 const STATE_FILE = join(INFRA, 'state.json');
 const SECRETS_FILE = join(LOCAL, 'secrets.json');
-const ENVS = /** @type {const} */ (['dev', 'prod']);
 
 const c = { dim: (s) => `\x1b[2m${s}\x1b[0m`, ok: (s) => `\x1b[32m${s}\x1b[0m`, warn: (s) => `\x1b[33m${s}\x1b[0m`, bold: (s) => `\x1b[1m${s}\x1b[0m`, err: (s) => `\x1b[31m${s}\x1b[0m` };
 const step = (s) => console.log(`\n${c.bold('▸ ' + s)}`);
@@ -203,11 +205,11 @@ async function main() {
   const projectName = process.env.NEON_PROJECT_NAME ?? 'hrp-synapse';
   const region = process.env.NEON_REGION ?? 'aws-ap-southeast-1';
   const zoneName = (process.env.ZONE_NAME ?? 'hrpai.in').trim().toLowerCase();
-  const hosts = {
-    dev: (process.env.DEV_APP_HOST ?? 'hrpsynapse-dev.hrpai.in').trim().toLowerCase(),
-    prod: (process.env.PROD_APP_HOST ?? 'hrpsynapse.hrpai.in').trim().toLowerCase(),
-  };
-  for (const h of Object.values(hosts)) {
+  const appHost = (process.env.PROD_APP_HOST ?? 'www.sanchalan.hrpai.in').trim().toLowerCase();
+  // www.<x> is the app; <x> redirects to it and is the parent of per-workspace <slug>.<x> addresses
+  const baseDomain = appHost.replace(/^www\./, '');
+  const hosts = [...new Set([appHost, baseDomain])];
+  for (const h of hosts) {
     if (!h.endsWith(`.${zoneName}`)) {
       console.error(c.err(`${h} is not inside the zone ${zoneName}. Set $env:ZONE_NAME to the domain on your Cloudflare account.`));
       process.exit(1);
@@ -215,19 +217,19 @@ async function main() {
   }
   const dbName = process.env.NEON_DB_NAME ?? 'neondb';
   const ownerRole = process.env.NEON_OWNER_ROLE ?? 'neondb_owner';
+  const removeOld = process.env.REMOVE_OLD === 'true';
 
   await cloudflarePreflight(CF_TOKEN, CF_ACCOUNT, zoneName);
 
-  const state = readJson(STATE_FILE, { neon: {}, cloudflare: { dev: {}, prod: {} } });
+  const state = readJson(STATE_FILE, { neon: {}, cloudflare: { prod: {} } });
+  state.cloudflare ??= {};
   const secrets = readJson(SECRETS_FILE, {});
-  for (const env of ENVS) {
-    secrets[env] ??= {};
-    secrets[env].APP_DB_PASSWORD ??= secret(24);
-    secrets[env].JWT_SECRET ??= secret(48);
-    secrets[env].DATA_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
-    // Web Push (installable app): one VAPID key pair per environment, generated once and kept
-    if (!secrets[env].VAPID_PRIVATE_KEY) Object.assign(secrets[env], vapidKeys());
-  }
+  secrets.prod ??= {};
+  secrets.prod.APP_DB_PASSWORD ??= secret(24);
+  secrets.prod.JWT_SECRET ??= secret(48);
+  secrets.prod.DATA_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
+  // Web Push (installable app): one VAPID key pair, generated once and kept
+  if (!secrets.prod.VAPID_PRIVATE_KEY) Object.assign(secrets.prod, vapidKeys());
   writeJson(SECRETS_FILE, secrets);
 
   // ----------------------------------------------------------------------------------- Neon
@@ -276,27 +278,29 @@ async function main() {
   if (!main) throw new Error('Could not find the default Neon branch');
   state.neon.branches = { prod: main.id };
 
+  // the smallest compute, never larger than 1 CU, asleep after 5 idle minutes
+  // (free plan: 100 CU-hours a month; 0.25 CU ≈ 400 awake hours)
+  try {
+    const eps = (await neon.listProjectBranchEndpoints(projectId, main.id)).data.endpoints;
+    for (const ep of eps) {
+      await neon.updateProjectEndpoint(projectId, ep.id, { endpoint: { autoscaling_limit_min_cu: 0.25, autoscaling_limit_max_cu: 1, suspend_timeout_seconds: 300 } }).catch(() =>
+        neon.updateProjectEndpoint(projectId, ep.id, { endpoint: { autoscaling_limit_min_cu: 0.25, autoscaling_limit_max_cu: 1 } }),
+      );
+    }
+    info(`${c.ok('✓')} compute 0.25–1 CU, sleeps after 5 idle minutes`);
+  } catch (e) {
+    info(c.warn(`could not adjust the compute size (${/** @type {Error} */ (e).message}); the plan's defaults stay`));
+  }
+
   // Neon returns sslmode=require; pg treats that as verify-full anyway, so say so explicitly (silences pg's warning)
   const strictSsl = (uri) => uri.replace(/sslmode=require/, 'sslmode=verify-full');
   const ownerUrl = async (branchId) =>
     strictSsl((await neon.getConnectionUri({ projectId, branch_id: branchId, database_name: dbName, role_name: ownerRole, pooled: false })).data.uri);
 
-  // prod (main branch) first, so the dev branch inherits the schema
   const prodOwner = await ownerUrl(main.id);
   await waitForDb(prodOwner);
-  step('Migrating production database (branch main)');
+  step('Migrating the production database (branch main)');
   run('pnpm --filter @synapse/db migrate', { env: { DATABASE_URL_OWNER: prodOwner, APP_DB_PASSWORD: secrets.prod.APP_DB_PASSWORD }, display: 'pnpm --filter @synapse/db migrate  (prod)' });
-
-  let dev = branches.find((b) => b.name === 'dev');
-  if (!dev) {
-    info('creating branch "dev" from main');
-    dev = (await neon.createProjectBranch(projectId, { branch: { name: 'dev', parent_id: main.id }, endpoints: [{ type: EndpointType.ReadWrite }] })).data.branch;
-  }
-  state.neon.branches.dev = dev.id;
-  const devOwner = await ownerUrl(dev.id);
-  await waitForDb(devOwner);
-  step('Migrating dev database (branch dev)');
-  run('pnpm --filter @synapse/db migrate', { env: { DATABASE_URL_OWNER: devOwner, APP_DB_PASSWORD: secrets.dev.APP_DB_PASSWORD }, display: 'pnpm --filter @synapse/db migrate  (dev)' });
   writeJson(STATE_FILE, state);
 
   // ----------------------------------------------------------------------------- Cloudflare
@@ -313,45 +317,75 @@ async function main() {
   const vecList = [];
   for await (const v of cf.vectorize.indexes.list({ account_id })) vecList.push(v);
 
-  for (const env of ENVS) {
-    const s = (state.cloudflare[env] ??= {});
-    const branchId = env === 'prod' ? main.id : dev.id;
+  const s = (state.cloudflare.prod ??= {});
+  const kvTitle = 'synapse-cache-prod';
+  s.kvId = kvList.find((n) => n.title === kvTitle)?.id ?? (await cf.kv.namespaces.create({ account_id, title: kvTitle })).id;
+  info(`${c.ok('✓')} KV ${kvTitle}`);
 
-    const kvTitle = `synapse-cache-${env}`;
-    s.kvId = kvList.find((n) => n.title === kvTitle)?.id ?? (await cf.kv.namespaces.create({ account_id, title: kvTitle })).id;
-    info(`${c.ok('✓')} KV ${kvTitle}`);
-
-    for (const qn of [`synapse-jobs-${env}`, `synapse-jobs-dlq-${env}`]) {
-      if (!queueList.some((q) => q.queue_name === qn)) await cf.queues.create({ account_id, queue_name: qn });
-      info(`${c.ok('✓')} Queue ${qn}`);
-    }
-
-    const vecName = `synapse-kb-${env}`;
-    if (!vecList.some((v) => v.name === vecName)) {
-      await cf.vectorize.indexes.create({ account_id, name: vecName, config: { dimensions: 1024, metric: 'cosine' }, description: 'HRP Synapse knowledge base (bge-m3). Namespace = tenant id.' });
-    }
-    info(`${c.ok('✓')} Vectorize ${vecName}`);
-
-    // Hyperdrive → Neon *direct* endpoint as the least-privilege runtime role, caching DISABLED
-    const owner = new URL(await ownerUrl(branchId));
-    const origin = { host: owner.hostname, port: 5432, database: dbName, user: 'synapse_app', password: secrets[env].APP_DB_PASSWORD, scheme: /** @type {'postgres'} */ ('postgres') };
-    const hdName = `synapse-${env}`;
-    const existing = hdList.find((h) => h.name === hdName);
-    if (existing) {
-      await cf.hyperdrive.configs.update(existing.id, { account_id, name: hdName, origin, caching: { disabled: true } });
-      s.hyperdriveId = existing.id;
-    } else {
-      s.hyperdriveId = (await cf.hyperdrive.configs.create({ account_id, name: hdName, origin, caching: { disabled: true } })).id;
-    }
-    info(`${c.ok('✓')} Hyperdrive ${hdName} (query cache disabled for tenant safety)`);
+  for (const qn of ['synapse-jobs-prod', 'synapse-jobs-dlq-prod']) {
+    if (!queueList.some((q) => q.queue_name === qn)) await cf.queues.create({ account_id, queue_name: qn });
+    info(`${c.ok('✓')} Queue ${qn}`);
   }
 
-  // app hostnames (Workers Custom Domains → Cloudflare issues a certificate for each exact host)
+  const vecName = 'synapse-kb-prod';
+  if (!vecList.some((v) => v.name === vecName)) {
+    await cf.vectorize.indexes.create({ account_id, name: vecName, config: { dimensions: 1024, metric: 'cosine' }, description: 'SanchalanOS knowledge base (bge-m3). Namespace = tenant id.' });
+  }
+  info(`${c.ok('✓')} Vectorize ${vecName}`);
+
+  // Hyperdrive → Neon *direct* endpoint as the least-privilege runtime role, caching DISABLED
+  const owner = new URL(prodOwner);
+  const origin = { host: owner.hostname, port: 5432, database: dbName, user: 'synapse_app', password: secrets.prod.APP_DB_PASSWORD, scheme: /** @type {'postgres'} */ ('postgres') };
+  const hdName = 'synapse-prod';
+  const existingHd = hdList.find((h) => h.name === hdName);
+  if (existingHd) {
+    await cf.hyperdrive.configs.update(existingHd.id, { account_id, name: hdName, origin, caching: { disabled: true } });
+    s.hyperdriveId = existingHd.id;
+  } else {
+    s.hyperdriveId = (await cf.hyperdrive.configs.create({ account_id, name: hdName, origin, caching: { disabled: true } })).id;
+  }
+  info(`${c.ok('✓')} Hyperdrive ${hdName} (query cache disabled for tenant safety)`);
+
+  // ------------------------------------------------------------- what the old setup left behind
+  const oldDev = {
+    neonBranch: branches.find((b) => b.name === 'dev'),
+    hyperdrive: hdList.find((h) => h.name === 'synapse-dev'),
+    kv: kvList.find((n) => n.title === 'synapse-cache-dev'),
+    queues: queueList.filter((q) => ['synapse-jobs-dev', 'synapse-jobs-dlq-dev'].includes(q.queue_name ?? '')),
+  };
+  const oldWorkers = [];
+  for await (const w of cf.workers.scripts.list({ account_id })) if (['synapse-dev', 'synapse-prod'].includes(/** @type {any} */ (w).id)) oldWorkers.push(/** @type {any} */ (w).id);
+  const leftovers = [
+    oldDev.neonBranch && 'Neon branch "dev"',
+    oldDev.hyperdrive && 'Hyperdrive synapse-dev',
+    oldDev.kv && 'KV synapse-cache-dev',
+    ...oldDev.queues.map((q) => `Queue ${q.queue_name}`),
+    ...oldWorkers.map((w) => `Worker ${w}`),
+  ].filter(Boolean);
+  if (leftovers.length && removeOld) {
+    step('Removing what the old setup made (REMOVE_OLD=true)');
+    for (const w of oldWorkers) {
+      await cf.workers.scripts.delete(w, { account_id, force: true }).then(() => info(`${c.ok('✓')} deleted Worker ${w}`), (e) => info(c.warn(`Worker ${w}: ${e.message}`)));
+    }
+    for (const q of oldDev.queues) {
+      await cf.queues.delete(q.queue_id ?? '', { account_id }).then(() => info(`${c.ok('✓')} deleted Queue ${q.queue_name}`), (e) => info(c.warn(`Queue ${q.queue_name}: ${e.message}`)));
+    }
+    if (oldDev.hyperdrive) await cf.hyperdrive.configs.delete(oldDev.hyperdrive.id, { account_id }).then(() => info(`${c.ok('✓')} deleted Hyperdrive synapse-dev`), (e) => info(c.warn(`Hyperdrive: ${e.message}`)));
+    if (oldDev.kv) await cf.kv.namespaces.delete(oldDev.kv.id, { account_id }).then(() => info(`${c.ok('✓')} deleted KV synapse-cache-dev`), (e) => info(c.warn(`KV: ${e.message}`)));
+    if (oldDev.neonBranch) await neon.deleteProjectBranch({ projectId, branchId: oldDev.neonBranch.id }).then(() => info(`${c.ok('✓')} deleted Neon branch dev`), (e) => info(c.warn(`Neon branch dev: ${e.message}`)));
+  } else if (leftovers.length) {
+    info(c.warn(`Not used any more: ${leftovers.join(', ')}.`));
+    info(c.warn('Run setup once with $env:REMOVE_OLD="true" to delete them (frees the old hostnames and Neon storage).'));
+  }
+  delete state.cloudflare.dev;
+
+  // app hostnames (Workers Custom Domains → Cloudflare issues a certificate for each exact host,
+  // multi-level ones like www.sanchalan.hrpai.in included)
   let zoneId = null;
   for await (const z of cf.zones.list({ name: zoneName, account: { id: account_id } })) if (z.name === zoneName) zoneId = z.id;
   if (zoneId) {
-    info(`${c.ok('✓')} Zone ${zoneName} found — dev: https://${hosts.dev}  prod: https://${hosts.prod}`);
-    for (const h of Object.values(hosts)) {
+    info(`${c.ok('✓')} Zone ${zoneName} found — https://${appHost}${baseDomain !== appHost ? ` (https://${baseDomain} redirects there)` : ''}`);
+    for (const h of hosts) {
       try {
         const existing = [];
         for await (const r of cf.dns.records.list({ zone_id: zoneId, name: { exact: h } })) existing.push(r);
@@ -362,75 +396,32 @@ async function main() {
         /* token without DNS read: wrangler will report conflicts itself */
       }
     }
+    if (baseDomain !== appHost) await bareToWww(CF_TOKEN, zoneId, baseDomain, appHost);
   } else {
-    info(c.warn(`Zone ${zoneName} is not on this Cloudflare account (or the token lacks Zone:Read). Workers stay on workers.dev until you add it and re-run.`));
+    info(c.warn(`Zone ${zoneName} is not on this Cloudflare account (or the token lacks Zone:Read). Add it and re-run: the app is served only on its own domain.`));
   }
   state.zoneName = zoneId ? zoneName : '';
-  state.hosts = zoneId ? hosts : {};
+  state.hosts = zoneId ? { prod: appHost, base: baseDomain } : {};
   writeJson(STATE_FILE, state);
 
   // --------------------------------------------------------------------------- wrangler.jsonc
   step('Rendering apps/api/wrangler.jsonc');
-  const tpl = readFileSync(join(ROOT, 'apps/api/wrangler.template.jsonc'), 'utf8');
-  const routeFor = (h) => (zoneId ? `"routes": [{ "pattern": "${h}", "custom_domain": true }],` : `// add the zone ${zoneName} to Cloudflare and re-run setup to serve ${h}`);
-  const rendered = tpl
-    .replace(/^\/\/ HRP Synapse gateway Worker — TEMPLATE\.\n(\/\/.*\n){2}/m, '// HRP Synapse gateway Worker — GENERATED by `pnpm run setup` from wrangler.template.jsonc.\n// Resource IDs are not secrets; commit this file so CI can deploy.\n')
-    .replaceAll('__DEV_HYPERDRIVE_ID__', state.cloudflare.dev.hyperdriveId)
-    .replaceAll('__PROD_HYPERDRIVE_ID__', state.cloudflare.prod.hyperdriveId)
-    .replaceAll('__DEV_KV_ID__', state.cloudflare.dev.kvId)
-    .replaceAll('__PROD_KV_ID__', state.cloudflare.prod.kvId)
-    .replaceAll('__DEV_APP_HOST__', hosts.dev)
-    .replaceAll('__PROD_APP_HOST__', hosts.prod)
-    .replaceAll('__CF_ACCOUNT_ID__', account_id)
-    .replaceAll('__ZONE_NAME__', zoneName)
-    .replace('// __DEV_ROUTES__', routeFor(hosts.dev))
-    .replace('// __PROD_ROUTES__', routeFor(hosts.prod));
-  writeFileSync(join(ROOT, 'apps/api/wrangler.jsonc'), rendered);
+  renderWrangler({ zoneId, zoneName, appHost, baseDomain, accountId: account_id, kvId: s.kvId, hyperdriveId: s.hyperdriveId });
   info(`${c.ok('✓')} written`);
-
-  // local dev vars (dev branch, pooled endpoint, runtime role)
-  const devPooled = new URL(strictSsl((await neon.getConnectionUri({ projectId, branch_id: dev.id, database_name: dbName, role_name: ownerRole, pooled: true })).data.uri));
-  devPooled.username = 'synapse_app';
-  devPooled.password = secrets.dev.APP_DB_PASSWORD;
-  const devVars = join(ROOT, 'apps/api/.dev.vars');
-  if (!existsSync(devVars)) {
-    writeFileSync(devVars, [`DATABASE_URL=${devPooled.toString()}`, `JWT_SECRET=${secret(48)}`, `DATA_ENCRYPTION_KEY=${randomBytes(32).toString('base64')}`, `GROQ_API_KEY=${process.env.GROQ_API_KEY ?? ''}`, `GEMINI_API_KEY=${process.env.GEMINI_API_KEY ?? ''}`, ...Object.entries(vapidKeys()).map(([k, v]) => `${k}=${v}`), ''].join('\n'));
-    info(`${c.ok('✓')} apps/api/.dev.vars for local development (git-ignored)`);
-  }
 
   // ------------------------------------------------------------------------------ deploy
   if (process.env.SKIP_DEPLOY !== 'true') {
     step('Building the web app');
     run('pnpm --filter @synapse/web build');
-    for (const env of ENVS) {
-      const wenv = env === 'prod' ? 'production' : 'dev';
-      step(`Deploying Worker (${wenv})`);
-      run(`pnpm --filter @synapse/api exec wrangler deploy --env ${wenv}`);
-      const bulk = { JWT_SECRET: secrets[env].JWT_SECRET, DATA_ENCRYPTION_KEY: secrets[env].DATA_ENCRYPTION_KEY, VAPID_PUBLIC_KEY: secrets[env].VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: secrets[env].VAPID_PRIVATE_KEY };
-      if (process.env.GROQ_API_KEY) bulk.GROQ_API_KEY = process.env.GROQ_API_KEY;
-      if (process.env.GEMINI_API_KEY) bulk.GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-      if (process.env.CF_TENANT_DOMAINS_TOKEN) bulk.CF_TENANT_DOMAINS_TOKEN = process.env.CF_TENANT_DOMAINS_TOKEN;
-      if (process.env.RESEND_API_KEY) bulk.RESEND_API_KEY = process.env.RESEND_API_KEY;
-      // integrations: OAuth apps registered by HRP AI (see docs/INTEGRATIONS.md)
-      for (const k of ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'MS_CLIENT_ID', 'MS_CLIENT_SECRET', 'META_APP_ID', 'META_APP_SECRET', 'META_VERIFY_TOKEN', 'FCM_SERVICE_ACCOUNT']) {
-        if (process.env[k]) bulk[k] = process.env[k];
-      }
-      const tmp = join(LOCAL, `secrets-${env}.tmp.json`);
-      writeJson(tmp, bulk);
-      try {
-        run(`pnpm --filter @synapse/api exec wrangler secret bulk "${tmp}" --env ${wenv}`, { display: `wrangler secret bulk <generated> --env ${wenv}` });
-      } finally {
-        rmSync(tmp, { force: true });
-      }
+    step('Deploying the Worker (production)');
+    run('pnpm --filter @synapse/api exec wrangler deploy --env production');
+    const bulk = { JWT_SECRET: secrets.prod.JWT_SECRET, DATA_ENCRYPTION_KEY: secrets.prod.DATA_ENCRYPTION_KEY, VAPID_PUBLIC_KEY: secrets.prod.VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY: secrets.prod.VAPID_PRIVATE_KEY };
+    // everything else (AI keys, mail, Google/Microsoft/Meta apps…) is set in the app:
+    // Settings → Connection keys. Values in the terminal are still uploaded if present.
+    for (const k of ['GROQ_API_KEY', 'GEMINI_API_KEY', 'CF_TENANT_DOMAINS_TOKEN', 'RESEND_API_KEY', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'MS_CLIENT_ID', 'MS_CLIENT_SECRET', 'META_APP_ID', 'META_APP_SECRET', 'META_VERIFY_TOKEN', 'FCM_SERVICE_ACCOUNT']) {
+      if (process.env[k]) bulk[k] = process.env[k];
     }
-  }
-
-  // ------------------------------------------------------------------------------- seed
-  if (process.env.SEED_DEMO !== 'false') {
-    step('Seeding a demo workspace on dev');
-    secrets.dev.DEMO_ADMIN_PASSWORD ??= `Demo-${secret(9)}!`;
-    writeJson(SECRETS_FILE, secrets);
-    run('pnpm --filter @synapse/db seed', { env: { DATABASE_URL_OWNER: devOwner, SEED_ADMIN_PASSWORD: secrets.dev.DEMO_ADMIN_PASSWORD, SEED_ADMIN_EMAIL: 'admin@demo.hrpsynapse.local' }, display: 'pnpm --filter @synapse/db seed  (dev)' });
+    uploadSecrets(bulk);
   }
 
   // ------------------------------------------------------------------------------ GitHub
@@ -451,18 +442,81 @@ async function main() {
 
   writeJson(STATE_FILE, state);
   step('Done');
-  info(`Neon project:  ${projectId}  (branches: main → prod, dev → dev)`);
-  info(state.zoneName ? `Dev app:       https://${hosts.dev}` : `Dev app:       https://synapse-dev.<your-workers-subdomain>.workers.dev  (see the deploy output above)`);
-  if (process.env.SEED_DEMO !== 'false') {
-    info(`Demo sign-in:  workspace "demo", admin@demo.hrpsynapse.local, password in infra/.local/secrets.json (dev.DEMO_ADMIN_PASSWORD)`);
-  }
-  info(state.zoneName ? `Production:    https://${hosts.prod}  (workspace chosen at sign-in)` : c.warn(`Production needs the zone ${zoneName} on this Cloudflare account; add it and re-run.`));
-  if (!process.env.CF_TENANT_DOMAINS_TOKEN) info(c.dim(`Optional: set $env:CF_TENANT_DOMAINS_TOKEN and re-run to give each workspace its own <slug>.${hosts.prod} address.`));
-  info('Commit apps/api/wrangler.jsonc and infra/state.json (no secrets inside), then push dev/prod branches.');
+  info(`Neon project:  ${projectId}  (branch main = production)`);
+  info(state.zoneName ? `Production:    https://${appHost}  (workspace chosen at sign-in)` : c.warn(`Production needs the zone ${zoneName} on this Cloudflare account; add it and re-run.`));
+  info('Your data: `pnpm cloud:import` copies the local database (and files) into production.');
+  if (!process.env.CF_TENANT_DOMAINS_TOKEN) info(c.dim(`Optional: set $env:CF_TENANT_DOMAINS_TOKEN and re-run to give each workspace its own <slug>.${baseDomain} address.`));
+  info('Commit apps/api/wrangler.jsonc and infra/state.json (no secrets inside); pushing to "main" deploys.');
 }
 
-main().catch((e) => {
-  console.error(c.err(`\nSetup failed: ${e?.message ?? e}`));
-  if (e?.response?.data) console.error(JSON.stringify(e.response.data, null, 2));
-  process.exit(1);
-});
+/**
+ * sanchalan.hrpai.in → https://www.sanchalan.hrpai.in (same path and query) with a Cloudflare
+ * redirect rule, before the request reaches the Worker. Other redirect rules in the zone are kept.
+ */
+async function bareToWww(token, zoneId, bare, www) {
+  const url = `https://api.cloudflare.com/client/v4/zones/${zoneId}/rulesets/phases/http_request_dynamic_redirect/entrypoint`;
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+  const rule = {
+    ref: 'sanchalanos_bare_to_www',
+    description: `SanchalanOS: ${bare} → ${www}`,
+    expression: `(http.host eq "${bare}")`,
+    action: 'redirect',
+    action_parameters: { from_value: { status_code: 301, target_url: { expression: `concat("https://${www}", http.request.uri.path)` }, preserve_query_string: true } },
+  };
+  try {
+    const cur = await fetch(url, { headers });
+    /** @type {any} */ const j = await cur.json().catch(() => ({}));
+    const rules = cur.ok ? (j.result?.rules ?? []).filter((r) => r.ref !== rule.ref).map(({ id, version, last_updated, ...r }) => r) : [];
+    if (!cur.ok && cur.status !== 404) throw new Error(`${cur.status} ${(j.errors ?? []).map((e) => e.message).join('; ')}`);
+    const put = await fetch(url, { method: 'PUT', headers, body: JSON.stringify({ rules: [...rules, rule] }) });
+    /** @type {any} */ const pj = await put.json().catch(() => ({}));
+    if (!put.ok) throw new Error(`${put.status} ${(pj.errors ?? []).map((e) => e.message).join('; ')}`);
+    info(`${c.ok('✓')} https://${bare} redirects to https://${www}`);
+  } catch (e) {
+    info(c.warn(`Could not add the redirect ${bare} → ${www} (${/** @type {Error} */ (e).message}).`));
+    info(c.warn('Either add "Zone → Single Redirect → Edit" to the token and re-run, or in the dashboard: hrpai.in → Rules →'));
+    info(c.warn(`Redirect Rules → Create: hostname equals ${bare} → dynamic concat("https://${www}", http.request.uri.path), 301, keep query string.`));
+  }
+}
+
+/**
+ * Writes apps/api/wrangler.jsonc from the template.
+ * @param {{ zoneId: string | null, zoneName: string, appHost: string, baseDomain: string, accountId: string, kvId: string, hyperdriveId: string }} o
+ */
+export function renderWrangler(o) {
+  const tpl = readFileSync(join(ROOT, 'apps/api/wrangler.template.jsonc'), 'utf8');
+  const hosts = [...new Set([o.appHost, o.baseDomain])];
+  const routes = o.zoneId
+    ? `"routes": [${hosts.map((h) => `{ "pattern": "${h}", "custom_domain": true }`).join(', ')}],`
+    : `// add the zone ${o.zoneName} to Cloudflare and re-run setup to serve ${o.appHost}`;
+  const rendered = tpl
+    .replace(/^\/\/ SanchalanOS gateway Worker — TEMPLATE\.\n(\/\/.*\n){2}/m, '// SanchalanOS gateway Worker — GENERATED by `pnpm run setup` from wrangler.template.jsonc.\n// Resource IDs are not secrets; commit this file so CI can deploy.\n')
+    .replaceAll('__PROD_HYPERDRIVE_ID__', o.hyperdriveId)
+    .replaceAll('__PROD_KV_ID__', o.kvId)
+    .replaceAll('__PROD_APP_HOST__', o.appHost)
+    .replaceAll('__PROD_BASE_DOMAIN__', o.baseDomain)
+    .replaceAll('__CF_ACCOUNT_ID__', o.accountId)
+    .replaceAll('__ZONE_NAME__', o.zoneName)
+    .replace('// __PROD_ROUTES__', routes);
+  writeFileSync(join(ROOT, 'apps/api/wrangler.jsonc'), rendered);
+}
+
+/** Uploads Worker secrets to production without printing them. @param {Record<string, string>} bulk */
+export function uploadSecrets(bulk) {
+  const tmp = join(LOCAL, 'secrets-prod.tmp.json');
+  writeJson(tmp, bulk);
+  try {
+    run(`pnpm --filter @synapse/api exec wrangler secret bulk "${tmp}" --env production`, { display: 'wrangler secret bulk <generated> --env production' });
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+// run directly (`pnpm setup`), not when another script imports the helpers above
+if (process.argv[1] && resolve(process.argv[1]).toLowerCase() === fileURLToPath(import.meta.url).toLowerCase()) {
+  main().catch((e) => {
+    console.error(c.err(`\nSetup failed: ${e?.message ?? e}`));
+    if (e?.response?.data) console.error(JSON.stringify(e.response.data, null, 2));
+    process.exit(1);
+  });
+}

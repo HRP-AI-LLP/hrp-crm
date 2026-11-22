@@ -1,6 +1,6 @@
 /**
  * Call invites from the person's connected mailbox (Gmail / Outlook): meetings in their calendar
- * from a week back to a month ahead — invites they received or sent outside Synapse — become calls,
+ * from a week back to a month ahead — invites they received or sent outside SanchalanOS — become calls,
  * filed on the project their title or attendees point to (else "Not filed"). A Zoom / Meet / Teams
  * link in the invite ties the call to that app, so the transcript is picked up when the person has
  * that meeting account connected. Runs with the mailbox sync and on demand.
@@ -324,8 +324,8 @@ async function fileInvite(tx: Tx, f: FileCtx, inv: Invite): Promise<'added' | 'u
   const others = inv.attendees.filter((a) => a.email !== f.self);
   const external = others.some((a) => !f.colleagues.has(a.email));
   if (!inv.joinUrl && !external) return 'skipped';
-  // calls Synapse itself put in the calendar
-  if (/Scheduled from HRP Synapse/.test(inv.description ?? '')) return 'skipped';
+  // calls SanchalanOS itself put in the calendar
+  if (/Scheduled from SanchalanOS/.test(inv.description ?? '')) return 'skipped';
   if (inv.source !== 'email' && (await tx.one(`select 1 from events where tenant_id = $1 and calendar_ref ->> 'id' = $2`, [f.tenantId, inv.id]))) return 'skipped';
   // an emailed meeting is one call per UID (per time of a recurring series), so a moved meeting updates it
   const ref = (inv.source === 'email' ? `ics:${inv.uid ?? inv.id}${inv.recurrenceId ? `:${inv.recurrenceId}` : ''}` : `cal:${f.integrationId}:${inv.id}`).slice(0, 300);
@@ -349,7 +349,7 @@ async function fileInvite(tx: Tx, f: FileCtx, inv: Invite): Promise<'added' | 'u
   if (inv.joinUrl) {
     const p = parseJoinUrl(inv.joinUrl);
     if (p) {
-      // the same meeting already came in from a meeting app, or was scheduled in Synapse
+      // the same meeting already came in from a meeting app, or was scheduled in SanchalanOS
       const dup = await tx.one<{ id: string }>(
         `select id from events where tenant_id = $1 and online_meeting ->> 'joinUrl' = $2 and starts_at between $3::timestamptz - interval '1 day' and $3::timestamptz + interval '1 day'`,
         [f.tenantId, p.joinUrl, inv.startsAt],

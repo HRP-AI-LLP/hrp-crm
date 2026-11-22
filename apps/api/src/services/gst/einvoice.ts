@@ -288,7 +288,7 @@ export async function cancelIrn(
     );
     return {
       ok: true,
-      note: "The IRN is cancelled. Cancel the invoice in Synapse too (or issue a corrected one).",
+      note: "The IRN is cancelled. Cancel the invoice in SanchalanOS too (or issue a corrected one).",
     };
   });
 }

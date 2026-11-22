@@ -115,14 +115,14 @@ Every project has a **work item key** (from its code or name, e.g. `FLEET`) and 
 
 Each project links its repositories (*Work setup → Code repositories*, GitHub `owner/name` or Azure DevOps `project/repo`; a repository belongs to one project). Projects without one show a **no repo** flag in the list and a banner on the project.
 
-With the **GitHub App** installed (an admin, *Work setup → GitHub App*), *Link repository* lists the organisation's repositories to pick from; such repositories get a **Synapse work items** check run on every push and pull request (success / neutral / failure by the policy, with the linked items listed), *Require check* turns that into a required status check on the main branch (added to an existing rule's checks, or a new rule with only that check; a rule without status checks is left for you to change), and an item's *Code* tab can **create a branch** in GitHub named after it.
+With the **GitHub App** installed (an admin, *Work setup → GitHub App*), *Link repository* lists the organisation's repositories to pick from; such repositories get a **SanchalanOS work items** check run on every push and pull request (success / neutral / failure by the policy, with the linked items listed), *Require check* turns that into a required status check on the main branch (added to an existing rule's checks, or a new rule with only that check; a rule without status checks is left for you to change), and an item's *Code* tab can **create a branch** in GitHub named after it.
 
 **Every project must have a repository** (*Work setup → GitHub App*, admins): when on, work items can't be created in an active project until a repository is linked. Tick *This project has no code* on projects that never will (consulting, events).
 
 Per repository a policy decides what happens to a commit or pull request that names no work item (`FLEET-12`) or change request (`FLEET-CR-3`):
 
-- **Enforce** — the CI check fails, so with branch protection (GitHub: required status check *Synapse work items / work-item*; Azure: required build validation) the PR cannot merge; the commit-msg hook refuses the commit on the developer's machine. GitHub / Azure cannot refuse the push itself from an outside service.
-- **Auto-create** — Synapse creates the item from the message: `feat:` story, `fix:` bug, `epic:` epic, `cr:` change request, `spike:` spike, `chore:`/`ci:`/`build:` chore, `docs:`/`refactor:`/`test:`/`perf:` task, `(scope)` → component; assigned to the author when they are on the project, placed in the active sprint (optional), labelled `from-git`. Once per commit.
+- **Enforce** — the CI check fails, so with branch protection (GitHub: required status check *SanchalanOS work items / work-item*; Azure: required build validation) the PR cannot merge; the commit-msg hook refuses the commit on the developer's machine. GitHub / Azure cannot refuse the push itself from an outside service.
+- **Auto-create** — SanchalanOS creates the item from the message: `feat:` story, `fix:` bug, `epic:` epic, `cr:` change request, `spike:` spike, `chore:`/`ci:`/`build:` chore, `docs:`/`refactor:`/`test:`/`perf:` task, `(scope)` → component; assigned to the author when they are on the project, placed in the active sprint (optional), labelled `from-git`. Once per commit.
 - **Warn** — recorded under *Commits and pull requests without a work item*, where each can be linked to a key or turned into an item.
 - **Off**.
 
@@ -130,7 +130,7 @@ Per repository a policy decides what happens to a commit or pull request that na
 
 ### Calls from the mailbox and recordings
 
-With Gmail or Outlook connected, the calendar (a week back to a month ahead) is read with each mailbox sync: meetings with a Zoom / Meet / Teams link or outside guests become calls, filed on the project their title, project code or guests' company points to — else under *Calls → Not filed*. Updates and cancellations follow; calls Synapse scheduled itself are not doubled. *My account → Meeting apps → Call invites from my mailbox* turns it off; *Calls → Check my invites* runs it now.
+With Gmail or Outlook connected, the calendar (a week back to a month ahead) is read with each mailbox sync: meetings with a Zoom / Meet / Teams link or outside guests become calls, filed on the project their title, project code or guests' company points to — else under *Calls → Not filed*. Updates and cancellations follow; calls SanchalanOS scheduled itself are not doubled. *My account → Meeting apps → Call invites from my mailbox* turns it off; *Calls → Check my invites* runs it now.
 
 Invitations that arrive as email attachments (`.ics` from Zoho, Webex, GoTo and other tools that never reach the calendar) are read too — recurring ones give each of their times from a week ago to a month ahead (skipped and moved times respected) — the same meeting from the calendar and the email is filed once (by its iCalendar UID); a cancellation (`METHOD:CANCEL`) cancels the call.
 

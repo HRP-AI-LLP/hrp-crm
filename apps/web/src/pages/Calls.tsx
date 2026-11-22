@@ -82,7 +82,7 @@ export function CallsPage() {
           ) : !data.calls.length ? (
             <Empty title={scope === 'unassigned' ? 'Nothing to file' : scope === 'upcoming' ? 'No upcoming calls' : 'No calls held yet'}>
               {scope === 'unassigned' ? (
-                'Meetings picked up from your Zoom, Google Meet or Teams accounts that Synapse could not match to a project land here.'
+                'Meetings picked up from your Zoom, Google Meet or Teams accounts that SanchalanOS could not match to a project land here.'
               ) : (
                 <>
                   Schedule calls from a project’s <strong>Calls</strong> section. <Link to="/projects">Open projects</Link>

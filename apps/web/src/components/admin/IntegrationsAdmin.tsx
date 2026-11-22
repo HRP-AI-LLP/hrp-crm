@@ -319,7 +319,7 @@ export function IntegrationsTab() {
         title="Gmail & Outlook"
         guide="mailbox"
         logo="@"
-        intro="Each person connects their own mailbox in My account. Mail with your customers is logged on their timeline, mail sent from Synapse goes from the person's own address, and meetings appear in their calendar."
+        intro="Each person connects their own mailbox in My account. Mail with your customers is logged on their timeline, mail sent from SanchalanOS goes from the person's own address, and meetings appear in their calendar."
       >
         <div className="integ-body">
           {!data.available.google && !data.available.microsoft && (

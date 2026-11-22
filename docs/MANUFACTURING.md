@@ -9,7 +9,7 @@ Manufacturing is a built-in app (Settings → Apps). It needs Inventory and Purc
 - quality checks;
 - batch and expiry tracking.
 
-When Synapse keeps the books, every step posts to the ledger.
+When SanchalanOS keeps the books, every step posts to the ledger.
 
 Switching it on adds two records, **Work orders** and **Job work**, and two roles:
 

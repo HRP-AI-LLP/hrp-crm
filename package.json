@@ -1,7 +1,7 @@
 {
-  "name": "hrp-synapse",
+  "name": "sanchalanos",
   "private": true,
-  "description": "HRP Synapse — multi-tenant, metadata-driven CRM by HRP AI LLP",
+  "description": "SanchalanOS — The AI operating system for Indian businesses. By HRP AI LLP.",
   "packageManager": "pnpm@10.28.0",
   "engines": {
     "node": ">=22"
@@ -17,16 +17,15 @@
     "setup": "node scripts/setup/provision.mjs",
     "setup:r2": "node scripts/setup/enable-r2.mjs",
     "local": "node scripts/local/local-dev.mjs",
-    "local:cloud": "node scripts/local/cloud-dev.mjs",
     "local:stop": "node scripts/local/stop.mjs",
     "local:admin": "node scripts/local/admin.mjs",
     "local:test": "node scripts/local/local-test.mjs",
     "dsc": "node scripts/local/dsc-signer.mjs",
-    "deploy:dev": "pnpm --filter @synapse/web build && pnpm --filter @synapse/api deploy:dev",
     "deploy:prod": "pnpm --filter @synapse/web build && pnpm --filter @synapse/api deploy:prod",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "gst:check": "node scripts/local/gsp-check.mjs",
-    "gst:ic-account": "node scripts/local/ic-account.mjs"
+    "gst:ic-account": "node scripts/local/ic-account.mjs",
+    "cloud:import": "node scripts/setup/import-local.mjs"
   },
   "devDependencies": {
     "@neondatabase/api-client": "^2.7.3",

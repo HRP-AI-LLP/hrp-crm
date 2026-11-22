@@ -122,7 +122,7 @@ export const APPS: Record<string, AppDefinition> = {
   books: {
     key: 'books',
     name: 'Books (accounting)',
-    description: 'Full double-entry accounting: chart of accounts and journals posted automatically from invoices, payments, bills and expenses; vendor bills, credits and payments with TDS; expenses and employee claims; banking with statement import, rules and reconciliation; recurring transactions, budgets, fixed assets and depreciation; trial balance, P&L, balance sheet, cash flow, GSTR-3B, GSTR-2B matching and TDS reports. Choose Synapse or Tally as the books of record.',
+    description: 'Full double-entry accounting: chart of accounts and journals posted automatically from invoices, payments, bills and expenses; vendor bills, credits and payments with TDS; expenses and employee claims; banking with statement import, rules and reconciliation; recurring transactions, budgets, fixed assets and depreciation; trial balance, P&L, balance sheet, cash flow, GSTR-3B, GSTR-2B matching and TDS reports. Choose SanchalanOS or Tally as the books of record.',
     objects: [
       { key: 'bill', label: 'Bill', plural: 'Bills', icon: 'file-text' },
       { key: 'vendor_payment', label: 'Vendor Payment', plural: 'Vendor Payments', icon: 'send' },

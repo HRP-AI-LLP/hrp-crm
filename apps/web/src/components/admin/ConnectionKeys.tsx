@@ -360,7 +360,7 @@ export function ConnectionKeysTab() {
   return (
     <div className="stack integ">
       <p className="muted" style={{ margin: 0 }}>
-        The keys Synapse needs to talk to Google, Microsoft, Zoom, GitHub, Meta, email, AI, GST and push services. Each has a guide to create it. Secret keys are encrypted and never shown again — only their last
+        The keys SanchalanOS needs to talk to Google, Microsoft, Zoom, GitHub, Meta, email, AI, GST and push services. Each has a guide to create it. Secret keys are encrypted and never shown again — only their last
         characters. A value saved here replaces the one in the server’s <code>.env</code>; Remove brings the <code>.env</code> value back.
       </p>
       {me.platformAdmin && (

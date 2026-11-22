@@ -544,7 +544,7 @@ export async function getItem(ctx: RecordCtx, projectId: string, taskId: string)
     watchers,
     watching: watchers.some((w) => w.user_id === ctx.principal.user.id),
     comments,
-    history: (history as Record<string, any>[]).map((h) => ({ id: h.id, field: h.field, from: pretty(h.field, h.old_value), to: pretty(h.field, h.new_value), at: h.at, actor: h.actor ?? 'Synapse' })),
+    history: (history as Record<string, any>[]).map((h) => ({ id: h.id, field: h.field, from: pretty(h.field, h.old_value), to: pretty(h.field, h.new_value), at: h.at, actor: h.actor ?? 'SanchalanOS' })),
     tests,
     level,
     branchName: `${t.work_type === 'bug' ? 'bugfix' : 'feature'}/${key}-${t.task_number}-${String(t.name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40)}`,

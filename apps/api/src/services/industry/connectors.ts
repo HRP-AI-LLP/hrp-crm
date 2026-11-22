@@ -167,13 +167,13 @@ export async function postChat(env: Env, i: Integration, msg: { title: string; t
                   { type: 'TextBlock', text: msg.title, weight: 'Bolder', size: 'Medium', wrap: true },
                   { type: 'TextBlock', text: msg.text, wrap: true },
                 ],
-                actions: msg.link ? [{ type: 'Action.OpenUrl', title: 'Open in HRP Synapse', url: msg.link }] : [],
+                actions: msg.link ? [{ type: 'Action.OpenUrl', title: 'Open in SanchalanOS', url: msg.link }] : [],
               },
             },
           ],
         }
       : i.provider === 'slack'
-        ? { text: `*${msg.title}*\n${msg.text}${msg.link ? `\n<${msg.link}|Open in HRP Synapse>` : ''}` }
+        ? { text: `*${msg.title}*\n${msg.text}${msg.link ? `\n<${msg.link}|Open in SanchalanOS>` : ''}` }
         : { text: `*${msg.title}*\n${msg.text}${msg.link ? `\n${msg.link}` : ''}` };
   await providerFetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 }
@@ -182,7 +182,7 @@ export async function testConnector(ctx: RecordCtx, env: Env, id: string) {
   assertConnectorAdmin(ctx);
   const i = await load(ctx.tx, ctx.tenantId, id);
   try {
-    if ((CHAT as readonly string[]).includes(i.provider)) await postChat(env, i, { title: 'HRP Synapse is connected', text: 'Alerts from your CRM will appear here.' });
+    if ((CHAT as readonly string[]).includes(i.provider)) await postChat(env, i, { title: 'SanchalanOS is connected', text: 'Alerts from your CRM will appear here.' });
     else if (i.provider === 'jira') await jira(env, i, '/rest/api/3/myself');
     else if (i.provider === 'azure_devops') await ado(env, i, '/_apis/projects?api-version=7.1');
     else if (i.provider === 'asana') await asana(env, i, '/users/me');

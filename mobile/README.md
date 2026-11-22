@@ -1,6 +1,6 @@
-# HRP Synapse on phones
+# SanchalanOS on phones
 
-Synapse ships in three layers. Each one wraps the same web app, so there's only one code base to maintain.
+SanchalanOS ships in three layers. Each one wraps the same web app, so there's only one code base to maintain.
 
 | Layer | What the user gets | Effort |
 | --- | --- | --- |
@@ -8,7 +8,7 @@ Synapse ships in three layers. Each one wraps the same web app, so there's only 
 | **Android app (Trusted Web Activity)** — `mobile/twa` | A Play Store listing. Chrome renders the app without browser UI, and push and location work. | About 1 hour plus Play Console review |
 | **Native shell (Capacitor)** — `mobile/capacitor` | Android and iOS store apps. Needed for the App Store and for later native plugins (background location, barcode scanner, contacts). | Half a day per platform |
 
-Both store apps load the live site (`https://hrpsynapse.hrpai.in`). A web deploy updates them instantly; there's no store resubmission for features.
+Both store apps load the live site (`https://www.sanchalan.hrpai.in`). A web deploy updates them instantly; there's no store resubmission for features.
 
 ## 1. Installable web app (already done)
 
@@ -28,7 +28,7 @@ Prerequisites: Node 20+, a JDK 17 and the Android SDK. Bubblewrap can download t
 ```bash
 npm i -g @bubblewrap/cli
 cd mobile/twa
-bubblewrap init --manifest https://hrpsynapse.hrpai.in/manifest.webmanifest   # answer prompts, or keep twa-manifest.json as provided
+bubblewrap init --manifest https://www.sanchalan.hrpai.in/manifest.webmanifest   # answer prompts, or keep twa-manifest.json as provided
 bubblewrap build                                                              # creates the keystore on first run and builds app-release-signed.apk / .aab
 ```
 
@@ -42,7 +42,7 @@ Next, make the site trust the app. Without this step Chrome shows a URL bar on t
    "ANDROID_APP_ID": "in.hrpai.synapse",
    "ANDROID_CERT_SHA256": "AB:CD:…"   // comma-separate several (upload key + Play signing key)
    ```
-3. Deploy. `https://hrpsynapse.hrpai.in/.well-known/assetlinks.json` now returns the statement.
+3. Deploy. `https://www.sanchalan.hrpai.in/.well-known/assetlinks.json` now returns the statement.
 4. Upload `app-release-bundle.aab` to Play Console (internal testing first).
 
 Keep `synapse-upload.keystore` and its passwords safe and **out of git** (it's in `.gitignore`). You can't update the app without them.
@@ -63,7 +63,7 @@ npx cap open android       # build / run / sign from Android Studio
 - **iOS:** add `NSLocationWhenInUseUsageDescription` and `NSCameraUsageDescription` to `ios/App/App/Info.plist`.
   - Web Push isn't delivered inside an iOS WKWebView. For iOS store builds, add `@capacitor/push-notifications` (APNs) when needed.
   - Until then, iPhone users who need reminders can use the home-screen web app.
-- To point a build at the dev environment, change `server.url` to `https://hrpsynapse-dev.hrpai.in/field`.
+- To point a build at a computer running `pnpm local`, change `server.url` to `http://<that computer's LAN address>:8787/field`.
 
 ### Android notifications (Firebase Cloud Messaging)
 

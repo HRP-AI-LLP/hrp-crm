@@ -5,7 +5,7 @@
  *           recipients match a CRM contact or open lead is logged on that record's timeline.
  *           Mail between colleagues and unknown senders is ignored. Each message is logged once
  *           per workspace (by its Message-ID), however many colleagues received it.
- *   send    mail written in Synapse goes out through the person's own mailbox, so replies come
+ *   send    mail written in SanchalanOS goes out through the person's own mailbox, so replies come
  *           back to them and appear in their Sent folder.
  *   events  CRM calendar events are mirrored into the owner's Google or Outlook calendar.
  */
@@ -402,7 +402,7 @@ export async function pushCalendarEvent(env: Env, tx: Tx, i: Integration, ev: Ca
     return null;
   }
   if (!ev) return null;
-  const desc = [ev.description ?? '', 'Created in HRP Synapse'].filter(Boolean).join('\n\n');
+  const desc = [ev.description ?? '', 'Created in SanchalanOS'].filter(Boolean).join('\n\n');
   const body = google
     ? {
         summary: ev.title,

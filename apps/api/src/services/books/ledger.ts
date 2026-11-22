@@ -134,7 +134,7 @@ export async function booksConfig(tx: Tx, tenantId: string): Promise<BooksConfig
   return (r as BooksConfig | null) ?? null;
 }
 
-/** Books are switched on and Synapse (not Tally) is the books of record: documents post journals. */
+/** Books are switched on and SanchalanOS (not Tally) is the books of record: documents post journals. */
 export async function postingOn(tx: Tx, tenantId: string): Promise<BooksConfig | null> {
   const c = await booksConfig(tx, tenantId);
   return c?.enabled && c.books_of_record === 'synapse' ? c : null;

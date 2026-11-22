@@ -122,8 +122,8 @@ export async function setupFiles(ctx: RecordCtx, projectId: string, id: string, 
   const allowNoKey = r.policy === 'auto_create' || r.policy === 'warn' || r.policy === 'off';
   const githubWorkflow = `# .github/workflows/synapse-work-items.yml — every push and pull request must name a ${key} work item
 # Add the repository secret SYNAPSE_TOKEN (Settings → Secrets and variables → Actions), then require
-# the "Synapse work items / work-item" check in the branch protection rule for ${r.default_branch}.
-name: Synapse work items
+# the "SanchalanOS work items / work-item" check in the branch protection rule for ${r.default_branch}.
+name: SanchalanOS work items
 on:
   push:
   pull_request:
@@ -181,7 +181,7 @@ steps:
       out=$(curl -sS -X POST "${url}" -H "authorization: Bearer $SYNAPSE_TOKEN" -H 'content-type: application/json' --data "$payload")
       echo "$out" | jq -r '.lines[]? // .error.message? // .'
       test "$(echo "$out" | jq -r '.ok')" = "true"
-    displayName: Every commit names a Synapse work item
+    displayName: Every commit names a SanchalanOS work item
     env:
       SYNAPSE_TOKEN: $(SYNAPSE_TOKEN)
       PR_ID: $(System.PullRequest.PullRequestId)
@@ -190,7 +190,7 @@ steps:
       BUILD_BRANCH: $(Build.SourceBranch)
 `;
   const commitMsgHook = `#!/bin/sh
-# Synapse commit-msg hook for ${r.repo}: every commit names a work item, e.g. "${key}-12 fix map tiles".
+# SanchalanOS commit-msg hook for ${r.repo}: every commit names a work item, e.g. "${key}-12 fix map tiles".
 # Install: save as .git/hooks/commit-msg and run  chmod +x .git/hooks/commit-msg
 # (or for the whole team: git config core.hooksPath .githooks and commit it in .githooks/commit-msg)
 msg_file="$1"
@@ -206,9 +206,9 @@ if [ -n "$key" ]; then
   exit 0
 fi
 ${allowNoKey
-  ? `echo "Synapse: no work item named — ${r.policy === 'auto_create' ? 'one will be created from this message (start it with feat:, fix:, cr:, chore: … to pick the type)' : 'the commit will be flagged'}."
+  ? `echo "SanchalanOS: no work item named — ${r.policy === 'auto_create' ? 'one will be created from this message (start it with feat:, fix:, cr:, chore: … to pick the type)' : 'the commit will be flagged'}."
 exit 0`
-  : `echo "✗ Synapse: name a work item in the commit message, e.g. \\"${key}-12 fix map tiles\\" or \\"${key}-CR-3 …\\","
+  : `echo "✗ SanchalanOS: name a work item in the commit message, e.g. \\"${key}-12 fix map tiles\\" or \\"${key}-CR-3 …\\","
 echo "  or commit on a branch named like feature/${key}-12-short-title."
 exit 1`}
 `;
@@ -477,7 +477,7 @@ export async function runCheck(env: Env, db: Db, repo: Repo, b: CheckBody) {
       texts: [c.message ?? '', b.branch ?? ''], author: c.author ?? null, authorEmail: c.email ?? null, url: c.url || web(`commit/${c.sha}`), branch: b.branch ?? null, at: null,
     });
   }
-  if (repo.policy === 'off') return { ok: true, policy: repo.policy, results: [], lines: ['Synapse: the work item policy is off for this repository.'] };
+  if (repo.policy === 'off') return { ok: true, policy: repo.policy, results: [], lines: ['SanchalanOS: the work item policy is off for this repository.'] };
   const results = await db.tx({ tenantId: repo.tenant_id }, async (tx) => {
     const out: CodeResult[] = [];
     for (const r of refs) out.push(await processCode(env, tx, repo, r, 'check'));
@@ -490,8 +490,8 @@ export async function runCheck(env: Env, db: Db, repo: Repo, b: CheckBody) {
   const lines = [
     ...results.map((r) => `${r.status === 'linked' ? '✓' : r.status === 'created' ? '＋' : r.status === 'skipped' ? '·' : '✗'} ${r.ref} ${r.title}${r.keys.length ? `  → ${r.keys.join(', ')}` : ''}${r.status === 'created' ? ' (created)' : ''}`),
     ...(missing.length
-      ? [repo.policy === 'enforce' ? `✗ ${missing.length} without a work item. Name one in the message (e.g. "${key}-12 …" or "${key}-CR-3 …"), or use a branch like feature/${key}-12-…, then amend or push again.` : `! ${missing.length} without a work item (recorded in Synapse).`]
-      : ['✓ Every commit and pull request is linked to a Synapse work item.']),
+      ? [repo.policy === 'enforce' ? `✗ ${missing.length} without a work item. Name one in the message (e.g. "${key}-12 …" or "${key}-CR-3 …"), or use a branch like feature/${key}-12-…, then amend or push again.` : `! ${missing.length} without a work item (recorded in SanchalanOS).`]
+      : ['✓ Every commit and pull request is linked to a SanchalanOS work item.']),
   ];
   return { ok, policy: repo.policy, results, lines };
 }

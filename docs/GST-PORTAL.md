@@ -1,6 +1,6 @@
 # GST portal, e-invoice and e-way bill (through a GSP)
 
-Synapse connects to the GST portal through a GST provider. Three are built in:
+SanchalanOS connects to the GST portal through a GST provider. Three are built in:
 
 | | **gstinapi.in** — recommended | **India Compliance** | **WhiteBooks** |
 |---|---|---|---|
@@ -11,7 +11,7 @@ Synapse connects to the GST portal through a GST provider. Three are built in:
 
 The server uses whichever has keys (gstinapi.in, then India Compliance, then WhiteBooks); `GST_PROVIDER=gstinapi`, `indiacompliance` or `whitebooks` in `.env` picks one.
 
-**Paid answers are kept.** Everything a provider returns is stored in Synapse's database: lookups, return history, GSTR-2B and ledgers in a cache that is read first, and every call's answer with its activity log. Screens show *Saved copy from …*; the provider is called again only when you press **Refresh from the portal** (or *Update …* on the overview). Filing steps always go to the portal.
+**Paid answers are kept.** Everything a provider returns is stored in SanchalanOS's database: lookups, return history, GSTR-2B and ledgers in a cache that is read first, and every call's answer with its activity log. Screens show *Saved copy from …*; the provider is called again only when you press **Refresh from the portal** (or *Update …* on the overview). Filing steps always go to the portal.
 
 From **Billing & GST → GST portal** you can:
 
@@ -91,7 +91,7 @@ On a deployed Worker, set the same names as secrets with `wrangler secret put �
    - Choose **Yes** and a duration (up to 30 days).
    - If asked, choose your provider's GSP.
    - Without this, the OTP request fails.
-2. In Synapse, go to **Billing & GST → GST portal**, add the registration and fill in:
+2. In SanchalanOS, go to **Billing & GST → GST portal**, add the registration and fill in:
    - **GSTIN** (*Look up* fills in the legal name from the portal);
    - **GST portal username**;
    - **Authorised signatory's PAN**, used for EVC;
@@ -115,12 +115,12 @@ Open **Returns → Prepare a return**, or press **Prepare** on a line of the cal
 | 3. Check status | Processed, or the portal's error report | ✓ | ✓ |
 | 4. Proceed to file / submit | ✓ (the portal builds the summary) | India Compliance: Submit (freezes the figures) | GSTR-6: submit |
 | 5. Fetch summary | ✓ | ✓ (with the liability) | ✓ |
-| 6. Offset liability | — | Synapse proposes it from the ledgers; you check it and send it | — |
+| 6. Offset liability | — | SanchalanOS proposes it from the ledgers; you check it and send it | — |
 | 7. File | EVC (OTP to the signatory); DSC with WhiteBooks | EVC; DSC with WhiteBooks | EVC or DSC |
 
-- **What gets filed** is the summary the portal returns, not Synapse's own figures. Read it before filing.
+- **What gets filed** is the summary the portal returns, not SanchalanOS's own figures. Read it before filing.
 - **Download JSON** gives you the exact portal JSON. You can upload it by hand in the GST offline tool instead.
-- A filed return keeps its **ARN**, and Synapse will not prepare it again.
+- A filed return keeps its **ARN**, and SanchalanOS will not prepare it again.
 - Every call is logged under **Activity**, with who made it.
 
 ### How GSTR-1 is built
@@ -140,7 +140,7 @@ Warnings such as *missing HSN* are shown before anything is sent.
 
 ### GSTR-3B offset
 
-Synapse reads the liability from the summary and the balances from your ledgers. Then:
+SanchalanOS reads the liability from the summary and the balances from your ledgers. Then:
 
 - **Forward-charge tax** is paid from ITC: IGST credit first, then CGST and SGST credit. CGST and SGST credit never cross.
 - **What is left**, reverse-charge tax, interest and late fee are paid from the cash ledger.
@@ -162,13 +162,13 @@ On an issued invoice, the **E-invoice & e-way bill** panel offers these actions.
 
 - **Generate IRN**
   - Sends the invoice's e-invoice JSON (schema 1.1) to the IRP and saves the IRN, the acknowledgement and the signed QR code.
-  - If the IRN already exists, for example because it was generated on the IRP portal, Synapse fetches it.
+  - If the IRN already exists, for example because it was generated on the IRP portal, SanchalanOS fetches it.
 - **E-way bill**
   - With a live IRN, it is generated through the IRP.
   - Otherwise, it is generated directly on the e-way bill system from the invoice. The invoice needs goods lines with HSN codes, and both PIN codes.
   - A distance of 0 lets the system work out the distance from the PIN codes.
 - **Update vehicle** (Part B): a new vehicle, for example after a breakdown or transhipment.
-- **Cancel EWB** and **Cancel IRN**: allowed within 24 hours. Cancel the e-way bill first. After cancelling an IRN, cancel the invoice in Synapse too.
+- **Cancel EWB** and **Cancel IRN**: allowed within 24 hours. Cancel the e-way bill first. After cancelling an IRN, cancel the invoice in SanchalanOS too.
 
 ## Who can do what
 
@@ -181,13 +181,13 @@ On an issued invoice, the **E-invoice & e-way bill** panel offers these actions.
 
 - **Due dates** are the regular ones. They are not adjusted for extensions; check gst.gov.in.
   - Quarterly GSTR-3B is due on the 22nd or the 24th, depending on the state.
-  - The calendar marks a return filed when it was filed from Synapse, or when *Update filed returns from the portal* finds it filed.
+  - The calendar marks a return filed when it was filed from SanchalanOS, or when *Update filed returns from the portal* finds it filed.
   - **GSTR-2B for a range** (Ledgers, notices & payments): last month, last quarter, this FY to date, any FY, from–to, or everything since July 2017. Months already kept cost nothing; the screen says how many need a paid call before it starts, stops on an expired session or no credits, and lists every saved month with its match against bills. Click a month to see each supplier document (matched / differences / not in your books), the bills suppliers didn't report, and download it as CSV or the portal's JSON — read from the database, no credit. From there: **Sync with books** matches the month again (after you enter or correct bills); **Add to books** enters documents that are missing as bills — the supplier is added from its GSTIN when new, the bill carries the supplier's invoice number and date and one line at the implied GST rate, posted or as a draft; **Link to a bill** matches a document to a bill whose number was typed differently, and the link is kept for later fetches. Credit and debit notes go in as vendor credits on the bill.
-  - Click any row of the calendar (or *View* on a filed one) to open that return: the portal's record (ARN, date, mode), Synapse's own filing if there is one, and what the books show for that month (GSTR-1 totals and counts, GSTR-3B tables) — all without a paid call. gstinapi.in gives the filed list but not a filed return's figures; with a provider that has the GSTR-1 / GSTR-3B summary views, *Fetch from the portal* gets them once and keeps them.
+  - Click any row of the calendar (or *View* on a filed one) to open that return: the portal's record (ARN, date, mode), SanchalanOS's own filing if there is one, and what the books show for that month (GSTR-1 totals and counts, GSTR-3B tables) — all without a paid call. gstinapi.in gives the filed list but not a filed return's figures; with a provider that has the GSTR-1 / GSTR-3B summary views, *Fetch from the portal* gets them once and keeps them.
 - **The schema follows GSTN's API** (2025 format: HSN split into B2B and B2C). If WhiteBooks or GSTN change a field, the portal's error report says which one. You can also download the JSON, fix it, and upload it as portal JSON.
 - **DSC filing** (WhiteBooks only) needs the signatory's DSC registered on the GST portal and WhiteBooks' signing utility. EVC needs nothing extra.
 - **India Compliance has no returns sandbox.** Saving to the portal is safe (you can save again or reset GSTR-1); *Proceed to file* / *Submit* freezes the figures and *File* is final. Check the summary each time.
-- **Encryption with India Compliance:** Synapse encrypts with GSTN's public certificate (fetched from the provider), AES-256 session keys and HMACs, and checks the HMAC on every response.
+- **Encryption with India Compliance:** SanchalanOS encrypts with GSTN's public certificate (fetched from the provider), AES-256 session keys and HMACs, and checks the HMAC on every response.
 
 ## API
 

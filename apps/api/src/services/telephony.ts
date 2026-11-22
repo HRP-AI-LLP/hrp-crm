@@ -73,7 +73,7 @@ export async function clickToCall(env: Env, ctx: RecordCtx, i: Integration, targ
   if (!['lead', 'contact', 'account', 'deal', 'ticket'].includes(target.object)) throw badRequest('Calls can be placed from leads, contacts, accounts, deals and tickets');
   const { row } = await loadRow(ctx, target.object, target.id, 'read');
   const me = await ctx.tx.one<{ phone: string | null }>(`select phone from users where tenant_id = $1 and id = $2`, [ctx.tenantId, ctx.principal.user.id]);
-  if (!me?.phone) throw badRequest('Add your phone number in My account first — Synapse rings it before connecting the customer');
+  if (!me?.phone) throw badRequest('Add your phone number in My account first — SanchalanOS rings it before connecting the customer');
   // only the record's own number can be dialled: no free-form numbers (toll fraud)
   let to = (row.phone as string | null) ?? (row.customer_phone as string | null) ?? null;
   if (!to && target.object === 'deal' && row.contact_id) to = (await ctx.tx.one<{ phone: string | null }>(`select phone from contacts where tenant_id = $1 and id = $2`, [ctx.tenantId, row.contact_id]))?.phone ?? null;

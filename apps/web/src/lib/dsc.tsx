@@ -1,6 +1,6 @@
 /**
  * Signing a document with a digital signature certificate: the document becomes a PDF in its
- * template, then either Synapse signs it with the uploaded .pfx, or the local signer signs it with the
+ * template, then either SanchalanOS signs it with the uploaded .pfx, or the local signer signs it with the
  * USB token (PIN typed here, sent only to the signer on this computer).
  */
 import { createRoot } from 'react-dom/client';
@@ -89,8 +89,8 @@ export async function localSigner(tenantId: string, paired: { id: string }[]) {
 }
 
 /**
- * USB token: Synapse prepares the PDF and a ticket for its 32-byte digest; the signer on this computer signs
- * that digest with the token (PIN typed here, sent only to the signer); Synapse puts the signature in and
+ * USB token: SanchalanOS prepares the PDF and a ticket for its 32-byte digest; the signer on this computer signs
+ * that digest with the token (PIN typed here, sent only to the signer); SanchalanOS puts the signature in and
  * checks it.
  */
 export async function signWithToken(kind: string, id: string, certificateId: string, pin: string, me: { tenant: { id: string } }, paired: { id: string }[]) {
@@ -101,7 +101,7 @@ export async function signWithToken(kind: string, id: string, certificateId: str
   return post<Json>(`/api/v1/documents/${kind}/${id}/dsc/token`, { ticket: prep.ticket, prepared: prep.prepared, signature: signed.signature });
 }
 
-/** USB token signing of an attached file (Synapse prepares the file's PDF; the signer here signs its digest). */
+/** USB token signing of an attached file (SanchalanOS prepares the file's PDF; the signer here signs its digest). */
 export async function signFileWithToken(fileId: string, certificateId: string, pin: string, placement: { page: string | number; position: string }, me: { tenant: { id: string } }, paired: { id: string }[]) {
   const signerId = await localSigner(me.tenant.id, paired);
   const prep = await post<{ ticket: string; prepared: string }>(`/api/v1/files/${fileId}/dsc/token-prepare`, { certificateId, signerId, ...placement });

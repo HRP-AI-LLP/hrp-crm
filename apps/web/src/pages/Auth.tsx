@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { BRAND } from '@synapse/shared';
 import { get, getWorkspace, post, setWorkspace } from '../lib/api';
 import { useAuth } from '../lib/auth';
 
@@ -25,15 +26,17 @@ function Art() {
           <img src="/logo-mark.png" alt="HRP AI" style={{ width: 36, height: 36 }} />
         </span>
         <div>
-          <b style={{ color: '#fff', fontSize: 17, display: 'block' }}>HRP Synapse</b>
-          <span style={{ color: '#7dd3fc', fontSize: 13 }}>by HRP AI LLP</span>
+          <b style={{ color: '#fff', fontSize: 17, display: 'block' }}>{BRAND.name}</b>
+          <span style={{ color: '#7dd3fc', fontSize: 13 }}>by {BRAND.company}</span>
         </div>
       </div>
       <div>
-        <h1>Every conversation, connected.</h1>
-        <p>Leads, deals and customer messages in one place, with AI that tells your team who to call next and why.</p>
+        <h1>{BRAND.tagline}.</h1>
+        <p>{BRAND.pitch}</p>
       </div>
-      <p className="small">HRP AI LLP · Where humans &amp; machines think together</p>
+      <p className="small">
+        {BRAND.company} · {BRAND.companyLine}
+      </p>
     </div>
   );
 }
@@ -145,7 +148,7 @@ export function LoginPage() {
             <Link to={`/forgot-password${ws ? `?workspace=${encodeURIComponent(ws)}` : ''}`}>Forgot your password?</Link>
             {probe.data?.signupEnabled && (
               <>
-                {' · '}New to Synapse? <Link to="/signup">Create a workspace</Link>
+                {' · '}New to SanchalanOS? <Link to="/signup">Create a workspace</Link>
               </>
             )}
           </p>

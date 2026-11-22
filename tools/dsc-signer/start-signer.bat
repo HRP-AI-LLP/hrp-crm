@@ -1,5 +1,5 @@
 @echo off
-rem Starts the HRP Synapse DSC signer (keep this window open while signing).
+rem Starts the SanchalanOS DSC signer (keep this window open while signing).
 rem pnpm local starts it for you; this is for computers that only sign.
 rem Needs only Python and the token driver: nothing to install.
 cd /d "%~dp0"

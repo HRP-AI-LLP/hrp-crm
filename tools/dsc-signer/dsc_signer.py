@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-HRP Synapse DSC signer: signs PDFs with a digital signature certificate on a USB token (ePass2003,
-ProxKey, Watchdata, HyperPKI …) for your Synapse workspace only.
+SanchalanOS DSC signer: signs PDFs with a digital signature certificate on a USB token (ePass2003,
+ProxKey, Watchdata, HyperPKI …) for your SanchalanOS workspace only.
 
-The key never leaves the token. Synapse asks this signer to sign one PDF at a time with a ticket it
+The key never leaves the token. SanchalanOS asks this signer to sign one PDF at a time with a ticket it
 made with the pairing secret; the signer checks the ticket (made by your workspace, for this exact PDF,
 this certificate, not expired), asks for nothing else, and returns the signed PDF. Requests from other
 websites are refused, and requests without a valid ticket are refused.
@@ -14,7 +14,7 @@ websites are refused, and requests without a valid ticket are refused.
 
 Needs only Python 3.10+ and the token maker's driver: no packages to install. The token is reached
 through Python's own ctypes, so application-control policies that block unsigned add-on files do not
-apply. Synapse prepares the PDF; the signer only signs its 32-byte digest, and only with a ticket.
+apply. SanchalanOS prepares the PDF; the signer only signs its 32-byte digest, and only with a ticket.
 """
 from __future__ import annotations
 
@@ -123,9 +123,9 @@ def check_ticket(cfg: dict, ticket: str) -> dict:
     if not hmac.compare_digest(good, mac):
         raise PermissionError("The ticket was not made by the paired workspace")
     if payload.get("exp", 0) < time.time():
-        raise PermissionError("The ticket expired: sign again from Synapse")
+        raise PermissionError("The ticket expired: sign again from SanchalanOS")
     if payload.get("v") != 2 or len(bytes.fromhex(payload.get("d", ""))) != 32:
-        raise PermissionError("This ticket is from another version of Synapse: reload the page and sign again")
+        raise PermissionError("This ticket is from another version of SanchalanOS: reload the page and sign again")
     return payload
 
 
@@ -462,7 +462,7 @@ def _sign_digest(lib: str, pin: str, payload: dict) -> bytes:
             return p.sign_rsa(h, keys[0], digest_info)
         finally:
             p.close(h)
-    raise PermissionError("The certificate Synapse asked for is not on the plugged-in token")
+    raise PermissionError("The certificate SanchalanOS asked for is not on the plugged-in token")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -499,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if not self._origin_ok():
-            return self._send(403, {"error": "This signer only answers your paired Synapse"})
+            return self._send(403, {"error": "This signer only answers your paired SanchalanOS"})
         if self.path == "/v1/status":
             cfg = load_config()
             return self._send(200, {"ok": True, "version": VERSION, "driver": bool(self._lib(cfg, False)), "signers": [{"tenant": p["tenant"], "signer": p["signer"]} for p in cfg["pairings"]]})
@@ -526,7 +526,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._origin_ok():
-            return self._send(403, {"error": "This signer only answers your paired Synapse"})
+            return self._send(403, {"error": "This signer only answers your paired SanchalanOS"})
         cfg = load_config()
         try:
             body = self._body()
@@ -560,7 +560,7 @@ def diag(cfg: dict) -> None:
     import platform
     import struct
 
-    print(f"Synapse DSC signer {VERSION}; Python {platform.python_version()} {struct.calcsize('P') * 8}-bit on {platform.platform()}")
+    print(f"SanchalanOS DSC signer {VERSION}; Python {platform.python_version()} {struct.calcsize('P') * 8}-bit on {platform.platform()}")
     cands = all_libs(cfg, None)
     if _WIN:
         for pat in ("*pkcs11*.dll", "*p11*.dll", "*csp11*.dll"):
@@ -600,11 +600,11 @@ def diag(cfg: dict) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="HRP Synapse DSC signer (USB token)")
+    ap = argparse.ArgumentParser(description="SanchalanOS DSC signer (USB token)")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("pair", help="pair with a Synapse workspace (code from Organisation > Digital signatures)")
+    p = sub.add_parser("pair", help="pair with a SanchalanOS workspace (code from Organisation > Digital signatures)")
     p.add_argument("code")
-    p.add_argument("--origin", required=True, action="append", help="your Synapse address, e.g. https://acme.synapse.example or http://localhost:8787 (repeat for several)")
+    p.add_argument("--origin", required=True, action="append", help="your SanchalanOS address, e.g. https://acme.synapse.example or http://localhost:8787 (repeat for several)")
     s = sub.add_parser("serve", help="run the signer")
     s.add_argument("--lib", help="the token's PKCS#11 library (.dll / .so)")
     s.add_argument("--port", type=int, default=None)
@@ -620,7 +620,7 @@ def main() -> None:
         m = re.fullmatch(r"([0-9a-f-]{36})\.([0-9a-f-]{36})\.([A-Za-z0-9_-]{20,})", a.code.strip())
         if not m:
             raise SystemExit(
-                "That is not a pairing code. In Synapse open Organisation > Digital signatures (DSC) > Pair a signer,\n"
+                "That is not a pairing code. In SanchalanOS open Organisation > Digital signatures (DSC) > Pair a signer,\n"
                 "then copy the whole command it shows (it starts with: pnpm dsc pair) and run it here."
             )
         tenant, signer, secret = m.groups()
@@ -648,7 +648,7 @@ def main() -> None:
             raise SystemExit(f"Port {port} is in use: the signer is probably already running.")
         srv.lib_override = a.lib  # type: ignore[attr-defined]
         origins = sorted(set().union(*(origins_of(p) for p in cfg["pairings"]))) if cfg["pairings"] else []
-        print(f"Synapse DSC signer {VERSION} on http://127.0.0.1:{port}")
+        print(f"SanchalanOS DSC signer {VERSION} on http://127.0.0.1:{port}")
         libs = all_libs(cfg, a.lib)
         print(f"  token drivers: {', '.join(Path(x).name for x in libs) if libs else 'none found yet (install the token driver, or pass --lib)'}")
         print(f"  answering:    {', '.join(origins) if origins else 'nobody yet: pair it from Organisation > Digital signatures'}")

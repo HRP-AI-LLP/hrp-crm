@@ -15,7 +15,7 @@ export function SolutionsPanel() {
       <div>
         <h3 style={{ margin: 0 }}>Industry solutions</h3>
         <p className="muted small" style={{ margin: '4px 0 0' }}>
-          One click sets Synapse up the way your kind of business works: lead fields, the deal pipeline, the apps you need, your usual payment plan, the installation checklist and KPI targets.
+          One click sets SanchalanOS up the way your kind of business works: lead fields, the deal pipeline, the apps you need, your usual payment plan, the installation checklist and KPI targets.
         </p>
       </div>
       <div className="solution-grid">

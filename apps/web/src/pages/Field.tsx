@@ -299,7 +299,7 @@ function SetupCards() {
     <div className="day-setup">
       {showInstall && (
         <div>
-          <b>Install Synapse on this phone</b>
+          <b>Install SanchalanOS on this phone</b>
           <p className="muted small">{inst.canInstall ? 'Opens full-screen from your home screen and works with a weak signal.' : 'In Safari tap Share, then “Add to Home Screen”.'}</p>
           {inst.canInstall && (
             <button className="btn primary sm" onClick={() => void inst.install()}>

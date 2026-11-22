@@ -38,11 +38,24 @@ import { securityRoutes } from './routes/security';
 import { connectionKeyRoutes } from './routes/connection-keys';
 import { withPlatformKeys } from './services/connection-keys';
 import { Db } from './lib/db';
+import { markDbAwake } from './services/cron-plan';
 
 export function createApp() {
   const app = new Hono<AppEnv>();
 
   app.use('/api/*', requestContext);
+  // remembers that the database is awake, so the cron can do its background work for free
+  app.use('/api/*', async (c, next) => {
+    await next();
+    let wait: ((p: Promise<unknown>) => void) | undefined;
+    try {
+      const ctx = c.executionCtx;
+      wait = (p) => ctx.waitUntil(p);
+    } catch {
+      /* no execution context (tests) */
+    }
+    markDbAwake(c.env, wait);
+  });
   // keys saved in Settings → Connection keys take the place of the .env values
   app.use('/api/*', async (c, next) => {
     c.env = await withPlatformKeys(c.env, c.var.db);
@@ -153,7 +166,7 @@ export function createApp() {
   // Everything else is the SPA (Workers Static Assets with SPA fallback)
   app.all('*', async (c) => {
     if (c.env.ASSETS) return c.env.ASSETS.fetch(c.req.raw);
-    return c.text('HRP Synapse API', 200);
+    return c.text('SanchalanOS API', 200);
   });
 
   app.onError(onError);

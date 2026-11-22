@@ -392,7 +392,7 @@ function PlanModal({ p, onClose, onSave }: { p: Json; onClose: () => void; onSav
         </label>
         <label className="field">
           Product
-          <input value={f.product} onChange={set('product')} placeholder="e.g. Synapse CRM" />
+          <input value={f.product} onChange={set('product')} placeholder="e.g. SanchalanOS CRM" />
         </label>
         <label className="field">
           Billed

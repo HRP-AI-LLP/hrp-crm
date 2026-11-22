@@ -1,6 +1,6 @@
 /**
  * Copilot: the daily workspace. Today's meetings with their brief and debrief status, what to do
- * first, action items from meetings and calls, the insights feed, Ask Synapse, and (for anyone
+ * first, action items from meetings and calls, the insights feed, Ask SanchalanOS, and (for anyone
  * who can see more than their own deals) a pipeline review.
  */
 import { objectPerm } from '@synapse/shared';
@@ -56,7 +56,7 @@ export function CopilotPage() {
           <h1>
             {greet}, {me?.user.fullName.split(' ')[0]}
           </h1>
-          <p>Your meetings, follow-ups and what Synapse noticed, in one place.</p>
+          <p>Your meetings, follow-ups and what SanchalanOS noticed, in one place.</p>
         </div>
       </div>
       <AskBox />

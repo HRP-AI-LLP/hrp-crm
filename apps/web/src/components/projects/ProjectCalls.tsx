@@ -58,7 +58,7 @@ export function ProjectCalls({ id }: { id: string }) {
     <div className="stack">
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <p className="muted small" style={{ margin: 0, maxWidth: 640 }}>
-          Calls with the client or the team. Add the transcript — or let Zoom, Google Meet or Teams send it — and Synapse writes the minutes: what was discussed, requirements, decisions and who does what.
+          Calls with the client or the team. Add the transcript — or let Zoom, Google Meet or Teams send it — and SanchalanOS writes the minutes: what was discussed, requirements, decisions and who does what.
         </p>
         {data.canSchedule && (
           <div className="row" style={{ gap: 6 }}>
@@ -397,7 +397,7 @@ export function CallDetail({ id, onClose, invalidate = [] }: { id: string; onClo
         <Recordings id={id} count={c.recordings} canEdit={c.canEdit} hasTranscript={c.hasTranscript} onChanged={refresh} />
         {c.transcriptStatus === 'waiting' && !c.hasTranscript && (
           <div className="callout info small">
-            {MEET_LABEL[c.meeting?.provider] ?? 'The meeting app'} makes the transcript once the call is over; Synapse checks for it and analyses it automatically. Turn on transcription / cloud recording in the meeting.
+            {MEET_LABEL[c.meeting?.provider] ?? 'The meeting app'} makes the transcript once the call is over; SanchalanOS checks for it and analyses it automatically. Turn on transcription / cloud recording in the meeting.
           </div>
         )}
 
@@ -418,7 +418,7 @@ export function CallDetail({ id, onClose, invalidate = [] }: { id: string; onClo
             <Minutes call={c} a={a} canEdit={c.canEdit} onChange={refresh} />
           ) : c.hasTranscript ? (
             <Empty title="Transcript added" action={c.canEdit ? <button className="btn primary" disabled={busy === 'analyse'} onClick={analyse}>{busy === 'analyse' ? 'Analysing…' : 'Analyse transcript'}</button> : undefined}>
-              Synapse reads it and writes the summary, requirements, decisions and each person's actions.
+              SanchalanOS reads it and writes the summary, requirements, decisions and each person's actions.
             </Empty>
           ) : c.canEdit ? (
             <TranscriptInput id={id} onSaved={refresh} />
@@ -689,7 +689,7 @@ function Recordings({ id, count, canEdit, hasTranscript, onChanged }: { id: stri
       <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
         <div>
           <strong>Recordings</strong>
-          <div className="muted small">{hasTranscript ? 'Kept with the call.' : 'Upload the recording of a call that already happened — Synapse transcribes it (who said what) and writes the minutes. Long recordings are cut into parts in your browser.'}</div>
+          <div className="muted small">{hasTranscript ? 'Kept with the call.' : 'Upload the recording of a call that already happened — SanchalanOS transcribes it (who said what) and writes the minutes. Long recordings are cut into parts in your browser.'}</div>
         </div>
         {canEdit && (
           <div className="row" style={{ gap: 8 }}>

@@ -856,7 +856,7 @@ function Dsc({ d }: { d: Json }) {
   return (
     <div className="stack">
       <p className="muted small" style={{ margin: 0 }}>
-        Sign invoices, orders and purchase orders with your digital signature certificate (Class 3 DSC). The signed PDF shows as signed in Adobe Reader and is kept with the document. A certificate kept as a <b>.pfx file</b> is stored encrypted and is never handed back — it signs only from Synapse. A certificate on a <b>USB token</b> stays on the token: the DSC signer on the computer with the token signs only what this Synapse asks it to.
+        Sign invoices, orders and purchase orders with your digital signature certificate (Class 3 DSC). The signed PDF shows as signed in Adobe Reader and is kept with the document. A certificate kept as a <b>.pfx file</b> is stored encrypted and is never handed back — it signs only from SanchalanOS. A certificate on a <b>USB token</b> stays on the token: the DSC signer on the computer with the token signs only what this SanchalanOS asks it to.
       </p>
       {d.canManage && (
         <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
@@ -1052,7 +1052,7 @@ function PfxModal({ d, sigs, onClose, onSaved }: { d: Json; sigs: Json[]; onClos
         <WhoSigns users={d.users} value={f.userIds} onChange={(userIds) => setF({ ...f, userIds })} />
         <SigPick sigs={sigs} value={f.signatureId} onChange={(signatureId) => setF({ ...f, signatureId })} />
         <p className="muted small" style={{ margin: 0 }}>
-          The file and password are encrypted and kept by Synapse; nobody can download them again. Remove the certificate here to delete them.
+          The file and password are encrypted and kept by SanchalanOS; nobody can download them again. Remove the certificate here to delete them.
         </p>
       </div>
     </Modal>

@@ -9,6 +9,7 @@ import type { AppEnv } from '../env';
 import { badRequest } from '../lib/errors';
 import { requireAdmin } from '../middleware';
 import * as ck from '../services/connection-keys';
+import { POLL_KEY } from '../services/cron-plan';
 
 const scopeOf = (v: string | undefined) => z.enum(['platform', 'workspace']).parse(v ?? 'platform');
 
@@ -39,6 +40,11 @@ export const connectionKeyRoutes = new Hono<AppEnv>()
     const b = z.object({ scope: z.enum(['platform', 'workspace']), values: z.record(z.string().regex(/^[A-Z][A-Z0-9_]{1,60}$/), z.string().max(20_000).nullable()) }).parse(await c.req.json());
     await guard(c, b.scope);
     const out = await ck.saveKeys(c.env, c.var.db, b.scope, c.var.tenant.id, c.var.principal.user.id, b.values);
+    // the 5-minute cron reads this one from KV, before it decides to wake the database
+    if (b.scope === 'platform' && 'CRON_POLL_MINUTES' in b.values) {
+      const v = b.values.CRON_POLL_MINUTES;
+      await (v ? c.env.CACHE_KV?.put(POLL_KEY, v) : c.env.CACHE_KV?.delete(POLL_KEY))?.catch(() => undefined);
+    }
     // never the values themselves
     await audit(c, b.scope, { keys: Object.fromEntries(Object.entries(b.values).map(([k, v]) => [k, v ? 'set' : 'removed'])) });
     return c.json(out);

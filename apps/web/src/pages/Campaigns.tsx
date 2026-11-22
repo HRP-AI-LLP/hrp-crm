@@ -59,7 +59,7 @@ function CampaignList() {
       {!q.data ? (
         <Spinner />
       ) : !q.data.items.length ? (
-        <Empty title="No campaigns yet">Festive offers, new collections, service reminders: pick an audience, a template and send. Synapse skips anyone without consent or who opted out.</Empty>
+        <Empty title="No campaigns yet">Festive offers, new collections, service reminders: pick an audience, a template and send. SanchalanOS skips anyone without consent or who opted out.</Empty>
       ) : (
         <section className="panel">
           <table className="data">

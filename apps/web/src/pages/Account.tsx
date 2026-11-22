@@ -38,7 +38,7 @@ function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void 
         ))}
       </ol>
       <div className="row">
-        <button className="btn" onClick={() => downloadText('hrp-synapse-recovery-codes.txt', `HRP Synapse recovery codes\n\n${codes.join('\n')}\n`, 'text/plain')}>
+        <button className="btn" onClick={() => downloadText('hrp-synapse-recovery-codes.txt', `SanchalanOS recovery codes\n\n${codes.join('\n')}\n`, 'text/plain')}>
           Download
         </button>
         <button className="btn" onClick={() => navigator.clipboard?.writeText(codes.join('\n'))}>

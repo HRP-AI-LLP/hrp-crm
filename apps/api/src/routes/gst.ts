@@ -86,7 +86,7 @@ export const gstRoutes = new Hono<AppEnv>()
 
   // ------------------------------------------------------------ dashboard
   .get('/gst/connections/:id/overview', async (c) => c.json(await gst.overview(deps(c, true), id(c))))
-  // one return for one period: the portal's record, Synapse's filing and the books' figures (no provider call)
+  // one return for one period: the portal's record, SanchalanOS's filing and the books' figures (no provider call)
   .get('/gst/connections/:id/returns/:type/:period', async (c) => {
     const period = c.req.param('period');
     if (!/^\d{6}$/.test(period)) throw badRequest('period is MMYYYY');

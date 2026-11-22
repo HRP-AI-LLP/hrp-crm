@@ -1,7 +1,7 @@
 /**
  * The USB-token DSC signer (tools/dsc-signer) for local runs.
  *
- * `pnpm local` and `pnpm local:cloud` call startDscSigner(): it starts `dsc_signer.py serve` in the
+ * `pnpm local` calls startDscSigner(): it starts `dsc_signer.py serve` in the
  * background. The signer needs only Python and the token's driver (it reaches the token through Python's
  * own ctypes), so there is nothing to install and no unsigned add-on file for an application-control
  * policy to block. Any failure only prints a hint: the app never waits for or depends on the signer.

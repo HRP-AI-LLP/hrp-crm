@@ -6,7 +6,7 @@ import type { Job } from './services/jobs';
 export interface Env {
   // --- config vars (wrangler.jsonc "vars") ---
   APP_ENV: 'local' | 'dev' | 'production';
-  /** the shared app hostname, e.g. hrpsynapse.hrpai.in (dev: hrpsynapse-dev.hrpai.in).
+  /** the shared app hostname, e.g. www.sanchalan.hrpai.in (not set when running on this computer).
    *  On this host the workspace is chosen at sign-in and sent as X-Tenant. */
   APP_HOST?: string;
   /** parent for optional per-workspace vanity hosts: <slug>.<BASE_DOMAIN> (normally = APP_HOST) */
@@ -44,7 +44,7 @@ export interface Env {
   CF_TENANT_DOMAINS_TOKEN?: string;
   /** optional: Resend API key for invitations and password resets (free tier: 3,000 mails/month) */
   RESEND_API_KEY?: string;
-  /** sender for platform mail, e.g. "HRP Synapse <no-reply@hrpai.in>" (domain verified in Resend) */
+  /** sender for platform mail, e.g. "SanchalanOS <no-reply@hrpai.in>" (domain verified in Resend) */
   MAIL_FROM?: string;
   /** web push (installable app): VAPID key pair — public as a var, private as a secret */
   VAPID_PUBLIC_KEY?: string;
@@ -96,6 +96,10 @@ export interface Env {
   META_VERIFY_TOKEN?: string;
   /** "true" = background mailbox sync around the clock (default: 07:00–21:00 IST) */
   MAIL_SYNC_ALWAYS?: string;
+  /** minutes between background polls of mailboxes, meetings, GeM and statements (default 30, nights ≥ 120) */
+  CRON_POLL_MINUTES?: string;
+  /** "true" = workspaces that ask for it get a nightly backup (default off) */
+  AUTO_BACKUPS?: string;
   /** Android app (Trusted Web Activity) for /.well-known/assetlinks.json */
   ANDROID_APP_ID?: string;
   ANDROID_CERT_SHA256?: string;

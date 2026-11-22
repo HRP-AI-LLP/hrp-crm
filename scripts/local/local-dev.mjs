@@ -1,6 +1,6 @@
 // @ts-check
 /**
- * Run HRP Synapse fully on this computer: Postgres in a Podman (or Docker) container, the API with
+ * Run SanchalanOS fully on this computer: Postgres in a Podman (or Docker) container, the API with
  * `wrangler dev` and the UI with Vite. Nothing in the cloud is used or touched — no Neon, no
  * Cloudflare remote bindings, no deploy.
  *
@@ -241,7 +241,7 @@ sweep.unref?.();
 const signer = startDscSigner({ skip: args.has('--no-signer') });
 setTimeout(() => {
   console.log(`
-\x1b[32m✓ HRP Synapse is running fully on this computer (database: local ${ENGINE} container)\x1b[0m
+\x1b[32m✓ SanchalanOS is running fully on this computer (database: local ${ENGINE} container)\x1b[0m
 
   UI (instant reload)        http://localhost:5173
   Built app (PWA, push)      http://localhost:8787

@@ -267,7 +267,7 @@ export function tenantProvider(cfg: TenantProviderConfig): Provider {
       call = gemini(cfg.apiKey, cfg.model);
       break;
     case 'openrouter':
-      call = openAiCompatible(d.baseUrl!, cfg.apiKey, cfg.model, { 'x-title': 'HRP Synapse' });
+      call = openAiCompatible(d.baseUrl!, cfg.apiKey, cfg.model, { 'x-title': 'SanchalanOS' });
       break;
     default:
       call = openAiCompatible(cfg.baseUrl ?? d.baseUrl ?? '', cfg.apiKey, cfg.model);

@@ -122,7 +122,7 @@ export function DocTemplatesTab() {
   return (
     <div className="stack">
       <p className="muted small" style={{ margin: 0 }}>
-        How your invoices, quotes, orders and purchase orders look when printed, shared or signed. The default template of each kind is used for every document Synapse makes; the print page can switch to another for one print.
+        How your invoices, quotes, orders and purchase orders look when printed, shared or signed. The default template of each kind is used for every document SanchalanOS makes; the print page can switch to another for one print.
       </p>
       {q.data?.canEdit && (
         <div>

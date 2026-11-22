@@ -7,7 +7,7 @@
  *                                                 unlock the account and end its sessions
  *   pnpm local:admin reset <workspace> <email> --no-mfa   also turn two-factor sign-in off
  *   pnpm local:admin platform <workspace> <email>  make someone a platform admin (Settings → Connection keys)
- *   add  --cloud dev  or  --cloud prod  to work on the Neon databases (needs $env:NEON_API_KEY)
+ *   add  --cloud  to work on the production database in Neon (needs $env:NEON_API_KEY)
  *
  * Passwords are stored only as one-way hashes, so they can't be shown — only replaced.
  * The demo workspace's password is DEMO_ADMIN_PASSWORD in infra/.local/local.json.
@@ -30,15 +30,17 @@ const fail = (/** @type {string} */ m) => {
 // SYNAPSE_OWNER_DB_URL: another database (an owner / superuser connection string)
 let conn = process.env.SYNAPSE_OWNER_DB_URL;
 const cloudAt = process.argv.indexOf('--cloud');
-const cloud = cloudAt > 0 ? (process.argv[cloudAt + 1] ?? '') : '';
-if (cloudAt > 0) process.argv.splice(cloudAt, 2);
+// `--cloud` (production); the old `--cloud prod` spelling still works
+const cloudArg = cloudAt > 0 ? process.argv[cloudAt + 1] : undefined;
+const cloud = cloudAt > 0 ? 'prod' : '';
+if (cloudAt > 0) process.argv.splice(cloudAt, cloudArg === 'prod' || cloudArg === 'dev' ? 2 : 1);
+if (cloudArg === 'dev') fail('there is no cloud dev environment any more: dev runs on this computer (`pnpm local:admin` without --cloud)');
 if (!conn && cloud) {
   // the Neon branch of that environment, as its owner role (infra/state.json + the Neon API)
-  if (!['dev', 'prod'].includes(cloud)) fail('use --cloud dev or --cloud prod');
   const key = (process.env.NEON_API_KEY ?? '').trim();
   if (!key) fail('set $env:NEON_API_KEY first (the same key `pnpm setup` uses)');
   const state = JSON.parse(readFileSync(join(ROOT, 'infra', 'state.json'), 'utf8'));
-  const branch = state.neon?.branches?.[cloud];
+  const branch = state.neon?.branches?.prod;
   if (!state.neon?.projectId || !branch) fail('infra/state.json has no Neon project yet — run `pnpm setup` first');
   const { createApiClient } = await import('@neondatabase/api-client');
   const neon = createApiClient({ apiKey: key });
@@ -46,7 +48,7 @@ if (!conn && cloud) {
     .getConnectionUri({ projectId: state.neon.projectId, branch_id: branch, database_name: process.env.NEON_DB_NAME ?? 'neondb', role_name: process.env.NEON_OWNER_ROLE ?? 'neondb_owner', pooled: false })
     .catch((/** @type {Error} */ e) => fail(`Neon refused: ${e.message}`));
   conn = /** @type {any} */ (r).data.uri;
-  console.log(`(Neon ${cloud} database)`);
+  console.log('(Neon production database)');
 }
 if (!conn) {
   if (!existsSync(LOCAL)) fail('infra/.local/local.json not found — run `pnpm local` once first.');
@@ -56,7 +58,7 @@ if (!conn) {
   conn = url.toString();
 }
 const db = new pg.Client({ connectionString: conn });
-await db.connect().catch((e) => fail(cloud ? `cannot reach the Neon ${cloud} database (${e.message})` : `cannot reach the local database (${e.message}). Start it with \`pnpm local\`.`));
+await db.connect().catch((e) => fail(cloud ? `cannot reach the Neon production database (${e.message})` : `cannot reach the local database (${e.message}). Start it with \`pnpm local\`.`));
 
 /** PBKDF2-SHA256, the same format the API writes (packages/shared/src/password.ts). */
 function hashPassword(/** @type {string} */ pw) {
@@ -107,9 +109,9 @@ try {
           `   ${r.is_owner ? '★' : ' '} ${r.email.padEnd(34)} ${r.full_name.padEnd(24)} ${r.status}${r.mfa ? ' · two-factor on' : ''}${r.locked ? ' · locked' : ''}${r.last_login ? ` · last sign-in ${r.last_login}` : ''}`,
         );
     }
-    const where = cloud ? (cloud === 'prod' ? 'https://hrpsynapse.hrpai.in' : 'https://hrpsynapse-dev.hrpai.in') : 'http://localhost:5173';
+    const where = cloud ? `https://${JSON.parse(readFileSync(join(ROOT, 'infra', 'state.json'), 'utf8')).hosts?.prod ?? 'www.sanchalan.hrpai.in'}` : 'http://localhost:5173';
     console.log(`\n★ = workspace owner. Sign in at ${where} with the workspace ID, email and password.`);
-    console.log(`Forgot the password? pnpm local:admin reset <workspace ID> <email>${cloud ? ` --cloud ${cloud}` : ''}`);
+    console.log(`Forgot the password? pnpm local:admin reset <workspace ID> <email>${cloud ? ' --cloud' : ''}`);
     if (rows.some((r) => r.slug === 'demo')) console.log('The demo workspace password is DEMO_ADMIN_PASSWORD in infra/.local/local.json.');
   } else if (cmd === 'reset') {
     if (!slug || !email) fail('usage: pnpm local:admin reset <workspace ID> <email>');

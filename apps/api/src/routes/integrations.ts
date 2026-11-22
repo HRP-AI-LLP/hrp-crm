@@ -352,12 +352,12 @@ export const integrationPublicRoutes = new Hono<AppEnv>()
     const s = await verifyState(c.env, c.req.query('state'));
     if (s.p !== provider) throw badRequest('Mismatched sign-in');
     const binding = /(?:^|;\s*)__Host-synapse_oauth=([A-Za-z0-9_-]+)/.exec(c.req.header('cookie') ?? '')?.[1];
-    if (!binding || !timingSafeEqual(await sha256Hex(binding), s.h)) throw badRequest('Finish connecting in the same browser where you started. Start again from Synapse.');
+    if (!binding || !timingSafeEqual(await sha256Hex(binding), s.h)) throw badRequest('Finish connecting in the same browser where you started. Start again from SanchalanOS.');
     c.header('set-cookie', `${OAUTH_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
     // each sign-in link works once
     if (c.env.CACHE_KV) {
       const k = `oauth:used:${s.n}`;
-      if (await c.env.CACHE_KV.get(k).catch(() => null)) throw badRequest('This sign-in link was already used. Start again from Synapse.');
+      if (await c.env.CACHE_KV.get(k).catch(() => null)) throw badRequest('This sign-in link was already used. Start again from SanchalanOS.');
       await c.env.CACHE_KV.put(k, '1', { expirationTtl: 900 }).catch(() => undefined);
     }
     // the browser is sent back only to this app or one of this workspace's own addresses

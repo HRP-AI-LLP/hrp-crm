@@ -6,7 +6,7 @@
  * Costing (perpetual, at moving average): issuing material moves its value from stock to work in
  * progress; recorded operation time absorbs labour and overhead at the work centre's hourly cost;
  * output relieves WIP into finished stock (by-products take their cost share, scrap goes to the
- * scrap account); closing an order books what is left in WIP as a variance. When Synapse keeps the
+ * scrap account); closing an order books what is left in WIP as a variance. When SanchalanOS keeps the
  * books, each step posts a journal (source "work_order" / "job_work").
  *
  * Access: bills of materials, work centres and MRP need the "manufacturing" admin area; actions on

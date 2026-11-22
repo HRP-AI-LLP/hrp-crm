@@ -339,7 +339,7 @@ export function RecordDetailPage() {
           onChange={setTab}
           items={(['timeline', ...(COPILOT_OBJECTS.includes(object) ? (['copilot'] as const) : []), 'related', 'files', 'tasks', 'ai'] as const).map((t) => ({
             key: t,
-            label: t === 'timeline' ? 'Timeline' : t === 'copilot' ? 'Copilot' : t === 'related' ? 'Related' : t === 'files' ? 'Files' : t === 'tasks' ? 'Tasks' : 'Synapse AI',
+            label: t === 'timeline' ? 'Timeline' : t === 'copilot' ? 'Copilot' : t === 'related' ? 'Related' : t === 'files' ? 'Files' : t === 'tasks' ? 'Tasks' : 'SanchalanOS AI',
             icon: t === 'timeline' ? 'clock' : t === 'copilot' ? 'spark' : t === 'related' ? 'layers' : t === 'files' ? 'folder' : t === 'tasks' ? 'check' : 'bulb',
           }))}
         >
@@ -751,7 +751,7 @@ function CallButton({ object, id, phone }: { object: string; id: string; phone: 
     <button
       className="btn"
       disabled={busy}
-      title={`Synapse rings your phone${st.data.myPhone ? ` (${st.data.myPhone})` : ''}, then connects ${phone}`}
+      title={`SanchalanOS rings your phone${st.data.myPhone ? ` (${st.data.myPhone})` : ''}, then connects ${phone}`}
       onClick={async () => {
         setBusy(true);
         try {

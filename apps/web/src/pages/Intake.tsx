@@ -876,7 +876,7 @@ function OurInvoice({ id, p, onDone }: { id: string; p: Json; onDone: () => void
               <b>{d.number ?? 'No number'}</b> of {d.date ? date(d.date) : '—'} · {d.subject ?? d.lines?.[0]?.description ?? ''} · total <b>{money2(pl.invoice?.total ?? d.total ?? 0)}</b>
               {d.taxInclusive ? ' (incl. GST)' : ''} · {d.paid?.status === 'paid' ? 'paid' : d.paid?.status ?? ''}
               {x.status === 'approved' && <span className="chip good" style={{ marginLeft: 6 }}>Imported</span>}
-              {pl.invoice?.duplicate && <span className="chip warn" style={{ marginLeft: 6 }}>Already in Synapse</span>}
+              {pl.invoice?.duplicate && <span className="chip warn" style={{ marginLeft: 6 }}>Already in SanchalanOS</span>}
             </div>
             <div className="grid2">
               <label className="field">

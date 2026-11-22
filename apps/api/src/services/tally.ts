@@ -1,13 +1,13 @@
 /**
  * Two-way Tally sync through a connector on the accountant's PC (connectors/tally).
  *
- *  Synapse → Tally: customer ledgers, sales invoices, credit notes and receipts, each pushed
+ *  SanchalanOS → Tally: customer ledgers, sales invoices, credit notes and receipts, each pushed
  *  once and again only if it changed (content hash). Invoices cancelled after they reached Tally
  *  are flagged for the accountant instead of being cancelled silently.
- *  Tally → Synapse: receipts entered in Tally are recorded as payments and settle the invoices
+ *  Tally → SanchalanOS: receipts entered in Tally are recorded as payments and settle the invoices
  *  named in their bill references. Each Tally voucher is applied once (its GUID).
  *
- * The connector authenticates with a long random token shown once when connecting; Synapse keeps
+ * The connector authenticates with a long random token shown once when connecting; SanchalanOS keeps
  * only its SHA-256.
  */
 import type { Env } from '../env';
@@ -100,7 +100,7 @@ export async function pendingForTally(ctx: RecordCtx, i: Integration, limit = 50
   const items: (PendingItem & { hash: string })[] = [];
   // a voucher Tally already has must not vanish quietly when cancelled here
   await tx.query(
-    `update tally_sync s set status = 'needs_attention', error = 'Cancelled in Synapse: cancel voucher ' || i.invoice_number || ' in Tally'
+    `update tally_sync s set status = 'needs_attention', error = 'Cancelled in SanchalanOS: cancel voucher ' || i.invoice_number || ' in Tally'
        from invoices i
       where s.tenant_id = $1 and i.tenant_id = s.tenant_id and i.id = s.record_id and s.kind in ('sales', 'credit_note')
         and s.status in ('synced', 'sent') and i.status = 'cancelled'`,

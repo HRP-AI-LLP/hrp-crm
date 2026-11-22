@@ -140,7 +140,7 @@ export function HealthPage() {
           )}
           {q.data.value?.length > 0 && (
             <section className="value-strip">
-              <h2>What Synapse did for you</h2>
+              <h2>What SanchalanOS did for you</h2>
               <div className="value-grid">
                 {(q.data.value as Json[]).map((v) => (
                   <div key={v.key} className="value-item">

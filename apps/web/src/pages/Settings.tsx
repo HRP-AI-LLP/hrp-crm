@@ -95,7 +95,7 @@ export function SettingsPage() {
       <div className="page-head">
         <div>
           <h1>Settings</h1>
-          <p>Shape Synapse to how your business sells.</p>
+          <p>Shape SanchalanOS to how your business sells.</p>
         </div>
         <select className="settings-select" value={tab} onChange={(e) => setTab(e.target.value)} aria-label="Settings section">
           {groups.map(([g, items]) => (
@@ -935,7 +935,7 @@ function AiModelsTab() {
   return (
     <div className="stack">
       <p className="muted" style={{ margin: 0, maxWidth: '75ch' }}>
-        Use your own model accounts for Synapse AI. Your keys are tried first, in the order below; the built-in models are used as a backup unless you turn that off.
+        Use your own model accounts for SanchalanOS AI. Your keys are tried first, in the order below; the built-in models are used as a backup unless you turn that off.
         Keys are encrypted before they are stored and are never shown again, only their last four characters.
       </p>
       {!data?.encryptionConfigured && <div className="field-error">This deployment has no encryption key configured, so keys cannot be saved. Ask your platform administrator to set DATA_ENCRYPTION_KEY.</div>}
@@ -1024,7 +1024,7 @@ function AiModelsTab() {
           </tbody>
         </table>
       ) : (
-        <Empty title="No API keys yet">Synapse AI runs on the built-in models until you add your own.</Empty>
+        <Empty title="No API keys yet">SanchalanOS AI runs on the built-in models until you add your own.</Empty>
       )}
 
       {adding && (

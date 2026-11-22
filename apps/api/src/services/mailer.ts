@@ -16,7 +16,7 @@ export function actionEmail(opts: { heading: string; intro: string; cta: string;
   const html = `<!doctype html><html><body style="margin:0;background:#f1f5f9;font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:32px 12px">
 <table role="presentation" width="100%" style="max-width:520px;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0">
-<tr><td style="background:#062f59;border-radius:12px 12px 0 0;padding:18px 24px;color:#ffffff;font-weight:700;font-size:16px">HRP Synapse</td></tr>
+<tr><td style="background:#062f59;border-radius:12px 12px 0 0;padding:18px 24px;color:#ffffff;font-weight:700;font-size:16px">SanchalanOS</td></tr>
 <tr><td style="padding:24px">
 <h1 style="margin:0 0 12px;font-size:20px;color:#075492">${esc(opts.heading)}</h1>
 <p style="margin:0 0 20px;line-height:1.55">${esc(opts.intro)}</p>
@@ -35,7 +35,7 @@ export async function sendPlatformMail(env: Env, msg: { to: string; subject: str
     method: 'POST',
     headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
     body: JSON.stringify({
-      from: msg.fromName ? `${msg.fromName.replace(/[<>"]/g, '')} <${(env.MAIL_FROM ?? 'no-reply@hrpai.in').replace(/^.*<|>.*$/g, '')}>` : (env.MAIL_FROM ?? 'HRP Synapse <no-reply@hrpai.in>'),
+      from: msg.fromName ? `${msg.fromName.replace(/[<>"]/g, '')} <${(env.MAIL_FROM ?? 'no-reply@hrpai.in').replace(/^.*<|>.*$/g, '')}>` : (env.MAIL_FROM ?? 'SanchalanOS <no-reply@hrpai.in>'),
       to: [msg.to],
       ...(msg.cc?.length ? { cc: msg.cc } : {}),
       ...(msg.replyTo ? { reply_to: msg.replyTo } : {}),

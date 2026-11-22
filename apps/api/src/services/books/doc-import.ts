@@ -63,7 +63,7 @@ export const invoiceDataSchema = z.object({
   subject: z.string().trim().max(500).nullish(),
   /** the buyer's P.O. / contract number */
   customerRef: z.string().trim().max(100).nullish(),
-  /** payment terms as Synapse knows them (due_on_receipt, net_30, end_of_month …) */
+  /** payment terms as SanchalanOS knows them (due_on_receipt, net_30, end_of_month …) */
   paymentTerms: z.string().regex(/^(due_on_receipt|net_[0-9]{1,3}|end_of_month|end_of_next_month|custom)$/).nullish(),
 });
 export type InvoiceData = z.infer<typeof invoiceDataSchema>;
@@ -589,7 +589,7 @@ async function planFor(ctx: RecordCtx, d: InvoiceData, prev: Choices = {}) {
   }
   if (d.customer.gstin && !validGstin(d.customer.gstin)) warnings.push(`The customer GSTIN ${d.customer.gstin} fails the check digit — correct it, or clear it`);
   const duplicate = d.number ? await ctx.tx.one<{ id: string }>(`select id from invoices where tenant_id = $1 and doc_type = 'tax_invoice' and invoice_number = $2 and deleted_at is null`, [ctx.tenantId, d.number]) : null;
-  if (duplicate) warnings.push(`Invoice ${d.number} is already in Synapse`);
+  if (duplicate) warnings.push(`Invoice ${d.number} is already in SanchalanOS`);
   // the deal (and its recurring invoice) this invoice belongs to: chosen, or the customer's one deal with charges
   let deal: { id: string; name: string } | null = null;
   let recurring: { id: string; name: string } | null = null;
@@ -865,7 +865,7 @@ export async function approveItem(ctx: RecordCtx, id: string) {
   if (!d.number) throw badRequest('The invoice number is missing');
   if (!d.date) throw badRequest('The invoice date is missing');
   if (!d.lines.length) throw badRequest('The invoice has no lines');
-  if (plan.invoice.duplicate) throw conflict(`Invoice ${d.number} is already in Synapse`);
+  if (plan.invoice.duplicate) throw conflict(`Invoice ${d.number} is already in SanchalanOS`);
   if (d.customer.gstin && !validGstin(d.customer.gstin)) throw badRequest(`The customer GSTIN ${d.customer.gstin} is not valid; correct or clear it`);
   const events: RecordEvent[] = [];
   const created: Record<string, unknown> = {};
@@ -940,7 +940,7 @@ export async function approveItem(ctx: RecordCtx, id: string) {
     events.push(...(await issueInvoice(ctx, invoiceId, { number: d.number, source: it.source_file })));
     const got = (await ctx.tx.one<{ grand_total: number; tax_total: number }>(`select grand_total::float8 as grand_total, tax_total::float8 as tax_total from invoices where tenant_id = $1 and id = $2`, [ctx.tenantId, invoiceId]))!;
     if (d.total && Math.abs(got.grand_total - d.total) > 1.01)
-      throw badRequest(`Synapse works this invoice out to ${got.grand_total.toFixed(2)} but the document says ${d.total.toFixed(2)}: check the lines and tax rates`);
+      throw badRequest(`SanchalanOS works this invoice out to ${got.grand_total.toFixed(2)} but the document says ${d.total.toFixed(2)}: check the lines and tax rates`);
     created.invoice = { id: invoiceId, number: d.number, total: got.grand_total };
     // 5. how it was paid
     const pay = plan.payment;

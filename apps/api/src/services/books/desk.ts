@@ -1605,7 +1605,7 @@ async function resolutionFor(ctx: RecordCtx, f: NewFinding): Promise<Resolution 
       return {
         steps: [
           'If you have entered bills for this month since GSTR-2B was fetched, press "Match with books again" first (free) — some may match now.',
-          n ? `${n} supplier invoice(s) have no bill in Synapse. If they are genuine business purchases, "Enter them as bills" creates one bill each (supplier added from its GSTIN, booked to Purchases, posted), so the ITC of ${money(c?.tax ?? 0)} can be claimed in GSTR-3B.` : 'Every remaining document is a credit or debit note.',
+          n ? `${n} supplier invoice(s) have no bill in SanchalanOS. If they are genuine business purchases, "Enter them as bills" creates one bill each (supplier added from its GSTIN, booked to Purchases, posted), so the ITC of ${money(c?.tax ?? 0)} can be claimed in GSTR-3B.` : 'Every remaining document is a credit or debit note.',
           'If you entered a bill under a different invoice number, open the month and use "Link to a bill" on that line instead, so it is not entered twice.',
           ...(c?.notes ? [`${c.notes} credit / debit note(s): enter them as vendor credits on the original bill (open the bill → Vendor credit).`] : []),
           ...(c?.noitc ? [`${c.noitc} line(s) are marked ITC not available by the portal; enter them as bills too, but don't claim their tax.`] : []),
@@ -1685,7 +1685,7 @@ async function resolutionFor(ctx: RecordCtx, f: NewFinding): Promise<Resolution 
           ...(c?.unplaced
             ? [
                 `${c.unplaced} line(s) have no suggestion. "Book by payee" groups them by who was paid or who paid you, so a whole group (all Zomato, all rent, all one customer) is booked to one account in one go — tick "always" to turn it into a rule for next time.`,
-                'Money in from customers whose invoices are not in Synapse yet: raise the invoice first (or book it to the customer as an advance), then run the bookkeeper again.',
+                'Money in from customers whose invoices are not in SanchalanOS yet: raise the invoice first (or book it to the customer as an advance), then run the bookkeeper again.',
               ]
             : []),
           ...(ai ? [] : ['Add an AI model in Settings → AI models: the bookkeeper then suggests the lines the rules can’t place (they still wait for your approval).']),
@@ -2046,7 +2046,7 @@ export async function runCompliance(deps: DeskDeps, opts: { trigger?: string; to
             kind: 'gst_return',
             severity: late ? 'risk' : 'warn',
             title: `${d.label} for ${d.periodLabel} ${late ? `was due ${d.dueDate}` : `is due ${d.dueDate}`} (${c.gstin})`,
-            body: late ? 'Late fee and interest run from the due date. If it was filed on the portal, use "Update filed returns from the portal" so Synapse knows.' : 'Prepare it from GST portal → Overview.',
+            body: late ? 'Late fee and interest run from the due date. If it was filed on the portal, use "Update filed returns from the portal" so SanchalanOS knows.' : 'Prepare it from GST portal → Overview.',
             link: '/billing',
             period: d.period,
           });

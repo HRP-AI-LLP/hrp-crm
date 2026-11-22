@@ -1,10 +1,10 @@
 /**
  * Meeting apps as plugins: each person connects their own Zoom, Google Meet and Microsoft Teams
- * accounts (as many as they use). Synapse can then
+ * accounts (as many as they use). SanchalanOS can then
  *   - create the online meeting when a call is scheduled (join link on the event),
  *   - fetch the transcript once the meeting is over (Zoom cloud recording transcript, Meet
  *     transcript entries, Teams transcript) and hand it to the call analysis,
- *   - pick up recent meetings held in those apps that were not scheduled in Synapse.
+ *   - pick up recent meetings held in those apps that were not scheduled in SanchalanOS.
  * Tokens are sealed with the workspace key; refresh happens on use.
  */
 import type { Env } from '../env';
@@ -168,7 +168,7 @@ export async function createOnlineMeeting(env: Env, tx: Tx, i: Integration, m: N
         headers: auth,
         body: JSON.stringify({
           summary: m.title,
-          description: [m.agenda ?? '', 'Scheduled from HRP Synapse'].filter(Boolean).join('\n\n'),
+          description: [m.agenda ?? '', 'Scheduled from SanchalanOS'].filter(Boolean).join('\n\n'),
           start: { dateTime: new Date(m.startsAt).toISOString() },
           end: { dateTime: new Date(m.endsAt).toISOString() },
           attendees: m.attendees.map((a) => ({ email: a.email, displayName: a.name ?? undefined })),
@@ -186,7 +186,7 @@ export async function createOnlineMeeting(env: Env, tx: Tx, i: Integration, m: N
     headers: auth,
     body: JSON.stringify({
       subject: m.title,
-      body: { contentType: 'text', content: [m.agenda ?? '', 'Scheduled from HRP Synapse'].filter(Boolean).join('\n\n') },
+      body: { contentType: 'text', content: [m.agenda ?? '', 'Scheduled from SanchalanOS'].filter(Boolean).join('\n\n') },
       start: { dateTime: new Date(m.startsAt).toISOString().replace('Z', ''), timeZone: 'UTC' },
       end: { dateTime: new Date(m.endsAt).toISOString().replace('Z', ''), timeZone: 'UTC' },
       attendees: m.attendees.map((a) => ({ emailAddress: { address: a.email, name: a.name ?? a.email }, type: 'required' })),
@@ -311,7 +311,7 @@ export async function fetchTranscript(env: Env, tx: Tx, i: Integration, m: Onlin
   return text.trim() ? text : null;
 }
 
-/* ───────────────────────── meetings held outside Synapse ───────────────────────── */
+/* ───────────────────────── meetings held outside SanchalanOS ───────────────────────── */
 
 export interface ExternalMeeting {
   ref: string;
@@ -392,7 +392,7 @@ export async function importRecent(env: Env, tx: Tx, i: Integration, days = 3) {
   let added = 0;
   for (const m of list) {
     if (await tx.one(`select 1 from events where tenant_id = $1 and external_ref = $2`, [i.tenant_id, m.ref])) continue;
-    // the same meeting scheduled from Synapse already waits for its transcript
+    // the same meeting scheduled from SanchalanOS already waits for its transcript
     if (await tx.one(`select 1 from events where tenant_id = $1 and online_meeting ->> 'joinUrl' = $2 and starts_at between $3::timestamptz - interval '1 day' and $3::timestamptz + interval '1 day'`, [i.tenant_id, m.online.joinUrl, m.startsAt])) continue;
     const project = await matchProject(tx, i.tenant_id, i.user_id!, m.title, m.attendees);
     await tx.query(
@@ -461,7 +461,7 @@ export async function matchProject(tx: Tx, tenantId: string, userId: string, tit
   );
   const byTitle = mine.filter((p) => (p.project_code && t.includes(p.project_code.toLowerCase())) || (p.name.length >= 5 && t.includes(p.name.toLowerCase())));
   if (byTitle.length === 1) return byTitle[0]!.id;
-  // what the person taught Synapse by moving earlier calls: the same (recurring) title, the same
+  // what the person taught SanchalanOS by moving earlier calls: the same (recurring) title, the same
   // outside people, the same company domain
   const open = new Set(mine.map((p) => p.id));
   const keys = filingKeys(title, attendees);

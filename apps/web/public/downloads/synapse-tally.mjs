@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * HRP Synapse ⇄ Tally connector.
+ * SanchalanOS ⇄ Tally connector.
  *
  * Runs on the PC where Tally Prime (or ERP 9) is open. It needs Node.js 18 or newer and nothing
  * else. Every few minutes it:
- *   1. asks Synapse for new or changed customer ledgers, invoices, credit notes and receipts,
+ *   1. asks SanchalanOS for new or changed customer ledgers, invoices, credit notes and receipts,
  *   2. imports each into Tally through Tally's XML server (http://localhost:9000 by default),
- *   3. tells Synapse what Tally accepted or rejected,
- *   4. reads receipts entered in Tally and sends them to Synapse (they settle invoices there).
+ *   3. tells SanchalanOS what Tally accepted or rejected,
+ *   4. reads receipts entered in Tally and sends them to SanchalanOS (they settle invoices there).
  *
  * In Tally: F1 (Help) → Settings → Connectivity → Client/Server configuration →
  *   "TallyPrime acts as" = Both (or Server), port 9000. Keep the company open.
@@ -95,7 +95,7 @@ function loadConfig(argv) {
     once: argv.includes('--once'),
     dryRun: argv.includes('--dry-run'),
   };
-  if (!cfg.url || !cfg.token) throw new Error('Give --url and --token (from Synapse: Billing & GST → Tally)');
+  if (!cfg.url || !cfg.token) throw new Error('Give --url and --token (from SanchalanOS: Billing & GST → Tally)');
   return cfg;
 }
 
@@ -104,7 +104,7 @@ const log = (...a) => console.log(new Date().toLocaleString('en-IN'), ...a);
 async function synapse(cfg, path, body) {
   const res = await fetch(`${cfg.url}${path}`, { method: body === undefined ? 'GET' : 'POST', headers: { authorization: `Bearer ${cfg.token}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
   const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`Synapse ${res.status}: ${j?.error?.message ?? res.statusText}`);
+  if (!res.ok) throw new Error(`SanchalanOS ${res.status}: ${j?.error?.message ?? res.statusText}`);
   return j;
 }
 
@@ -172,7 +172,7 @@ async function cycle(cfg) {
 
 async function main() {
   const cfg = loadConfig(process.argv.slice(2));
-  log(`Synapse ⇄ Tally connector. Tally at ${cfg.tally}. ${cfg.once ? 'One run.' : `Every ${cfg.every} minutes; Ctrl+C to stop.`}`);
+  log(`SanchalanOS ⇄ Tally connector. Tally at ${cfg.tally}. ${cfg.once ? 'One run.' : `Every ${cfg.every} minutes; Ctrl+C to stop.`}`);
   for (;;) {
     try {
       await cycle(cfg);

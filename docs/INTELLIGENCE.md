@@ -1,6 +1,6 @@
 # Revenue intelligence (Copilot)
 
-Synapse adds an intelligence layer on top of the CRM: a **context layer** that links everything known about a customer, **task agents** that work over it, a daily **Copilot** workspace, an **insights feed**, and **Ask Synapse**. Every agent cites the records it used, and everything runs as the person asking, so nobody sees more than they could in the app.
+SanchalanOS adds an intelligence layer on top of the CRM: a **context layer** that links everything known about a customer, **task agents** that work over it, a daily **Copilot** workspace, an **insights feed**, and **Ask SanchalanOS**. Every agent cites the records it used, and everything runs as the person asking, so nobody sees more than they could in the app.
 
 ## The context layer
 
@@ -50,7 +50,7 @@ Defined in `packages/shared/src/agents.ts`; run by `services/intel/agents.ts`.
 - **Do these first:** the focus list.
 - Action items, split into open, in progress, overdue and done; AI-made items are flagged.
 - The insights feed, with snooze and dismiss.
-- Ask Synapse.
+- Ask SanchalanOS.
 - A pipeline review for managers (anyone who can see more than their own deals).
 
 Records (leads, contacts, accounts, deals) get a **Copilot** tab with:
@@ -58,7 +58,7 @@ Records (leads, contacts, accounts, deals) get a **Copilot** tab with:
 - scores, Ask about this record, and the agents for the record with their last results and sources;
 - suggested updates waiting for approval;
 - competitors (on deals), calls to debrief and action items;
-- "What Synapse knows about this record".
+- "What SanchalanOS knows about this record".
 
 ## Insights (hourly sweep)
 
@@ -76,7 +76,7 @@ Records (leads, contacts, accounts, deals) get a **Copilot** tab with:
 
 Each insight goes to the record owner, who is notified once. Insights that stop being true disappear on the next run unless someone already acted on them or dismissed them.
 
-## Ask Synapse
+## Ask SanchalanOS
 
 - **About a record:** answers from that record's context.
 - **Across the CRM:**

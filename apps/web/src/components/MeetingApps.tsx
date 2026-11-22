@@ -21,7 +21,7 @@ const TOGGLES: [string, string][] = [
   ['autoFetch', 'Fetch transcripts after calls'],
   ['autoAnalyse', 'Write minutes automatically'],
   ['createTasks', 'Turn team actions into project tasks'],
-  ['importAll', 'Also pick up meetings not scheduled in Synapse'],
+  ['importAll', 'Also pick up meetings not scheduled in SanchalanOS'],
 ];
 
 export function MeetingAppsPanel({ returnTo = '/account' }: { returnTo?: '/account' | '/calls' }) {
@@ -61,7 +61,7 @@ export function MeetingAppsPanel({ returnTo = '/account' }: { returnTo?: '/accou
       </div>
       <div className="panel-body stack">
         <p className="muted small" style={{ margin: 0 }}>
-          Connect the accounts you hold calls on. Synapse creates the meeting when you schedule a project call, picks up the transcript afterwards, and writes the minutes with each person’s actions.
+          Connect the accounts you hold calls on. SanchalanOS creates the meeting when you schedule a project call, picks up the transcript afterwards, and writes the minutes with each person’s actions.
         </p>
         {data && !Object.values(data.available).some(Boolean) && (
           <div className="callout warn small">

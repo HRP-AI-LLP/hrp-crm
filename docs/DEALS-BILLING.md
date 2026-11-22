@@ -46,7 +46,7 @@ its managers; a named manager sees it in the sidebar):
 - **Profile**: legal and trade name, constitution, PAN, GSTIN, TAN, LLPIN / CIN, Udyam, incorporation date,
   registered address, website, the phone and email printed on documents.
 - **Phones, emails & contacts**: more numbers and addresses, branches, the company's own contact people.
-- **Partners & directors**: designation, share, phone, email, PAN, DIN / DPIN, their Synapse user, and
+- **Partners & directors**: designation, share, phone, email, PAN, DIN / DPIN, their SanchalanOS user, and
   their personal accounts (mobile numbers, UPI ids, account numbers) — the accounts desk books money to and
   from these to the person's own ledger (see ACCOUNTS-DESK.md, Own accounts).
 - **Bank accounts**: the company's current accounts with their numbers, IFSC and UPI id.
@@ -89,7 +89,7 @@ recurring invoice it was one of.
 Settings → Company → **Document templates** (also Organisation → Document templates) holds any number of
 designs for invoices, quotes, sales orders, purchase orders and credit notes. Whoever can manage the
 organisation (an admin with the Organisation area, or a designated manager) can create, copy, delete and
-choose the default per document kind ("Use for…"). Every document Synapse prints, shares, emails or signs
+choose the default per document kind ("Use for…"). Every document SanchalanOS prints, shares, emails or signs
 uses the default for its kind; the print page has a template picker to try another one.
 
 A template starts from one of:
@@ -104,26 +104,26 @@ A template starts from one of:
 ## Digital signature certificates (DSC)
 
 Organisation → **Digital signatures (DSC)**. Invoices, sales orders and purchase orders can be signed with a
-Class 3 DSC from the document's Signatures panel ("Sign with DSC: name"). Synapse draws the document in its
+Class 3 DSC from the document's Signatures panel ("Sign with DSC: name"). SanchalanOS draws the document in its
 default template as an A4 PDF, signs it (PAdES-style detached CMS, SHA-256, a visible stamp with the
 verification link on the last page), verifies the result, stores the signed PDF in the record's Files and
 records the signature (who, when, certificate, hash). Anyone can check a signed PDF at `/verify/<workspace>`
 or by its code; Adobe Reader shows it as signed (it trusts the issuer once the CCA India root is trusted).
 
-Two ways to hold the certificate — both sign only from Synapse:
+Two ways to hold the certificate — both sign only from SanchalanOS:
 
 - **.pfx / .p12 file** — upload it with its password. Both are encrypted (AES-GCM, workspace-bound) and can
   never be downloaded again; removing the certificate deletes them. Choose who may sign with it.
 - **USB token (ePass, ProxKey, mToken, WatchData…)** — the key never leaves the token. The small signer in
   `tools/dsc-signer` runs on the computer with the token and needs only Python 3.10+ and the token
-  driver (it uses Python's own ctypes; nothing to install). `pnpm local` / `pnpm local:cloud` start it in
+  driver (it uses Python's own ctypes; nothing to install). `pnpm local` starts it in
   the background; elsewhere `start-signer.bat`.
   1. Organisation → Digital signatures → **Pair a signer**; run the shown `pnpm dsc pair <code>` once.
   2. Plug in the token; **Add the token's certificate** reads it from the token (PIN if the token needs it).
   3. On a document, "Sign with DSC (token)" asks for the PIN; the PIN goes only to the signer on this computer.
-  Synapse prepares the PDF and the digest to sign; the signer signs only that digest, with a ticket.
-  The signer listens on `127.0.0.1` only, answers only the paired Synapse address, and signs only with a
-  ticket Synapse issued for that exact PDF (hash and length), certificate and user, valid 10 minutes. Synapse
+  SanchalanOS prepares the PDF and the digest to sign; the signer signs only that digest, with a ticket.
+  The signer listens on `127.0.0.1` only, answers only the paired SanchalanOS address, and signs only with a
+  ticket SanchalanOS issued for that exact PDF (hash and length), certificate and user, valid 10 minutes. SanchalanOS
   checks the returned file: original bytes untouched, signature valid, same certificate, whole file covered.
 
 Limits: the signed PDF is a picture of the document (text is not selectable); the PDF to sign can be up to
@@ -160,7 +160,7 @@ under Organisation → Documents (partners and team members each get a group wit
 
 ## PDF reports from any table
 
-Every data table in Synapse has an **Export PDF** button above it (added automatically, so new screens get it
+Every data table in SanchalanOS has an **Export PDF** button above it (added automatically, so new screens get it
 too): Organisation, Billing & GST, Books, Inventory, Projects, report results, the figures behind charts, and
 the rest. The PDF carries the company's name and GSTIN, the report's title (from the page, tab and panel),
 who generated it and when (IST), page numbers, right-aligned ₹ amounts and repeated column headings on every

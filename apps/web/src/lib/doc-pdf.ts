@@ -131,8 +131,8 @@ export async function documentToPdf(draw: (host: HTMLDivElement, doc: Document) 
       y = cut;
       pageNo++;
     }
-    pdf.setProducer('HRP Synapse');
-    pdf.setCreator('HRP Synapse');
+    pdf.setProducer('SanchalanOS');
+    pdf.setCreator('SanchalanOS');
     return pdf.save();
   } finally {
     iframe.remove();

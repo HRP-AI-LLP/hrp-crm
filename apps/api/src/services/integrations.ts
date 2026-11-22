@@ -165,9 +165,9 @@ export async function signState(env: Env, s: Omit<OAuthState, 'e' | 'n'>): Promi
 }
 export async function verifyState(env: Env, state: string | undefined): Promise<OAuthState> {
   const [payload, sig] = (state ?? '').split('.');
-  if (!payload || !sig || !timingSafeEqual(sig, await hmacSha256Hex(stateKey(env), payload))) throw badRequest('This sign-in link is not valid. Start again from Synapse.');
+  if (!payload || !sig || !timingSafeEqual(sig, await hmacSha256Hex(stateKey(env), payload))) throw badRequest('This sign-in link is not valid. Start again from SanchalanOS.');
   const s = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/'))) as OAuthState;
-  if (s.e < Date.now() / 1000) throw badRequest('This sign-in took too long. Start again from Synapse.');
+  if (s.e < Date.now() / 1000) throw badRequest('This sign-in took too long. Start again from SanchalanOS.');
   return s;
 }
 

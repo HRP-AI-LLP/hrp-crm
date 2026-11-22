@@ -20,7 +20,7 @@ import { noteReminder } from '../services/reminders';
 import { recordConsent } from '../services/privacy';
 import { systemPrincipal } from '../services/worker';
 
-const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'mail', 'smtp', 'status', 'docs', 'help', 'support', 'billing', 'static', 'assets', 'cdn', 'auth', 'login', 'signup', 'dev', 'staging', 'prod', 'hrp', 'synapse']);
+const RESERVED_SLUGS = new Set(['www', 'app', 'api', 'admin', 'mail', 'smtp', 'status', 'docs', 'help', 'support', 'billing', 'static', 'assets', 'cdn', 'auth', 'login', 'signup', 'dev', 'staging', 'prod', 'hrp', 'synapse', 'sanchalan', 'sanchalanos']);
 
 /** System context for public endpoints acting inside one workspace. */
 async function systemCtx(c: { env: AppEnv['Bindings'] }, tx: RecordCtx['tx'], tenantId: string): Promise<RecordCtx> {

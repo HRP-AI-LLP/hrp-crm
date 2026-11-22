@@ -422,7 +422,7 @@ function SettingsModal({ users, onClose, onSaved }: { users: Json[]; onClose: ()
           <input type="checkbox" checked={!!v.salaryTds} onChange={(e) => setF({ ...v, salaryTds: e.target.checked })} /> TDS on salaries (24Q, Form 16)
         </label>
         <label className="row small wide">
-          <input type="checkbox" checked={!!v.payrollHere} onChange={(e) => setF({ ...v, payrollHere: e.target.checked })} /> Also run payroll in Synapse (shows the Payroll tab in Books)
+          <input type="checkbox" checked={!!v.payrollHere} onChange={(e) => setF({ ...v, payrollHere: e.target.checked })} /> Also run payroll in SanchalanOS (shows the Payroll tab in Books)
         </label>
         <label className="field">
           Usually filed by (your CA's login)

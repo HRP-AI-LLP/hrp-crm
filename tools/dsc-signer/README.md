@@ -1,15 +1,15 @@
-# HRP Synapse DSC signer (USB token)
+# SanchalanOS DSC signer (USB token)
 
-Signs documents from your Synapse with a digital signature certificate (DSC) kept on a USB token
+Signs documents from your SanchalanOS with a digital signature certificate (DSC) kept on a USB token
 (ePass2003, ProxKey, Watchdata, HyperPKI, SafeNet …). The key never leaves the token; the PIN is typed in
-Synapse and goes only to this signer on your own computer, never to the server.
+SanchalanOS and goes only to this signer on your own computer, never to the server.
 
-It signs only for the Synapse it is paired with:
+It signs only for the SanchalanOS it is paired with:
 
-- it answers only web pages from that Synapse address (other websites get "403");
-- every signature needs a ticket that your Synapse made, with the pairing secret, for that exact PDF and
+- it answers only web pages from that SanchalanOS address (other websites get "403");
+- every signature needs a ticket that your SanchalanOS made, with the pairing secret, for that exact PDF and
   that certificate, valid for 10 minutes;
-- Synapse checks the signed PDF (valid signature, the registered certificate, the document unchanged)
+- SanchalanOS checks the signed PDF (valid signature, the registered certificate, the document unchanged)
   before keeping it with the record.
 
 ## Set up (once, on the computer with the token)
@@ -19,11 +19,11 @@ It signs only for the Synapse it is paired with:
 2. Have Python 3.10 or newer (3.12–3.14 are fine). **Nothing else to install.** The signer talks to the
    token through Python's own `ctypes` and the token maker's driver, so there are no packages and no
    unsigned add-on files for a Windows application-control policy to block.
-   - On your development computer, `pnpm local` (or `pnpm local:cloud`) starts the signer in the
+   - On your development computer, `pnpm local` starts the signer in the
      background with the app (lines marked `[dsc]`). `pnpm local --no-signer` or `DSC_SIGNER=off` skips it.
    - On another computer that only signs, double-click `start-signer.bat`.
    - An old `.deps` folder from earlier versions is no longer used and can be deleted.
-3. In Synapse: Organisation → **Digital signatures (DSC)** → **Pair a signer**. It shows a command with a
+3. In SanchalanOS: Organisation → **Digital signatures (DSC)** → **Pair a signer**. It shows a command with a
    one-time code; run it once. On your development computer that is
 
    ```
@@ -32,7 +32,7 @@ It signs only for the Synapse it is paired with:
 
    (elsewhere: `python dsc_signer.py pair <code> --origin https://your-synapse-address`). A running signer
    picks up the pairing at once.
-4. Plug in the token. In Synapse, **Add the token's certificate**: Synapse reads the certificate from the
+4. Plug in the token. In SanchalanOS, **Add the token's certificate**: SanchalanOS reads the certificate from the
    token through the signer (enter the PIN if the token asks for it) and you choose who may sign with it.
    If the signer says no driver was found, start it once with the driver's path:
    `pnpm dsc serve --lib "C:\Windows\System32\eps2003csp11v2.dll"` (remembered from then on).
@@ -48,7 +48,7 @@ certificate (from your DSC provider) to Adobe's trusted certificates once.
 
 - `python dsc_signer.py certs --pin <PIN>` lists the certificates on the token.
 - The settings (pairings, library path) are in `~/.synapse-dsc-signer.json`; delete the file to unpair.
-  Unpairing in Synapse (remove the signer) stops it at once.
+  Unpairing in SanchalanOS (remove the signer) stops it at once.
 - Too many wrong PINs lock the token; unlock it with the maker's tool.
 
 ## Troubleshooting
@@ -62,13 +62,13 @@ certificate (from your DSC provider) to Adobe's trusted certificates once.
 
 ## How signing works
 
-1. The browser draws the document as a PDF and sends it to Synapse, which adds the signature field and the
+1. The browser draws the document as a PDF and sends it to SanchalanOS, which adds the signature field and the
    visible stamp and works out the 32-byte SHA-256 digest that must be signed (it fixes every byte of the
    PDF and the signing time).
-2. Synapse returns a **ticket** for that digest, sealed with this signer's pairing secret, naming the
+2. SanchalanOS returns a **ticket** for that digest, sealed with this signer's pairing secret, naming the
    certificate and valid for 10 minutes.
 3. The browser hands the ticket and the PIN to the signer on this computer. The signer checks the seal and
    expiry, finds the certificate on the token, logs in with the PIN and has the token sign the digest
    (RSA PKCS#1 v1.5). Nothing else is ever signed, and the PIN never leaves this computer.
-4. Synapse puts the signature into the PDF, verifies it against the registered certificate, and keeps the
+4. SanchalanOS puts the signature into the PDF, verifies it against the registered certificate, and keeps the
    signed PDF with the document.

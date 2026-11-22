@@ -1,5 +1,5 @@
 /**
- * The context layer: everything Synapse knows about one customer or deal, gathered as the viewer
+ * The context layer: everything SanchalanOS knows about one customer or deal, gathered as the viewer
  * (record visibility and field security apply to every piece) and turned into numbered facts.
  *
  * Agents receive facts as "[F3] …" lines and must cite the refs they rely on; citations that do

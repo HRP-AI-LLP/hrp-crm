@@ -1,8 +1,9 @@
 /**
- * HRP Synapse edge gateway (Cloudflare Worker).
+ * SanchalanOS edge gateway (Cloudflare Worker).
  *   fetch     → Hono app: tenant resolution, auth, API, SPA assets
  *   queue     → background jobs (workflows, AI scoring, KB indexing, messaging, webhooks)
- *   scheduled → reminders every 5 minutes (KV-gated), daily housekeeping
+ *   scheduled → a 5-minute tick that wakes the database only when something is due (cron-plan.ts),
+ *               daily housekeeping
  */
 import { createApp } from './app';
 import type { Env } from './env';
@@ -29,6 +30,7 @@ import { queueDueSoon, workMailSweep } from './services/it/alerts';
 import { scheduledRulesSweep } from './services/it/rules';
 import { processJob } from './services/worker';
 import { withPlatformKeys, withTenantKeys } from './services/connection-keys';
+import { cronPlan } from './services/cron-plan';
 
 const app = createApp();
 
@@ -54,32 +56,38 @@ export default {
   },
 
   async scheduled(controller: ScheduledController, rawEnv: Env): Promise<void> {
+    // the 5-minute tick decides from KV alone; most ticks end here without touching the database
+    const plan = controller.cron === '*/5 * * * *' ? await cronPlan(rawEnv, new Date(controller.scheduledTime)) : null;
+    if (plan && !plan.wake) return;
     // Platform housekeeping runs per tenant under RLS (no bypass role exists).
     const db = Db.fromEnv(rawEnv);
     // keys saved in Settings → Connection keys take the place of the .env values
     const env = await withPlatformKeys(rawEnv, db);
+    const log = (job: string) => (e: unknown) => console.error(JSON.stringify({ level: 'error', job, msg: (e as Error).message }));
     try {
-      if (controller.cron === '*/5 * * * *') {
-        // reminders: a KV read decides whether the database needs waking at all
-        await reminderSweep(env, db);
-        // connected Gmail / Outlook mailboxes (each at most every ~15 minutes)
-        await mailSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'mail-sweep', msg: (e as Error).message })));
-        // Zoom / Meet / Teams calls that ended: transcript fetched, then analysed into minutes and actions
-        await meetingSweep(env, db, (t, e, o) => analyseAsOwner(env, db, t, e, o)).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'meeting-sweep', msg: (e as Error).message })));
-        // mailboxes read for GeM alerts, bills and invoices (each at most every ~15 minutes)
-        await intakeSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'intake-sweep', msg: (e as Error).message })));
-        // followed GeM bids: details and bid documents read from GeM's public pages
-        await gemDetailsSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'gem-details', msg: (e as Error).message })));
-        // statements that came by mail: opened with the saved passwords, imported, handed to the desk
-        await statementSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'statement-mail', msg: (e as Error).message })));
-        // campaigns send in batches while one is running (a KV flag keeps idle workspaces asleep)
-        await campaignSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'campaign-sweep', msg: (e as Error).message })));
-        await digestSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'digest-sweep', msg: (e as Error).message })));
-        // revenue intelligence: scores, insights, auto meeting prep, search index (hourly, KV-gated)
-        await intelSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'intel-sweep', msg: (e as Error).message })));
+      if (plan) {
+        // reminders: each sweep also stores when the next one is due
+        if (plan.reminders) await reminderSweep(env, db).catch(log('reminders'));
+        if (plan.poll) {
+          // connected Gmail / Outlook mailboxes (each at most every ~15 minutes, 07:00–21:00 IST)
+          await mailSweep(env, db).catch(log('mail-sweep'));
+          // Zoom / Meet / Teams calls that ended: transcript fetched, then analysed into minutes and actions
+          await meetingSweep(env, db, (t, e, o) => analyseAsOwner(env, db, t, e, o)).catch(log('meeting-sweep'));
+          // mailboxes read for GeM alerts, bills and invoices
+          await intakeSweep(env, db).catch(log('intake-sweep'));
+          // followed GeM bids: details and bid documents read from GeM's public pages
+          await gemDetailsSweep(env, db).catch(log('gem-details'));
+          // statements that came by mail: opened with the saved passwords, imported, handed to the desk
+          await statementSweep(env, db).catch(log('statement-mail'));
+        }
+        // campaigns send in batches while one is running
+        if (plan.campaigns) await campaignSweep(env, db).catch(log('campaign-sweep'));
+        if (plan.digests) await digestSweep(env, db).catch(log('digest-sweep'));
+        // revenue intelligence: scores, insights, auto meeting prep, search index (at most hourly)
+        if (plan.intel) await intelSweep(env, db).catch(log('intel-sweep'));
         // work items: scheduled automation rules (hourly), then watcher / assignee emails and chat posts
-        if (new Date().getUTCMinutes() < 5) await scheduledRulesSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'work-rules', msg: (e as Error).message })));
-        await workMailSweep(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'work-mail', msg: (e as Error).message })));
+        if (plan.rules) await scheduledRulesSweep(env, db).catch(log('work-rules'));
+        if (plan.workMail) await workMailSweep(env, db).catch(log('work-mail'));
         return;
       }
       await reminderSweep(env, db, true);
@@ -107,8 +115,8 @@ export default {
         // work items due tomorrow or overdue go into each assignee's morning digest
         await queueDueSoon(db, t.tenant_id).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'work-due', tenant: t.tenant_id, msg: (e as Error).message })));
       }
-      // workspaces with automatic backups enabled get one a day (kept: newest 7)
-      await dailyBackups(env, db).catch((e) => console.error(JSON.stringify({ level: 'error', job: 'daily-backups', msg: (e as Error).message })));
+      // automatic backups are off unless the platform turns them on (Settings → Connection keys → Options)
+      if (env.AUTO_BACKUPS === 'true') await dailyBackups(env, db).catch(log('daily-backups'));
     } finally {
       await db.close();
     }

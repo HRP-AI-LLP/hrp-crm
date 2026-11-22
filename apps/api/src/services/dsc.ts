@@ -1,12 +1,12 @@
 /**
- * Digital signature certificates (DSC) for signing documents from Synapse only.
+ * Digital signature certificates (DSC) for signing documents from SanchalanOS only.
  *
  *  .pfx file   uploaded once with its password; both are kept encrypted with the deployment key and are
- *              never handed back. Synapse signs the document's PDF itself (CMS / PAdES, readable by
+ *              never handed back. SanchalanOS signs the document's PDF itself (CMS / PAdES, readable by
  *              Adobe Reader), keeps the signed PDF on the record and records the signature.
  *  USB token   the key never leaves the token. A small signer on the computer with the token (see
  *              tools/dsc-signer) is paired with this workspace; it signs only when given a ticket that
- *              Synapse made for that exact PDF, with the pairing secret. Synapse then checks the signed
+ *              SanchalanOS made for that exact PDF, with the pairing secret. SanchalanOS then checks the signed
  *              PDF (the certificate is the registered one, the signature is valid, the original document
  *              is unchanged inside it) before keeping it.
  *
@@ -236,7 +236,7 @@ const toHex = (u: Uint8Array) => Array.from(u, (b) => b.toString(16).padStart(2,
 const fromHex = (h: string) => Uint8Array.from(h.match(/../g) ?? [], (x) => parseInt(x, 16));
 
 /**
- * Signing with a USB token, step 1. Synapse puts the signature field and stamp into the PDF and works out
+ * Signing with a USB token, step 1. SanchalanOS puts the signature field and stamp into the PDF and works out
  * the 32-byte digest the token must sign (it fixes the PDF's bytes and the signing time). The ticket is a
  * one-off permission, sealed with the signer's pairing secret, for the signer on this computer to sign
  * exactly that digest with exactly this certificate within 10 minutes. The token never sees anything else,
@@ -287,7 +287,7 @@ export async function prepareTokenSign(ctx: RecordCtx, env: Env, objectKey: stri
 export const tokenCompleteSchema = z.object({ ticket: z.string().max(4000), prepared: z.string().min(100).max(25_000_000), signature: z.string().min(40).max(4000) });
 
 /**
- * Step 2: the token's signature comes back. Synapse checks the ticket, puts the signature into the prepared
+ * Step 2: the token's signature comes back. SanchalanOS checks the ticket, puts the signature into the prepared
  * PDF, and verifies it with the registered certificate before keeping it.
  */
 export async function completeTokenSign(ctx: RecordCtx, env: Env, objectKey: string, recordId: string, input: z.infer<typeof tokenCompleteSchema>) {

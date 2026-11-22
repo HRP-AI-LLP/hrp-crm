@@ -289,7 +289,7 @@ export const salesRoutes = new Hono<AppEnv>()
     const out = await c.var.db.tx(scope(c), async (tx) => {
       await loadRow(rctx(c, tx), object, id, 'read');
       const sender = await pickSender(tx, c.var.tenant.id, c.var.principal.user.id);
-      if (!sender) throw badRequest('Connect your Gmail or Outlook in My account (or ask an admin to add an email channel) to send from Synapse');
+      if (!sender) throw badRequest('Connect your Gmail or Outlook in My account (or ask an admin to add an email channel) to send from SanchalanOS');
       // a reply continues the conversation thread in the person's mailbox
       const thread = sender.mailboxId
         ? await tx.one<{ t: string | null }>(

@@ -109,7 +109,7 @@ export function openApi(meta: TenantMeta, perms: EffectivePermissions, origin: s
   return {
     openapi: '3.1.0',
     info: {
-      title: `${meta.tenant.name} · HRP Synapse API`,
+      title: `${meta.tenant.name} · SanchalanOS API`,
       version: '1',
       description:
         'Authenticate with an API key from Settings → API keys: `Authorization: Bearer syn_…`. Keys act as a person and see what that person sees. Each key allows a number of requests a minute (see the X-RateLimit-* headers); 429 means wait for Retry-After seconds. Webhooks are signed: `X-Synapse-Signature-V2: t=<unix>,v1=<hex HMAC-SHA256 of "t.body" with your secret>`.',

@@ -1,6 +1,6 @@
 /**
  * Provider-neutral GST returns: builds the GST portal's JSON for GSTR-1, GSTR-3B and ITC-04 from
- * Synapse's own records, and the filing calendar with due dates. The JSON is what the portal's
+ * SanchalanOS's own records, and the filing calendar with due dates. The JSON is what the portal's
  * offline tool and every GSP accept (keys and formats as in GSTN's API schema), so it can be saved
  * through WhiteBooks or downloaded and uploaded on gst.gov.in by hand.
  *

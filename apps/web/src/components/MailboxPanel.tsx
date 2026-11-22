@@ -91,14 +91,14 @@ export function MailboxPanel() {
               </div>
             </div>
             <p className="muted small" style={{ margin: 0 }}>
-              Mail with people who are contacts or open leads in Synapse is added to their timeline — nothing else is read or stored. Email you send from Synapse goes out from this address.
+              Mail with people who are contacts or open leads in SanchalanOS is added to their timeline — nothing else is read or stored. Email you send from SanchalanOS goes out from this address.
             </p>
             <label className="row">
               <span className="switch">
-                <input type="checkbox" checked={mb.config.calendar !== false} onChange={(e) => act(() => patch('/api/v1/integrations/mailbox', { calendar: e.target.checked }), 'Saved')} aria-label="Add my Synapse meetings to my calendar" />
+                <input type="checkbox" checked={mb.config.calendar !== false} onChange={(e) => act(() => patch('/api/v1/integrations/mailbox', { calendar: e.target.checked }), 'Saved')} aria-label="Add my SanchalanOS meetings to my calendar" />
                 <span />
               </span>
-              Add my Synapse meetings and site visits to my {mb.provider === 'google' ? 'Google' : 'Outlook'} calendar
+              Add my SanchalanOS meetings and site visits to my {mb.provider === 'google' ? 'Google' : 'Outlook'} calendar
             </label>
             <label className="field">
               <span>Never log mail with these addresses or domains</span>

@@ -1,7 +1,7 @@
 /**
  * Viewing and signing any attached document. A PDF or photo opens in a viewer with the people who
  * signed it; anyone who may change the record can put a saved signature on it (chosen pages and
- * corner) or digitally sign it with a DSC kept in Synapse (.pfx) or on a USB token through the local
+ * corner) or digitally sign it with a DSC kept in SanchalanOS (.pfx) or on a USB token through the local
  * signer. Each signing keeps a new "… - signed.pdf" next to the original.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';

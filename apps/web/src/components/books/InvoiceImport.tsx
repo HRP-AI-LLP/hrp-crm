@@ -597,7 +597,7 @@ function EditInvoice({ item, onClose, onDone, onApprove }: { item: Json; onClose
         <div className="muted small">
           Lines add up to {money2(linesSum)}
           {d.taxable != null && Math.abs(linesSum - Number(d.taxable)) > 1 ? ' — not the taxable value' : ''} · taxable + tax = {money2((Number(d.taxable) || 0) + tax)}
-          {d.total != null && Math.abs((Number(d.taxable) || 0) + tax - Number(d.total)) > 1 ? ` — not the total ${money2(Number(d.total))}` : ''}. Synapse recalculates the tax from the lines; approval stops if its total differs from the document by more than ₹1.
+          {d.total != null && Math.abs((Number(d.taxable) || 0) + tax - Number(d.total)) > 1 ? ` — not the total ${money2(Number(d.total))}` : ''}. SanchalanOS recalculates the tax from the lines; approval stops if its total differs from the document by more than ₹1.
         </div>
 
         <fieldset style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}>

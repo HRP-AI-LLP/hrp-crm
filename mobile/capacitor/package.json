@@ -2,7 +2,7 @@
   "name": "synapse-mobile",
   "private": true,
   "version": "1.0.0",
-  "description": "Native shell (Android / iOS) around the HRP Synapse web app",
+  "description": "Native shell (Android / iOS) around the SanchalanOS web app",
   "scripts": {
     "add:android": "cap add android",
     "add:ios": "cap add ios",

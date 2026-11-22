@@ -1,7 +1,7 @@
 /**
  * Revenue intelligence API: agents, the Copilot workspace, action items, AI suggestions,
  * insights, scores, meetings (notes, transcripts, prep and debrief), competitors and
- * "Ask Synapse". Everything runs as the signed-in person and only touches what they can see.
+ * "Ask SanchalanOS". Everything runs as the signed-in person and only touches what they can see.
  */
 import { AGENTS, fieldAccess, objectPerm } from '@synapse/shared';
 import { Hono } from 'hono';

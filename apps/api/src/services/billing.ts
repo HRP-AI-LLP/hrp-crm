@@ -282,7 +282,7 @@ export async function invoiceFromOrder(ctx: RecordCtx, orderId: string, opts: { 
 /** Assigns the GST number, snapshots the parties and locks the document. */
 /**
  * Issues a draft. `imported`: an invoice raised and reported elsewhere (Zoho, Tally…) keeps its own number
- * and is marked imported, so Synapse never reports it to GSTR-1 or e-invoicing again.
+ * and is marked imported, so SanchalanOS never reports it to GSTR-1 or e-invoicing again.
  */
 export async function issueInvoice(ctx: RecordCtx, id: string, imported: { number: string; source?: string | null } | null = null): Promise<RecordEvent[]> {
   const { row } = await loadRow(ctx, 'invoice', id, 'update', true);
@@ -312,7 +312,7 @@ export async function issueInvoice(ctx: RecordCtx, id: string, imported: { numbe
     ? { number: imported.number.trim().slice(0, 60), fy: financialYear(date) }
     : await nextFyNumber(ctx, series, date, series === 'credit_note' ? settings.creditNotePrefix : series === 'proforma' ? 'PI' : settings.invoicePrefix);
   if (imported && (await ctx.tx.one(`select 1 from invoices where tenant_id = $1 and doc_type = $2 and invoice_number = $3 and id <> $4`, [ctx.tenantId, row.doc_type, n.number, id])))
-    throw badRequest(`Invoice ${n.number} is already in Synapse`);
+    throw badRequest(`Invoice ${n.number} is already in SanchalanOS`);
   // terms (other than custom) date the invoice from the day it is issued
   const due = dueFromTerms(row.payment_terms as string | null, date) ?? row.due_date ?? new Date(new Date(`${date}T00:00:00Z`).getTime() + settings.dueDays * 86_400_000).toISOString().slice(0, 10);
   // a foreign-currency invoice is booked at the day's reference rate unless one was set

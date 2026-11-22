@@ -35,7 +35,7 @@ export function ProjectsPage() {
     <>
       {github && (
         <div className={`callout small ${github === 'cancelled' ? 'warn' : ''}`} style={{ marginBottom: 10 }}>
-          {github === 'cancelled' ? 'The GitHub App was not installed.' : `GitHub App installed on ${github}. Link a project’s repository from its Work setup — pick it from the list — and pull requests get the Synapse check.`}{' '}
+          {github === 'cancelled' ? 'The GitHub App was not installed.' : `GitHub App installed on ${github}. Link a project’s repository from its Work setup — pick it from the list — and pull requests get the SanchalanOS check.`}{' '}
           <button className="link-btn small" onClick={() => setSp((p) => (p.delete('github'), p))}>
             Dismiss
           </button>

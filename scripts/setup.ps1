@@ -1,12 +1,12 @@
 <#
-  HRP Synapse - first-time setup for Windows (PowerShell 5.1+ / 7+).
+  SanchalanOS - first-time setup for Windows (PowerShell 5.1+ / 7+).
 
   Run from the repository root in the VS Code terminal AFTER setting:
      $env:NEON_API_KEY="napi_..."
      $env:CLOUDFLARE_API_TOKEN="..."
      $env:CLOUDFLARE_ACCOUNT_ID="..."
   Optional:
-     $env:ZONE_NAME="hrpai.in"            # defaults: hrpsynapse-dev.hrpai.in (dev), hrpsynapse.hrpai.in (prod)
+     $env:ZONE_NAME="hrpai.in"            # the app is served on www.sanchalan.hrpai.in (PROD_APP_HOST to change)
      $env:GROQ_API_KEY="..."; $env:GEMINI_API_KEY="..."
 
   Then:  .\scripts\setup.ps1
@@ -48,7 +48,7 @@ node scripts/setup/provision.mjs
 if ($LASTEXITCODE -ne 0) { Fail 'Provisioning failed. Fix the error above and run this script again (it is safe to re-run).' }
 
 Write-Host "`nAll set. Next: commit, create the dev and prod branches, and push:" -ForegroundColor Green
-Write-Host '  git add -A; git commit -m "HRP Synapse bootstrap"'
+Write-Host '  git add -A; git commit -m "SanchalanOS bootstrap"'
 Write-Host '  git branch dev; git branch prod'
 Write-Host '  git remote add origin https://github.com/<you>/hrp-crm.git'
 Write-Host '  git push -u origin main dev prod'

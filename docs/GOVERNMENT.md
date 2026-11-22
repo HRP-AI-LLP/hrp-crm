@@ -1,8 +1,8 @@
 # Government and tender contracts (GeM, CPPP, PSU)
 
-This is how a contract won on GeM, CPPP or a PSU e-procurement portal runs in Synapse, from the bid to the last retention release. The worked example is a GeM order from the Food Corporation of India (FCI), with one milestone delivered.
+This is how a contract won on GeM, CPPP or a PSU e-procurement portal runs in SanchalanOS, from the bid to the last retention release. The worked example is a GeM order from the Food Corporation of India (FCI), with one milestone delivered.
 
-## What Synapse adds for government buyers
+## What SanchalanOS adds for government buyers
 
 | Need | Where |
 |---|---|
@@ -14,7 +14,7 @@ This is how a contract won on GeM, CPPP or a PSU e-procurement portal runs in Sy
 | Payments net of income-tax TDS, GST TDS (section 51), liquidated damages, retention and bank charges | **Record payment** → *The customer deducted something* |
 | TDS and GST TDS to claim, and retention to collect | Books → GST & TDS; Books → Deposits & guarantees |
 
-## Postings (when Synapse keeps the books)
+## Postings (when SanchalanOS keeps the books)
 
 | Event | Debit | Credit |
 |---|---|---|
@@ -32,7 +32,7 @@ When Tally is the books of record, nothing is posted. The register still works, 
 
 - **Deposits & guarantees:**
   - Viewing: books or billing admins. The register is under Books and under Billing & GST.
-  - Changing: when Synapse keeps the books, only books admins, because changes post journals. Otherwise, billing admins too.
+  - Changing: when SanchalanOS keeps the books, only books admins, because changes post journals. Otherwise, billing admins too.
 - **Deductions on receipts:** books or billing admins. GST TDS, liquidated damages and retention are recorded on rupee receipts only.
 - **Milestone acceptance:** project managers.
 - **Reminders:** the person who recorded a deposit is notified 30 and 7 days before it expires. Extending it resets the reminders.
@@ -52,7 +52,7 @@ When Tally is the books of record, nothing is posted. The register still works, 
 
 1. In **Settings → Apps**, switch on **Orders**, **GST billing**, **Purchasing**, **Books** and **Projects**.
 2. In **Settings → Sales setup**, enter your legal name, GSTIN, state and address. In **Billing & GST → Settings**, enter the bank details printed on invoices.
-3. In **Books → Settings**, choose **Synapse keeps the books** and set the books start date. If you use Tally, choose Tally instead and set up Billing & GST → Tally.
+3. In **Books → Settings**, choose **SanchalanOS keeps the books** and set the books start date. If you use Tally, choose Tally instead and set up Billing & GST → Tally.
 4. In **Books → Banking**, add your current account. This is where payments land and where the EMD and margin money are paid from.
 
 ### 2. The buyer
@@ -144,7 +144,7 @@ The invoice becomes **Paid**. The deductions go to their own accounts, and reten
 
 - **Books → GST & TDS** lists every deduction by customer.
   - Income-tax TDS: match it to Form 26AS and claim it in your return.
-  - GST TDS: accept it in GSTR-2X — in Synapse, **Billing & GST → GST portal → Prepare a return → GSTR-2X** accepts every credit the deductors reported, then save and file it. It then reaches your electronic cash ledger. When you use it to pay GST, post a journal: Dr the output GST it pays, Cr *GST TDS receivable (section 51)*.
+  - GST TDS: accept it in GSTR-2X — in SanchalanOS, **Billing & GST → GST portal → Prepare a return → GSTR-2X** accepts every credit the deductors reported, then save and file it. It then reaches your electronic cash ledger. When you use it to pay GST, post a journal: Dr the output GST it pays, Cr *GST TDS receivable (section 51)*.
 - **GSTR-1 and GSTR-3B** include the invoice. File them from **Billing & GST → GST portal**.
 
 ### 9. Retention, guarantees and closure

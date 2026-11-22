@@ -317,7 +317,7 @@ describe('insights sweep and Copilot', () => {
   });
 });
 
-describe('Ask Synapse', () => {
+describe('Ask SanchalanOS', () => {
   it('answers from conversations the asker can see, with citations', async () => {
     const r = await api('POST', '/api/v1/intel/ask', { question: 'Which finish did Priya ask about?' });
     expect(r.status).toBe(200);

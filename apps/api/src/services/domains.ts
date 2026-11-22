@@ -2,11 +2,11 @@
  * Workspace hostnames.
  *
  * Cloudflare's free Universal SSL certificate covers hrpai.in and *.hrpai.in only — one level.
- * A workspace host like acme.hrpsynapse.hrpai.in is two levels deep, so a wildcard route would
+ * A workspace host like acme.sanchalan.hrpai.in is two levels deep, so a wildcard route would
  * serve it without a valid certificate. Instead, each vanity host is attached to the Worker as a
  * Workers Custom Domain, which issues its own certificate for that exact hostname at no cost.
  * This is opt-in (needs CF_TENANT_DOMAINS_TOKEN); without it every workspace uses the shared
- * app host (hrpsynapse.hrpai.in) and picks its workspace at sign-in.
+ * app host (www.sanchalan.hrpai.in) and picks its workspace at sign-in.
  */
 import type { Env } from '../env';
 

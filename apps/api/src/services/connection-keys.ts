@@ -194,7 +194,7 @@ function check(key: string, value: string) {
     }
     if (j.type !== 'service_account' || !j.client_email || !j.private_key) throw badRequest('That JSON is not a service-account key');
   }
-  if (key === 'MAIL_FROM' && !/^(.{0,100}<)?[^\s@<>]+@[^\s@<>]+\.[a-z]{2,}>?$/i.test(value)) throw badRequest('Send as: an address like HRP Synapse <no-reply@your-domain>');
+  if (key === 'MAIL_FROM' && !/^(.{0,100}<)?[^\s@<>]+@[^\s@<>]+\.[a-z]{2,}>?$/i.test(value)) throw badRequest('Send as: an address like SanchalanOS <no-reply@your-domain>');
   if (key === 'VAPID_SUBJECT' && !/^(mailto:|https:\/\/)/.test(value)) throw badRequest('Contact: a mailto: or https:// address');
 }
 

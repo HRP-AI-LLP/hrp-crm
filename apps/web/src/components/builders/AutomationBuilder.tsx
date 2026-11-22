@@ -129,7 +129,7 @@ export function AutomationsTab() {
     <div className="stack">
       <div className="spread">
         <p className="muted small" style={{ margin: 0 }}>
-          When something happens to a record, Synapse checks your conditions and runs the steps — with if/else branches for different paths.
+          When something happens to a record, SanchalanOS checks your conditions and runs the steps — with if/else branches for different paths.
         </p>
         <button className="btn primary" onClick={() => setEditing({ name: '', objectKey: 'lead', triggerEvent: 'created', conditions: [], actions: [STEP_TYPES[0]!.make()], isEnabled: true })}>
           New automation

@@ -1080,7 +1080,7 @@ export function GitHubAppSection() {
       ) : data ? (
         <div className="stack" style={{ gap: 6 }}>
           <p className="muted small" style={{ margin: 0 }}>
-            Installed on your GitHub organisation, Synapse lists its repositories to pick from, posts a “Synapse work items” check on every pull request, can make that check required on the main branch, and creates branches from work items.
+            Installed on your GitHub organisation, SanchalanOS lists its repositories to pick from, posts a “SanchalanOS work items” check on every pull request, can make that check required on the main branch, and creates branches from work items.
           </p>
           {(data.installations as Json[]).map((i) => (
             <div key={i.id} className="row small" style={{ gap: 8 }}>
@@ -1140,9 +1140,9 @@ export function RequireCheckButton({ projectId, repo }: { projectId: string; rep
   return (
     <button
       className="link-btn small"
-      title="Make “Synapse work items” a required status check on the main branch"
+      title="Make “SanchalanOS work items” a required status check on the main branch"
       onClick={async () => {
-        if (!window.confirm(`Make the Synapse check required on ${repo.repo} (${repo.default_branch})? Pull requests that don’t name a work item can’t be merged.`)) return;
+        if (!window.confirm(`Make the SanchalanOS check required on ${repo.repo} (${repo.default_branch})? Pull requests that don’t name a work item can’t be merged.`)) return;
         const r = await run(() => post<Json>(`/api/v1/projects/${projectId}/work/repos/${repo.id}/require-check`, {}));
         if (r) window.alert(r.already ? 'The check is already required.' : 'Done — the check is now required on the main branch.');
       }}

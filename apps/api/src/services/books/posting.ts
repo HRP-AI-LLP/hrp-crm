@@ -240,7 +240,7 @@ async function buildReimbursement(tx: Tx, t: string, id: string) {
 }
 
 /**
- * Brings a document's journal in line with the document. No-op unless Synapse keeps the books.
+ * Brings a document's journal in line with the document. No-op unless SanchalanOS keeps the books.
  * Documents dated before the books start date are covered by opening balances instead.
  */
 export async function repost(tx: Tx, tenantId: string, source: Source, id: string) {

@@ -1,16 +1,18 @@
-// HRP Synapse gateway Worker — TEMPLATE.
+// SanchalanOS gateway Worker — TEMPLATE.
 // `pnpm run setup` renders this into wrangler.jsonc with your real resource IDs. Edit this file,
 // not wrangler.jsonc, then re-run setup (or replace the __PLACEHOLDERS__ by hand).
-// Bindings are NOT inherited by environments in Wrangler, so each env lists them explicitly.
+//
+// Two environments only:
+//   dev  → this computer (`pnpm local`, apps/api/wrangler.local.jsonc, Postgres in a container)
+//   prod → Cloudflare + Neon (`--env production`, deployed from the GitHub "main" branch)
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "synapse-local",
+  "name": "sanchalanos-local",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
 
-  // ---- local development (`pnpm dev`): DATABASE_URL + JWT_SECRET come from apps/api/.dev.vars
+  // ---- `wrangler dev` without an env (the same settings as `pnpm local`)
   "assets": {
     "directory": "../web/dist",
     "binding": "ASSETS",
@@ -25,56 +27,15 @@
     "CORS_ORIGINS": "http://localhost:5173",
     "AI_DAILY_LIMIT_PER_TENANT": "300"
   },
-  // local R2 is simulated by wrangler dev (attachments, delivery proofs, signatures)
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "synapse-files-local" }],
-  // `pnpm local`: AI and knowledge-base search use the real dev resources in Cloudflare
-  // (needs CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID in the terminal)
-  "ai": { "binding": "AI", "remote": true },
-  "vectorize": [{ "binding": "VECTORIZE", "index_name": "synapse-kb-dev", "remote": true }],
 
   "env": {
-    // ---------------------------------------------------------------- dev (branch: dev)
-    "dev": {
-      "name": "synapse-dev",
-      "workers_dev": true,
-      // __DEV_ROUTES__
-      "assets": {
-        "directory": "../web/dist",
-        "binding": "ASSETS",
-        "not_found_handling": "single-page-application",
-        "run_worker_first": ["/api/*", "/.well-known/assetlinks.json"]
-      },
-      "vars": {
-        "APP_ENV": "dev",
-        "CORS_ORIGINS": "",
-        "APP_HOST": "__DEV_APP_HOST__",
-        "BASE_DOMAIN": "__DEV_APP_HOST__",
-        "SAAS_CNAME_TARGET": "__DEV_APP_HOST__",
-        "MAIL_FROM": "HRP Synapse <no-reply@hrpai.in>",
-        "VAPID_SUBJECT": "mailto:info@hrpai.in",
-        "CF_ACCOUNT_ID": "__CF_ACCOUNT_ID__",
-        "CF_ZONE_NAME": "__ZONE_NAME__",
-        "WORKER_NAME": "synapse-dev",
-        "ALLOW_TENANT_HEADER": "true",
-        "SIGNUP_ENABLED": "true",
-        "AI_DAILY_LIMIT_PER_TENANT": "300",
-        "AI_PII_PROVIDERS": "workers-ai,groq"
-      },
-      "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "__DEV_HYPERDRIVE_ID__" }],
-      "kv_namespaces": [{ "binding": "CACHE_KV", "id": "__DEV_KV_ID__" }],
-      "queues": {
-        "producers": [{ "binding": "JOBS", "queue": "synapse-jobs-dev" }],
-        "consumers": [{ "queue": "synapse-jobs-dev", "max_batch_size": 10, "max_batch_timeout": 5, "max_retries": 5, "dead_letter_queue": "synapse-jobs-dlq-dev" }]
-      },
-      "ai": { "binding": "AI" },
-      "vectorize": [{ "binding": "VECTORIZE", "index_name": "synapse-kb-dev" }],
-      "triggers": { "crons": ["17 3 * * *", "*/5 * * * *"] }
-    },
-
-    // ---------------------------------------------------------------- production (branch: prod)
+    // ---------------------------------------------------------------- production (branch: main)
     "production": {
-      "name": "synapse-prod",
-      "workers_dev": true,
+      "name": "sanchalanos",
+      // the app is served only on its own domain (no *.workers.dev copy to keep warm or secure)
+      "workers_dev": false,
+      "preview_urls": false,
       // __PROD_ROUTES__
       "assets": {
         "directory": "../web/dist",
@@ -82,17 +43,19 @@
         "not_found_handling": "single-page-application",
         "run_worker_first": ["/api/*", "/.well-known/assetlinks.json"]
       },
+      // logs on, sampled: enough to debug, well inside the free allowance
+      "observability": { "enabled": true, "head_sampling_rate": 0.2 },
       "vars": {
         "APP_ENV": "production",
         "CORS_ORIGINS": "",
         "APP_HOST": "__PROD_APP_HOST__",
-        "BASE_DOMAIN": "__PROD_APP_HOST__",
+        "BASE_DOMAIN": "__PROD_BASE_DOMAIN__",
         "SAAS_CNAME_TARGET": "__PROD_APP_HOST__",
-        "MAIL_FROM": "HRP Synapse <no-reply@hrpai.in>",
+        "MAIL_FROM": "SanchalanOS <no-reply@hrpai.in>",
         "VAPID_SUBJECT": "mailto:info@hrpai.in",
         "CF_ACCOUNT_ID": "__CF_ACCOUNT_ID__",
         "CF_ZONE_NAME": "__ZONE_NAME__",
-        "WORKER_NAME": "synapse-prod",
+        "WORKER_NAME": "sanchalanos",
         "ALLOW_TENANT_HEADER": "false",
         "SIGNUP_ENABLED": "true",
         "AI_DAILY_LIMIT_PER_TENANT": "300",
@@ -106,6 +69,8 @@
       },
       "ai": { "binding": "AI" },
       "vectorize": [{ "binding": "VECTORIZE", "index_name": "synapse-kb-prod" }],
+      // 03:17 UTC daily housekeeping + a 5-minute tick that reads KV first and wakes the database
+      // only when something is due (see apps/api/src/services/cron-plan.ts)
       "triggers": { "crons": ["17 3 * * *", "*/5 * * * *"] }
     }
   }

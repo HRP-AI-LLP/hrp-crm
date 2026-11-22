@@ -23,13 +23,13 @@ const criteriaSchema = z.array(z.object({ field: z.string().regex(KEY_PATTERN), 
 export async function sendInvite(c: { env: AppEnv['Bindings']; req: { url: string }; var: AppEnv['Variables'] }, user: { email: string; full_name: string }, token: string) {
   const url = `${appOrigin(c.env, c.req.url)}/accept-invite?workspace=${c.var.tenant.slug}&token=${token}`;
   const mail = actionEmail({
-    heading: `Join ${c.var.tenant.name} on HRP Synapse`,
+    heading: `Join ${c.var.tenant.name} on SanchalanOS`,
     intro: `Hi ${user.full_name}, ${c.var.principal.user.fullName} invited you to the ${c.var.tenant.name} workspace.`,
     cta: 'Accept the invitation',
     url,
     footer: 'The invitation is valid for 7 days.',
   });
-  const emailed = await sendPlatformMail(c.env, { to: user.email, subject: `You're invited to ${c.var.tenant.name} on HRP Synapse`, ...mail });
+  const emailed = await sendPlatformMail(c.env, { to: user.email, subject: `You're invited to ${c.var.tenant.name} on SanchalanOS`, ...mail });
   return { url, emailed };
 }
 
@@ -91,8 +91,9 @@ export const securityRoutes = new Hono<AppEnv>()
   .get('/backups', async (c) => {
     ownerOnly(c);
     const daily = await c.var.db.tx(scope(c, true), (tx) => tx.one<{ on: boolean }>(`select coalesce((settings -> 'backup' ->> 'daily')::boolean, false) as on from tenants where id = $1`, [c.var.tenant.id]));
-    if (!c.env.FILES) return c.json({ available: false, daily: daily?.on ?? false, items: [] });
-    return c.json({ available: true, daily: daily?.on ?? false, items: await listBackups(c.env, c.var.tenant.id) });
+    const nightly = c.env.AUTO_BACKUPS === 'true';
+    if (!c.env.FILES) return c.json({ available: false, daily: daily?.on ?? false, nightly, items: [] });
+    return c.json({ available: true, daily: daily?.on ?? false, nightly, items: await listBackups(c.env, c.var.tenant.id) });
   })
   .post('/backups', async (c) => {
     ownerOnly(c);
@@ -205,7 +206,7 @@ export const securityRoutes = new Hono<AppEnv>()
     });
     const url = `${appOrigin(c.env, c.req.url)}/reset-password?workspace=${c.var.tenant.slug}&token=${r.token}`;
     const mail = actionEmail({ heading: 'Set a new password', intro: `Hi ${r.u.full_name}, your administrator sent you a link to set a new password for ${c.var.tenant.name}.`, cta: 'Choose a new password', url, footer: 'The link works for 24 hours.' });
-    const emailed = await sendPlatformMail(c.env, { to: r.u.email, subject: 'Set a new HRP Synapse password', ...mail });
+    const emailed = await sendPlatformMail(c.env, { to: r.u.email, subject: 'Set a new SanchalanOS password', ...mail });
     return c.json({ resetUrl: url, emailed });
   })
   .post('/users/:id/reset-mfa', requireAdmin('users'), async (c) => {

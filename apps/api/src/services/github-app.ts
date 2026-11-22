@@ -1,9 +1,9 @@
 /**
- * The Synapse GitHub App: an admin installs it on their GitHub organisation or account, then
+ * The SanchalanOS GitHub App: an admin installs it on their GitHub organisation or account, then
  *   - repositories are picked from a list when linking them to projects,
- *   - every push and pull request gets a "Synapse work items" check run (pass / fail per the
+ *   - every push and pull request gets a "SanchalanOS work items" check run (pass / fail per the
  *     repository's code policy) — require it in branch protection and unlinked code cannot merge;
- *     Synapse can switch that protection on itself,
+ *     SanchalanOS can switch that protection on itself,
  *   - a branch can be created from a work item, named after its key.
  * One app for the whole platform (GITHUB_APP_* settings); its webhook goes to /api/public/github/app
  * and each installation is routed to the workspace that installed it.
@@ -18,7 +18,7 @@ import { projectAccess } from './projects';
 import type { RecordCtx } from './records';
 
 const API = 'https://api.github.com';
-export const CHECK_NAME = 'Synapse work items';
+export const CHECK_NAME = 'SanchalanOS work items';
 
 export function appConfigured(env: Env) {
   return !!(env.GITHUB_APP_ID && env.GITHUB_APP_SLUG && env.GITHUB_APP_PRIVATE_KEY && env.GITHUB_APP_WEBHOOK_SECRET);
@@ -100,7 +100,7 @@ export async function completeInstall(env: Env, db: Db, installationId: string, 
           s.t, inst.id, inst.account.login, inst.account.type, routeKey(inst.id), s.u,
         ]);
       } catch {
-        throw badRequest('This GitHub installation is already connected to another Synapse workspace');
+        throw badRequest('This GitHub installation is already connected to another SanchalanOS workspace');
       }
     } else await tx.query(`update github_installations set suspended_at = null, account = $3 where tenant_id = $1 and installation_id = $2`, [s.t, inst.id, inst.account.login]);
   });
@@ -193,7 +193,7 @@ export async function checksFor(tx: Tx, tenantId: string, event: string, body: a
     check: {
       sha,
       conclusion: fail ? 'failure' : missing.length ? 'neutral' : 'success',
-      title: fail ? `${missing.length} without a Synapse work item` : missing.length ? `${missing.length} without a work item (recorded)` : 'Linked to Synapse work items',
+      title: fail ? `${missing.length} without a SanchalanOS work item` : missing.length ? `${missing.length} without a work item (recorded)` : 'Linked to SanchalanOS work items',
       summary: [
         ...lines,
         '',
@@ -221,7 +221,7 @@ async function repoWithApp(ctx: RecordCtx, projectId: string, repoId: string) {
   return r as { repo: string; default_branch: string; installation_id: string };
 }
 
-/** Makes the "Synapse work items" check required on the main branch. */
+/** Makes the "SanchalanOS work items" check required on the main branch. */
 export async function requireCheck(ctx: RecordCtx, env: Env, projectId: string, repoId: string) {
   await projectAccess(ctx, projectId, 'manage');
   const r = await repoWithApp(ctx, projectId, repoId);
@@ -243,7 +243,7 @@ export async function requireCheck(ctx: RecordCtx, env: Env, projectId: string, 
       if (cur.required_status_checks.checks.some((c) => c.context === CHECK_NAME)) return { ok: true, already: true };
       await gh(token, `/repos/${r.repo}/branches/${branch}/protection/required_status_checks`, { method: 'PATCH', body: JSON.stringify({ strict: cur.required_status_checks.strict, checks: [...cur.required_status_checks.checks, add] }) });
     } else {
-      // a rule with other settings and no status checks: Synapse does not rewrite it
+      // a rule with other settings and no status checks: SanchalanOS does not rewrite it
       throw badRequest(`${r.default_branch} already has a protection rule without status checks — add “${CHECK_NAME}” as a required check in GitHub (Settings → Branches)`);
     }
   } catch (e) {

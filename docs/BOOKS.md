@@ -1,12 +1,12 @@
 # Books (accounting)
 
-Books is a built-in app (Settings → Apps) that turns Synapse into a full double-entry accounting system for Indian businesses, in the same territory as Zoho Books and Tally. It needs **GST billing** and **Purchasing** switched on.
+Books is a built-in app (Settings → Apps) that turns SanchalanOS into a full double-entry accounting system for Indian businesses, in the same territory as Zoho Books and Tally. It needs **GST billing** and **Purchasing** switched on.
 
-## Books of record: Synapse or Tally
+## Books of record: SanchalanOS or Tally
 
 Each workspace chooses one (Books → Settings):
 
-| | Synapse keeps the books | Accountant keeps the books in Tally |
+| | SanchalanOS keeps the books | Accountant keeps the books in Tally |
 |---|---|---|
 | Journals | Posted automatically from every invoice, credit note, receipt, write-off, bill, vendor credit, vendor payment, expense and reimbursement | Not posted |
 | Reports | Trial balance, P&L, balance sheet, cash flow, ledgers, GSTR-3B and the rest come from the ledger | GST and receivable reports from documents; the accountant's reports in Tally |

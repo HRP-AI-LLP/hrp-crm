@@ -1,4 +1,4 @@
-/* HRP Synapse service worker — generated into dist/sw.js by vite.config.ts (precache list + version).
+/* SanchalanOS service worker — generated into dist/sw.js by vite.config.ts (precache list + version).
  *  - app shell: hashed assets cache-first, page navigations network-first with the cached shell offline
  *  - never touches /api/* (data is always live; offline writes are queued by the app itself)
  *  - Web Push: shows notifications, focuses or opens the app at the notification's link
@@ -60,7 +60,7 @@ self.addEventListener('push', (event) => {
   try {
     msg = event.data ? event.data.json() : {};
   } catch {
-    msg = { title: 'HRP Synapse', body: event.data ? event.data.text() : '' };
+    msg = { title: 'SanchalanOS', body: event.data ? event.data.text() : '' };
   }
   let link = '/field';
   try {
@@ -70,7 +70,7 @@ self.addEventListener('push', (event) => {
     /* keep the default */
   }
   event.waitUntil(
-    self.registration.showNotification(msg.title || 'HRP Synapse', {
+    self.registration.showNotification(msg.title || 'SanchalanOS', {
       body: msg.body || '',
       tag: msg.tag || undefined,
       renotify: !!msg.tag,

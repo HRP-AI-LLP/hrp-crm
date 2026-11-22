@@ -221,7 +221,7 @@ export async function transcribeAll(env: Env, bytes: Uint8Array, type: string, o
   if (whole.segments) return { text: formatSegments(whole.segments), engine: whole.engine, reason: null, needsParts: false };
   if (whole.reason !== 'too_large' && bytes.length <= WHISPER_MAX) return { text: null, engine: null, reason: whole.reason, needsParts: false };
   const parts = splitAudio(bytes, type);
-  if (!parts) return { text: null, engine: null, reason: 'The recording is long — Synapse will cut it into parts in your browser and transcribe each one', needsParts: true };
+  if (!parts) return { text: null, engine: null, reason: 'The recording is long — SanchalanOS will cut it into parts in your browser and transcribe each one', needsParts: true };
   const all: Segment[] = [];
   let engine: SpeechResult['engine'] = null;
   for (const [i, p] of parts.entries()) {

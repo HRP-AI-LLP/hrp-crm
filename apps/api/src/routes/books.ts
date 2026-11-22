@@ -511,7 +511,7 @@ export const booksRoutes = new Hono<AppEnv>()
     requireCompliance(c);
     const b = z.object({ before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(await c.req.json());
     const r = await c.var.db.tx(scope(c), (tx) =>
-      tx.query(`update compliance_items set status = 'filed', notes = coalesce(notes, 'Filed before Synapse kept the calendar'), updated_at = now() where tenant_id = $1 and status in ('pending','in_progress') and due_date < $2::date returning id`, [c.var.tenant.id, b.before]),
+      tx.query(`update compliance_items set status = 'filed', notes = coalesce(notes, 'Filed before SanchalanOS kept the calendar'), updated_at = now() where tenant_id = $1 and status in ('pending','in_progress') and due_date < $2::date returning id`, [c.var.tenant.id, b.before]),
     );
     return c.json({ updated: r.length });
   })

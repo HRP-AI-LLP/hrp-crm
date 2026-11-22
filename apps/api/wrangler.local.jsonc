@@ -1,4 +1,4 @@
-// HRP Synapse — fully local development (`pnpm local`): no cloud resources at all.
+// SanchalanOS — fully local development (`pnpm local`): no cloud resources at all.
 // DATABASE_URL and the keys come from apps/api/.dev.vars, written by scripts/local/local-dev.mjs and
 // pointing at the local Postgres container. R2 files are simulated by wrangler on this computer.
 // Workers AI and Vectorize are not bound: AI features use GROQ_API_KEY / GEMINI_API_KEY when set,

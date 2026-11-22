@@ -330,7 +330,7 @@ describe('the GitHub App', () => {
     const ok = await hook('pull_request', pr(5, `${bugKey} fix zoom crash`, 'fix/zoom', 'sha-good'));
     expect(ok.status, await ok.clone().text()).toBe(200);
     expect(gh).toContain('POST /repos/acme-org/fleet/check-runs');
-    expect(ghBodies['POST /repos/acme-org/fleet/check-runs']).toMatchObject({ name: 'Synapse work items', head_sha: 'sha-good', conclusion: 'success' });
+    expect(ghBodies['POST /repos/acme-org/fleet/check-runs']).toMatchObject({ name: 'SanchalanOS work items', head_sha: 'sha-good', conclusion: 'success' });
     expect((await getItem(ids.bug)).links.some((l: Json) => l.kind === 'pr' && /pull\/5$/.test(l.url))).toBe(true);
     const bad = await hook('pull_request', pr(6, 'misc tweaks', 'tweaks', 'sha-bad'));
     expect(bad.status).toBe(200);
@@ -345,12 +345,12 @@ describe('the GitHub App', () => {
     const req = await pm('POST', `${P()}/repos/${ids.repo}/require-check`);
     expect(req.status, JSON.stringify(req.json)).toBe(200);
     expect(req.json.already).toBe(false);
-    expect(ghBodies['PUT /repos/acme-org/fleet/branches/main/protection']!.required_status_checks.checks).toEqual([{ context: 'Synapse work items', app_id: 424242 }]);
+    expect(ghBodies['PUT /repos/acme-org/fleet/branches/main/protection']!.required_status_checks.checks).toEqual([{ context: 'SanchalanOS work items', app_id: 424242 }]);
     expect((await pm('POST', `${P()}/repos/${ids.repo}/require-check`)).json.already).toBe(true);
     // an existing rule with other checks: the check is added to them
     protection = { required_status_checks: { strict: true, checks: [{ context: 'ci/build', app_id: null }] } };
     await pm('POST', `${P()}/repos/${ids.repo}/require-check`);
-    expect(ghBodies['PATCH /repos/acme-org/fleet/branches/main/protection/required_status_checks']).toEqual({ strict: true, checks: [{ context: 'ci/build', app_id: null }, { context: 'Synapse work items', app_id: 424242 }] });
+    expect(ghBodies['PATCH /repos/acme-org/fleet/branches/main/protection/required_status_checks']).toEqual({ strict: true, checks: [{ context: 'ci/build', app_id: null }, { context: 'SanchalanOS work items', app_id: 424242 }] });
     // a rule without status checks is left alone
     protection = { enforce_admins: { enabled: true } };
     expect((await pm('POST', `${P()}/repos/${ids.repo}/require-check`)).status).toBe(400);

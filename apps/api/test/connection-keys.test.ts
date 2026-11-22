@@ -105,9 +105,9 @@ describe('platform keys', () => {
     expect(mail.fields.find((f: Json) => f.key === 'RESEND_API_KEY')).toMatchObject({ source: 'env', value: '•••• v123' });
     expect(mail.status).toBe('ready');
     expect((await owner('POST', '/api/admin/connection-keys/test', { scope: 'platform', group: 'mail' })).json.checks[0]).toMatchObject({ ok: true });
-    await owner('PUT', '/api/admin/connection-keys', { scope: 'platform', values: { MAIL_FROM: 'Synapse <hello@mail.acme.test>' } });
+    await owner('PUT', '/api/admin/connection-keys', { scope: 'platform', values: { MAIL_FROM: 'SanchalanOS <hello@mail.acme.test>' } });
     mail = (await owner('GET', '/api/admin/connection-keys?scope=platform')).json.groups.find((x: Json) => x.id === 'mail');
-    expect(mail.fields.find((f: Json) => f.key === 'MAIL_FROM')).toMatchObject({ source: 'here', value: 'Synapse <hello@mail.acme.test>' });
+    expect(mail.fields.find((f: Json) => f.key === 'MAIL_FROM')).toMatchObject({ source: 'here', value: 'SanchalanOS <hello@mail.acme.test>' });
     expect((await owner('PUT', '/api/admin/connection-keys', { scope: 'platform', values: { MAIL_FROM: 'nobody' } })).status).toBe(400);
     delete h.env.RESEND_API_KEY;
     delete h.env.MAIL_FROM;

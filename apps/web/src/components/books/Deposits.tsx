@@ -281,7 +281,7 @@ function NewDeposit({ onClose, onDone, defaults }: { onClose: () => void; onDone
           {guarantee
             ? 'A guarantee is not money with the customer: only the margin your bank blocks is posted. You are reminded 30 and 7 days before it expires.'
             : f.instrument === 'withheld'
-              ? 'Retention withheld from a payment is added automatically when you record the receipt; use this only for amounts from before you started with Synapse.'
+              ? 'Retention withheld from a payment is added automatically when you record the receipt; use this only for amounts from before you started with SanchalanOS.'
               : f.instrument === 'exempt'
                 ? 'Recorded for the bid file; nothing is posted.'
                 : 'Posted as money with the customer until it is released or forfeited.'}

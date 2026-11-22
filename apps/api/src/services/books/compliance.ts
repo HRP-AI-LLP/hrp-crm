@@ -35,7 +35,7 @@ export const complianceSettingsSchema = z.object({
   staffEsi: z.boolean().default(false),
   staffPt: z.boolean().default(false),
   salaryTds: z.boolean().default(false),
-  /** run payroll in Synapse too (off: the HRMS does it) */
+  /** run payroll in SanchalanOS too (off: the HRMS does it) */
   payrollHere: z.boolean().default(false),
 });
 export type ComplianceSettings = z.infer<typeof complianceSettingsSchema>;
@@ -324,7 +324,7 @@ export async function complianceDailySweep(env: Env, db: Db, tenantId: string) {
 /**
  * Working papers for the LLP's annual filings, from the books: Form 11 (partners and their
  * contribution at the year end) and Form 8 (statement of assets and liabilities, income and
- * expenditure, and turnover). The CA checks and files them; Synapse prepares the figures.
+ * expenditure, and turnover). The CA checks and files them; SanchalanOS prepares the figures.
  */
 export async function llpWorking(ctx: RecordCtx, fyStart: number) {
   assertComplianceAccess(ctx);

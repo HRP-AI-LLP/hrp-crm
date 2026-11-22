@@ -28,7 +28,7 @@ describe('two-factor sign-in', () => {
     const s = await api('POST', '/api/auth/mfa/setup');
     expect(s.status, JSON.stringify(s.json)).toBe(200);
     secret = s.json.secret;
-    expect(s.json.uri).toMatch(/^otpauth:\/\/totp\/HRP%20Synapse/);
+    expect(s.json.uri).toMatch(/^otpauth:\/\/totp\/SanchalanOS/);
     expect((await api('POST', '/api/auth/mfa/enable', { code: '000000' })).status).toBe(400);
     const e = await api('POST', '/api/auth/mfa/enable', { code: await totpAt(secret) });
     expect(e.status, JSON.stringify(e.json)).toBe(200);

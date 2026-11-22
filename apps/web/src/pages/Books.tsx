@@ -211,7 +211,7 @@ function Overview({ go }: { go: (t: Tab) => void }) {
     <div className="stack">
       {cfg && (!cfg.enabled || cfg.books_of_record !== 'synapse') && (
         <div className="notice">
-          {!cfg.enabled ? 'Posting is off: documents are not posted to the ledger yet.' : 'Tally is the books of record: Synapse does not post journals; use Tally sync.'}{' '}
+          {!cfg.enabled ? 'Posting is off: documents are not posted to the ledger yet.' : 'Tally is the books of record: SanchalanOS does not post journals; use Tally sync.'}{' '}
           <button className="btn sm" onClick={() => go('settings')}>
             Settings
           </button>
@@ -2978,13 +2978,13 @@ function Settings() {
           <label className="row">
             <input type="radio" checked={c.books_of_record === 'synapse'} onChange={() => setF({ ...c, books_of_record: 'synapse' })} />
             <span>
-              <b>Synapse keeps the books.</b> Invoices, receipts, bills, vendor payments and expenses post journals automatically; reports come from the ledger.
+              <b>SanchalanOS keeps the books.</b> Invoices, receipts, bills, vendor payments and expenses post journals automatically; reports come from the ledger.
             </span>
           </label>
           <label className="row">
             <input type="radio" checked={c.books_of_record === 'tally'} onChange={() => setF({ ...c, books_of_record: 'tally' })} />
             <span>
-              <b>Our accountant keeps the books in Tally.</b> Synapse records the documents and syncs vouchers to Tally (Billing → Tally); no journals are posted here.
+              <b>Our accountant keeps the books in Tally.</b> SanchalanOS records the documents and syncs vouchers to Tally (Billing → Tally); no journals are posted here.
             </span>
           </label>
           <label className="row">

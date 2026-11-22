@@ -124,7 +124,7 @@ export function CopilotPanel({ object, id, canEdit }: { object: string; id: stri
       )}
 
       <details onToggle={(e) => setShowFacts((e.target as HTMLDetailsElement).open)}>
-        <summary className="small">What Synapse knows about this record</summary>
+        <summary className="small">What SanchalanOS knows about this record</summary>
         {showFacts && !facts.data ? (
           <Spinner />
         ) : (
