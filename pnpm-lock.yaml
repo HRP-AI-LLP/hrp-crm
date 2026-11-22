@@ -93,6 +93,9 @@ importers:
       dompurify:
         specifier: 3.2.6
         version: 3.2.6
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
       html-to-image:
         specifier: 1.11.13
         version: 1.11.13

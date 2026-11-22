@@ -46,6 +46,8 @@ export type CronPlan = {
   workMail: boolean;
   /** scheduled automation rules (hourly, with a poll) */
   rules: boolean;
+  /** WhatsApp chats on projects with new messages to read */
+  chats: boolean;
 };
 
 const due = (v: string | null, now: number) => !v || !(Date.parse(v) > now);
@@ -57,9 +59,9 @@ export const istHour = (d: Date) => Math.floor(((d.getUTCHours() * 60 + d.getUTC
 export async function cronPlan(env: Env, nowDate = new Date()): Promise<CronPlan> {
   const now = nowDate.getTime();
   const kv = env.CACHE_KV;
-  if (!kv) return { wake: true, awake: true, poll: true, reminders: true, digests: true, intel: true, campaigns: true, workMail: true, rules: nowDate.getUTCMinutes() < 5 };
+  if (!kv) return { wake: true, awake: true, poll: true, reminders: true, digests: true, intel: true, campaigns: true, workMail: true, rules: nowDate.getUTCMinutes() < 5, chats: true };
   const get = (k: string) => kv.get(k).catch(() => null);
-  const [awakeAt, pollOpt, reminders, digests, intel, campaigns, workMail] = await Promise.all([
+  const [awakeAt, pollOpt, reminders, digests, intel, campaigns, workMail, chats] = await Promise.all([
     get(DB_AWAKE_KEY),
     get(POLL_KEY),
     get('p:reminders:next'),
@@ -67,6 +69,7 @@ export async function cronPlan(env: Env, nowDate = new Date()): Promise<CronPlan
     get('intel:next'),
     get('campaigns:active'),
     get('pmmail:any'),
+    get('chats:pending'),
   ]);
   const awake = !!awakeAt && now - Number(awakeAt) < AWAKE_MS;
   const day = istHour(nowDate) >= 7 && istHour(nowDate) < 21;
@@ -85,7 +88,9 @@ export async function cronPlan(env: Env, nowDate = new Date()): Promise<CronPlan
     // assignee / watcher alerts are flagged when work changes; the hourly catch-up rides on a poll
     workMail: workMail !== null || (poll && nowDate.getUTCMinutes() < 5),
     rules: poll && nowDate.getUTCMinutes() < 5,
+    // a followed chat got messages: checked each tick until it has gone quiet and been read
+    chats: chats !== null,
   };
-  plan.wake = plan.poll || plan.reminders || plan.digests || plan.intel || plan.campaigns || plan.workMail || plan.rules;
+  plan.wake = plan.poll || plan.reminders || plan.digests || plan.intel || plan.campaigns || plan.workMail || plan.rules || plan.chats;
   return plan;
 }

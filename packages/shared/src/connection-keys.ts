@@ -517,7 +517,10 @@ export const GUIDES: Record<string, Guide> = {
       'A permanent token: Business settings → Users → System users → Add (Admin) → Assign assets: the app (full control) and the WhatsApp account → Generate new token with whatsapp_business_messaging and whatsapp_business_management → copy it.',
       'App settings → Basic → App secret (Show) → copy. Make up a verify token (any random text).',
       'Here: Connect channel → WhatsApp → paste the phone number ID, WABA ID, token, app secret and verify token.',
-      'Back in the app: WhatsApp → Configuration → Webhook: callback URL = the Inbound URL SanchalanOS shows for the channel, verify token = the same → Verify and save → subscribe to “messages”.',
+      'Back in the app: WhatsApp → Configuration → Webhook: callback URL = the Inbound URL SanchalanOS shows for the channel, verify token = the same → Verify and save → subscribe to “messages” (and, for project groups, “group_lifecycle_update”).',
+    ],
+    notes: [
+      'Project groups (Projects → a project → WhatsApp → New project group) use WhatsApp’s Groups API: the number needs an Official Business Account, a group has at most 8 people, and only groups made through the API can be read live. Groups that already exist on a phone can be brought in with “Import an exported chat”.',
     ],
   },
   instagram: {

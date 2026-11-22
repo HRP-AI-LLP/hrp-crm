@@ -26,6 +26,7 @@ import { loadMeta } from './tenancy';
 import { runWorkflows } from './workflows';
 
 export { systemPrincipal } from './system';
+import { afterDirectMessage, applyGroupLifecycle, flagPending, parseGroupLifecycle, takeGroupMessage } from './project-chats';
 import { actAs, systemPrincipal } from './system';
 
 async function tenantFor(db: Db, tenantId: string): Promise<TenantInfo | null> {
@@ -205,7 +206,19 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
         const events: Job[] = [];
         const statuses = parseStatuses(acc, job.payload);
         if (statuses.length) await db.tx(sc, (tx) => applyStatuses(tx, tenant.id, statuses));
+        // WhatsApp groups (Groups API): a group made here was confirmed, with its id and invite link
+        if (acc.channel === 'whatsapp') {
+          const life = parseGroupLifecycle(job.payload);
+          if (life.length) await db.tx(sc, (tx) => applyGroupLifecycle(tx, tenant.id, acc, life));
+        }
+        let chatsPending = false;
         for (const item of parseInbound(acc, job.payload)) {
+          // a group message: kept on the group's thread (participants don't become leads), copied to the projects that follow it
+          if (item.groupId) {
+            const g = await db.tx(sc, (tx) => takeGroupMessage(tx, tenant.id, acc, item));
+            chatsPending ||= g.followed;
+            continue;
+          }
           const saved = await db.tx(sc, async (tx) => {
             if (item.externalId) {
               const dup = await tx.one(`select 1 from messages where tenant_id = $1 and channel = $2 and external_id = $3`, [tenant.id, acc.channel, item.externalId]);
@@ -226,6 +239,8 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
             if (target.created) await routeInserted({ ...base, tx }, 'lead', target.id, !defaultOwner);
             // shared inbox thread, STOP opt-outs, campaign replies, owner notification
             await afterInbound(tx, tenant.id, acc, item, { msgId: msg!.id, target });
+            // a customer's chat that a project follows: the AI reads it once the chat goes quiet
+            if (acc.channel === 'whatsapp' && (await afterDirectMessage(tx, tenant.id, msg!.id, item))) chatsPending = true;
             return { target, msgId: msg!.id, activityId: act!.id };
           });
           if (!saved) continue;
@@ -241,6 +256,7 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
             /* sentiment is best effort */
           }
         }
+        if (chatsPending) await flagPending(env);
         await enqueue(env, waiter, events);
         return;
       }

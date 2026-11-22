@@ -36,7 +36,7 @@ function graph(acc: ChannelAccount) {
   return `https://graph.facebook.com/${String(acc.config.graphVersion ?? 'v21.0')}`;
 }
 
-async function waFetch<T = any>(env: Env, acc: ChannelAccount, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
+export async function waFetch<T = any>(env: Env, acc: ChannelAccount, path: string, init: { method?: string; body?: unknown } = {}): Promise<T> {
   const secret = await channelSecret(env, acc);
   if (!secret.accessToken) throw new WhatsAppError('The WhatsApp channel has no access token', 400);
   const ctl = new AbortController();
@@ -198,7 +198,9 @@ export type WaContent =
   | { type: 'document'; link: string; filename: string; caption?: string };
 
 export async function sendWa(env: Env, acc: ChannelAccount, to: string, content: WaContent, replyTo?: string | null): Promise<string | null> {
-  const body: Record<string, unknown> = { messaging_product: 'whatsapp', recipient_type: 'individual', to };
+  // a group thread's address is "group:<id>" (WhatsApp Groups API)
+  const group = to.startsWith('group:');
+  const body: Record<string, unknown> = { messaging_product: 'whatsapp', recipient_type: group ? 'group' : 'individual', to: group ? to.slice(6) : to };
   if (replyTo) body.context = { message_id: replyTo };
   if (content.type === 'text') Object.assign(body, { type: 'text', text: { body: content.text.slice(0, 4096), preview_url: /https?:\/\//.test(content.text) } });
   else if (content.type === 'template') Object.assign(body, { type: 'template', template: content.template });
@@ -447,7 +449,9 @@ export async function sendToRecord(env: Env, ctx: RecordCtx, origin: string, tar
     content = { type: 'text', text };
     preview = text;
   }
-  const allowed = await canContact(tx, tenantId, 'whatsapp', to, { marketing: purpose === 'marketing', consent });
+  // a group (people joined it through its invite link) has no single number to check; marketing never goes to groups
+  if (to.startsWith('group:') && purpose === 'marketing') throw badRequest('Marketing templates are not sent to groups');
+  const allowed = to.startsWith('group:') ? ({ ok: true } as const) : await canContact(tx, tenantId, 'whatsapp', to, { marketing: purpose === 'marketing', consent });
   if (!allowed.ok) throw badRequest(allowed.reason === 'no_consent' ? 'No WhatsApp marketing consent is recorded for this person. Use a utility template, or record their consent first.' : allowed.reason === 'opted_out' ? 'This number opted out of WhatsApp offers' : 'This number must not be contacted');
 
   const conv = await upsertConversation(tx, tenantId, acc, to, { direction: 'out', preview, related, owner: owner ?? ctx.principal.user.id });
@@ -467,6 +471,9 @@ export async function sendToRecord(env: Env, ctx: RecordCtx, origin: string, tar
     return { messageId: msg!.id, conversationId: conv.id, status: 'failed' as const, error: (e as Error).message };
   }
   if (related) await logActivity(tx, tenantId, related, preview, msg!.id, ctx.principal.user.id, false);
+  // our side of a chat a project follows: the AI reads replies too
+  const { afterOutbound, flagPending } = await import('./project-chats');
+  if (await afterOutbound(tx, tenantId, conv.id, msg!.id, preview, ctx.principal.user.fullName ?? 'Us')) await flagPending(env);
   return { messageId: msg!.id, conversationId: conv.id, status: 'sent' as const, externalId };
 }
 

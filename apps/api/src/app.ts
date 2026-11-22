@@ -38,6 +38,7 @@ import { securityRoutes } from './routes/security';
 import { connectionKeyRoutes } from './routes/connection-keys';
 import { withPlatformKeys } from './services/connection-keys';
 import { Db } from './lib/db';
+import { projectChatRoutes } from './routes/project-chats';
 import { markDbAwake } from './services/cron-plan';
 
 export function createApp() {
@@ -111,6 +112,7 @@ export function createApp() {
   app.route('/api/v1', projectRoutes);
   app.route('/api/v1', itRoutes);
   app.route('/api/v1', workRoutes);
+  app.route('/api/v1', projectChatRoutes);
   app.route('/api/v1', industryRoutes);
   app.route('/api/v1', intakeRoutes);
   app.route('/api/v1', manufacturingRoutes);

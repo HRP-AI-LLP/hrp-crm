@@ -110,6 +110,8 @@ export interface InboundItem {
   media?: { type: string; id: string; mime?: string; filename?: string; caption?: string };
   /** id of the message this one replies to (WhatsApp context) */
   replyTo?: string;
+  /** a message in a WhatsApp group (Groups API): the group's id; `from` is then the participant */
+  groupId?: string;
   at?: string;
 }
 
@@ -149,7 +151,9 @@ export function parseInbound(acc: ChannelAccount, payload: unknown): InboundItem
     const items: InboundItem[] = [];
     type Media = { id: string; mime_type?: string; filename?: string; caption?: string };
     type WaMsg = {
-      from: string;
+      from?: string;
+      from_user_id?: string;
+      group_id?: string;
       id: string;
       type: string;
       timestamp?: string;
@@ -160,10 +164,10 @@ export function parseInbound(acc: ChannelAccount, payload: unknown): InboundItem
       context?: { id?: string };
       image?: Media; document?: Media; audio?: Media; video?: Media; sticker?: Media;
     };
-    const entries = (p.entry as { changes?: { value?: { contacts?: { profile?: { name?: string }; wa_id?: string }[]; messages?: WaMsg[] } }[] }[]) ?? [];
+    const entries = (p.entry as { changes?: { value?: { contacts?: { profile?: { name?: string }; wa_id?: string; user_id?: string }[]; messages?: WaMsg[] } }[] }[]) ?? [];
     for (const e of entries)
       for (const ch of e.changes ?? []) {
-        const names = new Map((ch.value?.contacts ?? []).map((c) => [c.wa_id, c.profile?.name]));
+        const names = new Map((ch.value?.contacts ?? []).flatMap((c) => [[c.wa_id, c.profile?.name], [c.user_id, c.profile?.name]] as [string | undefined, string | undefined][]).filter(([k]) => !!k));
         for (const m of ch.value?.messages ?? []) {
           const media = m.image ?? m.document ?? m.audio ?? m.video ?? m.sticker;
           const text =
@@ -173,9 +177,13 @@ export function parseInbound(acc: ChannelAccount, payload: unknown): InboundItem
             : m.type === 'location' ? `📍 ${[m.location?.name, m.location?.address].filter(Boolean).join(', ') || `${m.location?.latitude}, ${m.location?.longitude}`}`
             : media ? (media.caption ?? `[${m.type}${media.filename ? `: ${media.filename}` : ''}]`)
             : `[${m.type} message]`;
+          // a person who hides their number behind a WhatsApp username is known by their user id
+          const from = m.from ?? m.from_user_id ?? '';
+          if (!from) continue;
           items.push({
-            from: m.from,
-            name: names.get(m.from) ?? undefined,
+            from,
+            name: names.get(from) ?? undefined,
+            ...(m.group_id ? { groupId: m.group_id } : {}),
             text,
             externalId: m.id,
             ...(media ? { media: { type: m.type, id: media.id, mime: media.mime_type, filename: media.filename, caption: media.caption } } : {}),

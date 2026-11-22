@@ -9,6 +9,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { del, get, patch, post, put, upload } from '../../lib/api';
+import { docxText } from '../../lib/docx';
 import { date } from '../../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 
@@ -445,8 +446,23 @@ function TranscriptInput({ id, onSaved }: { id: string; onSaved: () => void }) {
   const file = useRef<HTMLInputElement>(null);
   const pick = async (f: File | undefined) => {
     if (!f) return;
+    // Word transcripts (Teams' "Download as .docx", notes typed in Word) are read here, in the browser
+    if (/\.docx$/i.test(f.name) || f.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      if (f.size > 20_000_000) return toast('That Word file is over 20 MB', true);
+      try {
+        const t = await docxText(f);
+        if (t.length > 2_000_000) return toast('That transcript is over 2 MB of text — split it, or paste part of it', true);
+        if (!t.trim()) return toast('No text found in that Word document', true);
+        setText(t);
+        setName(f.name);
+      } catch (e) {
+        toast((e as Error).message, true);
+      }
+      return;
+    }
+    if (/\.doc$/i.test(f.name)) return toast('Old Word files (.doc) can’t be read — open it in Word and save as .docx', true);
     if (f.size > 2_000_000) return toast('That file is over 2 MB — paste the text instead', true);
-    if (!/\.(txt|vtt|srt|md|text|csv)$/i.test(f.name) && !f.type.startsWith('text/')) return toast('Upload a text transcript: .txt, .vtt, .srt or .md', true);
+    if (!/\.(txt|vtt|srt|md|text|csv)$/i.test(f.name) && !f.type.startsWith('text/')) return toast('Upload a transcript: .docx, .txt, .vtt, .srt or .md', true);
     setText(await f.text());
     setName(f.name);
   };
@@ -475,11 +491,11 @@ function TranscriptInput({ id, onSaved }: { id: string; onSaved: () => void }) {
       }}
     >
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <span className="muted small">Paste the transcript or notes, or drop the file from Zoom, Meet, Teams or any recorder (.vtt, .srt, .txt).</span>
+        <span className="muted small">Paste the transcript or notes, or drop the file from Zoom, Meet, Teams or any recorder (.docx, .vtt, .srt, .txt).</span>
         <button className="btn small" onClick={() => file.current?.click()}>
           Upload file
         </button>
-        <input ref={file} type="file" accept=".txt,.vtt,.srt,.md,text/*" hidden onChange={(e) => void pick(e.target.files?.[0])} />
+        <input ref={file} type="file" accept=".docx,.txt,.vtt,.srt,.md,text/*,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden onChange={(e) => void pick(e.target.files?.[0])} />
       </div>
       {name && <span className="chip">{name}</span>}
       <textarea rows={12} value={text} onChange={(e) => (setText(e.target.value), setName(null))} placeholder={'Priya: Let’s go over the dispatch module.\nRahul (client): We need GPS tracking on every truck…'} className="mono" />

@@ -13,6 +13,7 @@
     "@synapse/shared": "workspace:*",
     "@tanstack/react-query": "^5.104.2",
     "dompurify": "3.2.6",
+    "fflate": "0.8.3",
     "html-to-image": "1.11.13",
     "jspdf": "2.5.2",
     "jspdf-autotable": "3.8.4",

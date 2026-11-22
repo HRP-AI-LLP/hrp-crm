@@ -31,6 +31,7 @@ import { scheduledRulesSweep } from './services/it/rules';
 import { processJob } from './services/worker';
 import { withPlatformKeys, withTenantKeys } from './services/connection-keys';
 import { cronPlan } from './services/cron-plan';
+import { chatSweep } from './services/project-chats';
 
 const app = createApp();
 
@@ -88,6 +89,8 @@ export default {
         // work items: scheduled automation rules (hourly), then watcher / assignee emails and chat posts
         if (plan.rules) await scheduledRulesSweep(env, db).catch(log('work-rules'));
         if (plan.workMail) await workMailSweep(env, db).catch(log('work-mail'));
+        // WhatsApp chats on projects that went quiet: read by the AI into suggestions / work
+        if (plan.chats) await chatSweep(env, db).catch(log('project-chats'));
         return;
       }
       await reminderSweep(env, db, true);

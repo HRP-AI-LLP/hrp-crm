@@ -13,6 +13,7 @@ import { BarChart } from '../charts';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 import { AgileTab, ChangesTab, ReleasesTab } from './Agile';
 import { ProjectCalls } from './ProjectCalls';
+import { ProjectChats } from './ProjectChats';
 import { BoardsTab, DashboardsTab, HierarchyTab, QueriesView, TestsTab, WorkSetupTab } from './Work';
 import { AutomationTab, useLiveWork } from './WorkPlus';
 import { WorkItemModal } from './WorkItem';
@@ -42,9 +43,9 @@ function useAct(keys: unknown[][]) {
   };
 }
 
-type Tab = 'overview' | 'tasks' | 'boards' | 'agile' | 'hierarchy' | 'queries' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'issues' | 'tests' | 'dashboards' | 'time' | 'billing' | 'team' | 'worksetup' | 'automation';
+type Tab = 'overview' | 'tasks' | 'boards' | 'agile' | 'hierarchy' | 'queries' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'whatsapp' | 'issues' | 'tests' | 'dashboards' | 'time' | 'billing' | 'team' | 'worksetup' | 'automation';
 
-const PROJECT_ICON: Record<string, string> = { boards: 'board', hierarchy: 'layers', queries: 'search', tests: 'check', dashboards: 'chart', worksetup: 'gear', automation: 'repeat', overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
+const PROJECT_ICON: Record<string, string> = { boards: 'board', hierarchy: 'layers', queries: 'search', tests: 'check', dashboards: 'chart', worksetup: 'gear', automation: 'repeat', overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', whatsapp: 'inbox', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
 
 export function ProjectWorkspace({ id }: { id: string }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`) });
@@ -69,10 +70,10 @@ export function ProjectWorkspace({ id }: { id: string }) {
   const member = manage || data.level === 'member';
   const tabs: [Tab, string][] = [
     ['overview', 'Overview'], ['tasks', 'Tasks'], ['boards', 'Boards'], ['agile', 'Backlog & sprints'], ['hierarchy', 'Epics & hierarchy'], ['queries', 'Queries'], ['releases', 'Releases'], ['gantt', 'Gantt'],
-    ['milestones', 'Milestones'], ['changes', 'Changes & portal'], ['calls', 'Calls'], ['issues', 'Issues'], ['tests', 'Test plans'], ['dashboards', 'Dashboards'], ['time', 'Time'],
+    ['milestones', 'Milestones'], ['changes', 'Changes & portal'], ['calls', 'Calls'], ['whatsapp', 'WhatsApp'], ['issues', 'Issues'], ['tests', 'Test plans'], ['dashboards', 'Dashboards'], ['time', 'Time'],
     ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'], ['automation', 'Automation'], ['worksetup', 'Work setup'],
   ];
-  const GROUP: Record<string, string> = { overview: 'Work', tasks: 'Work', boards: 'Work', agile: 'Work', hierarchy: 'Work', queries: 'Work', releases: 'Work', gantt: 'Work', milestones: 'Delivery', changes: 'Delivery', calls: 'Delivery', issues: 'Delivery', tests: 'Delivery', dashboards: 'Insights', time: 'People & money', billing: 'People & money', team: 'People & money', automation: 'Settings', worksetup: 'Settings' };
+  const GROUP: Record<string, string> = { overview: 'Work', tasks: 'Work', boards: 'Work', agile: 'Work', hierarchy: 'Work', queries: 'Work', releases: 'Work', gantt: 'Work', milestones: 'Delivery', changes: 'Delivery', calls: 'Delivery', whatsapp: 'Delivery', issues: 'Delivery', tests: 'Delivery', dashboards: 'Insights', time: 'People & money', billing: 'People & money', team: 'People & money', automation: 'Settings', worksetup: 'Settings' };
   return (
     <div style={{ marginBottom: 20 }}>
     <RepoBanner id={id} manage={manage} status={data.project.status} onOpen={() => setTab('worksetup')} />
@@ -92,6 +93,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
         {tab === 'gantt' && <Gantt id={id} data={data} member={member} />}
         {tab === 'milestones' && <Milestones id={id} data={data} manage={manage} />}
         {tab === 'calls' && <ProjectCalls id={id} />}
+        {tab === 'whatsapp' && <ProjectChats id={id} />}
         {tab === 'boards' && <BoardsTab id={id} manage={manage} member={member} onOpen={openItem} />}
         {tab === 'hierarchy' && <HierarchyTab id={id} member={member} onOpen={openItem} />}
         {tab === 'queries' && <QueriesView projectId={id} member={member} />}

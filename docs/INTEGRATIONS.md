@@ -190,6 +190,22 @@ In *My account → Email, calendar & calls*, click **Connect Gmail** or **Connec
    - quotes go as their public link; invoices and orders as a signed link valid for 30 days, with *Pay online* when a Razorpay link is open.
 6. **Campaigns** (*Campaigns*, needs the campaigns permission): pick a template, map its variables to fields, choose the audience with filters, *Check who will receive it*, then send or schedule. Up to 5,000 people per campaign, sent in batches every few minutes. Results show delivered, read, replied, why people were skipped, and deals won within 30 days.
 
+#### WhatsApp chats on projects
+
+*Projects → a project → WhatsApp* follows the project's chats and lets the AI turn them into work:
+
+- **Customer chat** — a customer's one-to-one thread on the business number, live. A chat can be on several projects; a project can have any number of chats.
+- **Project group** — *New project group* creates a group on the business number (WhatsApp **Groups API**: Official Business Account, at most 8 people, invite-only). Subscribe the app's webhook to **group_lifecycle_update** as well as **messages**: WhatsApp confirms the group there with its invite link. Participants don't become leads; team members are recognised by the mobile number on their SanchalanOS profile. Replies from the inbox go to the group.
+- **Exported chat** — for any group or chat that lives on a phone (including personal WhatsApp): WhatsApp → ⋮ → More → *Export chat* → *Without media*, then *Import an exported chat* (.zip or .txt). *Upload newer export* adds only new messages. WhatsApp doesn't let software read such groups live, and the unofficial "WhatsApp Web" route breaks its terms (numbers get banned), so SanchalanOS doesn't use it.
+
+New messages mark a chat pending. When it has been quiet for 10 minutes (or after an hour, or 40 messages), the AI reads what is new, with earlier context, the project's open work and earlier suggestions (so nothing is proposed twice), and voice notes transcribed. Each suggestion is a **bug, requirement, story, task, change request, call, question or follow-up**, quoting the customer. Per chat:
+
+- **Suggest** — someone on the project creates each with one click (*Edit…* first to change its type, title, priority, due date or call time).
+- **Create automatically** — items the AI is 60 %+ sure of become work at once (calls only with an agreed time); the rest wait for review.
+- **Off** — messages are kept, not read.
+
+Created work carries the customer's words and a "From WhatsApp" line: bugs/stories/tasks as project work items (tagged *whatsapp*, requirements also *requirement*), change requests as drafts, calls on the project's calendar, questions and follow-ups on the to-do list. The project owner and managers get a notification. Without AI, keyword rules still catch obvious bugs, requests and questions. The 5-minute background job checks a flag first, so chats only wake the database when they have news.
+
 ### Tally
 
 1. On the PC that runs Tally, install Node.js 18 or newer. In Tally: F1 Help → Settings → Connectivity → TallyPrime acts as **Server** (or Both) on port **9000**, and keep the company open.

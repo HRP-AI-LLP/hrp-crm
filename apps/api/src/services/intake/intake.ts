@@ -595,7 +595,7 @@ export async function setWhose(ctx: RecordCtx, id: string, whose: 'ours' | 'thei
   const it = await ctx.tx.one<{ data: Record<string, any>; status: string }>(`select data, status from intake_items where tenant_id = $1 and id = $2 for update`, [ctx.tenantId, id]);
   if (!it) throw notFound('Mail not found');
   if (it.status === 'done') throw badRequest('This mail was already imported');
-  const data = { ...it.data, whose };
+  const data: Record<string, any> = { ...it.data, whose };
   if (whose === 'theirs' && Array.isArray(it.data.importItemIds)) {
     // the sales-invoice import prepared for it is dropped
     await ctx.tx.query(`update doc_import_items set status = 'rejected' where tenant_id = $1 and id = any($2::uuid[]) and status in ('pending','failed')`, [ctx.tenantId, it.data.importItemIds]);
