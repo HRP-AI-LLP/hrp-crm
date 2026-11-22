@@ -123,22 +123,47 @@ export async function removeInstallation(ctx: RecordCtx, id: string) {
 }
 
 /** Repositories the workspace's installations can reach, with the project each is linked to. */
-export async function listAppRepos(ctx: RecordCtx, env: Env) {
-  const inst = await ctx.tx.query<{ installation_id: string; account: string }>(`select installation_id::text, account from github_installations where tenant_id = $1 and suspended_at is null`, [ctx.tenantId]);
+type AppRepo = { fullName: string; private: boolean; defaultBranch: string; installationId: string; account: string; linkedTo: { projectId: string; name: string } | null };
+
+/**
+ * Every repository the GitHub App can see, across all its installations on this workspace, and per
+ * installation where to choose which repositories it sees (an installation that fails to answer is
+ * reported, the others still list).
+ */
+export async function appRepoList(ctx: RecordCtx, env: Env) {
+  const inst = await ctx.tx.query<{ installation_id: string; account: string; account_type: string | null }>(
+    `select installation_id::text, account, account_type from github_installations where tenant_id = $1 and suspended_at is null order by created_at`,
+    [ctx.tenantId],
+  );
   const linked = await ctx.tx.query<{ repo: string; project_id: string; name: string }>(`select r.repo, r.project_id, p.name from project_repos r join projects p on p.tenant_id = r.tenant_id and p.id = r.project_id where r.tenant_id = $1 and r.provider = 'github'`, [ctx.tenantId]);
-  const out: { fullName: string; private: boolean; defaultBranch: string; installationId: string; account: string; linkedTo: { projectId: string; name: string } | null }[] = [];
+  const repos: AppRepo[] = [];
+  const installations: { installationId: string; account: string; accountType: string | null; manageUrl: string; repos: number; error: string | null }[] = [];
   for (const i of inst) {
-    const token = await installationToken(env, i.installation_id);
-    for (let page = 1; page <= 5; page++) {
-      const r = await gh<{ repositories: { full_name: string; private: boolean; default_branch: string; archived: boolean }[]; total_count: number }>(token, `/installation/repositories?per_page=100&page=${page}`);
-      for (const x of r.repositories.filter((y) => !y.archived)) {
-        const l = linked.find((k) => k.repo === x.full_name.toLowerCase());
-        out.push({ fullName: x.full_name, private: x.private, defaultBranch: x.default_branch, installationId: i.installation_id, account: i.account, linkedTo: l ? { projectId: l.project_id, name: l.name } : null });
+    const manageUrl = i.account_type === 'Organization' ? `https://github.com/organizations/${encodeURIComponent(i.account)}/settings/installations/${i.installation_id}` : `https://github.com/settings/installations/${i.installation_id}`;
+    let n = 0;
+    try {
+      const token = await installationToken(env, i.installation_id);
+      for (let page = 1; page <= 10; page++) {
+        const r = await gh<{ repositories: { full_name: string; private: boolean; default_branch: string; archived: boolean }[]; total_count: number }>(token, `/installation/repositories?per_page=100&page=${page}`);
+        for (const x of r.repositories.filter((y) => !y.archived)) {
+          const l = linked.find((k) => k.repo === x.full_name.toLowerCase());
+          repos.push({ fullName: x.full_name, private: x.private, defaultBranch: x.default_branch, installationId: i.installation_id, account: i.account, linkedTo: l ? { projectId: l.project_id, name: l.name } : null });
+          n++;
+        }
+        if (r.repositories.length < 100) break;
       }
-      if (r.repositories.length < 100) break;
+      installations.push({ installationId: i.installation_id, account: i.account, accountType: i.account_type, manageUrl, repos: n, error: null });
+    } catch (e) {
+      installations.push({ installationId: i.installation_id, account: i.account, accountType: i.account_type, manageUrl, repos: 0, error: (e as Error).message });
     }
   }
-  return out;
+  repos.sort((a, b) => a.fullName.localeCompare(b.fullName));
+  return { repos, installations };
+}
+
+/** The repositories alone (installations that fail are skipped). */
+export async function listAppRepos(ctx: RecordCtx, env: Env) {
+  return (await appRepoList(ctx, env)).repos;
 }
 
 /* ───────────────────────── checks on code ───────────────────────── */

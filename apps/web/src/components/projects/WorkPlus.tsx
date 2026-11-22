@@ -1112,24 +1112,65 @@ export function GitHubAppSection() {
   );
 }
 
-/** Repositories the GitHub App can see, to pick from when linking. */
-export function AppRepoPicker({ onPick }: { onPick: (r: Json) => void }) {
-  const { data, error, isLoading } = useQuery({ queryKey: ['github-app-repos'], queryFn: () => get<Json[]>('/api/v1/work/github/repos'), retry: false, staleTime: 60_000 });
+/**
+ * Every repository the GitHub App can see, as a searchable list to tick: the ones ticked are linked
+ * together. Repositories already on this project show as linked; ones on another project can't be
+ * picked (a repository belongs to one project).
+ */
+export function AppRepoPicker({ projectId, picked, onChange }: { projectId: string; picked: Json[]; onChange: (r: Json[]) => void }) {
+  const { data, error, isLoading, refetch, isFetching } = useQuery({ queryKey: ['github-app-repo-list'], queryFn: () => get<Json>('/api/v1/work/github/repo-list'), retry: false, staleTime: 30_000 });
   const [q, setQ] = useState('');
   if (isLoading) return <span className="muted small">Loading repositories from GitHub…</span>;
-  if (error || !data?.length) return null;
-  const list = data.filter((r) => r.fullName.toLowerCase().includes(q.toLowerCase())).slice(0, 50);
+  if (error) return <div className="callout warn small">GitHub didn’t list the repositories: {(error as Error).message}</div>;
+  const repos = (data?.repos ?? []) as Json[];
+  const insts = (data?.installations ?? []) as Json[];
+  if (!insts.length) return <div className="callout small">Install the SanchalanOS GitHub App (Work setup → GitHub App) to pick repositories from a list — or type one below.</div>;
+  const ql = q.trim().toLowerCase();
+  const list = repos.filter((r) => !ql || r.fullName.toLowerCase().includes(ql));
+  const isPicked = (r: Json) => picked.some((x) => x.fullName === r.fullName);
+  const free = list.filter((r) => !r.linkedTo);
+  const toggle = (r: Json) => onChange(isPicked(r) ? picked.filter((x) => x.fullName !== r.fullName) : [...picked, r]);
   return (
     <div className="field">
-      Pick from GitHub
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${data.length} repositories…`} />
-      <div className="repo-pick">
-        {list.map((r) => (
-          <button key={r.fullName} type="button" className="repo-opt" disabled={!!r.linkedTo} onClick={() => onPick(r)} title={r.linkedTo ? `Linked to ${r.linkedTo.name}` : ''}>
-            <span className="mono">{r.fullName}</span> {r.private && <span className="chip">private</span>} {r.linkedTo && <span className="muted small">· {r.linkedTo.name}</span>}
-          </button>
-        ))}
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <span>
+          Repositories on GitHub <span className="muted small">({repos.length})</span>
+        </span>
+        <button type="button" className="link-btn small" disabled={isFetching} onClick={() => refetch()}>
+          {isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${repos.length} repositories…`} />
+      <div className="repo-pick" style={{ maxHeight: 280, overflowY: 'auto' }}>
+        {free.length > 1 && (
+          <label className="repo-opt row small" style={{ gap: 8 }}>
+            <input type="checkbox" checked={free.every(isPicked)} onChange={(e) => onChange(e.target.checked ? [...picked.filter((x) => !free.some((f) => f.fullName === x.fullName)), ...free] : picked.filter((x) => !free.some((f) => f.fullName === x.fullName)))} />
+            <b>All {ql ? 'shown' : 'not yet linked'} ({free.length})</b>
+          </label>
+        )}
+        {list.map((r) => {
+          const here = r.linkedTo?.projectId === projectId;
+          return (
+            <label key={r.fullName} className="repo-opt row small" style={{ gap: 8, opacity: r.linkedTo ? 0.65 : 1 }} title={r.linkedTo ? (here ? 'Already linked to this project' : `Linked to ${r.linkedTo.name}`) : ''}>
+              <input type="checkbox" checked={here || isPicked(r)} disabled={!!r.linkedTo} onChange={() => toggle(r)} />
+              <span className="mono">{r.fullName}</span>
+              {r.private && <span className="chip">private</span>}
+              {here ? <span className="chip good">linked</span> : r.linkedTo ? <span className="muted">· {r.linkedTo.name}</span> : null}
+            </label>
+          );
+        })}
+        {!list.length && <span className="muted small">No repository matches “{q}”.</span>}
+      </div>
+      {insts.map((i) => (
+        <div key={i.installationId} className="small muted">
+          {i.error ? <span style={{ color: 'var(--bad)' }}>{i.account}: {i.error}. </span> : `${i.account}: ${i.repos} repositor${i.repos === 1 ? 'y' : 'ies'}. `}
+          Missing one?{' '}
+          <a href={i.manageUrl} target="_blank" rel="noreferrer">
+            Choose which repositories the app can see on GitHub
+          </a>{' '}
+          (“All repositories”, or add it to “Only select repositories”), then Refresh.
+        </div>
+      ))}
     </div>
   );
 }

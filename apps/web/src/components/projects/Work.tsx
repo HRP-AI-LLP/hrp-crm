@@ -2147,6 +2147,8 @@ export function ReposSection({ id, manage }: { id: string; manage: boolean }) {
   const [add, setAdd] = useState<Json | null>(null);
   const [files, setFiles] = useState<Json | null>(null);
   const [resolve, setResolve] = useState<Json | null>(null);
+  const [busy, setBusy] = useState(false);
+  const qc = useQueryClient();
   if (!data) return null;
   const openSetup = async (repoId: string, token?: string) => {
     const f = await run(() => get<Json>(`/api/v1/projects/${id}/work/repos/${repoId}/setup`));
@@ -2157,8 +2159,8 @@ export function ReposSection({ id, manage }: { id: string; manage: boolean }) {
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h3 className="section-label">Code repositories &amp; policy</h3>
         {manage && (
-          <button className="btn small primary" onClick={() => setAdd({ provider: 'github', repo: '', defaultBranch: 'main', policy: 'enforce', autoSprint: true })}>
-            + Link repository
+          <button className="btn small primary" onClick={() => setAdd({ provider: 'github', repo: '', defaultBranch: 'main', policy: 'enforce', autoSprint: true, picked: [] })}>
+            + Link {data.repos.length ? 'more repositories' : 'repositories'}
           </button>
         )}
       </div>
@@ -2269,40 +2271,64 @@ export function ReposSection({ id, manage }: { id: string; manage: boolean }) {
       )}
       {add && (
         <Modal
-          title="Link a repository"
+          title="Link repositories"
           onClose={() => setAdd(null)}
           footer={
             <button
               className="btn primary"
-              disabled={!add.repo.trim()}
+              disabled={busy || (!add.picked.length && !add.repo.trim())}
               onClick={async () => {
-                const r = await run(() => post<Json>(`/api/v1/projects/${id}/work/repos`, add), 'Repository linked');
-                if (r) (setAdd(null), refetch(), openSetup(r.id, r.token));
+                setBusy(true);
+                const base = { provider: add.provider, policy: add.policy, autoSprint: add.autoSprint };
+                const todo: Json[] =
+                  add.provider === 'github' && add.picked.length
+                    ? add.picked.map((r: Json) => ({ ...base, repo: r.fullName, defaultBranch: r.defaultBranch, installationId: r.installationId }))
+                    : [{ ...base, repo: add.repo.trim(), defaultBranch: add.defaultBranch, installationId: add.installationId ?? null }];
+                const done: Json[] = [];
+                const failed: string[] = [];
+                for (const t of todo) {
+                  try {
+                    done.push({ ...(await post<Json>(`/api/v1/projects/${id}/work/repos`, t)), viaApp: !!t.installationId });
+                  } catch (e) {
+                    failed.push(`${t.repo}: ${(e as Error).message}`);
+                  }
+                }
+                setBusy(false);
+                refetch();
+                qc.invalidateQueries({ queryKey: ['github-app-repo-list'] });
+                if (failed.length) window.alert(`${done.length} linked. Not linked:\n${failed.join('\n')}`);
+                setAdd(null);
+                // a repository typed in (no GitHub App) needs the CI check / hooks: show their setup once
+                if (done.length === 1 && !done[0]!.viaApp) openSetup(done[0]!.id, done[0]!.token);
               }}
             >
-              Link
+              {busy ? 'Linking…' : add.provider === 'github' && add.picked.length ? `Link ${add.picked.length} repositor${add.picked.length === 1 ? 'y' : 'ies'}` : 'Link'}
             </button>
           }
         >
           <div className="modal-body stack">
             <label className="field">
               Host
-              <select value={add.provider} onChange={(e) => setAdd({ ...add, provider: e.target.value })}>
+              <select value={add.provider} onChange={(e) => setAdd({ ...add, provider: e.target.value, picked: [] })}>
                 <option value="github">GitHub</option>
                 <option value="azure_repos">Azure DevOps (Repos + Pipelines)</option>
               </select>
             </label>
-            {add.provider === 'github' && <AppRepoPicker onPick={(x) => setAdd({ ...add, repo: x.fullName, defaultBranch: x.defaultBranch, installationId: x.installationId })} />}
-            <label className="field">
-              Repository
-              <input autoFocus className="mono" value={add.repo} onChange={(e) => setAdd({ ...add, repo: e.target.value, installationId: null })} placeholder={add.provider === 'github' ? 'acme/fleet-portal or its URL' : 'Project/repo, e.g. Fleet/fleet-api'} />
-            </label>
-            <label className="field">
-              Main branch
-              <input className="mono" value={add.defaultBranch} onChange={(e) => setAdd({ ...add, defaultBranch: e.target.value })} />
-            </label>
+            {add.provider === 'github' && <AppRepoPicker projectId={id} picked={add.picked} onChange={(picked) => setAdd({ ...add, picked })} />}
+            {!(add.provider === 'github' && add.picked.length) && (
+              <>
+                <label className="field">
+                  {add.provider === 'github' ? 'Or type a repository' : 'Repository'}
+                  <input className="mono" value={add.repo} onChange={(e) => setAdd({ ...add, repo: e.target.value, installationId: null })} placeholder={add.provider === 'github' ? 'acme/fleet-portal or its URL' : 'Project/repo, e.g. Fleet/fleet-api'} />
+                </label>
+                <label className="field">
+                  Main branch
+                  <input className="mono" value={add.defaultBranch} onChange={(e) => setAdd({ ...add, defaultBranch: e.target.value })} />
+                </label>
+              </>
+            )}
             <div className="field">
-              Policy
+              Policy {add.picked.length > 1 ? '(for all of them; each can be changed later)' : ''}
               {POLICY.map(([k, l, d]) => (
                 <label key={k} className="row small" style={{ gap: 6, alignItems: 'flex-start' }}>
                   <input type="radio" name="policy" checked={add.policy === k} onChange={() => setAdd({ ...add, policy: k })} />
@@ -2317,6 +2343,9 @@ export function ReposSection({ id, manage }: { id: string; manage: boolean }) {
                 <input type="checkbox" checked={add.autoSprint} onChange={(e) => setAdd({ ...add, autoSprint: e.target.checked })} /> Put auto-created items in the active sprint
               </label>
             )}
+            <p className="small muted" style={{ margin: 0 }}>
+              A project can have any number of repositories (an app, its API, its infrastructure…): link more at any time.
+            </p>
           </div>
         </Modal>
       )}

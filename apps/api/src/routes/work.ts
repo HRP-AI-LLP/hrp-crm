@@ -426,6 +426,7 @@ export const workRoutes = new Hono<AppEnv>()
 
   /* ───── GitHub App: repositories, required check, branches ───── */
   .get('/work/github/repos', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => ghapp.listAppRepos(rctx(c, tx), c.env))))
+  .get('/work/github/repo-list', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => ghapp.appRepoList(rctx(c, tx), c.env))))
   .post('/projects/:id/work/repos/:rid/require-check', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => ghapp.requireCheck(rctx(c, tx), c.env, id(c), id(c, 'rid')))))
   .post('/projects/:id/work/items/:tid/branch', async (c) => {
     const b = z.object({ repoId: uuid, name: z.string().trim().min(3).max(200) }).parse(await c.req.json());
