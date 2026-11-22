@@ -9,6 +9,7 @@ import { Empty, Modal, Spinner, useToast } from '../components/ui';
 import { del, get, patch, post } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { dateTime, relative } from '../lib/format';
+import { Guide } from '../components/admin/ConnectionKeys';
 
 type Json = Record<string, any>;
 
@@ -58,6 +59,7 @@ export function DevelopersPage() {
       <div className="dev-grid">
         <section className="panel panel-body stack">
           <h2>Quick start</h2>
+          <Guide id="api_keys" open />
           <p className="small">
             Create an API key in Settings → API keys. A key acts as the person you choose and sees exactly what they can see. Send it as a bearer token.
           </p>

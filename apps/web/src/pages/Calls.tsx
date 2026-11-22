@@ -7,6 +7,7 @@ import { CallDetail, CallTable } from '../components/projects/ProjectCalls';
 import { Empty, Spinner, useToast } from '../components/ui';
 import { get, post } from '../lib/api';
 import { useOAuthReturn } from '../lib/oauthReturn';
+import { Guide } from '../components/admin/ConnectionKeys';
 
 type Json = Record<string, any>;
 type Scope = 'upcoming' | 'recent' | 'unassigned';
@@ -34,6 +35,7 @@ export function CallsPage() {
         <div>
           <h1>Calls</h1>
           <p>Project calls with clients and the team — transcripts and minutes, with each person’s actions.</p>
+          <Guide id="meeting_apps" label="How calls, meeting apps and transcripts work" />
         </div>
         <div className="row" style={{ gap: 6 }}>
           <button

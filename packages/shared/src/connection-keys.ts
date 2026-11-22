@@ -502,6 +502,8 @@ export const GUIDES: Record<string, Guide> = {
       'Sign in with your work account and allow reading and sending mail and the calendar.',
       'Mail with your customers is logged on their timeline from then on, and call invites are filed on the right projects.',
       'If your company uses Google Workspace or Microsoft 365, your IT admin may have to allow the “SanchalanOS” app first.',
+      'More than one address (e.g. your own and sales@): press “Add another Gmail / Outlook” and sign in with the other account — sign out of the first in that window, or use a private window, so you can pick it. Each mailbox syncs; the primary one gets your meetings in its calendar and is the default “From” (the email composer lets you pick another).',
+      'Sync now reads new mail at once; otherwise mail is read about every 15 minutes during the day. “Never log mail with these addresses or domains” keeps personal mail out.',
     ],
   },
   whatsapp: {
@@ -517,9 +519,15 @@ export const GUIDES: Record<string, Guide> = {
       'A permanent token: Business settings → Users → System users → Add (Admin) → Assign assets: the app (full control) and the WhatsApp account → Generate new token with whatsapp_business_messaging and whatsapp_business_management → copy it.',
       'App settings → Basic → App secret (Show) → copy. Make up a verify token (any random text).',
       'Here: Connect channel → WhatsApp → paste the phone number ID, WABA ID, token, app secret and verify token.',
-      'Back in the app: WhatsApp → Configuration → Webhook: callback URL = the Inbound URL SanchalanOS shows for the channel, verify token = the same → Verify and save → subscribe to “messages” (and, for project groups, “group_lifecycle_update”).',
+      'Back in the app: WhatsApp → Configuration → Webhook: callback URL = the Inbound URL SanchalanOS shows for the channel, verify token = the same → Verify and save → Webhook fields: subscribe to “messages” (and, for project groups, “group_lifecycle_update”).',
+      'App settings → Basic: App domains `hrpai.in` (your domain), Privacy policy URL, Terms of Service URL, User data deletion URL (your website pages), Category “Business and pages”, an app icon (1024×1024) → Save. Then switch the app from Development to Live at the top of the dashboard — until it is Live Meta delivers only test webhooks, not your customers’ messages.',
+      'Payment: WhatsApp Manager → Billing → add a card. Replies within 24 hours of a customer’s message are free; messages you start (reminders, updates, campaigns) need an approved template and are charged per message.',
+      'Templates: Settings → Channels → Templates on the channel → write one (Utility for updates, Marketing for campaigns) → it goes to Meta for approval (minutes to hours).',
+      'Test: send “hi” from your phone to the business number — it shows in Inbox within seconds; reply from Inbox.',
+      'A second (third…) number: add it to the same Meta app, then Connect channel again with that number’s Phone number ID (same app secret). Meta sends all numbers to the one callback URL; SanchalanOS sorts each message to the number it was sent to.',
     ],
     notes: [
+      'The Data Protection Officer section of App settings is needed only for people in the EU; leave it empty (or put India as the country).',
       'Project groups (Projects → a project → WhatsApp → New project group) use WhatsApp’s Groups API: the number needs an Official Business Account, a group has at most 8 people, and only groups made through the API can be read live. Groups that already exist on a phone can be brought in with “Import an exported chat”.',
     ],
   },
@@ -673,6 +681,147 @@ export const GUIDES: Record<string, Guide> = {
       'Add the connection here; copy the webhook address and the secret.',
       'Azure DevOps → Project settings → Service hooks → Create subscription → Web Hooks.',
       'Make one subscription each for: Code pushed, Pull request created, Pull request updated, Build completed. URL = the address; Basic authentication user name “synapse”, password = the secret.',
+    ],
+  },
+
+  /* ───────────── more connections, described where they are made ───────────── */
+
+  mail_intake: {
+    title: 'Read a company mailbox (bills, invoices, GeM, statements)',
+    links: [
+      { label: 'Gmail — app passwords', url: 'https://myaccount.google.com/apppasswords' },
+      { label: 'Zoho Mail — IMAP', url: 'https://www.zoho.com/mail/help/imap-access.html' },
+      { label: 'Titan — IMAP settings', url: 'https://support.titan.email/hc/en-us/articles/900000215446' },
+    ],
+    steps: [
+      'Add mailbox → pick the provider (Titan, Zoho, GoDaddy, Hostinger, Gmail, Outlook…) or “Other (IMAP)” with the server and port your mail host gives (usually port 993, TLS).',
+      'User name: the full address. Password: the mailbox password — or, for Gmail and Microsoft 365 with two-step sign-in, an app password (Gmail: Google account → Security → App passwords; Microsoft: Security info → Add sign-in method → App password). On Gmail turn IMAP on: Settings → Forwarding and POP/IMAP.',
+      'Choose what it reads: GeM bid alerts, bills and invoices (as drafts to approve), bank statements by mail. Save; “Sync now” reads the last messages at once, then it is read every 30 minutes during the day.',
+      'PDFs with passwords (bank statements, some invoices): Books → Bank → Statement passwords — saved once, used every month.',
+      'Several mailboxes can be added (accounts@, harsha@, gem@…). Milestones → “Find the mail thread” searches all of them, any date.',
+    ],
+    notes: ['Only the mail the mailbox is set to read is stored. A mailbox can also be your connected Gmail / Outlook (My account) instead of IMAP.'],
+  },
+  meeting_apps: {
+    title: 'Connect Zoom, Google Meet or Microsoft Teams',
+    links: [],
+    steps: [
+      'My account (or Calls) → Meeting apps → Connect Zoom / Google Meet / Microsoft Teams → sign in with your work account and allow access. Each person connects their own; several accounts per app are fine.',
+      'Scheduling a call (Calls, a project’s Calls, a deal) then creates the meeting link in that app and sends the invites.',
+      'After the meeting, the transcript is fetched (Zoom: Pro plan with cloud recording and “audio transcript” on; Meet: Google Workspace plans with transcripts, turned on in the meeting; Teams: transcription started in the meeting) and the AI writes minutes and action items onto the project.',
+      'No transcript? Upload one on the call: text, .vtt, .docx (Word) or a recording.',
+    ],
+    notes: ['If Connect says the app is not set up, the platform admin adds its keys in Settings → Connection keys (Google, Microsoft, Zoom).'],
+  },
+  project_whatsapp: {
+    title: 'Link customer WhatsApp chats to a project',
+    links: [],
+    steps: [
+      'Needs a WhatsApp number connected in Settings → Channels (see its guide).',
+      'Link a customer chat: pick a contact who has written to your number. Choose what the AI does: Suggest (it proposes bugs, requirements, change requests, stories, tasks, calls; someone creates each with one click), Create automatically (items it is fairly sure of become work), or Off (messages are only kept).',
+      'Project group: New project group creates a WhatsApp group from your business number (Official Business Account, up to 8 people) and gives an invite link to share.',
+      'A group or chat on someone’s phone: WhatsApp → the chat → ⋮ → More → Export chat (without media) → upload the .txt here with “Import an exported chat”; upload again later to add only the new lines.',
+      'Suggestions appear under the chat; the chat is read again after it goes quiet for a while, or when you press Analyse.',
+    ],
+  },
+  api_keys: {
+    title: 'API keys for scripts and integrations',
+    links: [],
+    steps: [
+      'Settings → API keys → New key: name it, choose read or read + write, and a rate limit. The key acts as you (or the person chosen): it sees and changes only what they can.',
+      'Copy the key at once (syn_…): it is shown only once. Revoke it here when it is no longer needed.',
+      'Call the API with the header `Authorization: Bearer syn_…` — e.g. `curl -H "Authorization: Bearer syn_…" https://<your address>/api/v1/records/lead?limit=10`. The full reference is under Developers (OpenAPI).',
+      'Webhooks (Developers → Webhooks) post events (record created / updated, deal won…) to your URL, signed with HMAC-SHA256 (X-Synapse-Signature).',
+    ],
+    copy: [{ label: 'API base address', path: '/api/v1' }],
+  },
+  coding_agent_claude: {
+    title: 'Connect Claude Code (desktop app or terminal)',
+    links: [
+      { label: 'Claude Code — MCP', url: 'https://docs.claude.com/en/docs/claude-code/mcp' },
+      { label: 'Install Claude Code', url: 'https://docs.claude.com/en/docs/claude-code/overview' },
+    ],
+    steps: [
+      'Create an API key with read + write access in Settings → API keys (it acts as you: the agent sees and changes only what you can).',
+      'In a terminal: `claude mcp add --transport http sanchalan <MCP address below> --header "Authorization: Bearer syn_…" --scope user` (the desktop app uses the same settings; restart it).',
+      'Check with `claude mcp list` — “sanchalan” should be connected. In Claude Code, /mcp lists its tools (next_work, request_review…).',
+      'Ask: “Work the SanchalanOS queue: next_work, set up the project if needed, implement and test on a branch, request_review, wait for review_status approved, then commit, push and complete.”',
+      'Review each item here: Approve — commit & push, Request changes, or Stop.',
+    ],
+    copy: [{ label: 'MCP address', path: '/api/v1/mcp' }],
+  },
+  coding_agent_codex: {
+    title: 'Connect OpenAI Codex',
+    links: [{ label: 'Codex — MCP servers', url: 'https://github.com/openai/codex/blob/main/docs/config.md' }],
+    steps: [
+      'Create an API key with read + write access in Settings → API keys.',
+      'Add to `~/.codex/config.toml` (Windows: `%USERPROFILE%\\.codex\\config.toml`): `[mcp_servers.sanchalan]`, `url = "<MCP address below>"`, `bearer_token_env_var = "SANCHALAN_KEY"`.',
+      'Set the key in your environment: PowerShell `setx SANCHALAN_KEY "syn_…"` (open a new terminal after), macOS / Linux `export SANCHALAN_KEY=syn_…` in your shell profile.',
+      'Start Codex in any folder and ask it to work the SanchalanOS queue (next_work → implement → request_review → after approval commit, push, complete).',
+    ],
+    copy: [{ label: 'MCP address', path: '/api/v1/mcp' }],
+  },
+  coding_agent_runner: {
+    title: 'Hands-free: the agent runner',
+    links: [],
+    steps: [
+      'On the developer machine: Node 20+, git, Claude Code (`claude`) or Codex (`codex`) signed in, and the GitHub CLI (`gh auth login`) for pull requests.',
+      'From the SanchalanOS repository folder, PowerShell: `$env:SANCHALAN_URL="<this address>"; $env:SANCHALAN_KEY="syn_…"; $env:AGENT="claude"; node scripts/agent/sanchalan-agent.mjs` (AGENT=codex for Codex).',
+      'It waits for work; for each item it clones the project (or creates the folder when no repository is linked) into WORK_DIR (default ~/sanchalan-work), makes a git worktree on branch sanchalan/<KEY>-<title>, runs the agent, and asks for review here.',
+      'After you approve it commits, pushes, opens the pull request and runs the project’s release command; Request changes sends your note back to the agent on the same branch.',
+      'Options: PROJECT=FLEET (one project), ONCE=1 (one job, then stop), WORK_DIR=D:\\work, CLAUDE_ARGS / CODEX_ARGS (the agent’s permissions). Keep the runner open, or run it as a scheduled task at log-on.',
+    ],
+  },
+  usage_costs: {
+    title: 'How usage and costs are counted',
+    links: [
+      { label: 'Cloudflare Workers pricing', url: 'https://developers.cloudflare.com/workers/platform/pricing/' },
+      { label: 'Neon pricing', url: 'https://neon.com/pricing' },
+      { label: 'WhatsApp pricing', url: 'https://developers.facebook.com/docs/whatsapp/pricing' },
+    ],
+    steps: [
+      'Every call to an outside service (AI models, email, WhatsApp / Meta, Razorpay and the bank feed, GST APIs, Google, Microsoft, Zoom, GitHub, Cloudflare), every request and background job, database queries, AI tokens and stored files are counted as they happen, per workspace and day.',
+      'Cost = the price list (plan fee per month + unit prices above the free allowance, in USD or INR) × the usage; “Projected” continues this month’s pace to its end.',
+      'Set the price list to your real plans (platform admins): e.g. Workers Paid $5, Neon Launch $19 plus storage, GitHub Team, WhatsApp utility ₹0.125 / marketing ₹0.88 per template message, your GSP’s price per call, and the ₹ per US$ rate on your card.',
+      'Bills: the suppliers’ invoices and receipts (GitHub, Cloudflare, Neon, OpenAI, Google, Meta, Razorpay…) become bills in Books when their mail is read (Mail intake → bills) or added by hand; they show here month by month next to the estimate.',
+      'Export CSV gives one row per month and service for your accountant.',
+    ],
+  },
+  bank_statements: {
+    title: 'Bank statements and feeds',
+    links: [],
+    steps: [
+      'Books → Bank → the account → Import statement: CSV, Excel or PDF from your net banking (most Indian banks: Accounts → Statement → download for a date range).',
+      'By mail: when the bank emails statements, add that mailbox in Mail intake with “bank statements” on, and save the PDF password once in Books → Bank → Statement passwords (often PAN in capitals or date of birth DDMMYYYY).',
+      'Live feed: RazorpayX current accounts connect directly (Books → Bank → Connect RazorpayX — see its guide).',
+      'The accounts desk then matches receipts and payments, proposes categories and GST, and asks you about the rest (Books → Accounts desk).',
+    ],
+  },
+  dsc_signer: {
+    title: 'Sign with a DSC on a USB token',
+    links: [],
+    steps: [
+      'Plug the token in and install its driver (ePass, ProxKey, HYP2003…) from the token vendor.',
+      'On that computer run the DSC signer from the SanchalanOS folder: `tools/dsc-signer/start-signer.bat` (it starts with `pnpm local` on a development machine).',
+      'Organisation → Digital signatures → Pair a signer → run the command it shows (it ties the signer to this workspace address).',
+      'View / sign on any PDF → Digital signature → choose the certificate and type the token PIN (it goes only to the signer on this computer). A .pfx certificate can instead be uploaded once and used from any computer.',
+    ],
+  },
+  ai_models: {
+    title: 'Use your own AI model keys',
+    links: [
+      { label: 'OpenAI — API keys', url: 'https://platform.openai.com/api-keys' },
+      { label: 'Anthropic — API keys', url: 'https://console.anthropic.com/settings/keys' },
+      { label: 'Google AI Studio', url: 'https://aistudio.google.com/apikey' },
+      { label: 'Groq console', url: 'https://console.groq.com/keys' },
+      { label: 'OpenRouter', url: 'https://openrouter.ai/keys' },
+    ],
+    steps: [
+      'Create an API key with the provider (link above) and add billing there if the provider needs it.',
+      'Add model → provider, key and model name (e.g. gpt-4.1-mini, claude-sonnet-4-5, gemini-2.5-flash) → Save → Test.',
+      'Personal data: tick “may receive personal data” only for providers your contracts allow; prompts with names, phone numbers and emails go only to those.',
+      'Order: your models are tried first, in order; “Fall back to the platform’s AI” uses the shared models (with the daily allowance) when yours fail.',
+      'The assistant (✦), meeting minutes, WhatsApp analysis, bill reading and lead scoring all use these models; usage shows in Settings → Usage & costs.',
     ],
   },
 };

@@ -23,6 +23,7 @@ import { date, money2, moneyShort } from '../lib/format';
 import { Deposits } from '../components/books/Deposits';
 import { AccountsDesk } from '../components/books/AccountsDesk';
 import { combineStatements, PdfPasswordError, readStatementFile, type StatementLine } from '../lib/statement';
+import { Guide } from '../components/admin/ConnectionKeys';
 
 type Json = Record<string, any>;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -912,6 +913,7 @@ function BankAccountView({ acc, back }: { acc: Json; back: () => void }) {
           </button>
           <h2 style={{ margin: 0 }}>{acc.name}</h2>
         </div>
+        <Guide id="bank_statements" label="Statements, feeds and passwords" />
         <div className="row" style={{ flexWrap: 'wrap' }}>
           <label className="btn sm">
             Import statements (PDF / Excel / CSV)

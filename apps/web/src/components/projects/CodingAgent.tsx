@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { get, post, put } from '../../lib/api';
 import { dateTime, relative } from '../../lib/format';
 import { Markdown } from '../Markdown';
+import { Guide } from '../admin/ConnectionKeys';
 import { Modal, Spinner, useToast } from '../ui';
 
 type Json = Record<string, any>;
@@ -132,34 +133,13 @@ function JobModal({ jobId, manage, onClose }: { jobId: string; manage: boolean; 
 }
 
 function Connect({ open }: { open: boolean }) {
-  const url = `${window.location.origin}/api/v1/mcp`;
   return (
-    <details className="panel" style={{ padding: 12 }} open={open}>
-      <summary>
-        <b>Connect Claude Code or Codex</b> <span className="small muted">— once per developer machine</span>
-      </summary>
-      <ol className="small stack" style={{ gap: 8, paddingLeft: 18 }}>
-        <li>
-          Create an API key with <b>read and write</b> access in Settings → API keys (it acts as you: the agent sees and changes only what you can).
-        </li>
-        <li>
-          <b>Claude Code</b> (desktop app or terminal):
-          <pre className="asst-json">{`claude mcp add --transport http sanchalan ${url} --header "Authorization: Bearer syn_…" --scope user`}</pre>
-          then ask it: <i>“Work the SanchalanOS queue: use next_work, implement, test, request review, and after approval commit, push and complete.”</i>
-        </li>
-        <li>
-          <b>Codex</b> — in <code>~/.codex/config.toml</code>:
-          <pre className="asst-json">{`[mcp_servers.sanchalan]\nurl = "${url}"\nbearer_token_env_var = "SANCHALAN_KEY"`}</pre>
-          and set <code>SANCHALAN_KEY=syn_…</code> in your environment.
-        </li>
-        <li>
-          <b>Hands-free:</b> run the agent runner from the SanchalanOS repository; it waits for work, clones or creates the project folder, starts Claude Code or Codex on each item, waits for your
-          approval here, then commits, pushes, opens the pull request and runs the release command:
-          <pre className="asst-json">{`SANCHALAN_URL=${window.location.origin} SANCHALAN_KEY=syn_… WORK_DIR=~/sanchalan-work AGENT=claude node scripts/agent/sanchalan-agent.mjs`}</pre>
-          (<code>AGENT=codex</code> for Codex). See docs/CODING-AGENT.md.
-        </li>
-      </ol>
-    </details>
+    <div className="stack" style={{ gap: 6 }}>
+      <b>Connect Claude Code or Codex</b>
+      <Guide id="coding_agent_claude" open={open} />
+      <Guide id="coding_agent_codex" />
+      <Guide id="coding_agent_runner" />
+    </div>
   );
 }
 

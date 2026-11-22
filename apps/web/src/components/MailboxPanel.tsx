@@ -4,7 +4,7 @@ import { api, del, get, patch, post, put } from '../lib/api';
 import { relative } from '../lib/format';
 import { useOAuthReturn } from '../lib/oauthReturn';
 import { Spinner, useToast } from './ui';
-import { SetUpKeysLink } from './admin/ConnectionKeys';
+import { Guide, SetUpKeysLink } from './admin/ConnectionKeys';
 
 export type Mailbox = { id: string; provider: 'google' | 'microsoft'; account: string; status: string; lastSyncAt: string | null; lastError: string | null; primary?: boolean; config: { calendar?: boolean; ignore?: string[]; invites?: boolean } };
 export interface IntegrationStatus {
@@ -58,6 +58,7 @@ export function MailboxPanel() {
         {boxes.length > 0 && <span className="chip good">{boxes.length} mailbox{boxes.length === 1 ? '' : 'es'}</span>}
       </div>
       <div className="panel-body stack">
+        <Guide id="mailbox" />
         {boxes.map((mb) => (
           <MailboxRow key={mb.id} mb={mb} many={boxes.length > 1} busy={busy} act={act} reconnect={() => connect(mb.provider)} />
         ))}

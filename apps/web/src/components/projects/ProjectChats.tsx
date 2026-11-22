@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { del, get, patch, post } from '../../lib/api';
 import { date } from '../../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../ui';
+import { Guide } from '../admin/ConnectionKeys';
 
 type Json = Record<string, any>;
 
@@ -59,6 +60,7 @@ export function ProjectChats({ id }: { id: string }) {
   const openCount = (data.proposals as Json[]).filter((p) => p.status === 'proposed').length;
   return (
     <div className="stack">
+      <Guide id="project_whatsapp" />
       <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <div>
           <h3 className="section-label" style={{ margin: 0 }}>

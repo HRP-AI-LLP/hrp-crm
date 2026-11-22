@@ -10,6 +10,7 @@ import { ApiError, get, post } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { downloadText } from '../lib/csv';
 import { relative } from '../lib/format';
+import { GuidesDirectory } from '../components/admin/ConnectionKeys';
 
 function Qr({ text }: { text: string }) {
   const svg = useMemo(() => {
@@ -168,6 +169,16 @@ export function AccountPage() {
       <div className="account-grid">
         <MailboxPanel />
         <MeetingAppsPanel />
+        <section className="panel">
+          <details>
+            <summary className="panel-head" style={{ cursor: 'pointer' }}>
+              <h2 style={{ display: 'inline' }}>Setup guides</h2> <span className="muted small">— how to connect WhatsApp, mailboxes, meeting apps, Claude Code / Codex and everything else</span>
+            </summary>
+            <div className="panel-body">
+              <GuidesDirectory />
+            </div>
+          </details>
+        </section>
         <WorkAlertPrefs />
         <PushDevices />
         <section className="panel">

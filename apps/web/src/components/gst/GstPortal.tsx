@@ -12,6 +12,7 @@ import { del, get, patch, post } from "../../lib/api";
 import { date, dateTime, money2 } from "../../lib/format";
 import { Empty, Modal, Spinner, useToast } from "../ui";
 import { SelectAll } from "../SelectAll";
+import { Guide } from '../admin/ConnectionKeys';
 
 type Json = Record<string, any>;
 const ymNow = () => new Date().toISOString().slice(0, 7);
@@ -138,6 +139,7 @@ export function GstPortal() {
     data.connections.find((c) => c.id === sel) ?? data.connections[0];
   return (
     <div className="panel-body stack">
+      <Guide id="gst" label="How the GST portal connection works" />
       {!data.gsp.configured && (
         <div
           className="panel"

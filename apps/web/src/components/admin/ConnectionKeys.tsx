@@ -62,7 +62,7 @@ export function Guide({ id, open: startOpen = false, extra, label }: { id: strin
   return (
     <div className={`guide ${open ? 'open' : ''}`}>
       <button type="button" className="guide-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span aria-hidden="true">{open ? '▾' : '▸'}</span> {label ?? 'How to set this up'} <span className="muted small">— {g.title}</span>
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span> {label ?? 'How to set this up'}{label !== g.title && <span className="muted small"> — {g.title}</span>}
       </button>
       {open && (
         <div className="guide-body">
@@ -394,6 +394,55 @@ export function ConnectionKeysTab() {
         Still in the server’s environment, by design: the database address, <code>JWT_SECRET</code> and <code>DATA_ENCRYPTION_KEY</code> (they are needed before anything here can be read) and the Cloudflare bindings in{' '}
         <code>wrangler.jsonc</code>.
       </p>
+    </div>
+  );
+}
+
+/* ───────────────────────── every guide in one place ───────────────────────── */
+
+const GUIDE_GROUPS: [string, string[]][] = [
+  ['Your own connections', ['mailbox', 'meeting_apps', 'api_keys']],
+  ['Coding agents (Claude Code, Codex)', ['coding_agent_claude', 'coding_agent_codex', 'coding_agent_runner']],
+  ['WhatsApp, Instagram, email and chat', ['whatsapp', 'project_whatsapp', 'instagram', 'email_channel', 'webhook_channel', 'teams', 'slack', 'gchat']],
+  ['Leads', ['meta_leads', 'google_leads']],
+  ['Mail intake', ['mail_intake']],
+  ['Payments, banking, GST and books', ['razorpay', 'razorpayx', 'bank_statements', 'gst', 'tally', 'dsc_signer', 'exotel']],
+  ['Code and work tools', ['github_app', 'dev_github', 'dev_azure', 'jira', 'azure_devops', 'asana']],
+  ['ERP and documents', ['sharepoint', 'dynamics_bc', 'netsuite']],
+  ['AI models', ['ai_models', 'ai']],
+  ['Platform setup (platform admins)', ['google', 'microsoft', 'zoom', 'meta', 'resend', 'push', 'turnstile', 'cloudflare', 'android', 'options', 'usage_costs']],
+];
+
+/** Settings → Setup guides (and My account): every integration's instructions, searchable. */
+export function GuidesDirectory() {
+  const [q, setQ] = useState('');
+  const known = new Set(GUIDE_GROUPS.flatMap(([, ids]) => ids));
+  const groups: [string, string[]][] = [...GUIDE_GROUPS, ['Other', Object.keys(GUIDES).filter((k) => !known.has(k))]];
+  const term = q.trim().toLowerCase();
+  const hit = (id: string) => {
+    const g = GUIDES[id];
+    if (!g) return false;
+    if (!term) return true;
+    return [g.title, ...g.steps, ...(g.notes ?? []), ...g.links.map((l) => l.label)].join(' ').toLowerCase().includes(term);
+  };
+  return (
+    <div className="stack">
+      <p className="muted small" style={{ margin: 0 }}>
+        Step-by-step instructions for every connection: where to sign up, what to copy, what to paste where. The same guides appear next to each connection in the app.
+      </p>
+      <input placeholder="Search the guides — e.g. WhatsApp, webhook, Zoom, app password, MCP" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search the guides" />
+      {groups.map(([name, ids]) => {
+        const list = ids.filter(hit);
+        if (!list.length) return null;
+        return (
+          <section key={name} className="stack" style={{ gap: 6 }}>
+            <h3 style={{ margin: '6px 0 0' }}>{name}</h3>
+            {list.map((id) => (
+              <Guide key={`${id}-${term}`} id={id} label={GUIDES[id]!.title} open={!!term && list.length <= 3} />
+            ))}
+          </section>
+        );
+      })}
     </div>
   );
 }

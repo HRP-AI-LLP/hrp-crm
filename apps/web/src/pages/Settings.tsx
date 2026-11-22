@@ -2,7 +2,7 @@ import type { FieldDef } from '@synapse/shared';
 import type { RolePermissions } from '@synapse/shared';
 import { RoleEditor } from '../components/admin/RoleEditor';
 import { ConnectorsTab } from '../components/admin/Connectors';
-import { ConnectionKeysTab, Guide } from '../components/admin/ConnectionKeys';
+import { ConnectionKeysTab, Guide, GuidesDirectory } from '../components/admin/ConnectionKeys';
 import { IntegrationsTab } from '../components/admin/IntegrationsAdmin';
 import { PrivacyTab } from '../components/admin/PrivacyAdmin';
 import { SolutionsPanel } from '../components/admin/SolutionsAdmin';
@@ -60,6 +60,7 @@ const GROUPS: [string, [string, string, string][]][] = [
     ['competitors', 'Competitors', 'ai'],
   ]],
   ['Connect', [
+    ['guides', 'Setup guides', '*'],
     ['keys', 'Connection keys', 'channels'],
     ['ai', 'AI models', 'ai'],
     ['integrations', 'Integrations', 'channels'],
@@ -79,7 +80,7 @@ const GROUPS: [string, [string, string, string][]][] = [
 export function SettingsPage() {
   const { can } = useAuth();
   useOAuthReturn();
-  const groups = GROUPS.map(([g, items]) => [g, items.filter(([, , area]) => can(area))] as const).filter(([, items]) => items.length);
+  const groups = GROUPS.map(([g, items]) => [g, items.filter(([, , area]) => area === '*' || can(area))] as const).filter(([, items]) => items.length);
   const all = groups.flatMap(([, items]) => items);
   const initial = (() => {
     const qs = new URLSearchParams(window.location.search);
@@ -151,6 +152,7 @@ export function SettingsPage() {
           {tab === 'routing' && <RoutingTab />}
           {tab === 'service' && <ServiceSettingsTab />}
           {tab === 'forms' && <FormsTab />}
+          {tab === 'guides' && <GuidesDirectory />}
           {tab === 'keys' && <ConnectionKeysTab />}
           {tab === 'integrations' && <IntegrationsTab />}
           {tab === 'connectors' && <ConnectorsTab />}
@@ -937,6 +939,7 @@ function AiModelsTab() {
 
   return (
     <div className="stack">
+      <Guide id="ai_models" />
       <p className="muted" style={{ margin: 0, maxWidth: '75ch' }}>
         Use your own model accounts for SanchalanOS AI. Your keys are tried first, in the order below; the built-in models are used as a backup unless you turn that off.
         Keys are encrypted before they are stored and are never shown again, only their last four characters.

@@ -9,7 +9,7 @@ import { del, get, patch, post } from '../lib/api';
 import { relative } from '../lib/format';
 import { useOAuthReturn } from '../lib/oauthReturn';
 import { Spinner, useToast } from './ui';
-import { SetUpKeysLink } from './admin/ConnectionKeys';
+import { Guide, SetUpKeysLink } from './admin/ConnectionKeys';
 
 type Json = Record<string, any>;
 const APPS: { key: 'zoom' | 'gmeet' | 'msmeet'; provider: string; name: string; note: string; group: string }[] = [
@@ -60,6 +60,7 @@ export function MeetingAppsPanel({ returnTo = '/account' }: { returnTo?: '/accou
         {data && data.accounts.length > 0 && <span className="chip good">{data.accounts.length} connected</span>}
       </div>
       <div className="panel-body stack">
+        <Guide id="meeting_apps" />
         <p className="muted small" style={{ margin: 0 }}>
           Connect the accounts you hold calls on. SanchalanOS creates the meeting when you schedule a project call, picks up the transcript afterwards, and writes the minutes with each person’s actions.
         </p>

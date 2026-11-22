@@ -9,6 +9,7 @@ import { Fragment, useState } from 'react';
 import { download, get, put, del } from '../../lib/api';
 import { date } from '../../lib/format';
 import { Spinner, useToast } from '../ui';
+import { Guide } from './ConnectionKeys';
 
 type Json = Record<string, any>;
 
@@ -202,6 +203,7 @@ export function UsageCostsTab() {
   const prev = (data.months as string[])[1];
   return (
     <div className="stack">
+      <Guide id="usage_costs" />
       <div className="spread" style={{ flexWrap: 'wrap', gap: 8 }}>
         <p className="muted small" style={{ margin: 0, maxWidth: 720 }}>
           Every call to an outside service, every request and database query, AI tokens and stored files — counted as they happen. Costs are estimates from the price list; bills are the suppliers' invoices recorded in Books (receipts read from your mail).

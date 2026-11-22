@@ -11,6 +11,7 @@ import { del, download, get, patch, post, put } from '../lib/api';
 import { readDocument } from '../lib/doc-read';
 import { date, dateTime, money2 } from '../lib/format';
 import { useUsers } from '../lib/hooks';
+import { Guide } from '../components/admin/ConnectionKeys';
 
 type Json = Record<string, any>;
 
@@ -1295,6 +1296,7 @@ function Mailboxes() {
   };
   return (
     <div className="stack">
+      <Guide id="mail_intake" />
       <div className="row" style={{ gap: 6 }}>
         <button className="btn primary" onClick={() => setEdit({ preset: 'titan' })}>
           + Add a mailbox
@@ -1392,6 +1394,9 @@ function MailboxModal({ m, presets, connections, onClose, onSaved }: { m: Json; 
       }
     >
       <div className="modal-body grid2">
+        <div className="wide">
+          <Guide id="mail_intake" />
+        </div>
         <label className="field wide">
           Mail service
           <select value={preset} onChange={(e) => pickPreset(e.target.value)}>

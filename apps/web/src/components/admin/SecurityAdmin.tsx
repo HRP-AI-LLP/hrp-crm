@@ -7,7 +7,7 @@ import { date, number, relative } from '../../lib/format';
 import { useMeta, useUsers } from '../../lib/hooks';
 import { describeFilter, type Filter, FilterBuilder } from '../ListTools';
 import { Empty, Modal, Spinner, useToast } from '../ui';
-import { SetUpKeysLink } from './ConnectionKeys';
+import { Guide, SetUpKeysLink } from './ConnectionKeys';
 
 type Json = Record<string, any>;
 
@@ -571,6 +571,8 @@ export function ApiKeysTab() {
   const origin = window.location.origin;
   return (
     <div className="stack">
+      <Guide id="api_keys" />
+      <Guide id="coding_agent_claude" label="Use a key with Claude Code / Codex (MCP)" />
       <div className="spread">
         <p className="muted small" style={{ margin: 0 }}>
           Keys let other systems (your website, Zapier, Make, n8n, a data warehouse) use the <code>/api/v1</code> API as a chosen person, with that person’s access. Read keys can only read. See <a href="/developers">Developers</a> for the API reference and webhooks.

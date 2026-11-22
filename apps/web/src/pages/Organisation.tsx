@@ -15,6 +15,7 @@ import { Empty, Modal, Spinner, useToast } from '../components/ui';
 import { del, get, post, put } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { SideTabs } from '../components/SideTabs';
+import { Guide } from '../components/admin/ConnectionKeys';
 
 type Json = Record<string, any>;
 type Tab = 'profile' | 'contacts' | 'leaders' | 'people' | 'banks' | 'documents' | 'signatures' | 'dsc' | 'templates';
@@ -858,6 +859,7 @@ function Dsc({ d }: { d: Json }) {
       <p className="muted small" style={{ margin: 0 }}>
         Sign invoices, orders and purchase orders with your digital signature certificate (Class 3 DSC). The signed PDF shows as signed in Adobe Reader and is kept with the document. A certificate kept as a <b>.pfx file</b> is stored encrypted and is never handed back — it signs only from SanchalanOS. A certificate on a <b>USB token</b> stays on the token: the DSC signer on the computer with the token signs only what this SanchalanOS asks it to.
       </p>
+      <Guide id="dsc_signer" />
       {d.canManage && (
         <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
           <button className="btn primary sm" onClick={() => setModal('pfx')}>
