@@ -479,17 +479,28 @@ async function main() {
   // ------------------------------------------------------------------------------ GitHub
   step('GitHub Actions secrets');
   const gh = spawnSync('gh auth status', { shell: true, stdio: 'pipe', cwd: ROOT });
-  const hasRemote = spawnSync('git remote get-url origin', { shell: true, stdio: 'pipe', cwd: ROOT }).status === 0;
-  if (gh.status === 0 && hasRemote) {
-    for (const [k, v] of [['NEON_API_KEY', NEON_API_KEY], ['CLOUDFLARE_API_TOKEN', CF_TOKEN], ['CLOUDFLARE_ACCOUNT_ID', CF_ACCOUNT]]) {
-      run(`gh secret set ${k}`, { input: v, capture: true, display: `gh secret set ${k} <hidden>` });
+  const originUrl = spawnSync('git remote get-url origin', { shell: true, stdio: 'pipe', cwd: ROOT, encoding: 'utf8' });
+  // owner/repo of "origin" (gh needs it named when the folder has several remotes)
+  const repo = originUrl.status === 0 ? /github\.com[/:]([^/]+\/[^/.\s]+)/.exec(originUrl.stdout.trim())?.[1] : undefined;
+  const manual = () => {
+    info(c.warn('Add these in GitHub → the repository → Settings → Secrets and variables → Actions:'));
+    info(c.warn('  secrets NEON_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID'));
+    info(c.warn(`  variable NEON_PROJECT_ID = ${projectId}`));
+  };
+  if (gh.status === 0 && repo) {
+    try {
+      for (const [k, v] of [['NEON_API_KEY', NEON_API_KEY], ['CLOUDFLARE_API_TOKEN', CF_TOKEN], ['CLOUDFLARE_ACCOUNT_ID', CF_ACCOUNT]]) {
+        run(`gh secret set ${k} -R ${repo}`, { input: v, capture: true, display: `gh secret set ${k} -R ${repo} <hidden>` });
+      }
+      run(`gh variable set NEON_PROJECT_ID --body ${projectId} -R ${repo}`, { capture: true });
+      info(`${c.ok('✓')} secrets and NEON_PROJECT_ID set on ${repo}`);
+    } catch {
+      info(c.warn(`Could not set them with the GitHub CLI on ${repo} (needs admin rights on the repository).`));
+      manual();
     }
-    run(`gh variable set NEON_PROJECT_ID --body ${projectId}`);
-    info(`${c.ok('✓')} repository secrets set`);
   } else {
-    info(c.warn('GitHub CLI not logged in or no git remote yet. After pushing the repo, add these repository secrets'));
-    info(c.warn('(Settings → Secrets and variables → Actions): NEON_API_KEY, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID'));
-    info(c.warn(`and the repository variable NEON_PROJECT_ID = ${projectId}`));
+    info(c.warn('GitHub CLI not logged in (`gh auth login`) or no "origin" remote on GitHub.'));
+    manual();
   }
 
   writeJson(STATE_FILE, state);
