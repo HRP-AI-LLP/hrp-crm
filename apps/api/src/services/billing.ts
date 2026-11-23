@@ -39,6 +39,8 @@ export interface BillingSettings {
   upiPayee: string;
   /** saved signature put on every invoice when it is issued */
   autoSignId: string;
+  /** a DSC (.pfx) certificate that digitally signs each invoice automatically when it is issued */
+  autoDscCertId: string;
   ledgers: TallyLedgers;
 }
 
@@ -55,6 +57,7 @@ export async function billingSettings(ctx: RecordCtx): Promise<BillingSettings> 
     upiVpa: b.upiVpa ?? '',
     upiPayee: b.upiPayee ?? '',
     autoSignId: b.autoSignId ?? '',
+    autoDscCertId: b.autoDscCertId ?? '',
     ledgers: {
       sales: 'Sales', cgst: 'Output CGST', sgst: 'Output SGST', igst: 'Output IGST', roundOff: 'Round Off', bank: 'Bank',
       tds: 'TDS Receivable', gstTds: 'GST TDS Receivable', ld: 'Liquidated Damages', retention: 'Retention Money Receivable', bankCharges: 'Bank Charges',
@@ -164,20 +167,36 @@ export async function getInvoice(ctx: RecordCtx, id: string) {
   );
   const account = row.account_id ? await ctx.tx.one<Record<string, unknown>>(`select id, name, gstin, address, city, state, pincode from accounts where tenant_id = $1 and id = $2`, [ctx.tenantId, row.account_id]) : null;
   const settings = await billingSettings(ctx);
+  const company = await letterhead(ctx);
   return {
     invoice: { ...toDto(obj, row, ctx.principal.permissions), buyer_name: row.buyer_name, buyer_address: row.buyer_address, buyer_state: row.buyer_state, buyer_pincode: row.buyer_pincode, seller_gstin: row.seller_gstin, seller_state: row.seller_state, pos_code: row.pos_code, round_off: Number(row.round_off), ack_no: row.ack_no, ack_date: row.ack_date, irn_qr: row.irn_cancelled_at ? null : row.irn_qr, irn_cancelled_at: row.irn_cancelled_at, ewb_no: row.ewb_cancelled_at ? null : row.ewb_no, ewb_date: row.ewb_date, ewb_valid_until: row.ewb_valid_until, financial_year: row.financial_year, imported: !!row.imported, import_source: row.import_source ?? null, subtotal: Number(row.subtotal), discount_total: Number(row.discount_total), tax_total: Number(row.tax_total) },
     lines: await invoiceLines(ctx, id),
     payments,
     credits,
     account,
-    company: await letterhead(ctx),
+    company,
     bankDetails: settings.bankDetails,
-    // a UPI QR for what is still owed on an issued tax invoice
-    upi:
-      settings.upiVpa && row.doc_type === 'tax_invoice' && ['issued', 'partially_paid'].includes(String(row.status)) && Number(row.balance_due) > 0
-        ? { vpa: settings.upiVpa, payee: settings.upiPayee || (await letterhead(ctx)).name, amount: Number(row.balance_due), note: String(row.invoice_number ?? '') }
-        : null,
+    // a pay-by-UPI QR: the structured UPI id, else one found in the bank details text.
+    // shows on any tax invoice with an amount — the balance once issued, otherwise the total.
+    upi: ((): { vpa: string; payee: string; amount: number; note: string } | null => {
+      const vpa = settings.upiVpa || upiFromText(settings.bankDetails);
+      if (!vpa || row.doc_type !== 'tax_invoice') return null;
+      const amount = Number(row.balance_due) > 0 ? Number(row.balance_due) : Number(row.grand_total) > 0 ? Number(row.grand_total) : 0;
+      if (amount <= 0 || row.status === 'cancelled') return null;
+      return { vpa, payee: settings.upiPayee || company.name, amount, note: String(row.invoice_number ?? row.name ?? '') };
+    })(),
   };
+}
+
+/** A UPI id written into free-text bank details, e.g. "UPI: name@bank". Prefers one labelled UPI. */
+function upiFromText(text: string | null | undefined): string {
+  if (!text) return '';
+  const labelled = text.match(/upi[^A-Za-z0-9]{0,4}([A-Za-z0-9._-]{2,256}@[A-Za-z][A-Za-z0-9.-]{1,64})/i);
+  if (labelled) return labelled[1]!;
+  // a bare VPA, but not an e-mail address (skip common mail domains)
+  const bare = text.match(/\b([A-Za-z0-9._-]{2,256}@[A-Za-z][A-Za-z0-9.-]{1,64})\b/);
+  if (bare && !/\.(com|in|org|net|co|io|gov|edu)$/i.test(bare[1]!)) return bare[1]!;
+  return '';
 }
 
 export async function saveInvoiceLines(ctx: RecordCtx, id: string, input: (LineInput & { orderLineId?: string | null; isService?: boolean })[], taxInclusive?: boolean): Promise<RecordEvent[]> {

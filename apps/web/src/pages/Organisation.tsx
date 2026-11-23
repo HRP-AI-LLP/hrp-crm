@@ -847,6 +847,7 @@ function Dsc({ d }: { d: Json }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ['org-dsc'], queryFn: () => get<Json>('/api/v1/organisation/dsc') });
   const sigs = useQuery({ queryKey: ['org-signatures'], queryFn: () => get<Json[]>('/api/v1/organisation/signatures') });
+  const billing = useQuery({ queryKey: ['billing-settings'], queryFn: () => get<Json>('/api/v1/billing/settings'), staleTime: 60_000 });
   const [modal, setModal] = useState<'pfx' | 'token' | 'pair' | null>(null);
   const [edit, setEdit] = useState<Json | null>(null);
   const [paired, setPaired] = useState<Json | null>(null);
@@ -927,6 +928,33 @@ function Dsc({ d }: { d: Json }) {
             </tbody>
           </table>
         </div>
+      )}
+      {d.canManage && certs.some((c) => c.kind === 'pfx' && !c.expired) && billing.data && (
+        <label className="field" style={{ maxWidth: 480 }}>
+          Sign every invoice automatically with this DSC when it is issued
+          <select
+            value={billing.data.autoDscCertId ?? ''}
+            onChange={async (e) => {
+              try {
+                await put('/api/admin/billing/settings', { autoDscCertId: e.target.value });
+                qc.invalidateQueries({ queryKey: ['billing-settings'] });
+                toast('Saved');
+              } catch (err) {
+                toast((err as Error).message, true);
+              }
+            }}
+          >
+            <option value="">No automatic signing (sign each by hand)</option>
+            {certs
+              .filter((c) => c.kind === 'pfx' && !c.expired)
+              .map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.subjectCn} — {c.label}
+                </option>
+              ))}
+          </select>
+          <small className="muted">Only a .pfx certificate can sign on its own. A USB-token certificate needs the signer on the computer, so it can’t auto-sign. The invoice must list you (or the signer) as allowed on the certificate.</small>
+        </label>
       )}
       <h3 style={{ margin: '8px 0 0' }}>Paired signers</h3>
       {!signers.length ? (

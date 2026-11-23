@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { download, get, post, put } from '../../lib/api';
 import { date, money2 } from '../../lib/format';
+import { signWithPfx } from '../../lib/dsc';
 import { Modal, useToast } from '../ui';
 import { type DocLine, LinesEditor, toLineInput } from './LinesEditor';
 import { TallySync } from './TallySync';
@@ -196,7 +197,26 @@ export function InvoicePanel({ id, canEdit }: { id: string; canEdit: boolean }) 
   const { me } = useAuth();
   const isGstAdmin = !!me && (hasAdmin(me.permissions, 'billing') || hasAdmin(me.permissions, 'books'));
   const { data } = useQuery({ queryKey: ['invoice', id], queryFn: () => get<Json>(`/api/v1/invoices/${id}`) });
+  const bset = useQuery({ queryKey: ['billing-settings'], queryFn: () => get<Json>('/api/v1/billing/settings'), staleTime: 60_000 });
   const act = useAct([['invoice', id], ['record', 'invoice', id], ['timeline', 'invoice', id], ['records', 'invoice']]);
+  const toast = useToast();
+  const qc = useQueryClient();
+  // issue, then digitally sign with the configured DSC (.pfx) automatically — no manual signing
+  const issueAndSign = async () => {
+    if (!window.confirm('Issue this invoice? It gets its GST number and can no longer be edited.')) return;
+    const r = await act(() => post(`/api/v1/invoices/${id}/issue`), 'Invoice issued');
+    if (!r) return;
+    const certId = bset.data?.autoDscCertId as string | undefined;
+    if (certId) {
+      try {
+        await signWithPfx('invoice', id, certId, me);
+        toast('Digitally signed with your DSC');
+        qc.invalidateQueries({ queryKey: ['doc-signatures', 'invoice', id] });
+      } catch (e) {
+        toast(`Issued, but automatic DSC signing failed: ${(e as Error).message}`, true);
+      }
+    }
+  };
   const [modal, setModal] = useState<null | 'pay' | 'cancel' | 'credit' | 'irn'>(null);
   const [f, setF] = useState<Json>({});
   if (!data) return null;
@@ -217,7 +237,7 @@ export function InvoicePanel({ id, canEdit }: { id: string; canEdit: boolean }) 
             {draft ? 'Preview' : 'Print / PDF'}
           </a>
           {canEdit && draft && (
-            <button className="btn sm primary" disabled={blocked || !data.lines.length} title={blocked ? 'Needs approval first' : undefined} onClick={() => window.confirm('Issue this invoice? It gets its GST number and can no longer be edited.') && act(() => post(`/api/v1/invoices/${id}/issue`), 'Invoice issued')}>
+            <button className="btn sm primary" disabled={blocked || !data.lines.length} title={blocked ? 'Needs approval first' : bset.data?.autoDscCertId ? 'Issues and digitally signs with your DSC' : undefined} onClick={isCn ? () => window.confirm('Issue this credit note? It gets its GST number and can no longer be edited.') && act(() => post(`/api/v1/invoices/${id}/issue`), 'Credit note issued') : issueAndSign}>
               Issue {isCn ? 'credit note' : 'invoice'}
             </button>
           )}

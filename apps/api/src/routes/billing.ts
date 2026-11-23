@@ -186,6 +186,8 @@ const settingsSchema = z.object({
   upiPayee: z.string().trim().max(50).optional(),
   /** a saved signature put on every invoice when it is issued ('' = none) */
   autoSignId: z.union([z.literal(''), z.string().uuid()]).optional(),
+  /** a DSC (.pfx) certificate that auto-signs each invoice when it is issued ('' = none) */
+  autoDscCertId: z.union([z.literal(''), z.string().uuid()]).optional(),
   ledgers: z
     .object({
       sales: z.string().max(80), cgst: z.string().max(80), sgst: z.string().max(80), igst: z.string().max(80), roundOff: z.string().max(80), bank: z.string().max(80),
