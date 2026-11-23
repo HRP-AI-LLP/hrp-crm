@@ -981,6 +981,9 @@ async function contextFor(tx: Tx, tenantId: string, run: Run, before: number) {
       [tenantId, run.project_id, run.id],
     );
     if (docs.length) parts.push(`Approved documents already in the project: ${docs.map((x) => `${x.title} (${x.subtype})`).join('; ')}`);
+    // what the client shared (BRD, requirement notes, screenshots of their system, formats…)
+    const shared = await (await import('./project-docs')).docsForAi(tx, tenantId, run.project_id, 12000).catch(() => '');
+    if (shared) parts.push(shared);
   }
   const arts = await tx.query<{ kind: string; subtype: string; title: string; body: string | null; position: number }>(
     `select a.kind, a.subtype, a.title, a.body, s.position from sdlc_artifacts a join sdlc_steps s on s.tenant_id = a.tenant_id and s.id = a.step_id

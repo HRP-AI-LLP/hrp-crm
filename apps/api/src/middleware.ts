@@ -95,8 +95,8 @@ async function authenticateApiKey(c: Context<AppEnv>, key: string) {
   if (!path.startsWith('/api/v1/')) throw forbidden('API keys can only call /api/v1');
   const hash = await sha256Hex(key);
   const { meta, principal, row } = await c.var.db.tx({ tenantId: tenant.id, readOnly: true }, async (tx) => {
-    const row = await tx.one<{ id: string; user_id: string; scopes: string[]; last_used_at: Date | null; rate_limit_per_min: number }>(
-      `select id, user_id, scopes, last_used_at, rate_limit_per_min from api_keys where tenant_id = $1 and key_hash = $2 and revoked_at is null and (expires_at is null or expires_at > now())`,
+    const row = await tx.one<{ id: string; user_id: string; scopes: string[]; last_used_at: Date | null; rate_limit_per_min: number; project_id: string | null }>(
+      `select id, user_id, scopes, last_used_at, rate_limit_per_min, project_id from api_keys where tenant_id = $1 and key_hash = $2 and revoked_at is null and (expires_at is null or expires_at > now())`,
       [tenant.id, hash],
     );
     if (!row) return { meta: null, principal: null, row: null };
@@ -107,6 +107,8 @@ async function authenticateApiKey(c: Context<AppEnv>, key: string) {
   if (!row || !principal || !meta || principal.user.status !== 'active') throw unauthorized('Invalid or revoked API key');
   assertNetworkAllowed(c.env, meta.tenant.security, (n) => c.req.header(n));
   if (meta.tenant.security?.requireMfa && !principal.user.mfaEnabled) throw forbidden('The person this key acts as must turn on two-factor sign-in');
+  // a key made for one project's repository works only for its coding agent, on that project
+  if (row.project_id && !/^\/api\/v1\/mcp\/?$/.test(path)) throw forbidden('This API key is for the coding agent of one project only');
   const write = !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method);
   if (write && !row.scopes.includes('write')) throw forbidden('This API key is read-only');
   // per-key rate limit (requests per minute), with the standard headers integrations read
@@ -131,7 +133,7 @@ async function authenticateApiKey(c: Context<AppEnv>, key: string) {
     }
   }
   c.set('meta', meta);
-  c.set('principal', { ...principal, apiKey: { id: row.id, scopes: row.scopes } });
+  c.set('principal', { ...principal, apiKey: { id: row.id, scopes: row.scopes, projectId: row.project_id } });
 }
 
 /** Bearer JWT (or API key) → principal. The token audience must equal the tenant resolved from the host. */

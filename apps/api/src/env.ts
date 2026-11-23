@@ -148,7 +148,7 @@ export interface Principal {
   /** sharing rules that apply to this user */
   shares?: { objectKey: string; criteria: { field: string; op: string; value?: unknown }[]; access: 'read' | 'edit' }[];
   /** set when the request is authenticated with an API key */
-  apiKey?: { id: string; scopes: string[] };
+  apiKey?: { id: string; scopes: string[]; projectId?: string | null };
 }
 
 export interface AppVariables {

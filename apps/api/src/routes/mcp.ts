@@ -12,6 +12,7 @@ import { ApiError } from '../lib/errors';
 import { scope } from '../middleware';
 import * as ag from '../services/coding-agent';
 import * as sd from '../services/sdlc';
+import * as pd from '../services/project-docs';
 import { DIAGRAM_TYPES, type DiagramType, specGuide } from '@synapse/shared/diagrams';
 import type { RecordCtx } from '../services/records';
 
@@ -23,8 +24,18 @@ type Tool = { name: string; description: string; inputSchema: Record<string, unk
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const str = (description: string) => ({ type: 'string', description });
 
+/** The project this agent session is tied to: the key's project, or the repository's X-Sanchalan-Project. */
+const pinRef = (c: Context<AppEnv>) => c.var.principal.apiKey?.projectId ?? (c.req.header('x-sanchalan-project')?.trim() || null);
+
 function run<T>(c: Context<AppEnv>, fn: (ctx: RecordCtx) => Promise<T>, readOnly = false) {
-  return c.var.db.tx(scope(c, readOnly), (tx) => fn({ tx, meta: c.var.meta, principal: c.var.principal, tenantId: c.var.tenant.id }));
+  return c.var.db.tx(scope(c, readOnly), async (tx) => {
+    const base: RecordCtx = { tx, meta: c.var.meta, principal: c.var.principal, tenantId: c.var.tenant.id };
+    const keyProject = c.var.principal.apiKey?.projectId ?? null;
+    const header = c.req.header('x-sanchalan-project')?.trim() || null;
+    const agentProject = keyProject ? await ag.resolveAgentProject(base, keyProject) : header ? await ag.resolveAgentProject(base, header) : null;
+    if (keyProject && header && (await ag.resolveAgentProject(base, header)).id !== keyProject) throw new ApiError(403, 'forbidden', `This key is for the project “${agentProject!.name}”, not “${header}”`);
+    return fn({ ...base, agentProject } as ag.AgentCtx);
+  });
 }
 
 const TOOLS: Tool[] = [
@@ -37,8 +48,24 @@ const TOOLS: Tool[] = [
   {
     name: 'setup_project',
     description: 'How to get a project onto this machine: the repositories to clone (or to create when none is linked), the local folder, build/test instructions and the release command. Call it before working on a project you do not have locally.',
-    inputSchema: obj({ project: str('Project id, work key (e.g. FLEET) or name') }, ['project']),
-    run: (c, a) => run(c, (ctx) => ag.projectSetup(ctx, String(a.project)), true),
+    inputSchema: obj({ project: str('Project id, work key (e.g. FLEET) or name') }, []),
+    run: (c, a) => run(c, (ctx) => ag.projectSetup(ctx, String(a.project ?? '')), true),
+  },
+  {
+    name: 'queue_board',
+    description:
+      'Queues the open items of a project\'s board (not done or cancelled) for the coding agent: every bug, task and story by default (the project\'s agent item types), or only some types, a priority or given keys (e.g. ["FLEET-12"]). Bugs first. Then call next_work in a loop to work them one by one.',
+    inputSchema: obj(
+      {
+        project: str('Project id, key or name (leave out when this repository is linked to one project)'),
+        workTypes: { type: 'array', items: { type: 'string', enum: ['story', 'task', 'bug', 'subtask', 'spike', 'improvement', 'epic', 'feature'] } },
+        keys: { type: 'array', items: { type: 'string' }, description: 'Only these items, e.g. ["FLEET-12", "FLEET-15"]' },
+        priority: { type: 'string', enum: ['urgent', 'high', 'medium', 'low'] },
+        limit: { type: 'integer', minimum: 1, maximum: 200 },
+      },
+      [],
+    ),
+    run: (c, a) => run(c, (ctx) => ag.queueOpen(ctx, String(a.project ?? ''), ag.queueOpenSchema.parse({ workTypes: a.workTypes, keys: a.keys, priority: a.priority, limit: a.limit }))),
   },
   {
     name: 'next_work',
@@ -48,7 +75,7 @@ const TOOLS: Tool[] = [
     run: async (c, a) => {
       const until = Date.now() + (wait.parse(a.waitSeconds) ?? 0) * 1000;
       for (;;) {
-        const job = await run(c, (ctx) => ag.claimNext(ctx, String(a.agent ?? 'agent'), a.project ? String(a.project) : null));
+        const job = await run(c, (ctx) => ag.claimNext(ctx, String(a.agent ?? 'agent'), a.project ? String(a.project ?? '') : null));
         if (job || Date.now() >= until) return { job };
         await sleep(3000);
       }
@@ -123,22 +150,46 @@ const TOOLS: Tool[] = [
     name: 'create_work_item',
     description: 'Files a new story, task, bug, sub-task, spike or improvement (e.g. a bug found while working). It is not sent back to the agent automatically.',
     inputSchema: obj(
-      { project: str('Project id, key or name'), type: { type: 'string', enum: ['story', 'task', 'bug', 'subtask', 'spike', 'improvement'] }, title: str('Title'), description: str('Description'), parentKey: str('Parent item key, for a sub-task') },
-      ['project', 'type', 'title'],
+      { project: str('Project id, key or name (leave out when this repository is linked to one project)'), type: { type: 'string', enum: ['story', 'task', 'bug', 'subtask', 'spike', 'improvement'] }, title: str('Title'), description: str('Description'), parentKey: str('Parent item key, for a sub-task') },
+      ['type', 'title'],
     ),
     run: (c, a) => run(c, (ctx) => ag.agentCreateItem(ctx, ag.newItemSchema.parse(a))),
   },
   {
     name: 'project_documents',
-    description: 'The project\'s documents (BRD, SRS, HLD, LLD, API spec, test plan, runbook …) and diagrams made by the AI delivery agents or people — approved ones first. Read the relevant ones before implementing.',
-    inputSchema: obj({ project: str('Project id, key or name') }, ['project']),
-    run: (c, a) => run(c, async (ctx) => ({ documents: await sd.projectDocs(ctx, (await ag.projectSetup(ctx, String(a.project))).project.id) }), true),
+    description: 'The project\'s documents: clientDocuments (what the client shared — BRD, requirement notes, screenshots of their current system, sample data and formats, process documents; read with read_document) and documents (BRD, SRS, HLD, LLD, API spec, test plan, runbook … and diagrams made by the AI delivery agents or people, approved ones first). Read the relevant ones before implementing.',
+    inputSchema: obj({ project: str('Project id, key or name (leave out when this repository is linked to one project)') }, []),
+    run: (c, a) =>
+      run(
+        c,
+        async (ctx) => {
+          const pid = (await ag.projectSetup(ctx, String(a.project ?? ''))).project.id;
+          return { clientDocuments: await pd.docsList(ctx, pid), documents: await sd.projectDocs(ctx, pid) };
+        },
+        true,
+      ),
   },
   {
     name: 'read_document',
     description: 'A document (markdown) or diagram (Mermaid and its spec) by id, from project_documents.',
     inputSchema: obj({ id: str('Document or diagram id') }, ['id']),
-    run: (c, a) => run(c, (ctx) => sd.readDoc(ctx, String(a.id)), true),
+    run: (c, a) =>
+      run(
+        c,
+        async (ctx) => {
+          // a document the client shared, or one the team / the AI wrote
+          const cd = /^[0-9a-f-]{36}$/i.test(String(a.id)) ? await pd.docForAgent(ctx, String(a.id)) : null;
+          if (cd) {
+            ag.assertAgentProject(ctx, cd.projectId);
+            return cd;
+          }
+          const d = await sd.readDoc(ctx, String(a.id));
+          const at = await ctx.tx.one<{ project_id: string }>(`select project_id from sdlc_artifacts where tenant_id = $1 and id = $2`, [ctx.tenantId, d.id]);
+          if (at) ag.assertAgentProject(ctx, at.project_id);
+          return d;
+        },
+        true,
+      ),
   },
   {
     name: 'diagram_format',
@@ -155,16 +206,16 @@ const TOOLS: Tool[] = [
   {
     name: 'save_diagram',
     description: 'Saves a diagram to the project\'s documents (e.g. the architecture you implemented), from a spec or Mermaid source. People see it under AI delivery, with PNG / JPG / SVG / draw.io downloads.',
-    inputSchema: obj({ project: str('Project id, key or name'), title: str('Title'), spec: { type: 'object', description: 'Diagram spec (see diagram_format)' }, mermaid: str('Or: Mermaid source') }, ['project', 'title']),
+    inputSchema: obj({ project: str('Project id, key or name (leave out when this repository is linked to one project)'), title: str('Title'), spec: { type: 'object', description: 'Diagram spec (see diagram_format)' }, mermaid: str('Or: Mermaid source') }, ['title']),
     run: (c, a) =>
-      run(c, async (ctx) => sd.createArtifact(ctx, { kind: 'diagram', projectId: (await ag.projectSetup(ctx, String(a.project))).project.id, title: String(a.title).slice(0, 200), subtype: 'custom', spec: a.spec, mermaid: a.mermaid ? String(a.mermaid) : null })),
+      run(c, async (ctx) => sd.createArtifact(ctx, { kind: 'diagram', projectId: (await ag.projectSetup(ctx, String(a.project ?? ''))).project.id, title: String(a.title).slice(0, 200), subtype: 'custom', spec: a.spec, mermaid: a.mermaid ? String(a.mermaid) : null })),
   },
   {
     name: 'save_document',
     description: 'Saves a markdown document to the project\'s documents (design notes, ADRs, API docs, release notes). Mermaid in ```mermaid blocks is drawn.',
-    inputSchema: obj({ project: str('Project id, key or name'), title: str('Title'), markdown: str('The document'), type: str('Kind: hld, lld, api_spec, adr, release_notes, runbook, user_manual, custom') }, ['project', 'title', 'markdown']),
+    inputSchema: obj({ project: str('Project id, key or name (leave out when this repository is linked to one project)'), title: str('Title'), markdown: str('The document'), type: str('Kind: hld, lld, api_spec, adr, release_notes, runbook, user_manual, custom') }, ['title', 'markdown']),
     run: (c, a) =>
-      run(c, async (ctx) => sd.createArtifact(ctx, { kind: 'document', projectId: (await ag.projectSetup(ctx, String(a.project))).project.id, title: String(a.title).slice(0, 200), subtype: String(a.type ?? 'custom'), body: String(a.markdown ?? '').slice(0, 400000) })),
+      run(c, async (ctx) => sd.createArtifact(ctx, { kind: 'document', projectId: (await ag.projectSetup(ctx, String(a.project ?? ''))).project.id, title: String(a.title).slice(0, 200), subtype: String(a.type ?? 'custom'), body: String(a.markdown ?? '').slice(0, 400000) })),
   },
 ];
 
@@ -180,7 +231,7 @@ async function handle(c: Context<AppEnv>, m: RpcReq) {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: 'sanchalanos', title: 'SanchalanOS', version: '1.0.0' },
         instructions:
-          'SanchalanOS work items for coding agents. Loop: next_work → (setup_project if the folder is missing) → implement on a branch, run tests, report_progress → request_review → review_status until approved → commit, push, complete(pushed) → run the release command if any → complete(released). Never commit or push before approval.',
+          'SanchalanOS work items for coding agents. When this repository is linked to a project (its key or X-Sanchalan-Project), every tool works on that project only. Loop: next_work → (setup_project if the folder is missing) → implement on a branch, run tests, report_progress → request_review → review_status until approved → commit, push, complete(pushed) → run the release command if any → complete(released). Never commit or push before approval.',
       });
     case 'ping':
       return reply({});
@@ -190,7 +241,11 @@ async function handle(c: Context<AppEnv>, m: RpcReq) {
       const t = TOOLS.find((x) => x.name === m.params?.name);
       if (!t) return error(-32602, `Unknown tool ${String(m.params?.name)}`);
       try {
-        const out = await t.run(c, (m.params?.arguments ?? {}) as Record<string, any>);
+        const args = { ...((m.params?.arguments ?? {}) as Record<string, any>) };
+        // a repository tied to a project: its tools work on that project without naming it
+        const pin = pinRef(c);
+        if (pin && (args.project === undefined || args.project === null || args.project === '') && 'project' in ((t.inputSchema.properties as object) ?? {})) args.project = pin;
+        const out = await t.run(c, args);
         return reply({ content: [{ type: 'text', text: JSON.stringify(out, null, 1) }], structuredContent: out && typeof out === 'object' && !Array.isArray(out) ? out : { result: out } });
       } catch (e) {
         const msg = e instanceof ZodError ? `Invalid arguments: ${e.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}` : e instanceof ApiError ? e.message : `Failed: ${(e as Error).message}`;
@@ -232,6 +287,18 @@ export const agentRoutes = new Hono<AppEnv>()
     const pid = uuid.parse(c.req.param('id'));
     const b = z.object({ taskId: uuid, note: z.string().max(2000).nullish() }).parse(await c.req.json());
     return c.json(await run(c, (ctx) => ag.queueItem(ctx, pid, b.taskId, b.note)));
+  })
+  .get('/projects/:id/agent/keys', async (c) => c.json({ items: await run(c, (ctx) => ag.projectKeys(ctx, uuid.parse(c.req.param('id'))), true) }))
+  .post('/projects/:id/agent/keys', async (c) => {
+    if (c.var.principal.apiKey) throw new ApiError(403, 'forbidden', 'Make repository keys signed in, not with another key');
+    const b = z.object({ name: z.string().trim().min(1).max(80) }).parse(await c.req.json());
+    return c.json(await run(c, (ctx) => ag.createProjectKey(ctx, uuid.parse(c.req.param('id')), c.var.tenant.slug, b.name)), 201);
+  })
+  .delete('/projects/:id/agent/keys/:kid', async (c) => c.json(await run(c, (ctx) => ag.revokeProjectKey(ctx, uuid.parse(c.req.param('id')), uuid.parse(c.req.param('kid'))))))
+  .post('/projects/:id/agent/queue-open', async (c) => {
+    const pid = uuid.parse(c.req.param('id'));
+    const b = ag.queueOpenSchema.parse(await c.req.json().catch(() => ({})));
+    return c.json(await run(c, (ctx) => ag.queueOpen(ctx, pid, b)));
   })
   .get('/agent/jobs/:id', async (c) => c.json(await run(c, (ctx) => ag.jobDetail(ctx, uuid.parse(c.req.param('id'))), true)))
   .post('/agent/jobs/:id/review', async (c) => {

@@ -131,4 +131,63 @@ describe('coding agent over MCP', () => {
     expect((await tool('get_work_item', { key: 'FLEET-2' })).data!.comments.at(-1).body).toMatch(/landscape/);
     expect((await tool('setup_project', { project: 'fleet' })).data).toMatchObject({ localFolder: 'fleet-app', repos: [] });
   });
+
+  it('queues the open items of the board on request, bugs first, each once', async () => {
+    const q = await tool('queue_board', { project: 'FLEET', workTypes: ['bug', 'task', 'story'] });
+    expect(q.error, q.text).toBe(false);
+    // the bug the agent filed was not queued by itself; asked for, it goes first; items already queued are left alone
+    expect(q.data!.items[0]).toMatchObject({ type: 'bug', title: 'Export fails for empty months' });
+    expect(q.data!.items.map((i: Json) => i.title)).not.toContain('Ignored before switching on');
+    expect((await tool('queue_board', { project: 'FLEET' })).data!.queued).toBe(0);
+    const web = await api('POST', `/api/v1/projects/${ids.project}/agent/queue-open`, {});
+    expect(web.json.queued).toBe(0);
+    expect((await tool('next_work', { agent: 'claude-code@test', project: 'FLEET' })).data!.job).toBeTruthy();
+  });
+
+  it('ties a repository to one project: its key or X-Sanchalan-Project limits every tool to that project', async () => {
+    const other = (await api('POST', '/api/v1/records/project', { name: 'Billing portal' })).json.id;
+    await sql(`update projects set status = 'active', work_key = 'BILL' where id = $1`, [other]);
+    await api('PUT', `/api/v1/projects/${other}/agent/settings`, { enabled: true, workTypes: ['bug', 'task', 'story'], onCreate: true, onUpdate: true, autoPush: false });
+    const billBug = await api('POST', `/api/v1/projects/${other}/work/items`, { name: 'Invoice total off by one paisa', workType: 'bug' });
+    expect(billBug.status, JSON.stringify(billBug.json)).toBeLessThan(300);
+
+    // a key made for FLEET's repository
+    const made = await api('POST', `/api/v1/projects/${ids.project}/agent/keys`, { name: 'Laptop' });
+    expect(made.status, JSON.stringify(made.json)).toBe(201);
+    const repoKey = made.json.key as string;
+    const as = async (name: string, args: Json = {}, headers: Record<string, string> = {}) => {
+      const r = await h.call('POST', '/api/v1/mcp', { body: { jsonrpc: '2.0', id: rpcId++, method: 'tools/call', params: { name, arguments: args } }, headers: { authorization: `Bearer ${repoKey}`, ...headers } });
+      const res = r.json.result;
+      return { error: !!res?.isError, text: res?.content?.[0]?.text as string, data: res?.isError ? null : (res?.structuredContent as Json) };
+    };
+    expect((await as('list_projects')).data!.result.map((p: Json) => p.project.key)).toEqual(['FLEET']);
+    // no project named: FLEET
+    expect((await as('setup_project')).data!.project.key).toBe('FLEET');
+    // another project's items, jobs and queue are out of reach
+    expect((await as('get_work_item', { key: 'BILL-1' })).text).toMatch(/linked to the project “Fleet app” only/);
+    expect((await as('queue_board', { project: 'BILL' })).error).toBe(true);
+    expect((await as('create_work_item', { project: 'BILL', type: 'bug', title: 'x' })).error).toBe(true);
+    const job = await as('next_work', { agent: 'claude-code@laptop' });
+    expect(job.data!.job === null || job.data!.job.item.key.startsWith('FLEET-')).toBe(true);
+    // the key is for the coding agent only
+    expect((await h.call('GET', '/api/v1/projects', { headers: { authorization: `Bearer ${repoKey}` } })).status).toBe(403);
+    // a header naming another project is refused
+    expect((await as('list_projects', {}, { 'x-sanchalan-project': 'BILL' })).text).toMatch(/This key is for the project/);
+
+    // the person's general key, tied by the repository's settings
+    const r = await h.call('POST', '/api/v1/mcp', { body: { jsonrpc: '2.0', id: rpcId++, method: 'tools/call', params: { name: 'list_projects', arguments: {} } }, headers: { authorization: `Bearer ${key}`, 'x-sanchalan-project': 'BILL' } });
+    expect(r.json.result.structuredContent.result.map((p: Json) => p.project.key)).toEqual(['BILL']);
+    const own = await h.call('POST', '/api/v1/mcp', { body: { jsonrpc: '2.0', id: rpcId++, method: 'tools/call', params: { name: 'get_work_item', arguments: { key: 'FLEET-1' } } }, headers: { authorization: `Bearer ${key}`, 'x-sanchalan-project': 'BILL' } });
+    expect(own.json.result.isError).toBe(true);
+
+    // one repository per project
+    expect((await api('POST', `/api/v1/projects/${other}/work/repos`, { provider: 'github', repo: 'hrp/billing-portal' })).status).toBeLessThan(300);
+    const second = await api('POST', `/api/v1/projects/${other}/work/repos`, { provider: 'github', repo: 'hrp/billing-admin' });
+    expect(second.status).toBe(400);
+    expect(second.json.error.message).toMatch(/linked to hrp\/billing-portal/);
+
+    // revoked: it stops working
+    expect((await api('DELETE', `/api/v1/projects/${ids.project}/agent/keys/${made.json.id}`)).status).toBe(200);
+    expect((await h.call('POST', '/api/v1/mcp', { body: { jsonrpc: '2.0', id: 1, method: 'tools/list' }, headers: { authorization: `Bearer ${repoKey}` } })).status).toBe(401);
+  });
 });

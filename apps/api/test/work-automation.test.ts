@@ -312,18 +312,18 @@ describe('the GitHub App', () => {
     expect(r.status, JSON.stringify(r.json)).toBe(201);
     ids.repo = r.json.id;
     expect(((await dev('GET', '/api/v1/work/github/repos')).json as Json[])[0]!.linkedTo).toMatchObject({ projectId: ids.project });
-    // one project, several repositories: the website joins the same project
+    // one project, one repository: the website needs a project of its own
     const web = await pm('POST', `${P()}/repos`, { provider: 'github', repo: 'acme-org/website', policy: 'warn', installationId: '777' });
-    expect(web.status, JSON.stringify(web.json)).toBe(201);
+    expect(web.status).toBe(400);
+    expect(web.json.error.message).toMatch(/linked to acme-org\/fleet/);
     const list = (await dev('GET', '/api/v1/work/github/repo-list')).json as Json;
-    expect(list.repos.map((x: Json) => [x.fullName, x.linkedTo?.projectId])).toEqual([
+    expect(list.repos.map((x: Json) => [x.fullName, x.linkedTo?.projectId ?? null])).toEqual([
       ['acme-org/fleet', ids.project],
-      ['acme-org/website', ids.project],
+      ['acme-org/website', null],
     ]);
     expect(list.installations[0]).toMatchObject({ account: 'acme-org', repos: 2, error: null });
     expect(list.installations[0].manageUrl).toMatch(/^https:\/\/github\.com\/.*installations\/777$/);
-    expect(((await pm('GET', `${P()}/repos`)).json.repos as Json[]).map((x) => x.repo).sort()).toEqual(['acme-org/fleet', 'acme-org/website']);
-    expect((await pm('DELETE', `${P()}/repos/${web.json.id}`)).status).toBeLessThan(300);
+    expect(((await pm('GET', `${P()}/repos`)).json.repos as Json[]).map((x) => x.repo)).toEqual(['acme-org/fleet']);
     const bugKey = (await getItem(ids.bug)).item.key;
     const hook = async (event: string, body: Json, secret = 'app-hook-secret') => {
       const raw = JSON.stringify(body);

@@ -25,7 +25,9 @@ export type Job =
   | { type: 'leadads.google'; tenantId: string; integrationId: string; body: unknown }
   | { type: 'payment.razorpay'; tenantId: string; integrationId: string; event: unknown }
   | { type: 'telephony.incoming'; tenantId: string; integrationId: string; params: Record<string, string> }
-  | { type: 'sdlc.advance'; tenantId: string; runId: string };
+  | { type: 'sdlc.advance'; tenantId: string; runId: string }
+  /** client documents on a project, read and summarised (services/project-docs.ts) */
+  | { type: 'projectdoc.read'; tenantId: string; projectId: string; userId: string | null };
 
 export interface Waiter {
   waitUntil(p: Promise<unknown>): void;

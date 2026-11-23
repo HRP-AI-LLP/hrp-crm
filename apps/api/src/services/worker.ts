@@ -188,6 +188,12 @@ export async function processJob(env: Env, job: Job, waiter: Waiter | null): Pro
         await enqueue(env, waiter, eventJobs(tenant.id, null, events));
         return;
       }
+      case 'projectdoc.read': {
+        const r = await (await import('./project-docs')).readPendingDocs(env, db, tenant.id, { projectId: job.projectId, asUserId: job.userId, limit: 5 });
+        // more waiting (a batch of uploads): another round
+        if (r.read >= 5) await enqueue(env, waiter, [job]);
+        return;
+      }
       case 'sdlc.advance':
         await (await import('./sdlc')).advance(env, db, job.runId, tenant.id, waiter);
         return;

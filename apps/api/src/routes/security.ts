@@ -314,7 +314,7 @@ export const securityRoutes = new Hono<AppEnv>()
     c.json({
       items: await c.var.db.tx(scope(c, true), (tx) =>
         tx.query(
-          `select k.id, k.name, k.prefix, k.scopes, k.rate_limit_per_min, k.expires_at, k.revoked_at, k.last_used_at, k.last_used_ip, k.use_count, k.created_at, k.user_id, u.full_name as user_name
+          `select k.id, k.name, k.prefix, k.scopes, k.rate_limit_per_min, k.expires_at, k.revoked_at, k.last_used_at, k.last_used_ip, k.use_count, k.created_at, k.user_id, u.full_name as user_name, k.project_id, (select name from projects p where p.tenant_id = k.tenant_id and p.id = k.project_id) as project_name
              from api_keys k join users u on u.tenant_id = k.tenant_id and u.id = k.user_id where k.tenant_id = $1 order by k.revoked_at nulls first, k.created_at desc`,
           [c.var.tenant.id],
         ),

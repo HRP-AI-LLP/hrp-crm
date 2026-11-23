@@ -22,12 +22,12 @@ export async function makeHarness(dbName: string) {
   clearL1();
   const app = createApp();
 
-  async function call(method: string, path: string, opts: { tenant?: string; token?: string; body?: unknown; cookie?: string; headers?: Record<string, string>; raw?: boolean } = {}) {
+  async function call(method: string, path: string, opts: { tenant?: string; token?: string; body?: unknown; cookie?: string; headers?: Record<string, string>; raw?: boolean; bin?: Uint8Array } = {}) {
     const headers: Record<string, string> = { 'content-type': 'application/json', ...(opts.headers ?? {}) };
     if (opts.tenant) headers['x-tenant'] = opts.tenant;
     if (opts.token) headers.authorization = `Bearer ${opts.token}`;
     if (opts.cookie) headers.cookie = opts.cookie;
-    const res = await app.request(`http://synapse.test${path}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) }, env);
+    const res = await app.request(`http://synapse.test${path}`, { method, headers, body: opts.bin ?? (opts.body === undefined ? undefined : JSON.stringify(opts.body)) }, env);
     const text = await res.text();
     let json: Json = {};
     if (!opts.raw) {
@@ -53,7 +53,7 @@ export async function makeHarness(dbName: string) {
 
   /** authenticated caller bound to one workspace */
   function as(tenant: string, token: string) {
-    return (method: string, path: string, body?: unknown, extra: { headers?: Record<string, string>; raw?: boolean } = {}) => call(method, path, { tenant, token, body, ...extra });
+    return (method: string, path: string, body?: unknown, extra: { headers?: Record<string, string>; raw?: boolean; bin?: Uint8Array } = {}) => call(method, path, { tenant, token, body, ...extra });
   }
 
   return { env, app, call, signup, login, as };

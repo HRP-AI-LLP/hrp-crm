@@ -83,6 +83,76 @@ export async function queueItem(ctx: RecordCtx, projectId: string, taskId: strin
   return { jobId: j!.id };
 }
 
+/* ───────────────────────── a key for the project's repository ───────────────────────── */
+
+/**
+ * A key for one project's repository, acting as the person who makes it: it works only for the
+ * coding agent (MCP) and only on this project, whatever else that person may do.
+ */
+export async function createProjectKey(ctx: RecordCtx, projectId: string, tenantSlug: string, name: string) {
+  const { project } = await projectAccess(ctx, projectId, 'member');
+  const { randomToken, sha256Hex } = await import('../lib/crypto');
+  const key = `syn_${tenantSlug}_${randomToken(32)}`;
+  const row = await ctx.tx.one<{ id: string }>(
+    `insert into api_keys (tenant_id, name, prefix, key_hash, user_id, scopes, rate_limit_per_min, project_id) values ($1,$2,$3,$4,$5,'{read,write}',600,$6) returning id`,
+    [ctx.tenantId, name.slice(0, 80), `${key.slice(0, 12 + tenantSlug.length)}…`, await sha256Hex(key), ctx.principal.user.id, projectId],
+  );
+  return { id: row!.id, key, project: { id: projectId, key: project.work_key ?? null, name: project.name } };
+}
+
+/** The project's repository keys: the person's own, or all of them for its managers. */
+export async function projectKeys(ctx: RecordCtx, projectId: string) {
+  const { level } = await projectAccess(ctx, projectId, 'view');
+  return ctx.tx.query(
+    `select k.id, k.name, k.prefix, k.created_at, k.last_used_at, k.revoked_at, u.full_name as user_name from api_keys k join users u on u.tenant_id = k.tenant_id and u.id = k.user_id
+      where k.tenant_id = $1 and k.project_id = $2 and ($3::boolean or k.user_id = $4) order by k.revoked_at nulls first, k.created_at desc`,
+    [ctx.tenantId, projectId, level === 'manage', ctx.principal.user.id],
+  );
+}
+
+export async function revokeProjectKey(ctx: RecordCtx, projectId: string, keyId: string) {
+  const { level } = await projectAccess(ctx, projectId, 'view');
+  const r = await ctx.tx.one(
+    `update api_keys set revoked_at = now() where tenant_id = $1 and id = $2 and project_id = $3 and revoked_at is null and ($4::boolean or user_id = $5) returning id`,
+    [ctx.tenantId, keyId, projectId, level === 'manage', ctx.principal.user.id],
+  );
+  if (!r) throw notFound('Key not found');
+  return { ok: true };
+}
+
+export const queueOpenSchema = z.object({
+  workTypes: z.array(z.enum(['story', 'task', 'bug', 'subtask', 'spike', 'improvement', 'epic', 'feature'])).min(1).max(10).optional(),
+  /** only these items (keys like FLEET-12), else every open one of the types */
+  keys: z.array(z.string().trim().max(40)).max(200).optional(),
+  priority: z.enum(['urgent', 'high', 'medium', 'low']).optional(),
+  limit: z.number().int().min(1).max(200).default(100),
+});
+
+/**
+ * Everything still open on the board (not done or cancelled) of the given types — the project's
+ * agent types by default — queued for the agent; items it already has stay as they are. Bugs first,
+ * then by priority and age.
+ */
+export async function queueOpen(ctx: RecordCtx, projectRef: string, input: z.infer<typeof queueOpenSchema>) {
+  if (!projectRef && pinOf(ctx)) projectRef = pinOf(ctx)!.id;
+  const p = (await projectsFor(ctx)).find((x) => x.id === projectRef || (x.work_key && x.work_key.toLowerCase() === projectRef.toLowerCase()) || x.name.toLowerCase() === projectRef.toLowerCase());
+  if (!p) throw notFound('No such project (or no access)');
+  await projectAccess(ctx, p.id, 'member');
+  const types = input.workTypes ?? (await getSettings(ctx, p.id)).workTypes;
+  const nums = (input.keys ?? []).map((k) => Number(k.replace(/^.*-/, ''))).filter((n) => Number.isInteger(n) && n > 0);
+  const items = await ctx.tx.query<{ id: string; task_number: number; name: string; work_type: string }>(
+    `select t.id, t.task_number, t.name, t.work_type from project_tasks t
+      where t.tenant_id = $1 and t.project_id = $2 and t.status not in ('done','cancelled') and t.work_type = any($3::text[])
+        and (cardinality($4::int[]) = 0 or t.task_number = any($4::int[])) and ($5::text is null or t.priority = $5)
+        and not exists (select 1 from coding_agent_jobs j where j.tenant_id = t.tenant_id and j.task_id = t.id and j.status not in ('released','failed','cancelled'))
+      order by (t.work_type = 'bug') desc, case t.priority when 'urgent' then 0 when 'high' then 1 when 'medium' then 2 else 3 end, t.created_at
+      limit $6`,
+    [ctx.tenantId, p.id, types, input.keys?.length ? nums : [], input.priority ?? null, input.limit],
+  );
+  for (const it of items) await queueItem(ctx, p.id, it.id, `Sent with the board's open items by ${ctx.principal.user.fullName}`);
+  return { project: p.work_key ?? p.name, queued: items.length, items: items.map((i) => ({ key: p.work_key ? `${p.work_key}-${i.task_number}` : `#${i.task_number}`, type: i.work_type, title: i.name })) };
+}
+
 const JOB_COLS = `j.id, j.project_id, j.task_id, j.status, j.reason, j.revision, j.seen_revision, j.agent, j.claimed_at, j.heartbeat_at, j.branch, j.commit_sha, j.pr_url, j.summary, j.test_report, j.how_to_verify,
   j.review_note, j.reviewed_at, j.created_at, j.updated_at, t.task_number, t.name, t.work_type, t.status as item_status, p.work_key, p.name as project,
   (select full_name from users u where u.tenant_id = j.tenant_id and u.id = j.reviewed_by) as reviewer`;
@@ -140,6 +210,29 @@ export async function asAgent(tx: Tx) {
 
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
 
+/**
+ * A coding agent's session can be tied to one project — by its key (made for one project's
+ * repository) or by the repository's MCP settings (X-Sanchalan-Project): it then sees, claims,
+ * reads and changes that project's items only.
+ */
+export type AgentCtx = RecordCtx & { agentProject?: { id: string; name: string } | null };
+function pinOf(ctx: RecordCtx) {
+  return (ctx as AgentCtx).agentProject ?? null;
+}
+function inPin(ctx: RecordCtx, projectId: string) {
+  const pin = pinOf(ctx);
+  if (pin && pin.id !== projectId) throw forbidden(`This repository is linked to the project “${pin.name}” only`);
+}
+export { inPin as assertAgentProject };
+
+/** The project named by the repository's settings (id, key or name), for this person. */
+export async function resolveAgentProject(ctx: RecordCtx, ref: string) {
+  const r = ref.trim();
+  const p = (await projectsFor({ ...ctx, agentProject: null } as AgentCtx)).find((x) => x.id === r || (x.work_key && x.work_key.toLowerCase() === r.toLowerCase()) || x.name.toLowerCase() === r.toLowerCase());
+  if (!p) throw notFound(`The project “${r}” in this repository's SanchalanOS settings was not found, or you are not on it`);
+  return { id: p.id as string, name: p.name as string };
+}
+
 async function projectsFor(ctx: RecordCtx) {
   const rows = await ctx.tx.query<Record<string, any>>(
     `select p.id, p.name, p.work_key, p.status, s.enabled, s.local_folder, s.instructions, s.release_command, s.auto_push, s.work_types,
@@ -150,7 +243,9 @@ async function projectsFor(ctx: RecordCtx) {
     [ctx.tenantId],
   );
   const out = [];
+  const pin = pinOf(ctx);
   for (const r of rows) {
+    if (pin && r.id !== pin.id) continue;
     try {
       await projectAccess(ctx, r.id, 'view');
       out.push(r);
@@ -185,6 +280,9 @@ export async function agentProjects(ctx: RecordCtx) {
 }
 
 export async function projectSetup(ctx: RecordCtx, projectRef: string) {
+  const pin = pinOf(ctx);
+  if (!projectRef && pin) projectRef = pin.id;
+  if (!projectRef) throw badRequest('Name the project (id, key or name)');
   const p = (await projectsFor(ctx)).find((x) => x.id === projectRef || (x.work_key && x.work_key.toLowerCase() === projectRef.toLowerCase()) || x.name.toLowerCase() === projectRef.toLowerCase());
   if (!p) throw notFound('No such project (or no access)');
   return setupOf(p);
@@ -219,6 +317,7 @@ async function itemBrief(ctx: RecordCtx, projectId: string, taskId: string) {
 async function jobFor(ctx: RecordCtx, jobId: string, lock = false) {
   const j = await ctx.tx.one<Record<string, any>>(`select * from coding_agent_jobs where tenant_id = $1 and id = $2${lock ? ' for update' : ''}`, [ctx.tenantId, jobId]);
   if (!j) throw notFound('No such job');
+  inPin(ctx, j.project_id);
   await projectAccess(ctx, j.project_id, 'member');
   return j;
 }
@@ -354,6 +453,7 @@ export async function itemByKey(ctx: RecordCtx, key: string) {
     [ctx.tenantId, m[1]!.toUpperCase(), Number(m[2])],
   );
   if (!t) throw notFound('No such item');
+  inPin(ctx, t.project_id);
   return { projectId: t.project_id, taskId: t.id, item: await itemBrief(ctx, t.project_id, t.id) };
 }
 

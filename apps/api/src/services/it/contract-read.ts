@@ -19,7 +19,7 @@ async function inflateRaw(b: Uint8Array): Promise<Uint8Array> {
 }
 
 /** One file out of a zip (a .docx is one): found through the central directory. */
-async function unzipEntry(zip: Uint8Array, name: string): Promise<Uint8Array | null> {
+export async function unzipEntry(zip: Uint8Array, name: string): Promise<Uint8Array | null> {
   const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
   let eocd = -1;
   for (let i = zip.length - 22; i >= Math.max(0, zip.length - 65_557); i--) if (dv.getUint32(i, true) === 0x06054b50) (eocd = i), (i = -1);

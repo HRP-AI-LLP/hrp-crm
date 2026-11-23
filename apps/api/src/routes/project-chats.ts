@@ -5,6 +5,9 @@ import type { AppEnv } from '../env';
 import { notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import * as pc from '../services/project-chats';
+import * as pd from '../services/project-docs';
+import { enqueue } from '../services/jobs';
+import { safeCtx } from './public';
 import type { RecordCtx } from '../services/records';
 
 const uuid = z.string().uuid();
@@ -18,6 +21,26 @@ const id = (c: { req: { param: (k: string) => string } }, k = 'id') => {
 };
 
 export const projectChatRoutes = new Hono<AppEnv>()
+  /* ───── client documents ───── */
+  .get('/projects/:id/client-docs', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pd.listDocs(rctx(c, tx), c.env, id(c)))))
+  .post('/projects/:id/client-docs', async (c) => {
+    const q = pd.uploadSchema.parse(c.req.query());
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    pd.assertUpload(bytes.length);
+    const r = await c.var.db.tx(scope(c), (tx) => pd.uploadDoc(rctx(c, tx), c.env, id(c), q, bytes));
+    await enqueue(c.env, safeCtx(c), [{ type: 'projectdoc.read', tenantId: c.var.tenant.id, projectId: id(c), userId: c.var.principal.user.id }]);
+    return c.json(r, 201);
+  })
+  .patch('/projects/:id/client-docs/:did', async (c) => {
+    const b = pd.updateSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => pd.updateDoc(rctx(c, tx), id(c), id(c, 'did'), b)));
+  })
+  .delete('/projects/:id/client-docs/:did', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => pd.deleteDoc(rctx(c, tx), c.env, id(c), id(c, 'did')))))
+  .post('/projects/:id/client-docs/:did/read', async (c) => {
+    await c.var.db.tx(scope(c), (tx) => pd.rereadDoc(rctx(c, tx), id(c), id(c, 'did')));
+    await enqueue(c.env, safeCtx(c), [{ type: 'projectdoc.read', tenantId: c.var.tenant.id, projectId: id(c), userId: c.var.principal.user.id }]);
+    return c.json({ ok: true });
+  })
   .get('/projects/:id/chats', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pc.listChats(rctx(c, tx), id(c)))))
   .get('/projects/:id/chats/choices', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pc.chatChoices(rctx(c, tx), id(c)))))
   .post('/projects/:id/chats', async (c) => {

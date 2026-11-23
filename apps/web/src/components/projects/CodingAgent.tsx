@@ -5,7 +5,7 @@
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { get, post, put } from '../../lib/api';
+import { del, get, post, put } from '../../lib/api';
 import { dateTime, relative } from '../../lib/format';
 import { Markdown } from '../Markdown';
 import { Guide } from '../admin/ConnectionKeys';
@@ -132,6 +132,121 @@ function JobModal({ jobId, manage, onClose }: { jobId: string; manage: boolean; 
   );
 }
 
+/**
+ * One repository, one project: a key that works only for this project's coding agent, and the command
+ * that ties the repository folder on the developer's machine to it.
+ */
+function RepoKeys({ projectId }: { projectId: string }) {
+  const toast = useToast();
+  const { data, refetch } = useQuery({ queryKey: ['agent', projectId, 'keys'], queryFn: () => get<{ items: Json[] }>(`/api/v1/projects/${projectId}/agent/keys`) });
+  const [made, setMade] = useState<Json | null>(null);
+  const [busy, setBusy] = useState(false);
+  const url = `${window.location.origin}/api/v1/mcp`;
+  const pin = made ? (made.project.key ?? made.project.id) : '';
+  const cmd = made ? `claude mcp add --scope local --transport http sanchalan ${url} --header "Authorization: Bearer ${made.key}" --header "X-Sanchalan-Project: ${pin}"` : '';
+  const json = made
+    ? JSON.stringify({ mcpServers: { sanchalan: { type: 'http', url, headers: { Authorization: 'Bearer ${SANCHALAN_API_KEY}', 'X-Sanchalan-Project': pin } } } }, null, 2)
+    : '';
+  const copy = (t: string) => navigator.clipboard?.writeText(t).then(() => toast('Copied'), () => undefined);
+  const live = (data?.items ?? []).filter((k) => !k.revoked_at);
+  return (
+    <section className="panel stack" style={{ padding: 12 }}>
+      <div className="row" style={{ justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <div>
+          <b>Link a repository on your computer to this project</b>
+          <div className="small muted">
+            One repository, one project: Claude Code in that folder sees, picks up, reads and changes this project's items only — never another project's — even if you can open others.
+          </div>
+        </div>
+        <button
+          className="btn primary"
+          disabled={busy}
+          onClick={async () => {
+            const name = window.prompt('Name the key (e.g. the computer or the repository)', 'Claude Code');
+            if (!name?.trim()) return;
+            setBusy(true);
+            try {
+              setMade(await post<Json>(`/api/v1/projects/${projectId}/agent/keys`, { name: name.trim() }));
+              refetch();
+            } catch (e) {
+              toast((e as Error).message, true);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Make a key for the repository
+        </button>
+      </div>
+      {made && (
+        <div className="stack" style={{ gap: 8 }}>
+          <div className="notice small">The key is shown only now. It works only for this project's coding agent.</div>
+          <div className="small">
+            <b>1. In a terminal, inside the repository folder</b> (the setting is kept for that folder only):
+          </div>
+          <pre className="code-block" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>{cmd}</pre>
+          <div className="row" style={{ gap: 6 }}>
+            <button className="btn sm" onClick={() => copy(cmd)}>
+              Copy the command
+            </button>
+          </div>
+          <div className="small">
+            <b>Or, for everyone on the team:</b> commit this as <code>.mcp.json</code> in the repository's root; each developer sets their own key in the <code>SANCHALAN_API_KEY</code> environment variable (<code>setx SANCHALAN_API_KEY "syn_…"</code> on Windows, then restart Claude):
+          </div>
+          <pre className="code-block" style={{ margin: 0 }}>{json}</pre>
+          <div className="row" style={{ gap: 6 }}>
+            <button className="btn sm" onClick={() => copy(json)}>
+              Copy .mcp.json
+            </button>
+          </div>
+          <div className="small">
+            <b>2. Then ask Claude Code</b> in that folder (terminal or the desktop app): <i>“Queue all open bugs and tasks on the board and fix them one by one; ask me to review each before committing.”</i>
+          </div>
+        </div>
+      )}
+      {live.length > 0 && (
+        <table className="data small">
+          <thead>
+            <tr>
+              <th>Key</th>
+              <th>Made by</th>
+              <th>Last used</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {live.map((k) => (
+              <tr key={k.id}>
+                <td>
+                  {k.name} <span className="muted">{k.prefix}</span>
+                </td>
+                <td>{k.user_name}</td>
+                <td>{k.last_used_at ? relative(k.last_used_at) : 'never'}</td>
+                <td style={{ textAlign: 'right' }}>
+                  <button
+                    className="link-btn small"
+                    onClick={async () => {
+                      if (!confirm(`Revoke “${k.name}”? Claude Code using it stops working on this project.`)) return;
+                      try {
+                        await del(`/api/v1/projects/${projectId}/agent/keys/${k.id}`);
+                        refetch();
+                      } catch (e) {
+                        toast((e as Error).message, true);
+                      }
+                    }}
+                  >
+                    Revoke
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 function Connect({ open }: { open: boolean }) {
   return (
     <div className="stack" style={{ gap: 6 }}>
@@ -234,6 +349,30 @@ export function CodingAgent({ id, manage }: { id: string; manage: boolean }) {
           </div>
         )}
       </section>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <button
+          className="btn"
+          disabled={busy}
+          title={`Every open ${cfg.workTypes.join(', ')} on the board (not done or cancelled) that the agent does not have yet. Bugs first.`}
+          onClick={async () => {
+            if (!confirm(`Send every open ${cfg.workTypes.join(' / ')} on this project's board to the coding agent?`)) return;
+            setBusy(true);
+            try {
+              const r = await post<Json>(`/api/v1/projects/${id}/agent/queue-open`, { workTypes: cfg.workTypes });
+              toast(r.queued ? `${r.queued} item${r.queued === 1 ? '' : 's'} sent to the coding agent` : 'Nothing new to send: every open item is with the agent already');
+              refetch();
+            } catch (e) {
+              toast((e as Error).message, true);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Send all open items on the board
+        </button>
+        <span className="small muted">Or ask Claude Code: “queue the open bugs of this project and fix them one by one”.</span>
+      </div>
+      <RepoKeys projectId={id} />
       <Connect open={!jobs.length} />
       <h3 style={{ margin: 0 }}>Jobs</h3>
       {!jobs.length ? (

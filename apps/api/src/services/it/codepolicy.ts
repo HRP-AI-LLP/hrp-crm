@@ -72,6 +72,9 @@ export async function addRepo(ctx: RecordCtx, projectId: string, input: { provid
   if (!/^[a-z0-9._-]+(\/[a-z0-9._ -]+){1,2}$/.test(repo)) throw badRequest(input.provider === 'github' ? 'Give the repository as owner/name, e.g. acme/fleet-portal' : 'Give the repository as project/repo, e.g. Fleet/fleet-api');
   const taken = await ctx.tx.one<{ project_id: string; name: string }>(`select r.project_id, p.name from project_repos r join projects p on p.tenant_id = r.tenant_id and p.id = r.project_id where r.tenant_id = $1 and r.provider = $2 and r.repo = $3`, [ctx.tenantId, input.provider, repo]);
   if (taken) throw badRequest(`${repo} is already linked to ${taken.name}`);
+  // one project, one repository: the coding agent and the code checks always know where the work goes
+  const own = await ctx.tx.one<{ repo: string }>(`select repo from project_repos where tenant_id = $1 and project_id = $2 limit 1`, [ctx.tenantId, projectId]);
+  if (own) throw badRequest(`This project is linked to ${own.repo}. A project has one repository: unlink it first, or make a project for the other repository`);
   const secret = randomToken(24);
   const r = await ctx.tx.one<{ id: string; public_token: string }>(
     `insert into project_repos (tenant_id, project_id, provider, repo, default_branch, policy, auto_sprint, secret_hash, installation_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9::bigint) returning id, public_token`,
