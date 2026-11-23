@@ -32,11 +32,11 @@ export const flowRoutes = new Hono<AppEnv>()
     return c.json({ items: await withLinks(c.env, c.var.tenant.id, items), enabled: !!c.env.FILES });
   })
   .post('/files', async (c) => {
-    const q = z.object({ object: objKey, id: uuid, kind: z.enum(FILE_KINDS).optional(), name: z.string().min(1).max(255), description: z.string().max(500).optional() }).parse(c.req.query());
+    const q = z.object({ object: objKey, id: uuid, kind: z.enum(FILE_KINDS).optional(), name: z.string().min(1).max(255), description: z.string().max(500).optional(), allowBinary: z.enum(['1', 'true']).optional() }).parse(c.req.query());
     const len = Number(c.req.header('content-length') ?? 0);
     if (len > MAX_FILE_BYTES) throw badRequest('Files can be at most 25 MB');
     const bytes = new Uint8Array(await c.req.arrayBuffer());
-    const file = await c.var.db.tx(scope(c), (tx) => saveFile(rctx(c, tx), c.env, { objectKey: q.object, recordId: q.id, name: q.name, bytes, kind: q.kind, description: q.description ?? null }));
+    const file = await c.var.db.tx(scope(c), (tx) => saveFile(rctx(c, tx), c.env, { objectKey: q.object, recordId: q.id, name: q.name, bytes, kind: q.kind, description: q.description ?? null }, { allowBinary: !!q.allowBinary }));
     const [linked] = await withLinks(c.env, c.var.tenant.id, [file]);
     return c.json(linked, 201);
   })

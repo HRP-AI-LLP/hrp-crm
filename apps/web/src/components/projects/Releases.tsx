@@ -503,6 +503,7 @@ function Channel({ projectId, release, c, manage, onChanged }: { projectId: stri
         </div>
         {manage && (
           <div className="row" style={{ gap: 6 }}>
+            {c.method === 'google_drive' && <DrivePublish projectId={projectId} release={release} c={c} onDone={onChanged} />}
             <select value={c.status} onChange={(e) => save({ status: e.target.value })} aria-label="Status">
               {Object.entries(CH_STATUS).map(([k, [l]]) => (
                 <option key={k} value={k}>
@@ -553,6 +554,85 @@ function Channel({ projectId, release, c, manage, onChanged }: { projectId: stri
   );
 }
 
+/** Upload the build to Drive, set who can open it, and WhatsApp the link to the recipient — in one go. */
+function DrivePublish({ projectId, release, c, onDone }: { projectId: string; release: Json; c: Json; onDone: () => void }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const ready = c.drive_account_id && c.recipient_id && ((c.files as Json[])?.length || c.url);
+  const publish = async () => {
+    const who = c.recipients ? ` to ${c.recipients}` : '';
+    if (!confirm(`Upload this build to Google Drive, share it ${c.contains_client_data ? 'with the recipient only' : c.share_access === 'public' ? 'as a public link' : 'with the recipient only'}, and send the link${who} on WhatsApp?`)) return;
+    setBusy(true);
+    try {
+      const r = await post<{ link: string; whatsapp: string; sharedWith: string }>(`/api/v1/projects/${projectId}/agile/releases/${release.id}/channels/${c.id}/publish`, {});
+      toast(`Shared with ${r.sharedWith}. WhatsApp: ${r.whatsapp === 'sent' ? 'sent ✓' : r.whatsapp}`);
+      onDone();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button className="btn sm primary" disabled={busy || !ready} title={ready ? 'Upload, share and send on WhatsApp' : 'Set the Google account, the recipient, and attach the build (or give its Drive link) first'} onClick={publish}>
+      {busy ? 'Publishing…' : c.delivered_at ? 'Re-send' : 'Publish & send'}
+    </button>
+  );
+}
+
+const RECIPIENT_TYPES: [string, string][] = [
+  ['contact', 'Contact'],
+  ['account', 'Company'],
+  ['lead', 'Lead'],
+];
+
+/** Pick the already-linked person the Drive link is sent to on WhatsApp. */
+function RecipientPicker({ projectId, object, id, name, onPick }: { projectId: string; object: string; id: string; name: string; onPick: (object: string, id: string, name: string) => void }) {
+  const [q, setQ] = useState('');
+  const res = useQuery({
+    queryKey: ['recipient', object, q],
+    queryFn: () => get<{ items: Json[] }>(`/api/v1/records/${object}?q=${encodeURIComponent(q)}&limit=8`),
+    enabled: q.trim().length >= 2,
+  });
+  void projectId;
+  const label = (r: Json) => r.full_name ?? r.name ?? r.company_name ?? [r.first_name, r.last_name].filter(Boolean).join(' ') ?? r.title ?? r.id;
+  return (
+    <div className="field">
+      Send the link to (on WhatsApp)
+      {id ? (
+        <div className="row" style={{ gap: 8 }}>
+          <span className="chip">👤 {name || 'Selected'}</span>
+          <button type="button" className="btn sm ghost" onClick={() => onPick(object, '', '')}>
+            Change
+          </button>
+        </div>
+      ) : (
+        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+          <select value={object} onChange={(e) => onPick(e.target.value, '', '')} style={{ width: 'auto' }}>
+            {RECIPIENT_TYPES.map(([k, l]) => (
+              <option key={k} value={k}>
+                {l}
+              </option>
+            ))}
+          </select>
+          <input value={q} placeholder="Search by name…" onChange={(e) => setQ(e.target.value)} style={{ flex: 1, minWidth: 160 }} />
+        </div>
+      )}
+      {!id && q.trim().length >= 2 && (
+        <div className="stack" style={{ gap: 2, marginTop: 4 }}>
+          {(res.data?.items ?? []).map((r) => (
+            <button key={r.id} type="button" className="btn sm ghost" style={{ justifyContent: 'flex-start' }} onClick={() => (onPick(object, r.id, String(label(r))), setQ(''))}>
+              {label(r)} {(r.phone ?? r.mobile) ? <span className="muted small">· {r.phone ?? r.mobile}</span> : <span className="muted small">· no phone</span>}
+            </button>
+          ))}
+          {res.data && !res.data.items.length && <span className="muted small">No match</span>}
+        </div>
+      )}
+      <small className="muted">The link is sent to their WhatsApp number. A restricted Drive share also needs their e-mail on the record.</small>
+    </div>
+  );
+}
+
 function ChannelForm({ projectId, release, c, onClose, onSaved }: { projectId: string; release: Json; c?: Json; onClose: () => void; onSaved: () => void }) {
   const act = useAct([['agile', projectId]]);
   const toast = useToast();
@@ -566,8 +646,17 @@ function ChannelForm({ projectId, release, c, onClose, onSaved }: { projectId: s
     notes: c?.notes ?? '',
     status: c?.status ?? 'planned',
     files: ((c?.files ?? []) as Json[]).map((x) => ({ id: x.id, name: x.name })),
+    driveAccountId: c?.drive_account_id ?? '',
+    driveFolderId: c?.drive_folder_id ?? '',
+    containsClientData: c?.contains_client_data ?? true,
+    shareAccess: c?.share_access ?? 'restricted',
+    recipientObject: c?.recipient_object ?? 'contact',
+    recipientId: c?.recipient_id ?? '',
+    recipientName: c?.recipients ?? '',
   });
   const [busy, setBusy] = useState(false);
+  const isDrive = f.method === 'google_drive';
+  const driveAccounts = useQuery({ queryKey: ['drive-accounts', projectId], queryFn: () => get<{ items: Json[] }>(`/api/v1/projects/${projectId}/agile/drive-accounts`), enabled: isDrive });
   const methods = METHODS_FOR[f.platform] ?? Object.keys(METHOD);
   const [tl, tp] = TARGET_LABEL[f.method] ?? TARGET_LABEL.other!;
   const shares = ['email', 'google_drive', 'onedrive', 'sharepoint', 'download_link', 'testflight'].includes(f.method);
@@ -593,7 +682,16 @@ function ChannelForm({ projectId, release, c, onClose, onSaved }: { projectId: s
             disabled={busy}
             onClick={async () => {
               setBusy(true);
-              const body = { platform: f.platform, method: f.method, target: f.target.trim() || null, url: f.url.trim() || null, buildRef: f.buildRef.trim() || null, recipients: f.recipients.trim() || null, notes: f.notes.trim() || null, status: f.status, fileIds: f.files.map((x) => x.id) };
+              const body: Json = { platform: f.platform, method: f.method, target: f.target.trim() || null, url: f.url.trim() || null, buildRef: f.buildRef.trim() || null, recipients: f.recipients.trim() || null, notes: f.notes.trim() || null, status: f.status, fileIds: f.files.map((x) => x.id) };
+              if (isDrive)
+                Object.assign(body, {
+                  driveAccountId: f.driveAccountId || null,
+                  driveFolderId: f.driveFolderId.trim() || null,
+                  containsClientData: f.containsClientData,
+                  shareAccess: f.containsClientData ? 'restricted' : f.shareAccess,
+                  recipientObject: f.recipientId ? f.recipientObject : null,
+                  recipientId: f.recipientId || null,
+                });
               const r = await act(() => (c ? put(`/api/v1/projects/${projectId}/agile/releases/${release.id}/channels/${c.id}`, body) : post(`/api/v1/projects/${projectId}/agile/releases/${release.id}/channels`, body)), c ? 'Saved' : 'Channel added');
               setBusy(false);
               if (r) onSaved();
@@ -649,7 +747,55 @@ function ChannelForm({ projectId, release, c, onClose, onSaved }: { projectId: s
             </select>
           </label>
         </div>
-        {shares && (
+        {isDrive && (
+          <div className="stack" style={{ gap: 10, border: '1px solid var(--line)', borderRadius: 8, padding: 12 }}>
+            <b className="small">Automatic delivery — upload to Google Drive and send the link on WhatsApp</b>
+            <div className="grid2">
+              <label className="field">
+                Google account
+                <select value={f.driveAccountId} onChange={(e) => setF({ ...f, driveAccountId: e.target.value })}>
+                  <option value="">Choose a connected account…</option>
+                  {(driveAccounts.data?.items ?? []).map((a) => (
+                    <option key={a.id} value={a.id} disabled={!a.hasDrive}>
+                      {a.email}
+                      {a.hasDrive ? '' : ' — reconnect for Drive'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                Folder in Drive (optional)
+                <input value={f.driveFolderId} placeholder="Drive folder ID (blank = My Drive)" onChange={(e) => setF({ ...f, driveFolderId: e.target.value })} />
+              </label>
+            </div>
+            <label className="row" style={{ gap: 8 }}>
+              <input type="checkbox" checked={f.containsClientData} onChange={(e) => setF({ ...f, containsClientData: e.target.checked, shareAccess: e.target.checked ? 'restricted' : f.shareAccess })} />
+              <span className="small">This build includes client data (e.g. the member database)</span>
+            </label>
+            <div className="field">
+              Who can open it
+              <div className="row" style={{ gap: 14, flexWrap: 'wrap' }}>
+                <label className="row small" style={{ gap: 6, fontWeight: 400 }}>
+                  <input type="radio" checked={f.shareAccess === 'restricted'} onChange={() => setF({ ...f, shareAccess: 'restricted' })} />
+                  Only the person below (signed in)
+                </label>
+                <label className="row small" style={{ gap: 6, fontWeight: 400, opacity: f.containsClientData ? 0.5 : 1 }}>
+                  <input type="radio" disabled={f.containsClientData} checked={f.shareAccess === 'public' && !f.containsClientData} onChange={() => setF({ ...f, shareAccess: 'public' })} />
+                  Anyone with the link
+                </label>
+              </div>
+              {f.containsClientData && <small className="muted">A build with client data can only be shared with the chosen person — a public link to those records isn’t allowed.</small>}
+            </div>
+            <RecipientPicker
+              projectId={projectId}
+              object={f.recipientObject}
+              id={f.recipientId}
+              name={f.recipientName}
+              onPick={(o, id, name) => setF({ ...f, recipientObject: o, recipientId: id, recipientName: name })}
+            />
+          </div>
+        )}
+        {shares && !isDrive && (
           <label className="field">
             {f.method === 'testflight' ? 'Testers (emails)' : 'Sent / shared to (emails, one per line)'}
             <textarea rows={2} value={f.recipients} onChange={(e) => setF({ ...f, recipients: e.target.value })} placeholder="deepak@fci.gov.in" />
@@ -679,7 +825,7 @@ function ChannelForm({ projectId, release, c, onClose, onSaved }: { projectId: s
                     if (file.size > 25 * 1024 * 1024) return toast('Files up to 25 MB — share bigger installers on Drive / OneDrive / SharePoint and paste the link', true);
                     setBusy(true);
                     try {
-                      const up = await upload<{ id: string; name: string }>(`/api/v1/files?object=project&id=${projectId}&name=${encodeURIComponent(file.name)}&description=${encodeURIComponent(`Release ${release.name} ${release.version ?? ''}`.trim())}`, file);
+                      const up = await upload<{ id: string; name: string }>(`/api/v1/files?object=project&id=${projectId}&allowBinary=1&name=${encodeURIComponent(file.name)}&description=${encodeURIComponent(`Release ${release.name} ${release.version ?? ''}`.trim())}`, file);
                       setF((x) => ({ ...x, files: [...x.files, { id: up.id, name: up.name ?? file.name }] }));
                     } catch (err) {
                       toast((err as Error).message, true);

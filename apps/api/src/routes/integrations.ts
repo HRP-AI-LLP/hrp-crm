@@ -445,7 +445,7 @@ export const integrationPublicRoutes = new Hono<AppEnv>()
           `insert into integrations (tenant_id, provider, user_id, label, account_ref, secret_ciphertext, config, created_by) values ($1,$2,$3,$4,$5,$6,$7,$3)
            on conflict (tenant_id, provider, account_ref) do update set secret_ciphertext = excluded.secret_ciphertext, status = 'active', last_error = null, error_count = 0,
              config = integrations.config || jsonb_build_object('addresses', excluded.config -> 'addresses')`,
-          [s.t, provider, s.u, provider === 'google' ? 'Gmail' : 'Outlook', address.toLowerCase(), await sealSecret(c.env, s.t, tokens as unknown as Record<string, unknown>), JSON.stringify({ calendar: true, ignore: [], addresses: msAliases, ...(first ? { primary: true } : {}) })],
+          [s.t, provider, s.u, provider === 'google' ? 'Gmail' : 'Outlook', address.toLowerCase(), await sealSecret(c.env, s.t, tokens as unknown as Record<string, unknown>), JSON.stringify({ calendar: true, ignore: [], addresses: msAliases, ...(provider === 'google' ? { drive: true } : {}), ...(first ? { primary: true } : {}) })],
         );
         return { connected: [address], failed: [] as string[] };
       });

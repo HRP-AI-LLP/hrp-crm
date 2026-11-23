@@ -205,7 +205,7 @@ export function oauthConfigured(env: Env, p: OAuthProvider) {
   return !!(env.META_APP_ID && env.META_APP_SECRET);
 }
 
-const GOOGLE_SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/calendar.events'];
+const GOOGLE_SCOPES = ['openid', 'email', 'https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/drive.file'];
 const MS_SCOPES = ['offline_access', 'openid', 'email', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite'];
 // meetings: create Meet / Teams meetings in the calendar and read their transcripts afterwards
 export const GMEET_SCOPES = ['openid', 'email', 'profile', 'https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/meetings.space.readonly'];

@@ -189,6 +189,15 @@ export const channelSchema = z.object({
   checklist: z.array(z.object({ label: z.string().trim().min(1).max(200), done: z.boolean() })).max(40).optional(),
   status: z.enum(CHANNEL_STATUSES).optional(),
   notes: z.string().max(4000).nullish(),
+  // Google Drive delivery
+  driveAccountId: z.string().uuid().nullish(),
+  driveFolderId: z.string().trim().max(200).nullish(),
+  /** the installer bundles the member database — then the share can only be restricted */
+  containsClientData: z.boolean().optional(),
+  shareAccess: z.enum(['restricted', 'public']).optional(),
+  /** the linked person the link is sent to on WhatsApp */
+  recipientObject: z.enum(['contact', 'account', 'lead', 'deal', 'sales_order', 'invoice']).nullish(),
+  recipientId: z.string().uuid().nullish(),
 });
 
 async function releaseOf(ctx: RecordCtx, projectId: string, releaseId: string) {
@@ -208,21 +217,27 @@ export async function saveChannel(ctx: RecordCtx, projectId: string, releaseId: 
   await releaseOf(ctx, projectId, releaseId);
   await checkFiles(ctx, projectId, input.fileIds);
   const checklist = input.checklist ?? (channelId ? undefined : defaultChecklist(input.platform, input.method));
+  // a build that carries client data is never world-readable (also enforced by the database)
+  const data = input.containsClientData;
+  const access = data === true ? 'restricted' : input.shareAccess;
+  if (input.recipientObject && !input.recipientId) throw badRequest('Pick the person to send to');
   if (channelId) {
     const r = await ctx.tx.one<{ id: string }>(
       `update project_release_channels set platform = $4, method = $5, target = $6, url = $7, build_ref = $8, recipients = $9, file_ids = coalesce($10::uuid[], file_ids),
               checklist = coalesce($11::jsonb, checklist), status = coalesce($12, status), notes = $13,
+              drive_account_id = $14, drive_folder_id = $15, contains_client_data = coalesce($16, contains_client_data),
+              share_access = coalesce($17, share_access), recipient_object = $18, recipient_id = $19,
               done_at = case when $12 = 'done' and status <> 'done' then now() when $12 is not null and $12 <> 'done' then null else done_at end, updated_at = now()
         where tenant_id = $1 and id = $2 and release_id = $3 returning id`,
-      [ctx.tenantId, channelId, releaseId, input.platform, input.method, input.target ?? null, input.url ?? null, input.buildRef ?? null, input.recipients ?? null, input.fileIds ?? null, checklist ? JSON.stringify(checklist) : null, input.status ?? null, input.notes ?? null],
+      [ctx.tenantId, channelId, releaseId, input.platform, input.method, input.target ?? null, input.url ?? null, input.buildRef ?? null, input.recipients ?? null, input.fileIds ?? null, checklist ? JSON.stringify(checklist) : null, input.status ?? null, input.notes ?? null, input.driveAccountId ?? null, input.driveFolderId ?? null, data ?? null, access ?? null, input.recipientObject ?? null, input.recipientId ?? null],
     );
     if (!r) throw notFound('Channel not found');
     return { id: channelId };
   }
   const r = await ctx.tx.one<{ id: string }>(
-    `insert into project_release_channels (tenant_id, project_id, release_id, platform, method, target, url, build_ref, recipients, file_ids, checklist, status, notes, done_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, case when $12 = 'done' then now() end) returning id`,
-    [ctx.tenantId, projectId, releaseId, input.platform, input.method, input.target ?? null, input.url ?? null, input.buildRef ?? null, input.recipients ?? null, input.fileIds ?? [], JSON.stringify(checklist ?? []), input.status ?? 'planned', input.notes ?? null],
+    `insert into project_release_channels (tenant_id, project_id, release_id, platform, method, target, url, build_ref, recipients, file_ids, checklist, status, notes, drive_account_id, drive_folder_id, contains_client_data, share_access, recipient_object, recipient_id, done_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,coalesce($16, true),coalesce($17, 'restricted'),$18,$19, case when $12 = 'done' then now() end) returning id`,
+    [ctx.tenantId, projectId, releaseId, input.platform, input.method, input.target ?? null, input.url ?? null, input.buildRef ?? null, input.recipients ?? null, input.fileIds ?? [], JSON.stringify(checklist ?? []), input.status ?? 'planned', input.notes ?? null, input.driveAccountId ?? null, input.driveFolderId ?? null, data ?? null, access ?? null, input.recipientObject ?? null, input.recipientId ?? null],
   );
   return { id: r!.id };
 }

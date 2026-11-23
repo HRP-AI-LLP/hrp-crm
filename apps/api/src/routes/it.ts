@@ -9,7 +9,9 @@ import { notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
 import * as rl from '../services/releases';
+import * as rd from '../services/release-dist';
 import * as ag from '../services/it/agile';
+import { appOrigin } from '../services/mailer';
 import { WORK_TYPES } from '../services/work-types';
 import * as ci from '../services/it/contract-import';
 import * as ct from '../services/it/contracts';
@@ -194,6 +196,11 @@ export const itRoutes = new Hono<AppEnv>()
     return c.json(await c.var.db.tx(scope(c), (tx) => rl.saveChannel(rctx(c, tx), id(c), id(c, 'rid'), id(c, 'cid'), b)));
   })
   .delete('/projects/:id/agile/releases/:rid/channels/:cid', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => rl.deleteChannel(rctx(c, tx), id(c), id(c, 'rid'), id(c, 'cid')))))
+  .get('/projects/:id/agile/drive-accounts', async (c) => c.json({ items: await c.var.db.tx(scope(c, true), (tx) => rd.driveAccounts(rctx(c, tx))) }))
+  .post('/projects/:id/agile/releases/:rid/channels/:cid/publish', async (c) => {
+    const b = rd.publishSchema.parse(await c.req.json().catch(() => ({})));
+    return c.json(await c.var.db.tx(scope(c), (tx) => rd.publishChannel(rctx(c, tx), c.env, appOrigin(c.env, c.req.url), id(c), id(c, 'rid'), id(c, 'cid'), b)));
+  })
   .get('/projects/:id/agile/releases/:rid/notes', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => ag.draftReleaseNotes(rctx(c, tx), id(c), id(c, 'rid')))))
   .post('/projects/:id/agile/releases/:rid/release', async (c) => {
     const b = z.object({ date: dateStr.nullish(), notes: z.string().max(50000).nullish() }).parse(await c.req.json().catch(() => ({})));

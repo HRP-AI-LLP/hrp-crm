@@ -53,10 +53,19 @@ export function sniffType(bytes: Uint8Array, name: string): string | null {
       pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       zip: 'application/zip',
     };
+    // release artifacts that are really ZIP containers (Android / iOS packages) — download-only
+    if (['apk', 'aab', 'ipa', 'jar', 'appx', 'msix'].includes(ext)) return 'application/octet-stream';
     return office[ext] ?? null;
   }
-  // Word / Excel 97–2003 (OLE container)
-  if (startsWith(bytes, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])) return ({ doc: 'application/msword', xls: 'application/vnd.ms-excel', ppt: 'application/vnd.ms-powerpoint' } as Record<string, string>)[ext] ?? null;
+  // Word / Excel 97–2003 (OLE container) — .msi is the same container, kept as a download-only installer
+  if (startsWith(bytes, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))
+    return ({ doc: 'application/msword', xls: 'application/vnd.ms-excel', ppt: 'application/vnd.ms-powerpoint', msi: 'application/octet-stream' } as Record<string, string>)[ext] ?? null;
+  // release artifacts (installers / packages): stored for distribution, always downloaded, never run or shown inline
+  if (startsWith(bytes, [0x4d, 0x5a]) && ['exe', 'msi', 'dll'].includes(ext)) return 'application/octet-stream'; // Windows PE
+  if (startsWith(bytes, [0x7f, 0x45, 0x4c, 0x46]) && ['appimage', 'bin', 'run', 'so'].includes(ext)) return 'application/octet-stream'; // Linux ELF
+  if (ascii(bytes, 0, 7) === '!<arch>' && ext === 'deb') return 'application/octet-stream'; // Debian package
+  if (ascii(bytes, 0, 4) === 'xar!' && ['pkg', 'xar'].includes(ext)) return 'application/octet-stream'; // macOS .pkg
+  if (['dmg'].includes(ext) && bytes.length > 512) return 'application/octet-stream'; // macOS disk image (trailer-based; accept by extension)
   // a saved email (.eml, kept from a mailbox): never shown inline, only downloaded
   if (ext === 'eml') {
     // header lines first (after an optional BOM, blank lines or an mbox "From " line), no binary in the headers
@@ -167,7 +176,7 @@ export async function saveFile(
   ctx: RecordCtx,
   env: Env,
   input: { objectKey: string; recordId: string; name: string; bytes: Uint8Array; kind?: FileKind; description?: string | null },
-  opts: { system?: boolean; maxBytes?: number } = {},
+  opts: { system?: boolean; maxBytes?: number; allowBinary?: boolean } = {},
 ) {
   if (!env.FILES) throw new StorageUnavailableError();
   if (!opts.system) await assertRecordAccess(ctx, input.objectKey, input.recordId, 'update');
@@ -177,6 +186,8 @@ export async function saveFile(
   const name = safeName(input.name);
   const type = sniffType(input.bytes, name);
   if (!type) throw badRequest('This file type is not allowed. Upload images, PDF, Office documents, CSV or text files.');
+  // installers/packages are only kept where they belong (release artifacts), never as ordinary documents
+  if (type === 'application/octet-stream' && !opts.allowBinary) throw badRequest('Programs and installers can only be attached to a release. Upload images, PDF, Office documents, CSV or text files here.');
   const usage = await storageUsage(ctx);
   if (usage.bytes + input.bytes.length > usage.quotaBytes) throw new ApiError(413, 'quota_exceeded', 'The workspace has used its file storage. Remove old files or ask HRP AI to raise the limit.');
 
