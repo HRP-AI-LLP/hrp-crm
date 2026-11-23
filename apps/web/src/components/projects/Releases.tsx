@@ -754,7 +754,7 @@ function ChannelForm({ projectId, release, c, onClose, onSaved }: { projectId: s
               <label className="field">
                 Google account
                 <select value={f.driveAccountId} onChange={(e) => setF({ ...f, driveAccountId: e.target.value })}>
-                  <option value="">Choose a connected account…</option>
+                  <option value="">{driveAccounts.isLoading ? 'Loading…' : 'Choose a connected account…'}</option>
                   {(driveAccounts.data?.items ?? []).map((a) => (
                     <option key={a.id} value={a.id} disabled={!a.hasDrive}>
                       {a.email}
@@ -762,6 +762,15 @@ function ChannelForm({ projectId, release, c, onClose, onSaved }: { projectId: s
                     </option>
                   ))}
                 </select>
+                {driveAccounts.isError && <small className="muted" style={{ color: 'var(--bad)' }}>Couldn’t load accounts — is the app updated and restarted?</small>}
+                {driveAccounts.data && !driveAccounts.data.items.length && (
+                  <small className="muted">
+                    No Google account is connected. Connect a Google (Gmail) account under <a href="/account">My account → Mailboxes</a>, then it appears here. An Outlook/Microsoft account can’t upload to Google Drive.
+                  </small>
+                )}
+                {!!driveAccounts.data?.items.length && driveAccounts.data.items.every((a) => !a.hasDrive) && (
+                  <small className="muted">Your Google account was connected before Drive was enabled — reconnect it in My account → Mailboxes to grant Drive access.</small>
+                )}
               </label>
               <label className="field">
                 Folder in Drive (optional)
