@@ -101,7 +101,7 @@ export async function listProjects(ctx: RecordCtx, q: { status?: string | null; 
     where.push(`(r.owner_id = ${me} or r.id in (select project_id from project_members m where m.tenant_id = r.tenant_id and m.user_id = ${me}))`);
   }
   return ctx.tx.query(
-    `select r.id, r.name, r.project_code, r.status, r.start_date, r.end_date, r.billing_method, r.budget_type,
+    `select r.id, r.name, r.project_code, r.status, r.start_date, r.end_date, r.billing_method, r.budget_type, r.project_kind, r.product_type,
             r.budget_hours::float8 as budget_hours, r.progress::float8 as progress, r.owner_id,
             (select full_name from users u where u.tenant_id = r.tenant_id and u.id = r.owner_id) as manager,
             (select name from accounts a where a.tenant_id = r.tenant_id and a.id = r.account_id) as customer,

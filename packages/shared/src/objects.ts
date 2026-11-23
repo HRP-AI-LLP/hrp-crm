@@ -37,12 +37,14 @@ export const BILL_STATUSES = ['draft', 'open', 'partially_paid', 'paid', 'void']
 export const WORK_ORDER_STATUSES = ['draft', 'released', 'in_progress', 'completed', 'closed', 'cancelled'] as const;
 export const JOB_WORK_STATUSES = ['draft', 'sent', 'partially_received', 'received', 'closed', 'cancelled'] as const;
 export const PROJECT_STATUSES = ['planning', 'active', 'on_hold', 'completed', 'cancelled'] as const;
+export const PROJECT_KINDS = ['client', 'in_house'] as const;
+export const PRODUCT_TYPES = ['web_app', 'saas', 'website', 'mobile_app', 'mobile_game', 'desktop_app', 'api_service', 'data_ai', 'iot_embedded', 'erp_implementation', 'other'] as const;
 export const PROJECT_BILLING_METHODS = ['fixed_price', 'time_project_rate', 'time_staff_rate', 'time_task_rate', 'non_billable'] as const;
 export const EXPENSE_STATUSES = ['draft', 'submitted', 'approved', 'rejected', 'recorded', 'reimbursed', 'void'] as const;
 export const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SGD', 'AUD', 'CAD', 'JPY', 'CHF', 'SAR', 'QAR', 'NZD', 'HKD', 'MYR', 'ZAR', 'SEK', 'NOK', 'DKK', 'CNY', 'BDT', 'NPR', 'LKR'] as const;
 export const DEAL_PRICING = ['fixed', 'hourly', 'daily', 'per_task', 'per_person_month', 'monthly_retainer', 'per_unit', 'milestone', 'subscription'] as const;
 export const VENDOR_TYPES = ['manufacturer', 'supplier', 'contractor', 'transporter', 'installer', 'service_provider', 'other'] as const;
-const LABELS: Record<string, string> = { fixed: 'Fixed bid', hourly: 'Hourly (time & materials)', daily: 'Per day', per_task: 'Per task / ticket', per_person_month: 'Per person per month', monthly_retainer: 'Monthly retainer', per_unit: 'Per unit / licence', milestone: 'Milestone based', subscription: 'Subscription', due_on_receipt: 'Due on receipt', net_7: 'Net 7 days', net_15: 'Net 15 days', net_30: 'Net 30 days', net_45: 'Net 45 days', net_60: 'Net 60 days', end_of_month: 'Due end of the month', end_of_next_month: 'Due end of next month', gem: 'GeM portal', tender: 'Tender (CPPP / e-procurement)', ngo: 'NGO / trust / society' };
+const LABELS: Record<string, string> = { client: 'For a client', in_house: 'In-house (our own product)', web_app: 'Web application', saas: 'SaaS product', website: 'Website', mobile_app: 'Mobile app', mobile_game: 'Mobile game', desktop_app: 'Desktop app (Windows / macOS)', api_service: 'API / backend service', data_ai: 'Data / AI', iot_embedded: 'IoT / embedded', erp_implementation: 'ERP / software implementation', fixed: 'Fixed bid', hourly: 'Hourly (time & materials)', daily: 'Per day', per_task: 'Per task / ticket', per_person_month: 'Per person per month', monthly_retainer: 'Monthly retainer', per_unit: 'Per unit / licence', milestone: 'Milestone based', subscription: 'Subscription', due_on_receipt: 'Due on receipt', net_7: 'Net 7 days', net_15: 'Net 15 days', net_30: 'Net 30 days', net_45: 'Net 45 days', net_60: 'Net 60 days', end_of_month: 'Due end of the month', end_of_next_month: 'Due end of next month', gem: 'GeM portal', tender: 'Tender (CPPP / e-procurement)', ngo: 'NGO / trust / society' };
 const currencyChoices = () => CURRENCIES.map((c) => ({ value: c, label: c }));
 const choices = (vals: readonly string[]) => vals.map((v) => ({ value: v, label: LABELS[v] ?? v.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()) }));
 
@@ -503,6 +505,8 @@ export const STANDARD_FIELDS: Record<StandardObjectKey, FieldDef[]> = {
     { key: 'name', label: 'Project name', type: 'text', standard: true, required: true },
     { key: 'project_code', label: 'Project code', type: 'text', standard: true, indexed: true },
     { key: 'status', label: 'Status', type: 'picklist', standard: true, indexed: true, options: { choices: choices(PROJECT_STATUSES) } },
+    { key: 'project_kind', label: 'Project for', type: 'picklist', standard: true, indexed: true, options: { choices: choices(PROJECT_KINDS) }, helpText: 'In-house: the company’s own product — no customer; planned, built and released here like any project' },
+    { key: 'product_type', label: 'What is being built', type: 'picklist', standard: true, indexed: true, options: { choices: choices(PRODUCT_TYPES) } },
     { key: 'account_id', label: 'Customer', type: 'lookup', standard: true, indexed: true, options: { lookupObject: 'account' } },
     { key: 'deal_id', label: 'Deal', type: 'lookup', standard: true, options: { lookupObject: 'deal' } },
     { key: 'sales_order_id', label: 'Sales order', type: 'lookup', standard: true, options: { lookupObject: 'sales_order' } },

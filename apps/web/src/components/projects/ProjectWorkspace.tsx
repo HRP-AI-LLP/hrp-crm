@@ -187,7 +187,12 @@ function Overview({ id, data }: { id: string; data: Json }) {
         {s.budget && <Kpi l={`Budget (${s.budget.type})`} v={s.budget.pct != null ? `${s.budget.pct}%` : '—'} tone={s.budget.pct > 100 ? 'bad' : undefined} sub={`${s.budget.type === 'hours' ? s.budget.used : money2(s.budget.used)} of ${s.budget.type === 'hours' ? s.budget.planned : money2(s.budget.planned)}`} />}
         {s.schedule && <Kpi l="Days left" v={String(s.schedule.daysLeft)} tone={s.schedule.daysLeft < 0 ? 'bad' : undefined} sub={`Ends ${date(s.schedule.endDate)}`} />}
       </div>
-      {s.money && (
+      {s.money && data.project.project_kind === 'in_house' && (
+        <div className="kpis" style={{ margin: 0 }}>
+          <Kpi l="Spent on it" v={money2(s.money.cost)} sub={`Team ${money2(s.money.labourCost)} · expenses ${money2(s.money.expenses)} · bills ${money2(s.money.bills)}`} />
+        </div>
+      )}
+      {s.money && data.project.project_kind !== 'in_house' && (
         <div className="kpis" style={{ margin: 0 }}>
           <Kpi
             l="Invoiced"

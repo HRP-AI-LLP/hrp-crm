@@ -23,7 +23,7 @@ export type { WorkType };
 export async function agileBoard(ctx: RecordCtx, projectId: string) {
   const { level } = await projectAccess(ctx, projectId);
   const sprints = await ctx.tx.query(
-    `select s.id, s.name, s.goal, s.start_date::text, s.end_date::text, s.status, s.capacity_points::float8 as capacity_points,
+    `select s.id, s.name, s.goal, s.start_date::text, s.end_date::text, s.status, s.release_id, s.capacity_points::float8 as capacity_points,
             s.committed_points::float8 as committed_points, s.completed_points::float8 as completed_points, s.started_at, s.closed_at,
             coalesce(sum(t.story_points), 0)::float8 as points, coalesce(sum(t.story_points) filter (where t.status = 'done'), 0)::float8 as done_points,
             count(t.id)::int as items, count(t.id) filter (where t.status = 'done')::int as done_items
@@ -33,7 +33,10 @@ export async function agileBoard(ctx: RecordCtx, projectId: string) {
     [ctx.tenantId, projectId],
   );
   const releases = await ctx.tx.query(
-    `select r.id, r.name, r.version, r.target_date::text, r.status, r.released_at::text, r.notes,
+    `select r.id, r.name, r.version, r.release_type, r.milestone_id, r.version_source, r.target_date::text, r.status, r.released_at::text, r.notes,
+            (select m.name from project_milestones m where m.tenant_id = r.tenant_id and m.id = r.milestone_id) as milestone,
+            (select coalesce(array_agg(s.id), '{}') from project_sprints s where s.tenant_id = r.tenant_id and s.release_id = r.id) as sprint_ids,
+            (select json_agg(json_build_object('platform', c.platform, 'method', c.method, 'status', c.status) order by c.created_at) from project_release_channels c where c.tenant_id = r.tenant_id and c.release_id = r.id) as channels,
             count(t.id)::int as items, count(t.id) filter (where t.status = 'done')::int as done_items,
             coalesce(sum(t.story_points), 0)::float8 as points
        from project_releases r left join project_tasks t on t.tenant_id = r.tenant_id and t.release_id = r.id
@@ -256,21 +259,33 @@ export interface ReleaseInput {
   targetDate?: string | null;
   status?: 'planned' | 'in_progress' | 'released' | 'cancelled';
   notes?: string | null;
+  releaseType?: 'major' | 'minor' | 'patch' | 'hotfix' | 'prerelease' | 'maintenance';
+  milestoneId?: string | null;
+  sprintIds?: string[];
+  versionSource?: string | null;
 }
 
 export async function saveRelease(ctx: RecordCtx, projectId: string, id: string | null, input: ReleaseInput) {
   await projectAccess(ctx, projectId, 'manage');
   if (input.status === 'released') throw badRequest('Use “Mark released” to release a version');
+  if (input.milestoneId && !(await ctx.tx.one(`select 1 from project_milestones where tenant_id = $1 and id = $2 and project_id = $3`, [ctx.tenantId, input.milestoneId, projectId]))) throw badRequest('Milestone not found');
+  const { setReleaseSprints } = await import('../releases');
   if (id) {
-    const r = await ctx.tx.one(`update project_releases set name = $4, version = $5, target_date = $6, status = coalesce($7, status), notes = coalesce($8, notes) where tenant_id = $1 and id = $2 and project_id = $3 returning id`, [
-      ctx.tenantId, id, projectId, input.name, input.version ?? null, input.targetDate ?? null, input.status ?? null, input.notes ?? null,
-    ]);
+    const r = await ctx.tx.one(
+      `update project_releases set name = $4, version = $5, target_date = $6, status = coalesce($7, status), notes = coalesce($8, notes),
+              release_type = coalesce($9, release_type), milestone_id = case when $10::boolean then $11::uuid else milestone_id end, version_source = case when $12::boolean then $13 else version_source end
+        where tenant_id = $1 and id = $2 and project_id = $3 returning id`,
+      [ctx.tenantId, id, projectId, input.name, input.version ?? null, input.targetDate ?? null, input.status ?? null, input.notes ?? null, input.releaseType ?? null, input.milestoneId !== undefined, input.milestoneId ?? null, input.versionSource !== undefined, input.versionSource ?? null],
+    );
     if (!r) throw notFound('Release not found');
+    if (input.sprintIds) await setReleaseSprints(ctx, projectId, id, input.sprintIds);
     return { id };
   }
-  const r = await ctx.tx.one<{ id: string }>(`insert into project_releases (tenant_id, project_id, name, version, target_date, status, notes) values ($1,$2,$3,$4,$5,$6,$7) returning id`, [
-    ctx.tenantId, projectId, input.name, input.version ?? null, input.targetDate ?? null, input.status ?? 'planned', input.notes ?? null,
-  ]);
+  const r = await ctx.tx.one<{ id: string }>(
+    `insert into project_releases (tenant_id, project_id, name, version, target_date, status, notes, release_type, milestone_id, version_source) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`,
+    [ctx.tenantId, projectId, input.name, input.version ?? null, input.targetDate ?? null, input.status ?? 'planned', input.notes ?? null, input.releaseType ?? 'minor', input.milestoneId ?? null, input.versionSource ?? null],
+  );
+  if (input.sprintIds?.length) await setReleaseSprints(ctx, projectId, r!.id, input.sprintIds);
   return { id: r!.id };
 }
 

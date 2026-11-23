@@ -8,6 +8,7 @@ import type { AppEnv } from '../env';
 import { notFound } from '../lib/errors';
 import { scope } from '../middleware';
 import { enabledApps } from '../services/apps';
+import * as rl from '../services/releases';
 import * as ag from '../services/it/agile';
 import { WORK_TYPES } from '../services/work-types';
 import * as ci from '../services/it/contract-import';
@@ -47,6 +48,10 @@ const releaseSchema = z.object({
   targetDate: dateStr.nullish(),
   status: z.enum(['planned', 'in_progress', 'cancelled']).optional(),
   notes: z.string().max(50000).nullish(),
+  releaseType: z.enum(['major', 'minor', 'patch', 'hotfix', 'prerelease', 'maintenance']).optional(),
+  milestoneId: uuid.nullish(),
+  sprintIds: z.array(uuid).max(50).optional(),
+  versionSource: z.string().max(300).nullish(),
 });
 const agileSchema = z
   .object({
@@ -178,6 +183,17 @@ export const itRoutes = new Hono<AppEnv>()
     await c.var.db.tx(scope(c), (tx) => ag.deleteRelease(rctx(c, tx), id(c), id(c, 'rid')));
     return c.json({ ok: true });
   })
+  .get('/projects/:id/agile/release-version', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => rl.repoVersion(rctx(c, tx), c.env, id(c)))))
+  .get('/projects/:id/agile/releases/:rid', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => rl.releaseDetail(rctx(c, tx), c.env, id(c), id(c, 'rid')))))
+  .post('/projects/:id/agile/releases/:rid/channels', async (c) => {
+    const b = rl.channelSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => rl.saveChannel(rctx(c, tx), id(c), id(c, 'rid'), null, b)), 201);
+  })
+  .put('/projects/:id/agile/releases/:rid/channels/:cid', async (c) => {
+    const b = rl.channelSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => rl.saveChannel(rctx(c, tx), id(c), id(c, 'rid'), id(c, 'cid'), b)));
+  })
+  .delete('/projects/:id/agile/releases/:rid/channels/:cid', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => rl.deleteChannel(rctx(c, tx), id(c), id(c, 'rid'), id(c, 'cid')))))
   .get('/projects/:id/agile/releases/:rid/notes', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => ag.draftReleaseNotes(rctx(c, tx), id(c), id(c, 'rid')))))
   .post('/projects/:id/agile/releases/:rid/release', async (c) => {
     const b = z.object({ date: dateStr.nullish(), notes: z.string().max(50000).nullish() }).parse(await c.req.json().catch(() => ({})));
