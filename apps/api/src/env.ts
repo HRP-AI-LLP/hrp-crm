@@ -28,6 +28,8 @@ export interface Env {
   AI_MODEL_GROQ?: string;
   /** speech-to-text for meeting and call recordings */
   AI_MODEL_WHISPER?: string;
+  /** Workers AI model that describes pictures when the workspace has no vision model of its own */
+  AI_MODEL_VISION?: string;
   AI_MODEL_GEMINI?: string;
   AI_EMBEDDING_MODEL?: string;
   CF_ZONE_ID?: string;

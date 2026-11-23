@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hmacSha256Hex } from '../src/lib/crypto';
 import { Db } from '../src/lib/db';
 import { chatSweep, parseChatExport, ruleProposals } from '../src/services/project-chats';
-import { type Json, makeHarness, PW } from './harness';
+import { fakeR2, type Json, makeHarness, PW } from './harness';
 
 let h: Awaited<ReturnType<typeof makeHarness>>;
 let api: ReturnType<typeof h.as>;
@@ -274,6 +274,65 @@ describe('an exported chat', () => {
     expect(kinds).toEqual(['bug', 'requirement']);
     expect((await sql(`select side from project_chat_messages where chat_id = $1 and sender = 'Owner'`, [r.json.chatId]))[0]!.side).toBe('team');
     expect((await api('POST', `${P()}/chats/import`, { text: 'nothing that looks like a chat here' })).status).toBe(400);
+  });
+});
+
+describe('an exported chat with its media', () => {
+  it('reads voice notes, photos and PDFs from the export, then the AI turns the chat into work', async () => {
+    const r2 = fakeR2();
+    h.env.FILES = r2 as unknown as R2Bucket;
+    const oldAi = h.env.AI;
+    const seen: string[] = [];
+    h.env.AI = {
+      run: async (model: string, input: any) => {
+        if (input?.audio) return { text: 'Please also add a driver app for Android' };
+        if (input?.image) return { description: 'A screenshot of the reports page with the error "PDF export failed (500)".' };
+        const sys = String(input?.messages?.[0]?.content ?? '');
+        if (sys.includes('You read pictures')) return { response: 'A screenshot of the reports page with the error "PDF export failed (500)".' };
+        seen.push(String(input?.messages?.[1]?.content ?? ''));
+        return {
+          response: JSON.stringify({
+            summary: 'The PDF export fails; a driver app is wanted; the agreement says delivery in 6 weeks.',
+            items: [
+              { type: 'bug', title: 'PDF export fails with error 500 on reports', priority: 'high', message: 1, confidence: 0.9 },
+              { type: 'requirement', title: 'Driver app for Android', message: 2, confidence: 0.85 },
+            ],
+          }),
+        };
+      },
+    } as unknown as Ai;
+    const file = async (name: string, type: string, bytes: Uint8Array) => {
+      const key = `t/${tenantId}/project/${ids.project}/${name}`;
+      await r2.put(key, bytes);
+      return (await sql(`insert into files (tenant_id, object_key, record_id, name, content_type, size_bytes, storage_key) values ($1,'project',$2,$3,$4,$5,$6) returning id`, [tenantId, ids.project, name, type, bytes.length, key]))[0]!.id as string;
+    };
+    const shot = await file('00000012-PHOTO-2026-09-02-10-15-30.jpg', 'image/jpeg', new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]));
+    const voice = await file('PTT-20260903-WA0004.opus', 'audio/ogg', new Uint8Array([79, 103, 103, 83, 1, 2]));
+    const text = [
+      '[02/09/26, 10:15:30 AM] Meena (Client): ‎<attached: 00000012-PHOTO-2026-09-02-10-15-30.jpg>',
+      'This is what we get',
+      '03/09/2026, 11:00 am - Meena (Client): PTT-20260903-WA0004.opus (file attached)',
+      '03/09/2026, 11:05 am - Meena (Client): VID-20260903-WA0005.mp4 (file attached)',
+      '03/09/2026, 11:06 am - Owner: Noted',
+    ].join('\n');
+    const r = await api('POST', `${P()}/chats/import`, { title: 'Old chat with Meena', text, teamNames: ['Owner'], media: [{ name: '00000012-PHOTO-2026-09-02-10-15-30.jpg', fileId: shot }, { name: 'PTT-20260903-WA0004.opus', fileId: voice }] });
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json).toMatchObject({ read: 4, added: 4, media: 3, mediaMatched: 2 });
+    expect((await api('GET', `${P()}/chats/${r.json.chatId}/media-names`)).json.names.sort()).toEqual(['00000012-PHOTO-2026-09-02-10-15-30.jpg', 'PTT-20260903-WA0004.opus']);
+    // older than 30 days: an export is read in full
+    const a = await api('POST', `${P()}/chats/${r.json.chatId}/analyse`);
+    expect(a.status, JSON.stringify(a.json)).toBe(200);
+    const msgs = await sql(`select body from project_chat_messages where chat_id = $1 order by at`, [r.json.chatId]);
+    expect(msgs.map((m) => m.body)).toEqual([
+      'This is what we get\n🖼 A screenshot of the reports page with the error "PDF export failed (500)".',
+      '🎤 Please also add a driver app for Android',
+      '[video] VID-20260903-WA0005.mp4',
+      'Noted',
+    ]);
+    expect(seen.pop()).toContain('PDF export failed (500)');
+    const kinds = (await sql(`select kind, title from project_chat_proposals where chat_id = $1 order by created_at`, [r.json.chatId])).map((x) => x.title);
+    expect(kinds).toEqual(['PDF export fails with error 500 on reports', 'Driver app for Android']);
+    h.env.AI = oldAi;
   });
 });
 

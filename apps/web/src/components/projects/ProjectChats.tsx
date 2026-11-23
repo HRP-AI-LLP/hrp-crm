@@ -6,7 +6,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { unzipSync, strFromU8 } from 'fflate';
 import { useState } from 'react';
-import { del, get, patch, post } from '../../lib/api';
+import { del, get, patch, post, upload } from '../../lib/api';
 import { date } from '../../lib/format';
 import { Empty, Modal, Spinner, useToast } from '../ui';
 import { Guide } from '../admin/ConnectionKeys';
@@ -506,19 +506,34 @@ function NewGroup({ projectId, onClose, onDone }: { projectId: string; onClose: 
 }
 
 /** The .txt of an export, or the .txt inside its .zip (opened here; media files stay on this computer). */
-async function exportText(file: File) {
+/** The export: its chat text, and (for a .zip "with media") the media files by name. */
+async function readExport(file: File) {
   if (/\.zip$/i.test(file.name) || file.type.includes('zip')) {
-    const files = unzipSync(new Uint8Array(await file.arrayBuffer()), { filter: (f) => /\.txt$/i.test(f.name) });
-    const txt = Object.entries(files).sort((a, b) => b[1].length - a[1].length)[0];
+    const files = unzipSync(new Uint8Array(await file.arrayBuffer()));
+    const txt = Object.entries(files)
+      .filter(([n]) => /\.txt$/i.test(n))
+      .sort((a, b) => b[1].length - a[1].length)[0];
     if (!txt) throw new Error('No chat .txt inside this .zip');
-    return strFromU8(txt[1]);
+    const media = new Map<string, Uint8Array>();
+    for (const [n, b] of Object.entries(files)) if (n !== txt[0] && !n.endsWith('/') && b.length) media.set(n.split('/').pop()!, b);
+    return { text: strFromU8(txt[1]), media };
   }
-  return file.text();
+  return { text: await file.text(), media: new Map<string, Uint8Array>() };
 }
 
+const MIME: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', heic: 'image/heic',
+  opus: 'audio/ogg', ogg: 'audio/ogg', m4a: 'audio/mp4', aac: 'audio/aac', mp3: 'audio/mpeg', amr: 'audio/amr', wav: 'audio/wav',
+  mp4: 'video/mp4', mov: 'video/quicktime', '3gp': 'video/3gpp', pdf: 'application/pdf', txt: 'text/plain', csv: 'text/csv',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+};
+const MAX_FILE = 25 * 1024 * 1024;
+
 function ImportChat({ projectId, chat, onClose, onDone }: { projectId: string; chat: Json | null; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ title: '', team: '', mode: 'suggest' });
+  const [f, setF] = useState({ title: '', team: '', mode: 'suggest', since: 'all', sinceDate: '' });
   const [file, setFile] = useState<File | null>(null);
+  const [progress, setProgress] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Json | null>(null);
   const act = useAct();
@@ -539,17 +554,42 @@ function ImportChat({ projectId, chat, onClose, onDone }: { projectId: string; c
             onClick={async () => {
               setBusy(true);
               const r = await act(async () => {
-                const text = await exportText(file!);
-                return post<Json>(`/api/v1/projects/${projectId}/chats/import`, {
+                const { text, media } = await readExport(file!);
+                // the media the chat names, not yet uploaded with an earlier export
+                const named = new Set([...text.matchAll(/<attached:\s*([^>]+)>|([^\s/\\:]+\.[A-Za-z0-9]{2,5}) \(file attached\)/g)].map((m) => (m[1] ?? m[2] ?? '').trim()));
+                const known = chat ? new Set((await get<{ names: string[] }>(`/api/v1/projects/${projectId}/chats/${chat.id}/media-names`)).names) : new Set<string>();
+                const todo = [...media].filter(([n]) => named.has(n) && !known.has(n));
+                const uploaded: { name: string; fileId: string }[] = [];
+                let skipped = 0;
+                for (const [i, [name, bytes]] of todo.entries()) {
+                  setProgress(`Uploading media ${i + 1} of ${todo.length}…`);
+                  if (bytes.length > MAX_FILE) {
+                    skipped++;
+                    continue;
+                  }
+                  const ext = name.split('.').pop()!.toLowerCase();
+                  try {
+                    const f = await upload<{ id: string }>(`/api/v1/files?object=project&id=${projectId}&name=${encodeURIComponent(name)}&description=${encodeURIComponent('From a WhatsApp chat export')}`, new Blob([bytes as Uint8Array<ArrayBuffer>], { type: MIME[ext] ?? 'application/octet-stream' }));
+                    uploaded.push({ name, fileId: f.id });
+                  } catch {
+                    skipped++;
+                  }
+                }
+                setProgress('Reading the chat…');
+                const res = await post<Json>(`/api/v1/projects/${projectId}/chats/import`, {
                   chatId: chat?.id ?? null,
                   title: chat ? null : f.title.trim(),
                   mode: f.mode,
                   text,
                   teamNames: f.team.split(',').map((s) => s.trim()).filter(Boolean),
                   offsetMinutes: -new Date().getTimezoneOffset(),
+                  media: uploaded,
+                  readSince: f.since === 'all' ? null : f.since === 'custom' ? f.sinceDate || null : new Date(Date.now() - Number(f.since) * 86_400_000).toISOString().slice(0, 10),
                 });
+                return { ...res, uploaded: uploaded.length, mediaSkipped: skipped };
               });
               setBusy(false);
+              setProgress('');
               if (r) {
                 setResult(r);
                 onDone();
@@ -557,7 +597,7 @@ function ImportChat({ projectId, chat, onClose, onDone }: { projectId: string; c
               }
             }}
           >
-            {busy ? 'Reading…' : 'Import'}
+            {busy ? progress || 'Reading…' : 'Import'}
           </button>
         )
       }
@@ -566,13 +606,14 @@ function ImportChat({ projectId, chat, onClose, onDone }: { projectId: string; c
         {result ? (
           <p>
             Read {result.read} messages ({date(result.from)} – {date(result.to)}): <b>{result.added} new</b>
-            {result.skipped ? `, ${result.skipped} already here` : ''}. The AI reads the new ones in a few minutes — or press <b>Read now</b>.
+            {result.skipped ? `, ${result.skipped} already here` : ''}.
+            {result.media ? ` ${result.media} photos, voice notes, videos and documents in the chat; ${result.uploaded} uploaded${result.mediaSkipped ? ` (${result.mediaSkipped} too large or failed — videos over 25 MB stay out)` : ''}.` : ''} The AI listens to the voice notes, looks at the photos and screenshots, reads the PDFs, then reads the chat and proposes tasks, bugs, requirements and calls — in a few minutes, or press <b>Read now</b>. Long chats are read a part at a time.
           </p>
         ) : (
           <>
             <ol className="small" style={{ margin: 0, paddingLeft: 18 }}>
-              <li>On the phone, open the WhatsApp group or chat → ⋮ (or the name, on iPhone) → More → <b>Export chat</b> → Without media.</li>
-              <li>Send the file to yourself (mail, Drive) and choose it below — the .zip or the .txt.</li>
+              <li>On the phone, open the WhatsApp group or chat → ⋮ (or the name, on iPhone) → More → <b>Export chat</b> → <b>Include media</b> (or Without media, for the text only).</li>
+              <li>Send the .zip to yourself (mail, Drive) and choose it below. Photos, screenshots, voice notes and PDFs are read too; each file up to 25 MB.</li>
               <li>Later, export again and use <b>Upload newer export</b>: only new messages are added.</li>
             </ol>
             {!chat && (
@@ -588,6 +629,18 @@ function ImportChat({ projectId, chat, onClose, onDone }: { projectId: string; c
             <label className="field">
               Names in the chat who are on our side (comma-separated)
               <input value={f.team} onChange={(e) => setF({ ...f, team: e.target.value })} placeholder="Names as they appear in the chat; colleagues' names are matched already" />
+            </label>
+            <label className="field">
+              Read the chat from
+              <select value={f.since} onChange={(e) => setF({ ...f, since: e.target.value })}>
+                <option value="all">The beginning (all of it)</option>
+                <option value="365">The last 12 months</option>
+                <option value="90">The last 3 months</option>
+                <option value="30">The last 30 days</option>
+                <option value="custom">A date…</option>
+              </select>
+              {f.since === 'custom' && <input type="date" value={f.sinceDate} onChange={(e) => setF({ ...f, sinceDate: e.target.value })} />}
+              <small className="muted">Older messages are kept on the chat; only these are read for tasks.</small>
             </label>
             {!chat && <ModeChoice mode={f.mode} set={(mode) => setF({ ...f, mode })} />}
           </>

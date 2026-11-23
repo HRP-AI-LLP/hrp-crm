@@ -30,6 +30,7 @@ export const projectChatRoutes = new Hono<AppEnv>()
     if (r.added) await pc.flagPending(c.env);
     return c.json(r);
   })
+  .get('/projects/:id/chats/:cid/media-names', async (c) => c.json({ names: await c.var.db.tx(scope(c, true), (tx) => pc.knownMedia(rctx(c, tx), id(c), id(c, 'cid'))) }))
   .post('/projects/:id/chats/group', async (c) => {
     const b = z.object({ channelAccountId: uuid, subject: z.string().trim().min(1).max(128), description: z.string().max(2048).nullish(), mode: z.enum(['suggest', 'auto', 'off']).optional() }).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => pc.createProjectGroup(rctx(c, tx), c.env, id(c), b)), 201);
