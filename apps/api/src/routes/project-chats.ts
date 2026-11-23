@@ -50,11 +50,12 @@ export const projectChatRoutes = new Hono<AppEnv>()
     return c.json(await c.var.db.tx(scope(c), (tx) => pc.updateChat(rctx(c, tx), id(c), id(c, 'cid'), b)));
   })
   .delete('/projects/:id/chats/:cid', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => pc.unlinkChat(rctx(c, tx), id(c), id(c, 'cid')))))
-  .get('/projects/:id/chats/:cid/messages', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pc.chatMessages(rctx(c, tx), id(c), id(c, 'cid'), c.req.query('before') || null))))
+  .get('/projects/:id/chats/:cid/messages', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pc.chatMessages(rctx(c, tx), id(c), id(c, 'cid'), c.req.query('before') || null, c.env))))
   .post('/projects/:id/chats/:cid/analyse', async (c) => {
     const who = await c.var.db.tx(scope(c, true), (tx) => pc.analyseNow(c.env, c.var.db, rctx(c, tx), id(c), id(c, 'cid')));
     return c.json(await pc.analyseChat(c.env, c.var.db, who.tenantId, id(c, 'cid'), who.userId));
   })
+  .get('/projects/:id/chat-proposals/:pid', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pc.proposalDetail(rctx(c, tx), c.env, id(c), id(c, 'pid')))))
   .post('/projects/:id/chat-proposals/:pid/accept', async (c) => {
     const b = pc.acceptSchema.parse(await c.req.json().catch(() => ({})));
     return c.json(await c.var.db.tx(scope(c), (tx) => pc.acceptProposal(rctx(c, tx), c.env, id(c), id(c, 'pid'), b)));

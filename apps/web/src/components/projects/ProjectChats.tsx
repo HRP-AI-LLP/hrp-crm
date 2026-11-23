@@ -203,12 +203,24 @@ function Proposal({ p, projectId, canAct, onDone }: { p: Json; projectId: string
   const act = useAct();
   const [edit, setEdit] = useState<Json | null>(null);
   const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
   const accept = async (body: Json = {}) => {
     setBusy(true);
     const r = await act(() => post<Json>(`/api/v1/projects/${projectId}/chat-proposals/${p.id}/accept`, body), 'Created');
     setBusy(false);
-    if (r) (setEdit(null), onDone());
+    if (r) {
+      if (r.attached) toast(`${r.attached} file${r.attached === 1 ? '' : 's'} from the chat attached`);
+      setEdit(null);
+      setOpen(false);
+      onDone();
+    }
   };
+  const toast = useToast();
+  const dismiss = async () => {
+    if ((await act(() => post(`/api/v1/projects/${projectId}/chat-proposals/${p.id}/dismiss`))) !== null) (setOpen(false), onDone());
+  };
+  const createLabel = p.kind === 'call' ? 'Schedule' : p.kind === 'question' || p.kind === 'follow_up' ? 'Add to-do' : 'Create';
+  const createNow = () => (p.kind === 'call' && !p.starts_at ? setEdit({ ...p, startsAt: '' }) : accept());
   const startsLocal = (s: string | null) => (s ? new Date(new Date(s).getTime() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16) : '');
   return (
     <div className="panel" style={{ padding: 10 }}>
@@ -216,7 +228,9 @@ function Proposal({ p, projectId, canAct, onDone }: { p: Json; projectId: string
         <div style={{ minWidth: 0 }}>
           <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
             <span className={`chip ${KIND_CHIP[p.kind] ?? ''}`}>{KIND_LABEL[p.kind] ?? p.kind}</span>
-            <b>{p.title}</b>
+            <button type="button" className="link-btn" style={{ fontWeight: 600, textAlign: 'left' }} onClick={() => setOpen(true)} title="See everything behind it">
+              {p.title}
+            </button>
             {p.priority === 'high' && <span className="chip bad">high</span>}
             {!p.ai && <span className="chip" title="Found by keyword rules (the AI was not available)">rules</span>}
           </div>
@@ -233,6 +247,10 @@ function Proposal({ p, projectId, canAct, onDone }: { p: Json; projectId: string
             {p.due ? ` · due ${date(p.due)}` : ''}
             {p.starts_at ? ` · ${when(p.starts_at)}` : ''}
             {p.status === 'proposed' ? ` · ${Math.round(p.confidence * 100)}% sure` : ''}
+            {' · '}
+            <button type="button" className="link-btn small" onClick={() => setOpen(true)}>
+              {(p.message_ids?.length ?? 0) > 1 ? `${p.message_ids.length} messages & files` : 'Details & files'}
+            </button>
           </div>
         </div>
         <div className="row nowrap" style={{ gap: 6 }}>
@@ -245,19 +263,41 @@ function Proposal({ p, projectId, canAct, onDone }: { p: Json; projectId: string
             <span className="chip">Dismissed</span>
           ) : canAct ? (
             <>
-              <button className="btn small primary" disabled={busy} onClick={() => (p.kind === 'call' && !p.starts_at ? setEdit({ ...p, startsAt: '' }) : accept())}>
-                {p.kind === 'call' ? 'Schedule' : p.kind === 'question' || p.kind === 'follow_up' ? 'Add to-do' : 'Create'}
+              <button className="btn small primary" disabled={busy} onClick={createNow}>
+                {createLabel}
               </button>
               <button className="btn small" disabled={busy} onClick={() => setEdit({ ...p, startsAt: startsLocal(p.starts_at) })}>
                 Edit…
               </button>
-              <button className="btn small ghost" disabled={busy} onClick={async () => (await act(() => post(`/api/v1/projects/${projectId}/chat-proposals/${p.id}/dismiss`))) !== null && onDone()}>
+              <button className="btn small ghost" disabled={busy} onClick={dismiss}>
                 Dismiss
               </button>
             </>
           ) : null}
         </div>
       </div>
+      {open && (
+        <ProposalDetail
+          projectId={projectId}
+          p={p}
+          onClose={() => setOpen(false)}
+          actions={
+            p.status === 'proposed' && canAct ? (
+              <>
+                <button className="btn ghost" disabled={busy} onClick={dismiss}>
+                  Dismiss
+                </button>
+                <button className="btn" disabled={busy} onClick={() => setEdit({ ...p, startsAt: startsLocal(p.starts_at) })}>
+                  Edit…
+                </button>
+                <button className="btn primary" disabled={busy} onClick={createNow}>
+                  {createLabel}
+                </button>
+              </>
+            ) : null
+          }
+        />
+      )}
       {edit && (
         <Modal
           title="Before creating"
@@ -650,6 +690,147 @@ function ImportChat({ projectId, chat, onClose, onDone }: { projectId: string; c
   );
 }
 
+/** A suggestion in full: what the AI understood, and the messages, photos, voice notes and files behind it. */
+function ProposalDetail({ projectId, p, onClose, actions }: { projectId: string; p: Json; onClose: () => void; actions: React.ReactNode }) {
+  const { data } = useQuery({ queryKey: ['chat-proposal', p.id, p.message_ids?.length ?? 0], queryFn: () => get<Json>(`/api/v1/projects/${projectId}/chat-proposals/${p.id}`) });
+  const d = data ?? p;
+  const msgs = (data?.messages ?? []) as Json[];
+  const files = msgs.filter((m) => m.cited && m.file);
+  const facts: [string, React.ReactNode][] = [
+    ['Type', <span className={`chip ${KIND_CHIP[d.kind] ?? ''}`}>{KIND_LABEL[d.kind] ?? d.kind}</span>],
+    ['Priority', <span className={`chip ${d.priority === 'high' ? 'bad' : ''}`}>{d.priority}</span>],
+    ['Asked by', d.requested_by ?? '—'],
+    ['In the chat', `${d.chat_title}${d.message_at ? ` · ${when(d.message_at)}` : ''}`],
+    ...(d.due ? ([['Due', date(d.due)]] as [string, React.ReactNode][]) : []),
+    ...(d.starts_at ? ([['Call at', when(d.starts_at)]] as [string, React.ReactNode][]) : []),
+    ['Found by', d.ai ? `AI · ${Math.round(Number(d.confidence) * 100)}% sure` : 'keyword rules'],
+    ...(d.status !== 'proposed' ? ([['Status', d.status === 'created' ? `Created${d.created_key ? ` · ${d.created_key}` : ''}` : 'Dismissed']] as [string, React.ReactNode][]) : []),
+  ];
+  return (
+    <Modal title={d.title} onClose={onClose} wide footer={actions}>
+      <div className="modal-body stack">
+        <table className="data small">
+          <tbody>
+            {facts.map(([k, v]) => (
+              <tr key={k}>
+                <th style={{ width: 130, textAlign: 'left', fontWeight: 500 }} className="muted">
+                  {k}
+                </th>
+                <td>{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {d.detail && (
+          <section>
+            <h4 style={{ margin: '0 0 4px' }}>What it is</h4>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{d.detail}</div>
+          </section>
+        )}
+        {d.quote && (
+          <section>
+            <h4 style={{ margin: '0 0 4px' }}>In their words</h4>
+            <div className="muted" style={{ borderLeft: '3px solid var(--line)', paddingLeft: 8, whiteSpace: 'pre-wrap' }}>
+              “{d.quote}”
+            </div>
+          </section>
+        )}
+        {!data ? (
+          <Spinner />
+        ) : (
+          <>
+            {files.length > 0 && (
+              <section>
+                <h4 style={{ margin: '0 0 6px' }}>
+                  Files from the chat ({files.length}) <span className="small muted">— attached to the work when you create it</span>
+                </h4>
+                <div className="row" style={{ gap: 10, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+                  {files.map((m) => (
+                    <div key={m.id} style={{ maxWidth: 300 }}>
+                      <ChatFile f={m.file} />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+            <section>
+              <h4 style={{ margin: '0 0 6px' }}>The conversation</h4>
+              {!msgs.length ? (
+                <p className="muted small">The messages behind this suggestion are no longer on the chat.</p>
+              ) : (
+                <div className="stack" style={{ gap: 6, maxHeight: '45vh', overflowY: 'auto' }}>
+                  {msgs.map((m) => (
+                    <Bubble key={m.id} m={m} mark={m.cited} />
+                  ))}
+                </div>
+              )}
+              <p className="small muted" style={{ margin: '6px 0 0' }}>
+                Highlighted: the messages it comes from. The rest is what was said around them.
+              </p>
+            </section>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function Bubble({ m, mark }: { m: Json; mark?: boolean }) {
+  return (
+    <div
+      style={{
+        alignSelf: m.side === 'team' ? 'flex-end' : 'flex-start',
+        maxWidth: '85%',
+        background: m.side === 'team' ? 'var(--accent-soft)' : 'var(--bg-2, #f4f5f7)',
+        borderRadius: 10,
+        padding: '6px 10px',
+        outline: mark ? '2px solid var(--accent)' : undefined,
+      }}
+    >
+      <div className="small muted">
+        {m.sender} · {when(m.at)}
+      </div>
+      {m.file && (
+        <div style={{ margin: '4px 0' }}>
+          <ChatFile f={m.file} />
+        </div>
+      )}
+      <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>
+    </div>
+  );
+}
+
+/** A chat's photo, voice note, video or document: shown or played where it can be, else a download. */
+function ChatFile({ f }: { f: Json }) {
+  const mime = String(f.mime ?? '');
+  if (mime.startsWith('image/') && !/heic/.test(mime))
+    return (
+      <a href={f.url} target="_blank" rel="noreferrer" title={f.name}>
+        <img src={f.url} alt={f.name} loading="lazy" style={{ maxWidth: '100%', maxHeight: 260, borderRadius: 6, display: 'block' }} />
+      </a>
+    );
+  if (mime.startsWith('audio/'))
+    return (
+      <div>
+        <audio controls preload="none" src={f.url} style={{ maxWidth: '100%' }} />
+        <div className="small muted">🎤 {f.name}</div>
+      </div>
+    );
+  if (mime.startsWith('video/'))
+    return (
+      <div>
+        <video controls preload="metadata" src={f.url} style={{ maxWidth: '100%', maxHeight: 260, borderRadius: 6 }} />
+        <div className="small muted">{f.name}</div>
+      </div>
+    );
+  return (
+    <a href={f.downloadUrl} className="small" title={f.name}>
+      📄 {f.name}
+      {f.size ? ` · ${Math.max(1, Math.round(Number(f.size) / 1024))} KB` : ''}
+    </a>
+  );
+}
+
 function ChatView({ projectId, chat, canManage, onClose, onChanged }: { projectId: string; chat: Json; canManage: boolean; onClose: () => void; onChanged: () => void }) {
   const { data } = useQuery({ queryKey: ['project-chats', projectId, chat.id, 'messages'], queryFn: () => get<Json[]>(`/api/v1/projects/${projectId}/chats/${chat.id}/messages`) });
   const act = useAct();
@@ -680,12 +861,7 @@ function ChatView({ projectId, chat, canManage, onClose, onChanged }: { projectI
         ) : (
           <div className="stack" style={{ gap: 6, maxHeight: '60vh', overflowY: 'auto' }}>
             {[...data].reverse().map((m) => (
-              <div key={m.id} style={{ alignSelf: m.side === 'team' ? 'flex-end' : 'flex-start', maxWidth: '80%', background: m.side === 'team' ? 'var(--accent-soft)' : 'var(--bg-2, #f4f5f7)', borderRadius: 10, padding: '6px 10px' }}>
-                <div className="small muted">
-                  {m.sender} · {when(m.at)}
-                </div>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{m.body}</div>
-              </div>
+              <Bubble key={m.id} m={m} />
             ))}
           </div>
         )}

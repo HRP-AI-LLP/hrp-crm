@@ -50,6 +50,13 @@ describe('coding agent over MCP', () => {
     const list = await mcp('tools/list');
     expect(list.result.tools.map((t: Json) => t.name)).toEqual(expect.arrayContaining(['next_work', 'request_review', 'review_status', 'complete', 'setup_project']));
     expect((await mcp('nope')).error.code).toBe(-32601);
+    // no key, or a key of no workspace: "add your key", not "not found"
+    const bare = await h.call('POST', '/api/v1/mcp', { body: { jsonrpc: '2.0', id: 9, method: 'initialize', params: {} } });
+    expect(bare.status).toBe(401);
+    expect(bare.headers.get('www-authenticate')).toMatch(/Bearer/);
+    expect(bare.json.error).toMatchObject({ code: 'api_key_required', message: expect.stringMatching(/Authorization: Bearer syn_/) });
+    const wrong = await h.call('POST', '/api/v1/mcp', { body: {}, headers: { authorization: `Bearer syn_nosuchplace_${'x'.repeat(40)}` } });
+    expect(wrong.json.error.message).toMatch(/does not belong/);
   });
 
   it('queues items once switched on, and hands the next one to the agent with the project setup', async () => {

@@ -234,7 +234,9 @@ export async function deleteFile(ctx: RecordCtx, env: Env, id: string) {
   const f = await loadFile(ctx, id);
   await assertRecordAccess(ctx, f.object_key, f.record_id, 'update');
   await ctx.tx.query(`update files set deleted_at = now() where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
-  if (env.FILES && f.storage_key) await env.FILES.delete(f.storage_key).catch(() => undefined);
+  // a chat's photo attached to work made from it shares the stored file: keep it while one still uses it
+  const shared = f.storage_key ? await ctx.tx.one(`select 1 from files where tenant_id = $1 and storage_key = $2 and deleted_at is null limit 1`, [ctx.tenantId, f.storage_key]) : null;
+  if (env.FILES && f.storage_key && !shared) await env.FILES.delete(f.storage_key).catch(() => undefined);
   return { ok: true };
 }
 

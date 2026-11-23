@@ -55,7 +55,21 @@ export const tenantResolver: MiddlewareHandler<AppEnv> = async (c, next) => {
   // integrations may omit X-Tenant: API keys carry the workspace slug (syn_<slug>_<secret>)
   const key = apiKeyFrom(c);
   const tenant = await resolveTenant(c.env, c.var.db, host, c.req.header('x-tenant') ?? (key ? key.split('_')[1]! : null));
-  if (!tenant) throw new ApiError(404, 'tenant_not_found', 'Unknown workspace');
+  if (!tenant) {
+    // coding agents (Claude Code, Codex) on the shared host: the workspace comes from the key, so
+    // a missing or mistyped key is an authentication problem, not a missing endpoint
+    if (/^\/api\/v1\/(mcp|agent)(\/|$)/.test(new URL(c.req.url).pathname)) {
+      c.header('www-authenticate', 'Bearer realm="SanchalanOS"');
+      throw new ApiError(
+        401,
+        'api_key_required',
+        key || c.req.header('authorization')
+          ? 'This API key does not belong to a SanchalanOS workspace. Create one in SanchalanOS under Settings → API keys (it starts with syn_<your-workspace>_).'
+          : 'Send your SanchalanOS API key: claude mcp add --transport http sanchalan https://www.sanchalan.hrpai.in/api/v1/mcp --header "Authorization: Bearer syn_<workspace>_<secret>"',
+      );
+    }
+    throw new ApiError(404, 'tenant_not_found', 'Unknown workspace');
+  }
   if (tenant.status !== 'active') throw new ApiError(403, 'tenant_inactive', 'This workspace is not active');
   c.set('tenant', tenant);
   // a workspace's own keys (its own GSP account) for this request only

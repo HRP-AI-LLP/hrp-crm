@@ -81,13 +81,33 @@ function toBase64(bytes: Uint8Array) {
 }
 
 async function runNova(env: Env, audio: Uint8Array | ReadableStream, contentType: string, offset: number, prefix: string): Promise<Segment[]> {
-  const body = audio instanceof Uint8Array ? new Response(audio).body! : audio;
-  const out = await env.AI!.run(NOVA as never, { audio: { body, contentType }, diarize: true, punctuate: true, smart_format: true, utterances: true } as never);
+  const run = async (language?: string) => {
+    // a stream can be read only once: a retry without the language needs the bytes
+    const body = audio instanceof Uint8Array ? new Response(audio).body! : audio;
+    return env.AI!.run(NOVA as never, { audio: { body, contentType }, diarize: true, punctuate: true, smart_format: true, utterances: true, ...(language ? { language } : {}) } as never);
+  };
+  // Indian calls switch between Hindi and English: Nova-3's multilingual mode follows both
+  const lang = env.AI_SPEECH_LANGUAGE ?? 'multi';
+  let out: unknown;
+  try {
+    out = await run(lang || undefined);
+  } catch (e) {
+    if (!lang || !(audio instanceof Uint8Array)) throw e;
+    out = await run();
+  }
   return novaSegments(out, offset, prefix);
 }
 
+/** Whisper often names Hindi speech "Urdu" and writes it in Arabic script; Indian chats speak Hindi. */
+export const ARABIC_SCRIPT = /[\u0600-\u06FF]/;
+
 async function runWhisper(env: Env, bytes: Uint8Array, offset: number): Promise<Segment[]> {
-  const out = await env.AI!.run((env.AI_MODEL_WHISPER || WHISPER) as never, { audio: toBase64(bytes), task: 'transcribe', vad_filter: true } as never);
+  const model = (env.AI_MODEL_WHISPER || WHISPER) as never;
+  const prompt = 'Hindi, English and Hinglish business conversation. नमस्ते, ठीक है, please check the invoice.';
+  let out = (await env.AI!.run(model, { audio: toBase64(bytes), task: 'transcribe', vad_filter: true, initial_prompt: prompt } as never)) as any;
+  if (ARABIC_SCRIPT.test(String(out?.text ?? '')) || out?.transcription_info?.language === 'ur') {
+    out = await env.AI!.run(model, { audio: toBase64(bytes), task: 'transcribe', vad_filter: true, language: 'hi', initial_prompt: prompt } as never).catch(() => out);
+  }
   return whisperSegments(out, offset);
 }
 

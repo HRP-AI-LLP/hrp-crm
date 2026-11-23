@@ -113,6 +113,39 @@ describe('reading exported chats', () => {
     ]);
     expect(r.map((x) => x.kind)).toEqual(['bug', 'requirement']);
   });
+
+  it('reads exports from phones set to Hindi, and Hinglish and Hindi messages', () => {
+    const hi = parseChatExport(
+      [
+        '२२/११/२६, ४:१५ अपराह्न - रवि शर्मा: लॉगिन पेज नहीं खुल रहा',
+        '22/11/26, 4:16 अपराह्न - रवि शर्मा: IMG-20261122-WA0004.jpg (फ़ाइल संलग्न है)',
+        'ये देखिए',
+        '22/11/26, 4:17 अपराह्न - Prashant: <मीडिया छोड़ा गया>',
+        '22/11/26, 4:18 अपराह्न - रवि शर्मा: यह संदेश हटा दिया गया था',
+        '23/11/26, 9:05 पूर्वाह्न - रवि शर्मा: ok ji',
+      ].join('\n'),
+    );
+    expect(hi.map((x) => [x.sender, x.body, x.attachment, x.at.toISOString()])).toEqual([
+      ['रवि शर्मा', 'लॉगिन पेज नहीं खुल रहा', null, '2026-11-22T10:45:00.000Z'],
+      ['रवि शर्मा', 'ये देखिए', 'IMG-20261122-WA0004.jpg', '2026-11-22T10:46:00.000Z'],
+      ['Prashant', '[media]', null, '2026-11-22T10:47:00.000Z'],
+      ['रवि शर्मा', 'ok ji', null, '2026-11-23T03:35:00.000Z'],
+    ]);
+    const at = '2026-11-22T04:00:00Z';
+    const r = ruleProposals(
+      [
+        'sir report download nahi ho raha',
+        'invoice me GST number bhi chahiye',
+        'logo ki jagah naya wala laga do, purana badal do',
+        'kal 4 baje call pe baat karte hain',
+        'payment kab tak milega',
+        'रिपोर्ट नहीं खुल रही',
+        'डैशबोर्ड में फ्यूल का खर्च भी चाहिए',
+        'thik hai',
+      ].map((body) => ({ sender: 'Ravi', side: 'client', body, at })),
+    );
+    expect(r.map((x) => x.kind)).toEqual(['bug', 'requirement', 'change_request', 'call', 'question', 'bug', 'requirement']);
+  });
 });
 
 describe('a customer chat on a project', () => {
@@ -294,7 +327,7 @@ describe('an exported chat with its media', () => {
           response: JSON.stringify({
             summary: 'The PDF export fails; a driver app is wanted; the agreement says delivery in 6 weeks.',
             items: [
-              { type: 'bug', title: 'PDF export fails with error 500 on reports', priority: 'high', message: 1, confidence: 0.9 },
+              { type: 'bug', title: 'PDF export fails with error 500 on reports', priority: 'high', message: 0, messages: [0], confidence: 0.9 },
               { type: 'requirement', title: 'Driver app for Android', message: 2, confidence: 0.85 },
             ],
           }),
@@ -332,6 +365,36 @@ describe('an exported chat with its media', () => {
     expect(seen.pop()).toContain('PDF export failed (500)');
     const kinds = (await sql(`select kind, title from project_chat_proposals where chat_id = $1 order by created_at`, [r.json.chatId])).map((x) => x.title);
     expect(kinds).toEqual(['PDF export fails with error 500 on reports', 'Driver app for Android']);
+
+    // a suggestion in full: the messages behind it, with the screenshot to look at
+    const bug = (await sql(`select id from project_chat_proposals where chat_id = $1 and kind = 'bug'`, [r.json.chatId]))[0]!.id;
+    const d = await api('GET', `/api/v1/projects/${ids.project}/chat-proposals/${bug}`);
+    expect(d.status, JSON.stringify(d.json)).toBe(200);
+    const cited = d.json.messages.filter((m: Json) => m.cited);
+    expect(cited).toHaveLength(1);
+    expect(cited[0].file).toMatchObject({ id: shot, type: 'image', mime: 'image/jpeg', url: expect.stringContaining('/api/public/files/') });
+    // the chat view shows files too
+    const cm = (await api('GET', `${P()}/chats/${r.json.chatId}/messages`)).json as Json[];
+    expect(cm.find((m) => m.file?.type === 'audio')?.file.name).toBe('PTT-20260903-WA0004.opus');
+
+    // the same bug reported again in another chat joins the waiting suggestion, with its evidence
+    const again = await api('POST', `${P()}/chats/import`, { title: 'Meena again', text: '04/09/2026, 10:00 am - Meena (Client): PDF export still fails with error 500 on the reports page\n04/09/2026, 10:01 am - Owner: ok', teamNames: ['Owner'] });
+    const before = (await sql(`select count(*)::int n from project_chat_proposals where project_id = $1 and status = 'proposed'`, [ids.project]))[0]!.n;
+    const second = await api('POST', `${P()}/chats/${again.json.chatId}/analyse`);
+    expect(second.json).toMatchObject({ proposals: 0, merged: 2 });
+    expect((await sql(`select count(*)::int n from project_chat_proposals where project_id = $1 and status = 'proposed'`, [ids.project]))[0]!.n).toBe(before);
+    expect((await sql(`select cardinality(message_ids) n from project_chat_proposals where id = $1`, [bug]))[0]!.n).toBe(2);
+
+    // creating it: the conversation is in the description and the screenshot is attached
+    const made = await api('POST', `/api/v1/projects/${ids.project}/chat-proposals/${bug}/accept`, {});
+    expect(made.status, JSON.stringify(made.json)).toBe(200);
+    expect(made.json).toMatchObject({ object: 'task', attached: 1 });
+    const task = (await sql(`select description from project_tasks where id = $1`, [made.json.id]))[0]!;
+    expect(task.description).toContain('**From the chat**');
+    expect(task.description).toContain('📎 00000012-PHOTO-2026-09-02-10-15-30.jpg');
+    expect(task.description).toContain('PDF export still fails');
+    const att = (await api('GET', `/api/v1/projects/${ids.project}/work/items/${made.json.id}/files`)).json as Json[];
+    expect(att.map((f) => f.name)).toEqual(['00000012-PHOTO-2026-09-02-10-15-30.jpg']);
     h.env.AI = oldAi;
   });
 });

@@ -30,6 +30,8 @@ export interface Env {
   AI_MODEL_WHISPER?: string;
   /** Workers AI model that describes pictures when the workspace has no vision model of its own */
   AI_MODEL_VISION?: string;
+  /** Deepgram Nova-3 language for calls: 'multi' (Hindi + English, the default), 'hi', 'en', or '' for Nova's own default */
+  AI_SPEECH_LANGUAGE?: string;
   AI_MODEL_GEMINI?: string;
   AI_EMBEDDING_MODEL?: string;
   CF_ZONE_ID?: string;
