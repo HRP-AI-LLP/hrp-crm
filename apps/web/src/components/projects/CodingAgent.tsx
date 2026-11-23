@@ -199,11 +199,10 @@ function RepoKeys({ projectId }: { projectId: string }) {
               Copy .mcp.json
             </button>
           </div>
-          <div className="small">
-            <b>2. Then ask Claude Code</b> in that folder (terminal or the desktop app): <i>“Queue all open bugs and tasks on the board and fix them one by one; ask me to review each before committing.”</i>
-          </div>
+          <div className="notice small">Keep the key to yourself: do not paste it into chats, mails or tickets. If it was shared, revoke it below and make a new one.</div>
         </div>
       )}
+      <HowToStart />
       {live.length > 0 && (
         <table className="data small">
           <thead>
@@ -244,6 +243,59 @@ function RepoKeys({ projectId }: { projectId: string }) {
         </table>
       )}
     </section>
+  );
+}
+
+const ASK_WORK = 'Queue the open bugs and tasks on the SanchalanOS board and fix them one by one. For each, request a review and wait for my approval before committing.';
+const ASK_BUILD = 'Look at this repository and tell me, in a few lines, how to build it, run it and run its tests on Windows.';
+
+/** After the key: where to talk to Claude Code, and what to say. */
+function HowToStart() {
+  const toast = useToast();
+  const copy = (t: string) => navigator.clipboard?.writeText(t).then(() => toast('Copied'), () => undefined);
+  const Ask = ({ text }: { text: string }) => (
+    <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+      <div className="code-block" style={{ flex: 1, whiteSpace: 'pre-wrap', margin: 0 }}>
+        {text}
+      </div>
+      <button className="btn sm" onClick={() => copy(text)}>
+        Copy
+      </button>
+    </div>
+  );
+  return (
+    <details className="small">
+      <summary style={{ cursor: 'pointer' }}>
+        <b>How to start working with Claude Code</b>
+      </summary>
+      <ol style={{ margin: '8px 0 0', paddingLeft: 18, display: 'grid', gap: 8 }}>
+        <li>
+          <b>Open Claude Code in the repository folder</b> — the folder where you ran the command above:
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+            <li>
+              Terminal: go to the folder (<code>cd</code>) and type <code>claude</code>.
+            </li>
+            <li>Claude desktop app: start a new Code session on your own computer (not in the cloud) and choose that folder.</li>
+          </ul>
+          The connection is kept for that folder only; another folder (or a cloud session) does not see it.
+        </li>
+        <li>
+          <b>Check it is connected</b> (optional): type <code>/mcp</code> — “sanchalan” should be listed as connected. <code>/mcp</code> only shows the connection; the work is asked for in plain words, next.
+        </li>
+        <li>
+          <b>Ask in the chat, as a normal message:</b>
+          <Ask text={ASK_WORK} />
+          The first time it uses a SanchalanOS tool, Claude Code asks for permission: allow it.
+        </li>
+        <li>
+          <b>Review each fix here</b>, under Jobs below (or on the item): Approve — it commits and pushes — or Request changes with a note; Claude carries on from there.
+        </li>
+        <li>
+          <b>Build and test commands (optional).</b> The instructions box above can stay empty: Claude works out how to build and test from the repository. To save it the trouble each time, ask it once and paste its answer into the instructions box:
+          <Ask text={ASK_BUILD} />
+        </li>
+      </ol>
+    </details>
   );
 }
 
@@ -338,7 +390,7 @@ export function CodingAgent({ id, manage }: { id: string; manage: boolean }) {
           </label>
         </div>
         <label className="field">
-          Instructions for the agent (stack, build and test commands, conventions)
+          Instructions for the agent (optional: stack, build and test commands, conventions — left empty, Claude works them out from the repository)
           <textarea disabled={!manage} rows={4} placeholder={'pnpm install\npnpm test\nBranches: sanchalan/<KEY>-<short-title>. Keep changes small; add tests.'} value={cfg.instructions ?? ''} onChange={(e) => change({ instructions: e.target.value })} />
         </label>
         {manage && (
