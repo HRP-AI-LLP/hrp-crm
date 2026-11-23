@@ -13,6 +13,8 @@ import { scope } from '../middleware';
 import * as ag from '../services/coding-agent';
 import * as sd from '../services/sdlc';
 import * as pd from '../services/project-docs';
+import * as rd from '../services/release-dist';
+import { appOrigin } from '../services/mailer';
 import { DIAGRAM_TYPES, type DiagramType, specGuide } from '@synapse/shared/diagrams';
 import type { RecordCtx } from '../services/records';
 
@@ -238,6 +240,24 @@ const TOOLS: Tool[] = [
     inputSchema: obj({ project: str('Project id, key or name (leave out when this repository is linked to one project)'), title: str('Title'), spec: { type: 'object', description: 'Diagram spec (see diagram_format)' }, mermaid: str('Or: Mermaid source') }, ['title']),
     run: (c, a) =>
       run(c, async (ctx) => sd.createArtifact(ctx, { kind: 'diagram', projectId: (await ag.projectSetup(ctx, String(a.project ?? ''))).project.id, title: String(a.title).slice(0, 200), subtype: 'custom', spec: a.spec, mermaid: a.mermaid ? String(a.mermaid) : null })),
+  },
+  {
+    name: 'release_channels',
+    description: 'The Google Drive release channels for this project: their channelId, version, status, whether they are ready (account + recipient set), and whether the build carries client data. Use before a release to find the channelId to publish.',
+    inputSchema: obj({}),
+    run: (c) => run(c, (ctx) => rd.agentReleaseChannels(ctx as ag.AgentCtx)),
+  },
+  {
+    name: 'release_upload_url',
+    description: 'Start uploading a built installer to the channel’s Google Drive account/folder. Returns an uploadUrl — PUT the installer bytes straight to it (any size; it goes direct to Google), then read the file id from Google’s response and call release_publish. Use this from the build machine after compiling.',
+    inputSchema: obj({ channelId: str('From release_channels'), fileName: str('The installer file name, e.g. CPFSlipsApp-1.1.0-setup.exe'), contentType: str('Optional MIME type (default application/octet-stream)') }, ['channelId', 'fileName']),
+    run: (c, a) => run(c, (ctx) => rd.agentUploadUrl(ctx as ag.AgentCtx, c.env, String(a.channelId), String(a.fileName), a.contentType ? String(a.contentType) : undefined)),
+  },
+  {
+    name: 'release_publish',
+    description: 'Share a build that is now in Drive (from release_upload_url) with the channel’s recipient — restricted to them, or public only for a data-free build — and send them the link on WhatsApp. Finishes the release.',
+    inputSchema: obj({ channelId: str('From release_channels'), driveFileId: str('The Drive file id returned after the upload') }, ['channelId', 'driveFileId']),
+    run: (c, a) => run(c, (ctx) => rd.agentPublish(ctx as ag.AgentCtx, c.env, appOrigin(c.env, c.req.url), String(a.channelId), String(a.driveFileId))),
   },
   {
     name: 'save_document',

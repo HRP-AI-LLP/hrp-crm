@@ -272,7 +272,35 @@ export async function releaseDetail(ctx: RecordCtx, env: Env, projectId: string,
   const { signedFileUrl } = await import('./files');
   const fileMap = new Map<string, Record<string, unknown>>();
   for (const f of files) fileMap.set(f.id, { id: f.id, name: f.name, size: Number(f.size_bytes), type: f.content_type, url: await signedFileUrl(env, ctx.tenantId, f.id, false) });
-  return { ...r, sprints, items, channels: channels.map((c) => ({ ...c, files: (c.file_ids as string[]).map((id) => fileMap.get(id)).filter(Boolean) })) };
+  const runbook = buildRunbook(r, channels);
+  return { ...r, sprints, items, runbook, channels: channels.map((c) => ({ ...c, files: (c.file_ids as string[]).map((id) => fileMap.get(id)).filter(Boolean) })) };
+}
+
+/**
+ * The commands to run on the build machine to ship this release, generated from the channels. Shown on
+ * every release so the offline steps always travel with it, not just in a chat message.
+ */
+function buildRunbook(release: Record<string, any>, channels: Record<string, any>[]) {
+  const version = release.version || release.name;
+  const steps: { title: string; commands: string[]; note: string }[] = [];
+  for (const c of channels) {
+    if (c.method !== 'google_drive') continue;
+    const skip = c.contains_client_data ? '' : ' -SkipDatabase';
+    const who = c.recipients ? c.recipients : 'the recipient';
+    const access = c.contains_client_data || c.share_access === 'restricted' ? `shares it with ${who} (sign-in required)` : 'shares it as a public link';
+    steps.push({
+      title: 'Build & ship to Google Drive + WhatsApp',
+      commands: [`pwsh ./scripts/Publish-Release.ps1 -Version ${version} -ChannelId ${c.id}${skip}`],
+      note: `Run on the Windows build machine. Builds the signed installer${c.contains_client_data ? ' (with the member database)' : ' (no client data)'}, uploads it to Google Drive${c.drive_folder_id ? '' : ' (My Drive)'}, ${access}, and sends them the link on WhatsApp. Set SANCHALAN_URL and SANCHALAN_KEY (your project’s coding-agent key) once in the environment first.`,
+    });
+  }
+  if (!steps.length)
+    steps.push({
+      title: 'Build the release',
+      commands: [`pwsh ./scripts/Publish-Release.ps1 -Version ${version}`],
+      note: 'Add a Google Drive channel (account + recipient) to this release to upload and send it automatically.',
+    });
+  return steps;
 }
 
 /** Sprints that feed a release (a sprint feeds one release). */

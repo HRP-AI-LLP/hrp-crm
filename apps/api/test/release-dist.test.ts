@@ -30,6 +30,9 @@ beforeAll(async () => {
   Object.assign(h.env, { GOOGLE_CLIENT_ID: 'gid', GOOGLE_CLIENT_SECRET: 'gsecret' });
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
+    if (url.includes('/upload/drive') && url.includes('uploadType=resumable')) {
+      return new Response('', { status: 200, headers: { location: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=SESSION1' } });
+    }
     if (url.startsWith('https://www.googleapis.com/upload/drive')) {
       drive.uploads++;
       return Response.json({ id: 'DRIVEFILE1', webViewLink: 'https://drive.google.com/file/d/DRIVEFILE1/view' });
@@ -162,6 +165,42 @@ describe('Google Drive delivery', () => {
     expect(drive.uploads).toBe(0); // used the existing Drive file, not a re-upload
     expect(drive.perms).toEqual([{ role: 'reader', type: 'user', emailAddress: 'deepak@fci.gov.in' }]);
     expect(r.json.link).toContain('BIGINSTALLER9');
+  });
+
+  it('the build machine ships a release through the project key (upload URL → publish)', async () => {
+    const fileId = await file('CPFSlipsApp-1.1.0-setup.exe');
+    const ch = await api('POST', `/api/v1/projects/${ids.project}/agile/releases/${ids.release}/channels`, {
+      platform: 'windows',
+      method: 'google_drive',
+      containsClientData: true,
+      driveAccountId: ids.drive,
+      driveFolderId: 'FOLDER1',
+      recipientObject: 'contact',
+      recipientId: ids.contact,
+      fileIds: [fileId],
+    });
+    const channelId = ch.json.id;
+    const keyRes = await api('POST', `/api/v1/projects/${ids.project}/agent/keys`, { name: 'Build machine' });
+    expect(keyRes.status, JSON.stringify(keyRes.json)).toBe(201);
+    const key = keyRes.json.key as string;
+    const mcp = async (name: string, args: Json) => {
+      const r = await h.call('POST', '/api/v1/mcp', { body: { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name, arguments: args } }, headers: { authorization: `Bearer ${key}` } });
+      expect(r.status, JSON.stringify(r.json)).toBe(200);
+      return r.json.result.structuredContent as Json;
+    };
+    // find the channel over MCP
+    const chans = await mcp('release_channels', {});
+    expect((chans.channels as Json[]).find((x) => x.channelId === channelId)).toMatchObject({ version: '1.1.0', containsClientData: true, ready: true });
+    // get a direct-to-Drive upload URL
+    const up = await mcp('release_upload_url', { channelId, fileName: 'CPFSlipsApp-1.1.0-setup.exe' });
+    expect(up.uploadUrl).toContain('upload_id=SESSION1');
+    // after the script PUTs the bytes and gets a file id, publish it
+    drive.perms = [];
+    waSent = null;
+    const done = await mcp('release_publish', { channelId, driveFileId: 'UPLOADEDBYBUILD' });
+    expect(done).toMatchObject({ access: 'restricted', sharedWith: 'deepak@fci.gov.in', whatsapp: 'sent' });
+    expect(drive.perms).toEqual([{ role: 'reader', type: 'user', emailAddress: 'deepak@fci.gov.in' }]);
+    expect(waSent!.text).toContain('https://drive.google.com/file/d/UPLOADEDBYBUILD/view');
   });
 
   it('a data-free build may be shared as a public link', async () => {

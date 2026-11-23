@@ -97,6 +97,8 @@ export const publishSchema = z.object({
   /** the recipient's e-mail for a restricted Drive share, when their record has none */
   recipientEmail: z.string().email().nullish(),
   message: z.string().trim().max(2000).nullish(),
+  /** a build the script just uploaded to Drive — share and send this instead of uploading */
+  driveFileId: z.string().trim().max(200).nullish(),
 });
 
 /**
@@ -111,9 +113,9 @@ export async function publishChannel(ctx: RecordCtx, env: Env, origin: string, p
   if (ch.contains_client_data && ch.share_access === 'public') throw badRequest('A build that includes client data cannot be shared publicly. Share it with the recipient only, or build without the data to share a public link.');
   if (!ch.drive_account_id) throw badRequest('Choose the Google account to upload to');
   if (!ch.recipient_object || !ch.recipient_id) throw badRequest('Choose the person to send the link to');
-  const storedFileId = (ch.file_ids as string[])[0];
-  // a big installer the build script already uploaded to Drive: give its link or id instead of attaching it
-  const existingDriveId = ch.drive_file_id || driveIdFromUrl(ch.url);
+  // a build the script just uploaded (driveFileId), one already in Drive (link/id), or one attached here
+  const existingDriveId = input.driveFileId || ch.drive_file_id || driveIdFromUrl(ch.url);
+  const storedFileId = existingDriveId ? null : (ch.file_ids as string[])[0];
   if (!storedFileId && !existingDriveId) throw badRequest('Attach the build to this channel, or give the Drive link of the already-uploaded build');
 
   const acc = await ctx.tx.one<{ id: string; tenant_id: string; provider: string; account_ref: string; secret_ciphertext: string | null; config: Record<string, any> }>(
@@ -176,6 +178,81 @@ export async function publishChannel(ctx: RecordCtx, env: Env, origin: string, p
     [ctx.tenantId, channelId, driveFileId, link, recipient?.name ?? recipientEmail ?? null, wa.messageId, JSON.stringify(done), wa.status],
   );
   return { link, driveFileId: driveFileId, access: ch.share_access, sharedWith: ch.share_access === 'public' ? 'anyone with the link' : recipientEmail, whatsapp: wa.status, whatsappError: wa.error ?? null };
+}
+
+// ── Automation from the build machine (via the project's MCP key) ───────────────────────────────
+
+import type { AgentCtx } from './coding-agent';
+
+function agentProjectId(ctx: AgentCtx): string {
+  const p = ctx.agentProject;
+  if (!p) throw badRequest('This key is not tied to a project');
+  return p.id;
+}
+
+/** The Google Drive release channels of the pinned project, so the script can find the one to publish. */
+export async function agentReleaseChannels(ctx: AgentCtx) {
+  const projectId = agentProjectId(ctx);
+  const rows = await ctx.tx.query<Record<string, any>>(
+    `select ch.id, ch.status, ch.contains_client_data, ch.share_access, ch.drive_account_id, ch.drive_folder_id, ch.recipient_id,
+            r.id as release_id, r.name as release_name, r.version, r.status as release_status
+       from project_release_channels ch join project_releases r on r.tenant_id = ch.tenant_id and r.id = ch.release_id
+      where ch.tenant_id = $1 and ch.project_id = $2 and ch.method = 'google_drive'
+      order by r.created_at desc, ch.created_at`,
+    [ctx.tenantId, projectId],
+  );
+  return {
+    channels: rows.map((c) => ({
+      channelId: c.id,
+      release: c.release_name,
+      version: c.version,
+      status: c.status,
+      containsClientData: c.contains_client_data,
+      access: c.share_access,
+      ready: !!(c.drive_account_id && c.recipient_id),
+      folderId: c.drive_folder_id,
+    })),
+  };
+}
+
+async function agentChannel(ctx: AgentCtx, channelId: string) {
+  const projectId = agentProjectId(ctx);
+  const ch = await ctx.tx.one<Record<string, any>>(`select * from project_release_channels where tenant_id = $1 and id = $2 and project_id = $3 and method = 'google_drive'`, [ctx.tenantId, channelId, projectId]);
+  if (!ch) throw notFound('Drive channel not found for this project');
+  return ch;
+}
+
+/**
+ * Starts a resumable upload straight to the channel's Drive account and folder, and returns the URL the
+ * build machine PUTs the installer bytes to. The upload goes directly to Google, so any size works and
+ * the file never passes through here.
+ */
+export async function agentUploadUrl(ctx: AgentCtx, env: Env, channelId: string, fileName: string, contentType = 'application/octet-stream') {
+  const ch = await agentChannel(ctx, channelId);
+  if (!ch.drive_account_id) throw badRequest('Set the Google account on this channel first');
+  const acc = await ctx.tx.one<Record<string, any>>(`select * from integrations where tenant_id = $1 and id = $2 and provider = 'google' and status = 'active'`, [ctx.tenantId, ch.drive_account_id]);
+  if (!acc) throw badRequest('That Google account is no longer connected');
+  const token = await mailboxToken(env, ctx.tx, acc as never);
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json; charset=UTF-8', 'x-upload-content-type': contentType },
+    body: JSON.stringify({ name: fileName.replace(/[\r\n]/g, ''), ...(ch.drive_folder_id ? { parents: [ch.drive_folder_id] } : {}) }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    if (res.status === 403 && /insufficient|scope/i.test(t)) throw badRequest('This Google account cannot use Drive yet — reconnect it to grant Drive access.');
+    throw new ProviderError(`Google Drive: could not start the upload (${res.status})`, res.status);
+  }
+  const uploadUrl = res.headers.get('location');
+  if (!uploadUrl) throw new ProviderError('Google Drive did not return an upload URL', 502);
+  return { uploadUrl, fileName, folderId: ch.drive_folder_id ?? null, note: 'PUT the installer bytes to uploadUrl, then call release_publish with the file id Google returns.' };
+}
+
+/** Shares a build that is already in Drive with the recipient (or publicly) and WhatsApps them the link. */
+export async function agentPublish(ctx: AgentCtx, env: Env, origin: string, channelId: string, driveFileId: string) {
+  const ch = await agentChannel(ctx, channelId);
+  return publishChannel(ctx, env, origin, ch.project_id, ch.release_id, channelId, { driveFileId });
 }
 
 export { RECIPIENT_OBJECTS };

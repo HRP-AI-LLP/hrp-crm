@@ -412,6 +412,29 @@ function ReleaseDetail({ projectId, releaseId, manage, onClose, onEdit }: { proj
           )}
         </section>
 
+        {!!(r.runbook as Json[] | undefined)?.length && (
+          <section>
+            <h4 style={{ margin: '0 0 6px' }}>Run on your machine</h4>
+            <p className="small muted" style={{ margin: '0 0 8px' }}>These steps can’t run in the cloud (the installer is built and signed on your Windows machine). Run them there — they’re generated for this release and travel with every release.</p>
+            <div className="stack" style={{ gap: 8 }}>
+              {(r.runbook as Json[]).map((s, i) => (
+                <div key={i} className="stack" style={{ gap: 4, border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}>
+                  <b className="small">{s.title}</b>
+                  {(s.commands as string[]).map((cmd, j) => (
+                    <div key={j} className="row" style={{ gap: 6, alignItems: 'center' }}>
+                      <code style={{ flex: 1, background: 'var(--bg-subtle, #f4f4f5)', padding: '6px 8px', borderRadius: 6, fontSize: 12, overflowX: 'auto', whiteSpace: 'pre' }}>{cmd}</code>
+                      <button type="button" className="btn sm ghost" title="Copy" onClick={() => navigator.clipboard?.writeText(cmd)}>
+                        Copy
+                      </button>
+                    </div>
+                  ))}
+                  <small className="muted">{s.note}</small>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section>
           <h4 style={{ margin: '0 0 6px' }}>
             Work in it ({done}/{(r.items as Json[]).length} done)
