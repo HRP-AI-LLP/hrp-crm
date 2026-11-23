@@ -92,7 +92,8 @@ describe('projects', () => {
     // members cannot set rates
     expect((await dev('PATCH', `/api/v1/projects/${ids.project}/tasks/${ids.taskB}`, { rate: 99 })).status).toBe(403);
     const p = (await pm('GET', `/api/v1/projects/${ids.project}`)).json.project;
-    expect(p.progress).toBe(50); // two top-level tasks of 8h, one done
+    // progress is the milestones delivered (none yet), not the tasks; tasks drive the boards
+    expect(p.progress).toBe(0);
     // the outsider cannot see the project's insides
     expect((await outsider('GET', `/api/v1/projects/${ids.project}/tasks`)).status).toBe(403);
     // assignees are notified

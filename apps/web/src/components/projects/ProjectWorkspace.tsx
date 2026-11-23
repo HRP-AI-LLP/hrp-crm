@@ -175,7 +175,11 @@ function Overview({ id, data }: { id: string; data: Json }) {
   return (
     <div className="stack">
       <div className="kpis" style={{ margin: 0 }}>
-        <Kpi l="Progress" v={`${Math.round(s.progress)}%`} sub={`${t.done ?? 0} of ${total} tasks done`} />
+        <Kpi
+          l="Progress"
+          v={`${Math.round(s.progress)}%`}
+          sub={s.milestones?.total ? `${s.milestones.done} of ${s.milestones.total} milestones done · ${t.done ?? 0} of ${total} tasks` : `${t.done ?? 0} of ${total} tasks done (add milestones to track delivery)`}
+        />
         <Kpi l="Overdue tasks" v={String(s.overdueTasks)} tone={s.overdueTasks ? 'bad' : undefined} sub={`${s.issues?.open ?? 0} open issues (${s.issues?.critical ?? 0} critical)`} />
         <Kpi l="Hours logged" v={String(s.hours.logged)} sub={`${s.hours.billable} billable · ${s.hours.estimated} estimated`} />
         {s.budget && <Kpi l={`Budget (${s.budget.type})`} v={s.budget.pct != null ? `${s.budget.pct}%` : '—'} tone={s.budget.pct > 100 ? 'bad' : undefined} sub={`${s.budget.type === 'hours' ? s.budget.used : money2(s.budget.used)} of ${s.budget.type === 'hours' ? s.budget.planned : money2(s.budget.planned)}`} />}
@@ -183,7 +187,11 @@ function Overview({ id, data }: { id: string; data: Json }) {
       </div>
       {s.money && (
         <div className="kpis" style={{ margin: 0 }}>
-          <Kpi l="Invoiced" v={money2(s.money.revenue)} sub={`${money2(s.money.unbilled)} approved, not billed`} />
+          <Kpi
+            l="Invoiced"
+            v={money2(s.money.revenue)}
+            sub={[s.money.milestonesUninvoiced ? `${money2(s.money.milestonesUninvoiced)} of milestones done, not invoiced` : null, s.money.unbilled ? `${money2(s.money.unbilled)} of time approved, not billed` : null].filter(Boolean).join(' · ') || 'Before GST; invoices of the project and its milestones'}
+          />
           <Kpi l="Cost" v={money2(s.money.cost)} sub={`Labour ${money2(s.money.labourCost)}${s.money.fixedPay ? ` (fixed pay ${money2(s.money.fixedPay)})` : ''}${s.money.commission ? ` (commission ${money2(s.money.commission)})` : ''} · expenses ${money2(s.money.expenses)} · bills ${money2(s.money.bills)}`} />
           <Kpi l="Profit" v={money2(s.money.profit)} tone={s.money.profit < 0 ? 'bad' : 'good'} sub={s.money.margin != null ? `Margin ${s.money.margin}%` : undefined} />
         </div>

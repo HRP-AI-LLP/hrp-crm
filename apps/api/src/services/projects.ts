@@ -192,16 +192,32 @@ export async function setMembers(ctx: RecordCtx, id: string, members: MemberInpu
   await notify(ctx, added, `You were added to project ${project.name}`, `/projects/${id}`);
 }
 
+/**
+ * A project's progress is how much of what was agreed is delivered: its milestones, weighted by
+ * their amounts when every one has an amount, else counted equally; a milestone counts when it is
+ * done (accepted by the customer). Without milestones, its tasks (weighted by estimate). Tasks
+ * drive the boards, backlog and sprints, not this figure.
+ */
+export const PROGRESS_SQL = `coalesce(
+    (select case when count(*) = 0 then null
+                 when bool_and(coalesce(m.amount, 0) > 0) then round(100 * coalesce(sum(m.amount) filter (where m.status = 'done'), 0) / sum(m.amount), 2)
+                 else round(100.0 * count(*) filter (where m.status = 'done') / count(*), 2) end
+       from project_milestones m where m.tenant_id = p.tenant_id and m.project_id = p.id),
+    (select round(sum(case when t.status = 'done' then 100 else t.progress end * coalesce(nullif(t.estimate_hours, 0), 1)) / nullif(sum(coalesce(nullif(t.estimate_hours, 0), 1)), 0), 2)
+       from project_tasks t where t.tenant_id = p.tenant_id and t.project_id = p.id and t.parent_id is null and t.status <> 'cancelled'),
+    0)`;
+
 export async function refreshProgress(tx: Tx, tenantId: string, projectId: string) {
-  // weighted by estimate when tasks have one; sub-tasks count through their parents
-  await tx.query(
-    `update projects p set progress = coalesce((
-        select round(sum(case when t.status = 'done' then 100 else t.progress end * coalesce(nullif(t.estimate_hours, 0), 1)) / nullif(sum(coalesce(nullif(t.estimate_hours, 0), 1)), 0), 2)
-          from project_tasks t where t.tenant_id = p.tenant_id and t.project_id = p.id and t.parent_id is null and t.status <> 'cancelled'), 0)
-      where p.tenant_id = $1 and p.id = $2`,
-    [tenantId, projectId],
-  );
+  await tx.query(`update projects p set progress = ${PROGRESS_SQL} where p.tenant_id = $1 and p.id = $2`, [tenantId, projectId]);
 }
+
+/**
+ * The project's invoices: those booked to it, and those raised for its milestones (on the milestone,
+ * or linked to it as its invoice). $1 tenant, $2 project; alias i.
+ */
+export const PROJECT_INVOICES = `(i.project_id = $2
+    or i.id in (select m.invoice_id from project_milestones m where m.tenant_id = $1 and m.project_id = $2 and m.invoice_id is not null)
+    or i.id in (select l.target_id from milestone_links l join project_milestones m on m.tenant_id = l.tenant_id and m.id = l.milestone_id where l.tenant_id = $1 and m.project_id = $2 and l.kind = 'invoice'))`;
 
 /** Copies a project's milestones, lists, tasks and dependencies (dates shifted to a new start). */
 export async function duplicateProject(ctx: RecordCtx, id: string, input: { name: string; startDate?: string | null; accountId?: string | null }) {
@@ -278,6 +294,13 @@ async function checkEvidence(ctx: RecordCtx, project: Record<string, any>, fileI
 }
 
 export async function saveMilestone(ctx: RecordCtx, projectId: string, id: string | null, input: MilestoneInput) {
+  const r = await saveMilestoneRow(ctx, projectId, id, input);
+  // a milestone done (or added, or its amount changed) moves the project's progress
+  await refreshProgress(ctx.tx, ctx.tenantId, projectId);
+  return r;
+}
+
+async function saveMilestoneRow(ctx: RecordCtx, projectId: string, id: string | null, input: MilestoneInput) {
   const { project } = await projectAccess(ctx, projectId, 'manage');
   if (input.ownerId && !(await workers(ctx.tx, ctx.tenantId, project)).has(input.ownerId)) throw badRequest('The milestone owner must be on the project');
   if (input.startDate && input.dueDate && input.dueDate < input.startDate) throw badRequest('The due date is before the start');
@@ -380,6 +403,7 @@ export async function linkMilestone(ctx: RecordCtx, projectId: string, id: strin
     if (m.status !== 'done') throw badRequest('Mark the milestone done (with the customer\'s approval) before linking invoices and payments');
     if (!(await ctx.tx.one(`select 1 from ${LINK_TABLE[kind]} where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, targetId]))) throw notFound('Document not found');
     await ctx.tx.query(`insert into milestone_links (tenant_id, milestone_id, kind, target_id) values ($1,$2,$3,$4) on conflict do nothing`, [ctx.tenantId, id, kind, targetId]);
+    if (kind === 'invoice') await ctx.tx.query(`update invoices set project_id = $3 where tenant_id = $1 and id = $2 and project_id is null`, [ctx.tenantId, targetId, projectId]);
   } else await ctx.tx.query(`delete from milestone_links where tenant_id = $1 and milestone_id = $2 and kind = $3 and target_id = $4`, [ctx.tenantId, id, kind, targetId]);
   return { ok: true };
 }
@@ -425,6 +449,7 @@ export async function deleteMilestone(ctx: RecordCtx, projectId: string, id: str
   if (!m) throw notFound('Milestone not found');
   if (m.invoice_id) throw badRequest('This milestone is invoiced');
   await ctx.tx.query(`delete from project_milestones where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
+  await refreshProgress(ctx.tx, ctx.tenantId, projectId);
 }
 
 export async function saveList(ctx: RecordCtx, projectId: string, id: string | null, input: { name: string; milestoneId?: string | null; position?: number }) {
@@ -1061,7 +1086,7 @@ export async function unbilled(ctx: RecordCtx, projectId: string, upTo = today()
     [ctx.tenantId, projectId],
   );
   const invoiced = await ctx.tx.one<{ v: number }>(
-    `select coalesce(sum(case when doc_type = 'credit_note' then -taxable_total else taxable_total end), 0)::float8 as v from invoices where tenant_id = $1 and project_id = $2 and status not in ('draft','cancelled') and deleted_at is null`,
+    `select coalesce(sum(case when i.doc_type = 'credit_note' then -i.taxable_total else i.taxable_total end), 0)::float8 as v from invoices i where i.tenant_id = $1 and ${PROJECT_INVOICES} and i.status not in ('draft','cancelled') and i.deleted_at is null`,
     [ctx.tenantId, projectId],
   );
   // milestones already invoiced: their invoice and what is still due on it
@@ -1171,10 +1196,10 @@ export { releaseInvoice } from './project-links';
 export async function projectEconomics(tx: Tx, tenantId: string, projectId: string) {
   const one = async (q: string) => Number((await tx.one<{ v: number }>(q, [tenantId, projectId]))?.v ?? 0);
   const invoiced = await one(
-    `select coalesce(sum(case when doc_type = 'credit_note' then -taxable_total else taxable_total end * exchange_rate), 0)::float8 as v from invoices where tenant_id = $1 and project_id = $2 and status not in ('draft','cancelled') and deleted_at is null`,
+    `select coalesce(sum(case when i.doc_type = 'credit_note' then -i.taxable_total else i.taxable_total end * i.exchange_rate), 0)::float8 as v from invoices i where i.tenant_id = $1 and ${PROJECT_INVOICES} and i.status not in ('draft','cancelled') and i.deleted_at is null`,
   );
   const collected = await one(
-    `select coalesce(sum(case when grand_total > 0 then amount_paid * taxable_total / grand_total else 0 end * exchange_rate), 0)::float8 as v from invoices where tenant_id = $1 and project_id = $2 and doc_type = 'tax_invoice' and status not in ('draft','cancelled') and deleted_at is null`,
+    `select coalesce(sum(case when i.grand_total > 0 then i.amount_paid * i.taxable_total / i.grand_total else 0 end * i.exchange_rate), 0)::float8 as v from invoices i where i.tenant_id = $1 and ${PROJECT_INVOICES} and i.doc_type = 'tax_invoice' and i.status not in ('draft','cancelled') and i.deleted_at is null`,
   );
   const expenses = await one(`select coalesce(sum(taxable_amount * exchange_rate), 0)::float8 as v from expenses where tenant_id = $1 and project_id = $2 and status in ('approved','recorded','reimbursed') and deleted_at is null`);
   const bills = await one(
@@ -1219,9 +1244,16 @@ export async function projectSummary(ctx: RecordCtx, projectId: string) {
        from time_entries where tenant_id = $1 and project_id = $2`,
     [ctx.tenantId, projectId],
   );
+  const ms = await ctx.tx.one<{ total: number; done: number; done_uninvoiced: number }>(
+    `select count(*)::int as total, count(*) filter (where m.status = 'done')::int as done,
+            coalesce(sum(m.amount) filter (where m.status = 'done' and m.invoice_id is null
+              and not exists (select 1 from milestone_links l where l.tenant_id = m.tenant_id and l.milestone_id = m.id and l.kind = 'invoice')), 0)::float8 as done_uninvoiced
+       from project_milestones m where m.tenant_id = $1 and m.project_id = $2`,
+    [ctx.tenantId, projectId],
+  );
   const est = await ctx.tx.one<{ v: number }>(`select coalesce(sum(estimate_hours), 0)::float8 as v from project_tasks where tenant_id = $1 and project_id = $2 and parent_id is null and status <> 'cancelled'`, [ctx.tenantId, projectId]);
   const revenue = await ctx.tx.one<{ v: number }>(
-    `select coalesce(sum(case when doc_type = 'credit_note' then -taxable_total else taxable_total end * exchange_rate), 0)::float8 as v from invoices where tenant_id = $1 and project_id = $2 and status not in ('draft','cancelled') and deleted_at is null`,
+    `select coalesce(sum(case when i.doc_type = 'credit_note' then -i.taxable_total else i.taxable_total end * i.exchange_rate), 0)::float8 as v from invoices i where i.tenant_id = $1 and ${PROJECT_INVOICES} and i.status not in ('draft','cancelled') and i.deleted_at is null`,
     [ctx.tenantId, projectId],
   );
   const otherCosts = await ctx.tx.one<{ expenses: number; bills: number }>(
@@ -1246,11 +1278,12 @@ export async function projectSummary(ctx: RecordCtx, projectId: string) {
     : project.budget_type === 'cost' ? { type: 'cost', planned: Number(project.budget_amount ?? 0), used: cost }
     : project.budget_type === 'revenue' ? { type: 'revenue', planned: Number(project.budget_amount ?? 0), used: r2(revenue!.v + time!.unbilled_amount) }
     : null;
-  const money = level === 'manage' ? { revenue: r2(revenue!.v), unbilled: r2(time!.unbilled_amount), labourCost: r2(time!.labour_cost), fixedPay, commission, bases: eco.bases, commissions: eco.byMember, expenses: r2(otherCosts!.expenses), bills: r2(otherCosts!.bills), cost, profit: r2(revenue!.v - cost), margin: revenue!.v ? r2(((revenue!.v - cost) / revenue!.v) * 100) : null } : null;
+  const money = level === 'manage' ? { revenue: r2(revenue!.v), unbilled: r2(time!.unbilled_amount), milestonesUninvoiced: r2(ms?.done_uninvoiced ?? 0), labourCost: r2(time!.labour_cost), fixedPay, commission, bases: eco.bases, commissions: eco.byMember, expenses: r2(otherCosts!.expenses), bills: r2(otherCosts!.bills), cost, profit: r2(revenue!.v - cost), margin: revenue!.v ? r2(((revenue!.v - cost) / revenue!.v) * 100) : null } : null;
   // cost and revenue budgets reveal money: only managers see them
   const showBudget = budget && (level === 'manage' || budget.type === 'hours');
   return {
     progress: Number(project.progress),
+    milestones: { total: ms?.total ?? 0, done: ms?.done ?? 0 },
     tasks: Object.fromEntries(tasks.map((t) => [t.status, t.n])),
     overdueTasks: overdue?.n ?? 0,
     issues,

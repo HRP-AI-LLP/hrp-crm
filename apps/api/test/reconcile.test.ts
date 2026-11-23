@@ -100,6 +100,34 @@ describe('match & reconcile', () => {
     expect(r.items.some((s) => s.left.id === ids.pay || s.left.id === ids.ms)).toBe(false);
   });
 
+  it('progress follows the milestones, not the tasks; invoiced counts the milestones’ invoices', async () => {
+    // a second milestone of ₹50,000: one of ₹2,00,000 in all
+    const m2 = (await api('POST', `/api/v1/projects/${ids.project}/milestones`, { name: 'Milestone-2 go-live', amount: 50000 })).json.id;
+    let s = (await api('GET', `/api/v1/projects/${ids.project}/summary`)).json;
+    expect(s.progress).toBe(0);
+    expect(s.milestones).toEqual({ total: 2, done: 0 });
+    // the customer's approval mail closes milestone 1: three quarters of the value delivered, with no tasks at all
+    const mail = (await sql(`insert into activities (tenant_id, kind, subject, related_object, related_id) values ($1, 'email', 'Milestone-1 accepted', 'project', $2) returning id`, [ids.tenant, ids.project]))[0]!.id;
+    const done = await api('PUT', `/api/v1/projects/${ids.project}/milestones/${ids.ms}`, { name: 'Milestone-1 design', amount: 150000, status: 'done', approvalActivityId: mail });
+    expect(done.status, JSON.stringify(done.json)).toBe(200);
+    s = (await api('GET', `/api/v1/projects/${ids.project}/summary`)).json;
+    expect(s.progress).toBe(75);
+    expect(s.milestones).toEqual({ total: 2, done: 1 });
+    expect(s.tasks).toEqual({});
+    // the invoice on milestone 1 counts even when it was never booked to the project itself
+    await sql(`update invoices set project_id = null where id = $1`, [ids.inv]);
+    s = (await api('GET', `/api/v1/projects/${ids.project}/summary`)).json;
+    expect(s.money.revenue).toBe(150000);
+    expect(s.money.milestonesUninvoiced).toBe(0);
+    await sql(`update invoices set project_id = $2 where id = $1`, [ids.inv, ids.project]);
+    // without amounts, milestones count equally
+    await sql(`update project_milestones set amount = null where id = $1`, [m2]);
+    await api('PUT', `/api/v1/projects/${ids.project}/milestones/${m2}`, { name: 'Milestone-2 go-live' });
+    expect((await api('GET', `/api/v1/projects/${ids.project}/summary`)).json.progress).toBe(50);
+    expect((await api('DELETE', `/api/v1/projects/${ids.project}/milestones/${m2}`)).status).toBeLessThan(300);
+    expect((await api('GET', `/api/v1/projects/${ids.project}/summary`)).json.progress).toBe(100);
+  });
+
   it('a receipt that pays several invoices together; a rejected suggestion stays hidden', async () => {
     let r = await list(`?focus=payment:${ids.payAcme}`);
     const two = r.items.find((s) => s.kind === 'receipt_invoice')!;
