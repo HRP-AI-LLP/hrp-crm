@@ -67,8 +67,11 @@ export function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels
     if (i.ewb_no) rows.push(['E-way bill', `${i.ewb_no}${i.ewb_date ? ` · ${date(i.ewb_date)}` : ''}`]);
     // the letterhead's state must be the seller state snapshot so CGST/SGST vs IGST prints as issued
     const company = { ...d.company, state: i.seller_state ?? d.company.state, gstin: i.seller_gstin ?? d.company.gstin };
+    // a subject that describes what is billed, not the customer's name (e.g. "Maintenance" or "Website, Hosting")
+    const lineNames = [...new Set((d.lines as Json[]).map((l) => String(l.name ?? '').trim()).filter(Boolean))];
+    const subject = (i.subject && String(i.subject).trim()) || (lineNames.length ? lineNames.slice(0, 3).join(', ') + (lineNames.length > 3 ? '…' : '') : cn ? 'Credit note' : 'Tax invoice');
     return {
-      doc: { quote: { ...i, bill_to: billTo, doc_date: i.invoice_date, status: 'issued', valid_until: null }, lines: d.lines, account: d.account, contact: null, company },
+      doc: { quote: { ...i, bill_to: billTo, doc_date: i.invoice_date, status: 'issued', valid_until: null, subject }, lines: d.lines, account: d.account, contact: null, company },
       labels: {
         title: cn ? 'Credit note' : i.doc_type === 'proforma' ? 'Proforma invoice' : i.status === 'draft' ? 'Tax invoice (draft)' : 'Tax invoice',
         numberLabel: cn ? 'Credit note #' : 'Invoice #',

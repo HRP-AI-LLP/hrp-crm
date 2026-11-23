@@ -77,6 +77,8 @@ export interface DocTemplate {
     labels: { title?: string | null; billTo?: string | null; subject?: string | null; total?: string | null };
     headerNote?: string | null;
     footerNote?: string | null;
+    /** faint watermark text behind the document; empty = the company name, '-' = none (DRAFT always shows while unissued) */
+    watermark?: string | null;
     margins: { top: number; bottom: number; left: number; right: number };
   };
   letterhead?: string | null;
@@ -117,8 +119,18 @@ export function QuoteDocument({ doc, labels, template }: { doc: QuoteDoc; labels
   // the template's own logo, else the organisation's (Organisation → Profile)
   const logoSrc = st?.logoPosition === 'none' ? null : (st?.logo || company.logo || null);
   const logo = logoSrc ? <img className="qdoc-logo" src={logoSrc} alt="" /> : null;
+  // a faint watermark: DRAFT while unissued, else the template's text or the company name; '-' turns it off
+  const isDraft = String(labels?.number ?? '').trim().toUpperCase() === 'DRAFT';
+  const wmSet = st?.watermark?.trim();
+  const watermark = isDraft ? 'DRAFT' : wmSet === '-' ? '' : wmSet || company.name || '';
   const body = (
     <>
+      {watermark && (
+        <div className={`qdoc-wm${isDraft ? ' draft' : ''}`} aria-hidden="true">
+          {watermark}
+        </div>
+      )}
+      <div className="qdoc-content">
       {st?.headerNote && <p className="qdoc-headnote">{st.headerNote}</p>}
       <header className={`qdoc-head${showCompany ? '' : ' no-company'}`}>
         {showCompany ? (
@@ -176,7 +188,7 @@ export function QuoteDocument({ doc, labels, template }: { doc: QuoteDoc; labels
         </div>
         <div>
           <h3>{st?.labels?.subject || 'Subject'}</h3>
-          <b>{q.subject || q.name}</b>
+          <b>{q.subject?.trim() || [...new Set(lines.map((l) => l.name?.trim()).filter(Boolean))].slice(0, 3).join(', ') || q.name}</b>
         </div>
       </section>
 
@@ -368,6 +380,7 @@ export function QuoteDocument({ doc, labels, template }: { doc: QuoteDoc; labels
         </div>
       </footer>}
       {st?.footerNote && <p className="qdoc-footnote">{st.footerNote}</p>}
+      </div>
     </>
   );
   const cls = `qdoc t-${t?.base ?? 'classic'}${letterhead ? ' has-lh' : ''}`;
