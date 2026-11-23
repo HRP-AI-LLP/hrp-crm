@@ -750,6 +750,18 @@ export const GUIDES: Record<string, Guide> = {
     ],
     copy: [{ label: 'MCP address', path: '/api/v1/mcp' }],
   },
+  coding_agent_desktop: {
+    title: 'Connect the Claude desktop app (chats and Cowork sessions on your computer)',
+    links: [{ label: 'mcp-remote', url: 'https://www.npmjs.com/package/mcp-remote' }],
+    steps: [
+      'The desktop app does not read Claude Code’s settings (`claude mcp add`): it has its own. On the project, open Coding agent → “Make a key for the repository” and press “Copy for the desktop app”.',
+      'In the desktop app: Settings → Developer → Edit Config. Paste the block at the top level of claude_desktop_config.json — next to "preferences", not inside it (if "mcpServers" is already there, add only the "sanchalan" entry). Keep `Bearer ` and the whole key on one line. Node.js must be installed (the block runs `npx mcp-remote`).',
+      'Save, then Quit Claude from the tray icon (closing the window is not enough) and open it again. Settings → Developer should list “sanchalan” as running; the key’s “Last used” on the Coding agent tab changes from “never”.',
+      'Start a new session with the repository folder (sessions opened before the setup never see the tools) and ask: “Queue the open bugs and tasks on the SanchalanOS board and fix them one by one. For each, request a review and wait for my approval before committing.”',
+      'If it does not connect: “Dynamic Client Registration rejected (HTTP 405)” or “Invalid or revoked API key” in the log (Settings → Developer → sanchalan → Open logs) means the key was refused — make a new one and paste it whole. Not listed at all: the block is not at the top level, the file has a JSON mistake, or the app was not fully quit.',
+    ],
+    copy: [{ label: 'MCP address', path: '/api/v1/mcp' }],
+  },
   coding_agent_codex: {
     title: 'Connect OpenAI Codex',
     links: [{ label: 'Codex — MCP servers', url: 'https://github.com/openai/codex/blob/main/docs/config.md' }],

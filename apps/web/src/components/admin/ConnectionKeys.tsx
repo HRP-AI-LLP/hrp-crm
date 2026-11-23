@@ -402,7 +402,7 @@ export function ConnectionKeysTab() {
 
 const GUIDE_GROUPS: [string, string[]][] = [
   ['Your own connections', ['mailbox', 'meeting_apps', 'api_keys']],
-  ['Coding agents (Claude Code, Codex)', ['coding_agent_claude', 'coding_agent_codex', 'coding_agent_runner', 'ai_delivery']],
+  ['Coding agents (Claude Code, Codex)', ['coding_agent_claude', 'coding_agent_desktop', 'coding_agent_codex', 'coding_agent_runner', 'ai_delivery']],
   ['WhatsApp, Instagram, email and chat', ['whatsapp', 'project_whatsapp', 'instagram', 'email_channel', 'webhook_channel', 'teams', 'slack', 'gchat']],
   ['Leads', ['meta_leads', 'google_leads']],
   ['Mail intake', ['mail_intake']],

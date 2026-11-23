@@ -147,6 +147,7 @@ function RepoKeys({ projectId }: { projectId: string }) {
   const json = made
     ? JSON.stringify({ mcpServers: { sanchalan: { type: 'http', url, headers: { Authorization: 'Bearer ${SANCHALAN_API_KEY}', 'X-Sanchalan-Project': pin } } } }, null, 2)
     : '';
+  const desktop = made ? desktopConfig(url, `Bearer ${made.key}`, pin) : '';
   const copy = (t: string) => navigator.clipboard?.writeText(t).then(() => toast('Copied'), () => undefined);
   const live = (data?.items ?? []).filter((k) => !k.revoked_at);
   return (
@@ -199,6 +200,15 @@ function RepoKeys({ projectId }: { projectId: string }) {
               Copy .mcp.json
             </button>
           </div>
+          <div className="small">
+            <b>Or, for the Claude desktop app</b> (its sessions use their own settings, not Claude Code’s): Settings → Developer → <b>Edit Config</b>, put this at the <b>top level</b> of <code>claude_desktop_config.json</code> (next to <code>"preferences"</code>, not inside it), save, then <b>Quit</b> Claude from the tray icon and open it again:
+          </div>
+          <pre className="code-block" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>{desktop}</pre>
+          <div className="row" style={{ gap: 6 }}>
+            <button className="btn sm" onClick={() => copy(desktop)}>
+              Copy for the desktop app
+            </button>
+          </div>
           <div className="notice small">Keep the key to yourself: do not paste it into chats, mails or tickets. If it was shared, revoke it below and make a new one.</div>
         </div>
       )}
@@ -246,6 +256,23 @@ function RepoKeys({ projectId }: { projectId: string }) {
   );
 }
 
+/** The "sanchalan" entry of claude_desktop_config.json: the desktop app reaches the server through mcp-remote. */
+function desktopConfig(url: string, auth: string, pin: string) {
+  return JSON.stringify(
+    {
+      mcpServers: {
+        sanchalan: {
+          command: 'npx',
+          args: ['-y', 'mcp-remote', url, '--header', 'Authorization:${SANCHALAN_AUTH}', '--header', `X-Sanchalan-Project:${pin}`],
+          env: { SANCHALAN_AUTH: auth },
+        },
+      },
+    },
+    null,
+    2,
+  );
+}
+
 const ASK_WORK = 'Queue the open bugs and tasks on the SanchalanOS board and fix them one by one. For each, request a review and wait for my approval before committing.';
 const ASK_BUILD = 'Look at this repository and tell me, in a few lines, how to build it, run it and run its tests on Windows.';
 
@@ -270,17 +297,22 @@ function HowToStart() {
       </summary>
       <ol style={{ margin: '8px 0 0', paddingLeft: 18, display: 'grid', gap: 8 }}>
         <li>
-          <b>Open Claude Code in the repository folder</b> — the folder where you ran the command above:
-          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+          <b>Choose where Claude works</b> — the two keep separate settings:
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18, display: 'grid', gap: 4 }}>
             <li>
-              Terminal: go to the folder (<code>cd</code>) and type <code>claude</code>.
+              <b>Claude Code in a terminal</b> (simplest): run the <code>claude mcp add …</code> command shown when you make the key, inside the repository folder. Then, each time: go to that folder (<code>cd</code>) and type <code>claude</code>. The
+              connection is kept for that folder only.
             </li>
-            <li>Claude desktop app: start a new Code session on your own computer (not in the cloud) and choose that folder.</li>
+            <li>
+              <b>The Claude desktop app</b> (its chats and Cowork sessions linked to your computer): they do <i>not</i> read the <code>claude mcp add</code> setting. Add SanchalanOS to the app instead — Settings → Developer → <b>Edit Config</b> opens{' '}
+              <code>claude_desktop_config.json</code>; paste the block shown when you make the key (“Copy for the desktop app”) at the <b>top level</b> of the file, next to <code>"preferences"</code> and not inside it; keep <code>Bearer </code> and the
+              whole key on one line; save; <b>Quit</b> Claude from the tray icon (closing the window is not enough) and open it again. It needs Node.js (for <code>npx</code>); the first start takes about 20 seconds.
+            </li>
           </ul>
-          The connection is kept for that folder only; another folder (or a cloud session) does not see it.
         </li>
         <li>
-          <b>Check it is connected</b> (optional): type <code>/mcp</code> — “sanchalan” should be listed as connected. <code>/mcp</code> only shows the connection; the work is asked for in plain words, next.
+          <b>Start a new session</b> in that folder (a session gets its tools when it starts: one opened before the setup never sees them). Check it is connected (optional): in Claude Code type <code>/mcp</code> — “sanchalan” should be connected; in the desktop
+          app, Settings → Developer lists “sanchalan” as running. <code>/mcp</code> only shows the connection; the work is asked for in plain words, next. The key’s <b>Last used</b> below changes from “never” once it connects.
         </li>
         <li>
           <b>Ask in the chat, as a normal message:</b>
@@ -294,6 +326,18 @@ function HowToStart() {
           <b>Build and test commands (optional).</b> The instructions box above can stay empty: Claude works out how to build and test from the repository. To save it the trouble each time, ask it once and paste its answer into the instructions box:
           <Ask text={ASK_BUILD} />
         </li>
+        <li>
+          <b>If it does not connect</b>
+          <ul style={{ margin: '4px 0 0', paddingLeft: 18, display: 'grid', gap: 4 }}>
+            <li>“None exist” / no SanchalanOS tools: the session was opened before the setup — start a new one. In the desktop app, check Settings → Developer shows “sanchalan”; if it is not listed, the block is not at the top level of the file (or the file has a JSON mistake), or the app was not fully quit.</li>
+            <li>
+              “Invalid or revoked API key”, or in the desktop log “Dynamic Client Registration rejected (HTTP 405)”: the key was refused — revoked, still the placeholder, or mistyped. Make a new key here and paste it whole, after <code>Bearer </code>.
+            </li>
+            <li>“This repository is linked to the project … only”: the key or X-Sanchalan-Project names another project — use this project’s key.</li>
+            <li>Nothing gets queued: the board has no open bugs, tasks or stories of the item types ticked above — add them to the board (or ask Claude to file them with create_work_item), then ask again.</li>
+            <li>The desktop app’s log for it: Settings → Developer → sanchalan → Open logs.</li>
+          </ul>
+        </li>
       </ol>
     </details>
   );
@@ -304,6 +348,7 @@ function Connect({ open }: { open: boolean }) {
     <div className="stack" style={{ gap: 6 }}>
       <b>Connect Claude Code or Codex</b>
       <Guide id="coding_agent_claude" open={open} />
+      <Guide id="coding_agent_desktop" />
       <Guide id="coding_agent_codex" />
       <Guide id="coding_agent_runner" />
     </div>
