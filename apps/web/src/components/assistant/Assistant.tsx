@@ -9,7 +9,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { del, get, post } from '../../lib/api';
+import { del, get, post, upload } from '../../lib/api';
 import { relative } from '../../lib/format';
 import { Markdown } from '../Markdown';
 import { Spinner, useToast } from '../ui';
@@ -18,6 +18,7 @@ type Json = Record<string, any>;
 type Thread = { thread: Json; messages: Json[]; actions: Json[] };
 
 const SUGGESTIONS = [
+  'I have an idea for an app — build it for me (attach any notes or sketches with 📎)',
   'What is due this week across my projects?',
   'Plan the next sprint for my project from the backlog',
   'Which leads have I not followed up on in 7 days?',
@@ -104,7 +105,29 @@ export function AssistantChat({ threadId, onThread, compact }: { threadId: strin
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [pendingText, setPendingText] = useState<string | null>(null);
+  const [files, setFiles] = useState<{ id: string; name: string }[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
   const end = useRef<HTMLDivElement>(null);
+  const attach = async (list: FileList | null) => {
+    if (!list?.length) return;
+    setUploading(true);
+    try {
+      for (const f of Array.from(list)) {
+        if (f.size > 25 * 1024 * 1024) {
+          toast(`${f.name} is over 25 MB`, true);
+          continue;
+        }
+        const r = await upload<{ id: string; name: string }>(`/api/v1/sdlc/studio/files?name=${encodeURIComponent(f.name)}`, f);
+        setFiles((x) => [...x, { id: r.id, name: r.name }]);
+      }
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
   const { data, isLoading } = useQuery({ queryKey: ['assistant', threadId], queryFn: () => get<Thread>(`/api/v1/assistant/threads/${threadId}`), enabled: !!threadId });
   const set = (t: Thread) => qc.setQueryData(['assistant', t.thread.id], t);
   useEffect(() => {
@@ -117,14 +140,17 @@ export function AssistantChat({ threadId, onThread, compact }: { threadId: strin
     setBusy(true);
     setPendingText(m);
     setText('');
+    const sent = files;
+    setFiles([]);
     try {
-      const t = await post<Thread>('/api/v1/assistant/chat', { threadId, message: m, page: loc.pathname });
+      const t = await post<Thread>('/api/v1/assistant/chat', { threadId, message: m, page: loc.pathname, ...(sent.length ? { attachments: sent } : {}) });
       set(t);
       if (t.thread.id !== threadId) onThread(t.thread.id);
       qc.invalidateQueries({ queryKey: ['assistant-threads'] });
     } catch (e) {
       toast((e as Error).message, true);
       setText(m);
+      setFiles(sent);
     } finally {
       setBusy(false);
       setPendingText(null);
@@ -188,7 +214,18 @@ export function AssistantChat({ threadId, onThread, compact }: { threadId: strin
           return (
             <div key={m.id} className={`asst-msg ${m.role}`}>
               {m.role === 'user' ? (
-                <div className="asst-bubble">{m.content}</div>
+                <div className="asst-bubble">
+                  {String(m.content).split('\n\n[Attached files')[0]}
+                  {(m.data?.attachments as Json[] | undefined)?.length ? (
+                    <div className="row" style={{ gap: 4, flexWrap: 'wrap', marginTop: 6 }}>
+                      {(m.data.attachments as Json[]).map((a) => (
+                        <span key={a.id} className="chip">
+                          📎 {a.name}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               ) : (
                 <div className="asst-answer">
                   <Steps steps={m.data?.steps} />
@@ -231,6 +268,18 @@ export function AssistantChat({ threadId, onThread, compact }: { threadId: strin
         )}
         <div ref={end} />
       </div>
+      {files.length > 0 && (
+        <div className="row" style={{ gap: 4, flexWrap: 'wrap', padding: '6px 12px 0' }}>
+          {files.map((f) => (
+            <span key={f.id} className="chip">
+              📎 {f.name}
+              <button type="button" className="btn ghost sm" style={{ height: 18, padding: '0 4px' }} aria-label={`Remove ${f.name}`} onClick={() => setFiles((x) => x.filter((y) => y.id !== f.id))}>
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <form
         className="asst-input"
         onSubmit={(e) => {
@@ -251,7 +300,11 @@ export function AssistantChat({ threadId, onThread, compact }: { threadId: strin
           }}
           aria-label="Message to the assistant"
         />
-        <button className="btn primary" disabled={busy || !text.trim()}>
+        <input ref={fileRef} type="file" multiple hidden onChange={(e) => attach(e.target.files)} />
+        <button type="button" className="btn ghost" disabled={busy || uploading} onClick={() => fileRef.current?.click()} title="Attach documents or pictures (a BRD, notes, sketches, screenshots)" aria-label="Attach files">
+          {uploading ? '…' : '📎'}
+        </button>
+        <button className="btn primary" disabled={busy || uploading || !text.trim()}>
           Send
         </button>
       </form>

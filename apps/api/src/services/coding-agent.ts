@@ -241,7 +241,7 @@ export async function resolveAgentProject(ctx: RecordCtx, ref: string) {
 
 async function projectsFor(ctx: RecordCtx) {
   const rows = await ctx.tx.query<Record<string, any>>(
-    `select p.id, p.name, p.work_key, p.status, s.enabled, s.local_folder, s.instructions, s.release_command, s.auto_push, s.work_types, s.work_mode, s.batch_size,
+    `select p.id, p.name, p.work_key, p.status, p.ai_rules, s.enabled, s.local_folder, s.instructions, s.release_command, s.auto_push, s.work_types, s.work_mode, s.batch_size,
             coalesce((select json_agg(json_build_object('provider', r.provider, 'repo', r.repo, 'defaultBranch', r.default_branch)) from project_repos r where r.tenant_id = p.tenant_id and r.project_id = p.id), '[]') as repos,
             (select count(*)::int from coding_agent_jobs j where j.tenant_id = p.tenant_id and j.project_id = p.id and j.status in ('queued','changes_requested')) as waiting
        from projects p left join coding_agent_settings s on s.tenant_id = p.tenant_id and s.project_id = p.id
@@ -273,6 +273,8 @@ function setupOf(p: Record<string, any>) {
     localFolder: p.local_folder || (repos[0] ? repos[0].folder : slug(p.work_key || p.name)),
     repos,
     instructions: p.instructions ?? null,
+    /** the project's rules: follow every one */
+    rules: p.ai_rules ?? null,
     releaseCommand: p.release_command ?? null,
     autoPush: !!p.auto_push,
     workMode: p.work_mode ?? 'one',

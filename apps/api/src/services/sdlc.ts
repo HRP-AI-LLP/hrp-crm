@@ -974,8 +974,9 @@ Use only the steps this goal needs (usually 5 to 15), in a sensible order: requi
 async function contextFor(tx: Tx, tenantId: string, run: Run, before: number) {
   const parts: string[] = [];
   if (run.project_id) {
-    const p = await tx.one<Record<string, any>>(`select name, description, work_key from projects where tenant_id = $1 and id = $2`, [tenantId, run.project_id]);
+    const p = await tx.one<Record<string, any>>(`select name, description, work_key, ai_rules from projects where tenant_id = $1 and id = $2`, [tenantId, run.project_id]);
     if (p) parts.push(`Project: ${p.name}${p.work_key ? ` (${p.work_key})` : ''}${p.description ? `\n${String(p.description).slice(0, 3000)}` : ''}`);
+    if (p?.ai_rules) parts.push(`Rules for this project — follow every one of them, and say so where a document depends on one:\n${String(p.ai_rules).slice(0, 12000)}`);
     const docs = await tx.query<{ title: string; subtype: string }>(
       `select title, subtype from sdlc_artifacts where tenant_id = $1 and project_id = $2 and status = 'approved' and (run_id is distinct from $3) order by updated_at desc limit 20`,
       [tenantId, run.project_id, run.id],

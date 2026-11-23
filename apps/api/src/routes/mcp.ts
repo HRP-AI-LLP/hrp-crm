@@ -47,7 +47,7 @@ const TOOLS: Tool[] = [
   },
   {
     name: 'setup_project',
-    description: 'How to get a project onto this machine: the repositories to clone (or to create when none is linked), the local folder, build/test instructions and the release command. Call it before working on a project you do not have locally.',
+    description: 'How to get a project onto this machine: the repositories to clone (or to create when none is linked), the local folder, build/test instructions, the release command and the project rules (follow every rule). Call it once per session, and before working on a project you do not have locally.',
     inputSchema: obj({ project: str('Project id, work key (e.g. FLEET) or name') }, []),
     run: (c, a) => run(c, (ctx) => ag.projectSetup(ctx, String(a.project ?? '')), true),
   },
@@ -260,7 +260,7 @@ async function handle(c: Context<AppEnv>, m: RpcReq) {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: 'sanchalanos', title: 'SanchalanOS', version: '1.0.0' },
         instructions:
-          'SanchalanOS work items for coding agents. When this repository is linked to a project (its key or X-Sanchalan-Project), every tool works on that project only. Loop: next_work → (setup_project if the folder is missing) → implement on a branch, run tests, report_progress → request_review → review_status until approved → commit, push, complete(pushed) → run the release command if any → complete(released). All at once (next_work with all: true, or a project set to batch): next_work returns jobs[] → implement them all → request_review for each → review_status_all until none awaits → commit/push/complete the approved ones, redo the changes_requested ones. Never commit or push before approval.',
+          'SanchalanOS work items for coding agents. When this repository is linked to a project (its key or X-Sanchalan-Project), every tool works on that project only. Loop: next_work → (setup_project if the folder is missing) → implement on a branch, run tests, report_progress → request_review → review_status until approved → commit, push, complete(pushed) → run the release command if any → complete(released). All at once (next_work with all: true, or a project set to batch): next_work returns jobs[] → implement them all → request_review for each → review_status_all until none awaits → commit/push/complete the approved ones, redo the changes_requested ones. Never commit or push before approval. Call setup_project once per session and follow its rules (the project\'s rules) and the project documents (project_documents / read_document) in everything you build.',
       });
     case 'ping':
       return reply({});

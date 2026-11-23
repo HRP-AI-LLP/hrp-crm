@@ -10,6 +10,7 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { useApps, useMetaReady } from "../components/ops/OrderPanel";
+import { IdeaStudio } from "../components/projects/IdeaStudio";
 import { ProjectWorkspace } from "../components/projects/ProjectWorkspace";
 import { Empty, Modal, Spinner, useToast } from "../components/ui";
 import { get, post } from "../lib/api";
@@ -51,6 +52,7 @@ export function ProjectsPage() {
   const metaReady = useMetaReady();
   const [q, setQ] = useState({ status: "open", search: "", mine: false });
   const [create, setCreate] = useState(false);
+  const [idea, setIdea] = useState(false);
   const [sp, setSp] = useSearchParams();
   const github = sp.get("github");
   const params = new URLSearchParams({
@@ -97,6 +99,9 @@ export function ProjectsPage() {
           <Link className="btn" to="/timesheet">
             Timesheet
           </Link>
+          <button className="btn ai" onClick={() => setIdea(true)} title="Describe an idea; HRP AI plans, documents and builds it">
+            New from an idea
+          </button>
           <button className="btn primary" onClick={() => setCreate(true)}>
             New project
           </button>
@@ -238,6 +243,7 @@ export function ProjectsPage() {
         </div>
       </section>
       {create && <NewProject onClose={() => setCreate(false)} />}
+      {idea && <IdeaStudio onClose={() => setIdea(false)} />}
     </>
   );
 }

@@ -249,6 +249,7 @@ Map of the API (find gives the details):
 - Objects you can see: ${objects.join(', ')}.
 - Projects: GET /api/v1/projects, /api/v1/projects/{id}, /summary; tasks /api/v1/projects/{id}/tasks; milestones POST /api/v1/projects/{id}/milestones; task lists, issues, members, time.
 - Work management (boards, backlog, epics, stories, bugs, workflows): /api/v1/projects/{id}/work/... (items, board, boards, query, hierarchy, rules); agile sprints and releases: /api/v1/projects/{id}/agile/sprints, /agile/releases, /agile/backlog; my work: /api/v1/work/mine, /api/v1/my-tasks.
+- Idea → product: when the person wants a new product, app, game or SaaS built from an idea, gather the idea, a name, the kind (productType: web_app, saas, website, mobile_app, mobile_game, desktop_app, api_service, data_ai, iot_embedded, other), platforms (web, android, ios, windows, macos, linux, api), who it is for, preferred technology and their rules (ask one short question only if the idea is too thin), then propose ONE card: POST /api/v1/sdlc/studio/start {idea, name, productType, platforms, audience, stack, rules, fileIds (ids of attached files), reviewMode ('key' default), build (true: HRP AI, the coding agent, builds it), workMode ('batch' default)}. It creates an in-house project, reads the files, and starts the full delivery: PRD, SRS, UX, architecture, diagrams, API and data design, security, standards, backlog, test cases, plans, runbook, the build and the user manual. Afterwards link the project and say the person reviews the key documents and the backlog under AI delivery, and connects their coding tool under Project → Coding agent. Rules can be changed later: PUT /api/v1/projects/{id}/ai-rules {rules}.
 - AI delivery (agents writing BRD / SRS / HLD / test plans, diagrams in Mermaid + draw.io, backlog, test cases, code): /api/v1/sdlc/runs, /api/v1/sdlc/artifacts, /api/v1/sdlc/diagrams/generate {prompt, type}, /api/v1/sdlc/documents/generate {prompt, docType}.
 - Timesheets: /api/v1/time, /api/v1/timesheet; calls and meetings: /api/v1/calls, /api/v1/projects/{id}/calls; project WhatsApp chats: /api/v1/projects/{id}/chats.
 - Books, GST, sales, billing, inventory, manufacturing, IT, field service, insights, intake: find them by name.
@@ -364,19 +365,32 @@ async function turn(c: Caller, threadId: string, page: string | null) {
   });
 }
 
-export const chatSchema = z.object({ threadId: z.string().uuid().nullish(), message: z.string().trim().min(1).max(8000), page: z.string().max(400).nullish() });
+export const chatSchema = z.object({
+  threadId: z.string().uuid().nullish(),
+  message: z.string().trim().min(1).max(8000),
+  page: z.string().max(400).nullish(),
+  /** files uploaded with POST /sdlc/studio/files, for an idea or anything else in the message */
+  attachments: z.array(z.object({ id: z.string().uuid(), name: z.string().max(255) })).max(20).optional(),
+});
+
+function withAttachments(input: z.infer<typeof chatSchema>) {
+  if (!input.attachments?.length) return { content: input.message, data: '{}' };
+  const list = input.attachments.map((a) => `- ${a.name.replace(/[\r\n<>]/g, ' ')} (file id ${a.id})`).join('\n');
+  return { content: `${input.message}\n\n[Attached files — pass their ids as fileIds when starting a product from an idea:\n${list}]`, data: JSON.stringify({ attachments: input.attachments }) };
+}
 
 export async function chat(c: Caller, input: z.infer<typeof chatSchema>) {
+  const msg = withAttachments(input);
   const threadId = await tx(c, async (t) => {
     if (input.threadId) {
       await ownThread(t, c, input.threadId);
       // a new message supersedes cards still waiting: they stay visible but can no longer run
       await t.query(`update assistant_actions set status = 'rejected', error = 'Superseded by a new message', decided_at = now() where tenant_id = $1 and thread_id = $2 and status = 'proposed'`, [c.tenantId, input.threadId]);
-      await t.query(`insert into assistant_messages (tenant_id, thread_id, role, content) values ($1,$2,'user',$3)`, [c.tenantId, input.threadId, input.message]);
+      await t.query(`insert into assistant_messages (tenant_id, thread_id, role, content, data) values ($1,$2,'user',$3,$4)`, [c.tenantId, input.threadId, msg.content, msg.data]);
       return input.threadId;
     }
     const th = await t.one<{ id: string }>(`insert into assistant_threads (tenant_id, user_id, title) values ($1,$2,$3) returning id`, [c.tenantId, uid(c), clip(input.message.replace(/\s+/g, ' '), 80)]);
-    await t.query(`insert into assistant_messages (tenant_id, thread_id, role, content) values ($1,$2,'user',$3)`, [c.tenantId, th!.id, input.message]);
+    await t.query(`insert into assistant_messages (tenant_id, thread_id, role, content, data) values ($1,$2,'user',$3,$4)`, [c.tenantId, th!.id, msg.content, msg.data]);
     return th!.id;
   });
   try {

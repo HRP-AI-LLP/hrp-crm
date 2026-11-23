@@ -7,6 +7,7 @@ import { scope } from '../middleware';
 import type { AiCtx } from '../services/ai/features';
 import { enqueue } from '../services/jobs';
 import type { RecordCtx } from '../services/records';
+import * as ps from '../services/product-studio';
 import * as sd from '../services/sdlc';
 import { safeCtx } from './public';
 
@@ -23,6 +24,27 @@ const ai = (c: Context<AppEnv>): AiCtx => ({ env: c.env, db: c.var.db, tenantId:
 const advance = (c: Context<AppEnv>, runId: string) => enqueue(c.env, safeCtx(c), [{ type: 'sdlc.advance', tenantId: c.var.tenant.id, runId }]);
 
 export const sdlcRoutes = new Hono<AppEnv>()
+  // idea → product
+  .post('/sdlc/studio/files', async (c) => {
+    const name = z.string().trim().min(1).max(255).parse(c.req.query('name'));
+    const bytes = new Uint8Array(await c.req.arrayBuffer());
+    const { assertUpload } = await import('../services/project-docs');
+    assertUpload(bytes.length);
+    return c.json(await run(c, (ctx) => ps.stageFile(ctx, c.env, name, bytes)), 201);
+  })
+  .post('/sdlc/studio/start', async (c) => {
+    const body = ps.ideaSchema.parse(await c.req.json());
+    const r = await run(c, (ctx) => ps.startFromIdea(ctx, body));
+    if (r.readDocs) await enqueue(c.env, safeCtx(c), [{ type: 'projectdoc.read', tenantId: c.var.tenant.id, projectId: r.projectId, userId: c.var.principal.user.id }]);
+    if (r.advance) await advance(c, r.runId);
+    return c.json({ projectId: r.projectId, runId: r.runId, name: r.name, documents: r.documents, link: `/projects/${r.projectId}` }, 201);
+  })
+  .get('/sdlc/studio/:id', async (c) => c.json(await run(c, (ctx) => ps.studioStatus(ctx, id(c)), true)))
+  .get('/projects/:id/ai-rules', async (c) => c.json(await run(c, (ctx) => ps.getRules(ctx, id(c)), true)))
+  .put('/projects/:id/ai-rules', async (c) => {
+    const b = ps.rulesSchema.parse(await c.req.json());
+    return c.json(await run(c, (ctx) => ps.saveRules(ctx, id(c), b.rules)));
+  })
   .get('/sdlc/catalogue', (c) => c.json(sd.catalogue()))
   .get('/sdlc/runs', async (c) => {
     const p = c.req.query('projectId');
