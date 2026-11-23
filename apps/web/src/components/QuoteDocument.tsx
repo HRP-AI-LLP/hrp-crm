@@ -1,4 +1,27 @@
+import qrcode from 'qrcode-generator';
+import { useMemo } from 'react';
 import { date, money2, rupeesInWords } from '../lib/format';
+
+/** The pay-by-UPI QR, printed on the invoice next to the bank details. */
+function UpiQrBlock({ upi }: { upi: { vpa: string; payee: string; amount: number; note: string } }) {
+  const svg = useMemo(() => {
+    const link = `upi://pay?${new URLSearchParams({ pa: upi.vpa, pn: upi.payee.slice(0, 50), am: upi.amount.toFixed(2), cu: 'INR', tn: upi.note.slice(0, 50) })}`;
+    const q = qrcode(0, 'M');
+    q.addData(link);
+    q.make();
+    return q.createSvgTag({ cellSize: 3, margin: 0, scalable: true });
+  }, [upi.vpa, upi.payee, upi.amount, upi.note]);
+  return (
+    <div className="qdoc-upi">
+      <div className="qdoc-upi-qr" role="img" aria-label="UPI payment QR code" dangerouslySetInnerHTML={{ __html: svg }} />
+      <div className="qdoc-upi-txt">
+        <b>Scan to pay ₹{upi.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</b>
+        <div>with any UPI app</div>
+        <div className="qdoc-upi-vpa">{upi.vpa}</div>
+      </div>
+    </div>
+  );
+}
 
 export interface QuoteLine {
   id?: string;
@@ -52,6 +75,8 @@ export interface DocLabels {
   signatures?: { signerName: string; designation: string | null; image: string; signedAt: string; verifyCode: string; valid: boolean; revoked?: boolean }[];
   /** where a signature code is checked */
   verifyBase?: string | null;
+  /** a pay-by-UPI QR printed on the invoice itself */
+  upi?: { vpa: string; payee: string; amount: number; note: string } | null;
 }
 
 /** A document template (Settings → Document templates); null prints the classic design. */
@@ -280,6 +305,7 @@ export function QuoteDocument({ doc, labels, template }: { doc: QuoteDoc; labels
           )}
           {cur === 'INR' && (st?.showWords ?? true) && <p className="qdoc-words">{rupeesInWords(Number(q.grand_total ?? 0))}</p>}
           {labels?.footerNote && (st?.showBank ?? true) && <p className="qdoc-desc" style={{ whiteSpace: 'pre-wrap' }}>{labels.footerNote}</p>}
+          {labels?.upi && (st?.showQr ?? true) && <UpiQrBlock upi={labels.upi} />}
         </div>
         <table className="qdoc-totals">
           <tbody>

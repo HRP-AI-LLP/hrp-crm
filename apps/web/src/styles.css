@@ -563,6 +563,12 @@ input.num { text-align: right; }
 /* document templates */
 .qdoc { position: relative; }
 .qdoc-content { position: relative; z-index: 1; }
+.qdoc-upi { display: flex; gap: 10px; align-items: center; margin-top: 8px; padding: 8px; border: 1px solid #e2e8f0; border-radius: 6px; width: fit-content; }
+.qdoc-upi-qr { width: 84px; height: 84px; flex: none; }
+.qdoc-upi-qr svg { width: 100%; height: 100%; display: block; }
+.qdoc-upi-txt { font-size: 11px; line-height: 1.35; }
+.qdoc-upi-txt b { font-size: 12.5px; }
+.qdoc-upi-vpa { color: #64748b; word-break: break-all; }
 .qdoc-wm { position: absolute; inset: 0; z-index: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; overflow: hidden; font-size: clamp(48px, 11vw, 120px); font-weight: 800; letter-spacing: .12em; text-transform: uppercase; color: rgba(7, 84, 146, .055); transform: rotate(-28deg); white-space: nowrap; }
 .qdoc-wm.draft { color: rgba(220, 38, 38, .08); }
 @media print { .qdoc-wm { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }

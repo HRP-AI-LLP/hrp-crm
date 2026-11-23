@@ -79,6 +79,7 @@ export function shape(kind: string, d: Json): { doc: QuoteDoc; labels: DocLabels
         party: 'Bill to',
         rows,
         footerNote: [i.supply_type === 'intra' ? 'Supply within the state: CGST + SGST' : i.supply_type === 'inter' ? 'Inter-state supply: IGST' : '', d.bankDetails ? `\n${d.bankDetails}` : ''].join(''),
+        upi: d.upi ?? null,
       },
       back: `/o/invoice/${i.id}`,
     };
@@ -160,7 +161,6 @@ export function DocPrintPage() {
       </div>
       <TemplatedDocument doc={s.doc} labels={s.labels} template={tpl.data ?? null} />
       {kind === 'invoice' && data?.invoice?.irn_qr && <IrnQr qr={data.invoice.irn_qr} irn={data.invoice.irn} />}
-      {kind === 'invoice' && data?.upi && (tpl.data?.settings?.showQr ?? true) && <UpiQr upi={data.upi} />}
     </div>
   );
 }
@@ -179,29 +179,6 @@ function IrnQr({ qr, irn }: { qr: string; irn: string }) {
       <div>
         <b>E-invoice (signed by the Invoice Registration Portal)</b>
         <div className="small" style={{ wordBreak: 'break-all' }}>IRN {irn}</div>
-      </div>
-    </div>
-  );
-}
-
-/** Pay-by-UPI QR for the balance (built locally; scanned by any UPI app). */
-function UpiQr({ upi }: { upi: { vpa: string; payee: string; amount: number; note: string } }) {
-  const link = `upi://pay?${new URLSearchParams({ pa: upi.vpa, pn: upi.payee.slice(0, 50), am: upi.amount.toFixed(2), cu: 'INR', tn: upi.note.slice(0, 50) })}`;
-  const svg = useMemo(() => {
-    const q = qrcode(0, 'M');
-    q.addData(link);
-    q.make();
-    return q.createSvgTag({ cellSize: 3, margin: 1, scalable: true });
-  }, [link]);
-  return (
-    <div className="upi-qr">
-      <div className="qr" role="img" aria-label="UPI payment QR code" dangerouslySetInnerHTML={{ __html: svg }} />
-      <div>
-        <b>Scan to pay ₹{upi.amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })} with any UPI app</b>
-        <div className="small">
-          {upi.payee} · {upi.vpa}
-        </div>
-        <div className="small muted">Reference: {upi.note}</div>
       </div>
     </div>
   );
@@ -243,7 +220,6 @@ export function PublicDocPage() {
       </div>
       <TemplatedDocument doc={s.doc} labels={{ ...s.labels, signatures: (data.data.signatures ?? []) as NonNullable<DocLabels['signatures']>, verifyBase: data.data.verifyBase ?? null }} template={data.data.template ?? null} />
       {data.kind === 'invoice' && data.data.invoice?.irn_qr && <IrnQr qr={data.data.invoice.irn_qr} irn={data.data.invoice.irn} />}
-      {data.kind === 'invoice' && data.data.upi && <UpiQr upi={data.data.upi} />}
     </div>
   );
 }

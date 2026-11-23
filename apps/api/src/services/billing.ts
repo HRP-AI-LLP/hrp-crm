@@ -183,7 +183,9 @@ export async function getInvoice(ctx: RecordCtx, id: string) {
       if (!vpa || row.doc_type !== 'tax_invoice') return null;
       const amount = Number(row.balance_due) > 0 ? Number(row.balance_due) : Number(row.grand_total) > 0 ? Number(row.grand_total) : 0;
       if (amount <= 0 || row.status === 'cancelled') return null;
-      return { vpa, payee: settings.upiPayee || company.name, amount, note: String(row.invoice_number ?? row.name ?? '') };
+      // the payment reference: the invoice number once issued, else the customer name — never the "— invoice" record name
+      const ref = String(row.invoice_number ?? '').trim() || String(row.buyer_name ?? account?.name ?? '').trim();
+      return { vpa, payee: settings.upiPayee || company.name, amount, note: ref };
     })(),
   };
 }

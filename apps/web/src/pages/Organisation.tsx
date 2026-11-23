@@ -929,32 +929,43 @@ function Dsc({ d }: { d: Json }) {
           </table>
         </div>
       )}
-      {d.canManage && certs.some((c) => c.kind === 'pfx' && !c.expired) && billing.data && (
-        <label className="field" style={{ maxWidth: 480 }}>
-          Sign every invoice automatically with this DSC when it is issued
-          <select
-            value={billing.data.autoDscCertId ?? ''}
-            onChange={async (e) => {
-              try {
-                await put('/api/admin/billing/settings', { autoDscCertId: e.target.value });
-                qc.invalidateQueries({ queryKey: ['billing-settings'] });
-                toast('Saved');
-              } catch (err) {
-                toast((err as Error).message, true);
-              }
-            }}
-          >
-            <option value="">No automatic signing (sign each by hand)</option>
-            {certs
-              .filter((c) => c.kind === 'pfx' && !c.expired)
-              .map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.subjectCn} — {c.label}
-                </option>
-              ))}
-          </select>
-          <small className="muted">Only a .pfx certificate can sign on its own. A USB-token certificate needs the signer on the computer, so it can’t auto-sign. The invoice must list you (or the signer) as allowed on the certificate.</small>
-        </label>
+      {d.canManage && certs.length > 0 && billing.data && (
+        <div className="panel" style={{ padding: 12, maxWidth: 560 }}>
+          <b>Sign invoices automatically when they are issued</b>
+          {certs.some((c) => c.kind === 'pfx' && !c.expired) ? (
+            <>
+              <label className="field" style={{ marginTop: 6 }}>
+                Sign every invoice with this .pfx certificate the moment it is issued
+                <select
+                  value={billing.data.autoDscCertId ?? ''}
+                  onChange={async (e) => {
+                    try {
+                      await put('/api/admin/billing/settings', { autoDscCertId: e.target.value });
+                      qc.invalidateQueries({ queryKey: ['billing-settings'] });
+                      toast('Saved');
+                    } catch (err) {
+                      toast((err as Error).message, true);
+                    }
+                  }}
+                >
+                  <option value="">No automatic signing (sign each by hand)</option>
+                  {certs
+                    .filter((c) => c.kind === 'pfx' && !c.expired)
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.subjectCn} — {c.label}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <small className="muted">The certificate must list you as allowed to sign. A USB-token certificate can’t be used here — see below.</small>
+            </>
+          ) : (
+            <p className="muted small" style={{ margin: '6px 0 0' }}>
+              Your certificates are all on <b>USB tokens</b>. A token keeps its key on the device, so it can only sign with the token plugged in and its PIN typed — it <b>cannot sign unattended</b>, and so can’t sign invoices automatically. To sign automatically, add a <b>.pfx</b> (file) certificate with “Add a .pfx certificate” above. With a token, sign each issued invoice in one step from the invoice’s <b>Sign</b> panel (the token must be connected and the local signer running).
+            </p>
+          )}
+        </div>
       )}
       <h3 style={{ margin: '8px 0 0' }}>Paired signers</h3>
       {!signers.length ? (
