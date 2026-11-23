@@ -64,6 +64,7 @@ const HealthPage = page(() => import('./pages/Health'), 'HealthPage');
 const CopilotPage = page(() => import('./pages/Copilot'), 'CopilotPage');
 const AssistantPage = page(() => import('./components/assistant/Assistant'), 'AssistantPage');
 const SdlcPage = page(() => import('./components/sdlc/Sdlc'), 'SdlcPage');
+const ReconcilePage = page(() => import('./components/books/Reconcile'), 'ReconcilePage');
 const DevelopersPage = page(() => import('./pages/Developers'), 'DevelopersPage');
 const SharedDashboardPage = page(() => import('./pages/Dashboards'), 'SharedDashboardPage');
 
@@ -175,6 +176,7 @@ export function App() {
         <Route path="copilot" element={<CopilotPage />} />
         <Route path="assistant" element={<AssistantPage />} />
         <Route path="sdlc" element={<SdlcPage />} />
+        <Route path="reconcile" element={<ReconcilePage />} />
         <Route path="developers" element={<DevelopersPage />} />
         <Route path="campaigns" element={<CampaignsPage />} />
         <Route path="sales-ops" element={<SalesOpsPage />} />

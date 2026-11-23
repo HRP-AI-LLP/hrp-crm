@@ -21,6 +21,7 @@ import { AutomationTab, useLiveWork } from './WorkPlus';
 import { WorkItemModal } from './WorkItem';
 import { MilestoneMoney } from './MilestoneMoney';
 
+const ProjectCosts = lazy(() => import('./ProjectCosts').then((m) => ({ default: m.ProjectCosts })));
 const SdlcPanel = lazy(() => import('../sdlc/Sdlc').then((m) => ({ default: m.SdlcPanel })));
 
 type Json = Record<string, any>;
@@ -48,9 +49,24 @@ function useAct(keys: unknown[][]) {
   };
 }
 
-type Tab = 'overview' | 'tasks' | 'boards' | 'agile' | 'hierarchy' | 'queries' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'whatsapp' | 'agent' | 'delivery' | 'issues' | 'tests' | 'dashboards' | 'time' | 'billing' | 'team' | 'worksetup' | 'automation';
+const COMMISSION_ON: [string, string][] = [
+  ['invoiced', 'invoiced'],
+  ['collected', 'collected'],
+  ['gross_profit', 'gross profit'],
+  ['net_profit', 'net profit'],
+  ['profit_after_all', 'profit after all expenses'],
+];
+const COMMISSION_HELP: Record<string, string> = {
+  invoiced: 'Revenue invoiced on the project, before GST',
+  collected: 'The part of the invoiced revenue received',
+  gross_profit: 'Invoiced − direct costs (vendor bills and expenses on the project)',
+  net_profit: 'Gross profit − team cost (time at cost, day / month pay, fixed pay)',
+  profit_after_all: 'Collected − direct costs − team cost − commissions on invoiced / collected',
+};
 
-const PROJECT_ICON: Record<string, string> = { boards: 'board', hierarchy: 'layers', queries: 'search', tests: 'check', dashboards: 'chart', worksetup: 'gear', automation: 'repeat', overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', whatsapp: 'inbox', agent: 'spark', delivery: 'layers', issues: 'ticket', time: 'clock', billing: 'rupee', team: 'users' };
+type Tab = 'overview' | 'tasks' | 'boards' | 'agile' | 'hierarchy' | 'queries' | 'releases' | 'changes' | 'gantt' | 'milestones' | 'calls' | 'whatsapp' | 'agent' | 'delivery' | 'issues' | 'tests' | 'dashboards' | 'time' | 'billing' | 'costs' | 'team' | 'worksetup' | 'automation';
+
+const PROJECT_ICON: Record<string, string> = { boards: 'board', hierarchy: 'layers', queries: 'search', tests: 'check', dashboards: 'chart', worksetup: 'gear', automation: 'repeat', overview: 'gauge', tasks: 'check', agile: 'repeat', releases: 'layers', changes: 'contract', gantt: 'board', milestones: 'target', calls: 'video', whatsapp: 'inbox', agent: 'spark', delivery: 'layers', issues: 'ticket', time: 'clock', billing: 'rupee', costs: 'wallet', team: 'users' };
 
 export function ProjectWorkspace({ id }: { id: string }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`) });
@@ -76,9 +92,9 @@ export function ProjectWorkspace({ id }: { id: string }) {
   const tabs: [Tab, string][] = [
     ['overview', 'Overview'], ['tasks', 'Tasks'], ['boards', 'Boards'], ['agile', 'Backlog & sprints'], ['hierarchy', 'Epics & hierarchy'], ['queries', 'Queries'], ['releases', 'Releases'], ['gantt', 'Gantt'],
     ['milestones', 'Milestones'], ['changes', 'Changes & portal'], ['calls', 'Calls'], ['whatsapp', 'WhatsApp'], ['delivery', 'AI delivery'], ['agent', 'Coding agent'], ['issues', 'Issues'], ['tests', 'Test plans'], ['dashboards', 'Dashboards'], ['time', 'Time'],
-    ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['team', 'Team'], ['automation', 'Automation'], ['worksetup', 'Work setup'],
+    ...(manage ? ([['billing', 'Billing']] as [Tab, string][]) : []), ['costs', 'Costs & expenses'], ['team', 'Team'], ['automation', 'Automation'], ['worksetup', 'Work setup'],
   ];
-  const GROUP: Record<string, string> = { overview: 'Work', tasks: 'Work', boards: 'Work', agile: 'Work', hierarchy: 'Work', queries: 'Work', releases: 'Work', gantt: 'Work', milestones: 'Delivery', changes: 'Delivery', calls: 'Delivery', whatsapp: 'Delivery', agent: 'Delivery', delivery: 'Delivery', issues: 'Delivery', tests: 'Delivery', dashboards: 'Insights', time: 'People & money', billing: 'People & money', team: 'People & money', automation: 'Settings', worksetup: 'Settings' };
+  const GROUP: Record<string, string> = { overview: 'Work', tasks: 'Work', boards: 'Work', agile: 'Work', hierarchy: 'Work', queries: 'Work', releases: 'Work', gantt: 'Work', milestones: 'Delivery', changes: 'Delivery', calls: 'Delivery', whatsapp: 'Delivery', agent: 'Delivery', delivery: 'Delivery', issues: 'Delivery', tests: 'Delivery', dashboards: 'Insights', time: 'People & money', billing: 'People & money', costs: 'People & money', team: 'People & money', automation: 'Settings', worksetup: 'Settings' };
   return (
     <div style={{ marginBottom: 20 }}>
     <RepoBanner id={id} manage={manage} status={data.project.status} onOpen={() => setTab('worksetup')} />
@@ -115,6 +131,11 @@ export function ProjectWorkspace({ id }: { id: string }) {
         {tab === 'issues' && <Issues id={id} data={data} member={member} />}
         {tab === 'time' && <ProjectTime id={id} data={data} member={member} />}
         {tab === 'billing' && manage && <Billing id={id} />}
+        {tab === 'costs' && (
+          <Suspense fallback={<Spinner />}>
+            <ProjectCosts id={id} manage={manage} />
+          </Suspense>
+        )}
         {tab === 'team' && <Team id={id} data={data} manage={manage} />}
       </div>
     </SideTabs>
@@ -1862,9 +1883,24 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
                       <input inputMode="decimal" value={m.commissionPct} onChange={(e) => set(i, { commissionPct: e.target.value })} aria-label="Commission %" style={{ width: 70 }} />
                       <span className="muted small">% of</span>
                       <select value={m.commissionOn} onChange={(e) => set(i, { commissionOn: e.target.value })} aria-label="Commission on" style={{ width: 'auto' }}>
-                        <option value="invoiced">invoiced</option>
-                        <option value="collected">collected</option>
+                        {COMMISSION_ON.map(([k, l]) => (
+                          <option key={k} value={k}>
+                            {l}
+                            {data.economics ? ` (${money2(data.economics.bases[k] ?? 0)})` : ''}
+                          </option>
+                        ))}
                       </select>
+                      {(() => {
+                        const cur = (data.members as Json[]).find((x) => x.user_id === m.userId)?.commission_now as Json | null | undefined;
+                        const base = data.economics?.bases?.[m.commissionOn] ?? null;
+                        const pct = Number(m.commissionPct);
+                        const amount = base != null && pct > 0 ? Math.round(Math.max(0, base) * pct) / 100 : cur?.amount ?? null;
+                        return amount != null ? (
+                          <span className="small" title={COMMISSION_HELP[m.commissionOn]}>
+                            = <b>{money2(amount)}</b> so far
+                          </span>
+                        ) : null;
+                      })()}
                     </div>
                   )}
                   {m.payBasis === 'none' && <span className="muted small">No cost on this project</span>}

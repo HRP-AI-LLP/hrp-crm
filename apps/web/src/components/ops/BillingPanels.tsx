@@ -3,6 +3,7 @@ import { hasAdmin, type RecordDto } from '@synapse/shared';
 import { useAuth } from '../../lib/auth';
 import { useApps } from './OrderPanel';
 import { PaymentLinks } from './PayOnline';
+import { ReconcilePanel } from '../books/Reconcile';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
@@ -460,6 +461,8 @@ export function PaymentPanel({ id, canEdit }: { id: string; canEdit: boolean }) 
   const { data } = useQuery({ queryKey: ['payment', id], queryFn: () => get<Json>(`/api/v1/payments/${id}`) });
   const act = useAct([['payment', id], ['record', 'payment', id], ['invoice']]);
   const [apply, setApply] = useState<Record<string, string>>({});
+  const [matching, setMatching] = useState(false);
+  const qc = useQueryClient();
   if (!data) return null;
   const p = data.payment;
   const left = Number(p.unallocated);
@@ -471,8 +474,8 @@ export function PaymentPanel({ id, canEdit }: { id: string; canEdit: boolean }) 
         </h2>
         <div className="row">
           {canEdit && p.status === 'received' && left > 0 && (
-            <button className="btn sm" onClick={() => act(() => post(`/api/v1/payments/${id}/allocate`, { allocations: 'auto' }), 'Applied to the oldest invoices')}>
-              Apply automatically
+            <button className="btn sm primary" onClick={() => setMatching(true)} title="Invoices this receipt pays, with any TDS the customer kept — you approve before anything is saved">
+              Find matching invoices
             </button>
           )}
           {canEdit && p.status === 'received' && (
@@ -546,6 +549,13 @@ export function PaymentPanel({ id, canEdit }: { id: string; canEdit: boolean }) 
           </>
         )}
       </div>
+      {matching && (
+        <Modal title={`Match receipt ${p.payment_number}`} xl onClose={() => setMatching(false)}>
+          <div className="modal-body">
+            <ReconcilePanel focus={`payment:${id}`} onDone={() => { qc.invalidateQueries({ queryKey: ['payment', id] }); qc.invalidateQueries({ queryKey: ['record', 'payment', id] }); }} />
+          </div>
+        </Modal>
+      )}
     </section>
   );
 }

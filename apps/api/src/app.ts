@@ -43,6 +43,7 @@ import { Db } from './lib/db';
 import { projectChatRoutes } from './routes/project-chats';
 import { assistantRoutes } from './routes/assistant';
 import { sdlcRoutes } from './routes/sdlc';
+import { reconcileRoutes } from './routes/reconcile';
 import { setAssistantApp } from './services/assistant';
 import { markDbAwake } from './services/cron-plan';
 
@@ -123,6 +124,7 @@ export function createApp() {
   app.route('/api/v1', mcpRoutes);
   app.route('/api/v1', agentRoutes);
   app.route('/api/v1', sdlcRoutes);
+  app.route('/api/v1', reconcileRoutes);
   app.route('/api/v1', industryRoutes);
   app.route('/api/v1', intakeRoutes);
   app.route('/api/v1', manufacturingRoutes);

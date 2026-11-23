@@ -220,7 +220,7 @@ export const projectRoutes = new Hono<AppEnv>()
               payBasis: z.enum(['hourly', 'daily', 'monthly', 'fixed', 'commission', 'none']).optional(),
               payAmount: z.number().min(0).max(1e12).nullish(),
               commissionPct: z.number().min(0).max(100).nullish(),
-              commissionOn: z.enum(['invoiced', 'collected']).optional(),
+              commissionOn: z.enum(['invoiced', 'collected', 'gross_profit', 'net_profit', 'profit_after_all']).optional(),
             }),
           )
           .max(200),
@@ -393,6 +393,8 @@ export const projectRoutes = new Hono<AppEnv>()
     const b = z.object({ body: z.string().trim().min(1).max(10000) }).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => pj.addComment(rctx(c, tx), id(c), { issueId: id(c, 'iid') }, b.body)), 201);
   })
+
+  .get('/projects/:id/costs', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pj.projectCosts(rctx(c, tx), id(c)))))
 
   /* ───── billing ───── */
   .get('/projects/:id/unbilled', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pj.unbilled(rctx(c, tx), id(c), qDate(c, 'upTo', today())))))

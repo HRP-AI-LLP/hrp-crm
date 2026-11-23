@@ -19,10 +19,10 @@ import { projectAccess } from './projects';
 import type { RecordCtx, RecordEvent } from './records';
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+export const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 const near = (a: number, b: number, pct = 0.01) => b > 0 && Math.abs(a - b) <= Math.max(1, b * pct);
 
-type Inv = {
+export type Inv = {
   id: string;
   invoice_number: string | null;
   invoice_date: string;
@@ -38,7 +38,7 @@ type Inv = {
   lines: string | null;
 };
 
-const INV_COLS = `i.id, i.invoice_number, i.invoice_date::text as invoice_date, i.status, i.account_id, a.name as account, i.project_id,
+export const INV_COLS = `i.id, i.invoice_number, i.invoice_date::text as invoice_date, i.status, i.account_id, a.name as account, i.project_id,
   i.taxable_total::float8 as taxable_total, i.grand_total::float8 as grand_total, i.amount_paid::float8 as amount_paid, i.balance_due::float8 as balance_due,
   (select m.name from project_milestones m where m.tenant_id = i.tenant_id and m.invoice_id = i.id limit 1) as milestone,
   (select string_agg(l.name, ' · ') from invoice_lines l where l.tenant_id = i.tenant_id and l.order_id = i.id) as lines`;
@@ -59,7 +59,7 @@ async function invoiceRow(ctx: RecordCtx, id: string) {
 }
 
 /** The words of the milestone's kept emails (subjects and bodies), where invoice numbers are named. */
-async function mailText(ctx: RecordCtx, projectId: string, milestoneId: string) {
+export async function mailText(ctx: RecordCtx, projectId: string, milestoneId: string) {
   const rows = await ctx.tx.query<{ t: string }>(
     `select coalesce(a.subject, '') || ' ' || left(coalesce(a.body, ''), 20000) as t from activities a
       where a.tenant_id = $1 and a.related_object = 'project' and a.related_id = $2 and (a.metadata ->> 'milestoneId' = $3
@@ -70,6 +70,36 @@ async function mailText(ctx: RecordCtx, projectId: string, milestoneId: string) 
   return rows.map((r) => r.t).join('\n');
 }
 
+/** Invoices that may be the milestone's: named in its emails, on the project or its customer, worth its amount. */
+export async function invoiceCandidates(ctx: RecordCtx, projectId: string, accountId: string | null, ms: { name: string; amount: number | null }, words: string) {
+  const amount = Number(ms.amount ?? 0);
+  const rows = await ctx.tx.query<Inv>(
+    `select ${INV_COLS} from invoices i left join accounts a on a.tenant_id = i.tenant_id and a.id = i.account_id
+      where i.tenant_id = $1 and i.deleted_at is null and i.doc_type = 'tax_invoice' and i.status <> 'cancelled'
+        and not exists (select 1 from project_milestones m where m.tenant_id = i.tenant_id and m.invoice_id = i.id)
+        and (i.project_id = $2 or ($3::uuid is not null and i.account_id = $3) or i.invoice_date >= current_date - 400)
+      order by i.invoice_date desc limit 400`,
+    [ctx.tenantId, projectId, accountId],
+  );
+  return rows
+    .map((r) => {
+      const reasons: string[] = [];
+      let score = 0;
+      const named = !!r.invoice_number && squash(r.invoice_number).length >= 4 && words.includes(squash(r.invoice_number));
+      if (named) (score += 6), reasons.push('its number is in the milestone’s emails');
+      if (r.project_id === projectId) (score += 2), reasons.push('on this project');
+      if (accountId && r.account_id === accountId) (score += 1), reasons.push('the project’s customer');
+      if (amount && near(r.taxable_total, amount)) (score += 5), reasons.push('value before GST equals the milestone amount');
+      else if (amount && near(r.grand_total, amount)) (score += 4), reasons.push('total equals the milestone amount');
+      if (r.lines && (squash(r.lines).includes(squash(ms.name)) || /milestone/i.test(r.lines))) (score += 1), reasons.push('mentions the milestone');
+      return { ...r, score, reasons };
+    })
+    // a matching value alone, from another customer, is not enough
+    .filter((r) => r.score >= 6 || (r.score >= 5 && (r.project_id === projectId || r.account_id === accountId)))
+    .sort((a, b) => b.score - a.score || b.invoice_date.localeCompare(a.invoice_date))
+    .slice(0, 6);
+}
+
 /** What the milestone has, and what may be its invoice and its money. */
 export async function milestoneBilling(ctx: RecordCtx, projectId: string, milestoneId: string, opts: { q?: string | null } = {}) {
   const { project, ms } = await load(ctx, projectId, milestoneId);
@@ -78,34 +108,7 @@ export async function milestoneBilling(ctx: RecordCtx, projectId: string, milest
   const text = await mailText(ctx, projectId, milestoneId);
   const words = squash(text);
 
-  let candidates: (Inv & { score: number; reasons: string[] })[] = [];
-  if (!invoice) {
-    const rows = await ctx.tx.query<Inv>(
-      `select ${INV_COLS} from invoices i left join accounts a on a.tenant_id = i.tenant_id and a.id = i.account_id
-        where i.tenant_id = $1 and i.deleted_at is null and i.doc_type = 'tax_invoice' and i.status <> 'cancelled'
-          and not exists (select 1 from project_milestones m where m.tenant_id = i.tenant_id and m.invoice_id = i.id)
-          and (i.project_id = $2 or ($3::uuid is not null and i.account_id = $3) or i.invoice_date >= current_date - 400)
-        order by i.invoice_date desc limit 400`,
-      [ctx.tenantId, projectId, project.account_id ?? null],
-    );
-    candidates = rows
-      .map((r) => {
-        const reasons: string[] = [];
-        let score = 0;
-        const named = !!r.invoice_number && squash(r.invoice_number).length >= 4 && words.includes(squash(r.invoice_number));
-        if (named) (score += 6), reasons.push('its number is in the milestone’s emails');
-        if (r.project_id === projectId) (score += 2), reasons.push('on this project');
-        if (project.account_id && r.account_id === project.account_id) (score += 1), reasons.push('the project’s customer');
-        if (amount && near(r.taxable_total, amount)) (score += 5), reasons.push('value before GST equals the milestone amount');
-        else if (amount && near(r.grand_total, amount)) (score += 4), reasons.push('total equals the milestone amount');
-        if (r.lines && (squash(r.lines).includes(squash(ms.name)) || /milestone/i.test(r.lines))) (score += 1), reasons.push('mentions the milestone');
-        return { ...r, score, reasons };
-      })
-      // a matching value alone, from another customer, is not enough
-      .filter((r) => r.score >= 6 || (r.score >= 5 && (r.project_id === projectId || r.account_id === project.account_id)))
-      .sort((a, b) => b.score - a.score || b.invoice_date.localeCompare(a.invoice_date))
-      .slice(0, 6);
-  }
+  const candidates = invoice ? [] : await invoiceCandidates(ctx, projectId, project.account_id ?? null, ms, words);
 
   // invoices only as PDFs in the milestone's kept mail: offered for import when none is in the books
   const pdfs =
@@ -143,7 +146,7 @@ export async function milestoneBilling(ctx: RecordCtx, projectId: string, milest
 }
 
 /** Open receipts of the customer and unbooked bank credits that may pay the invoice, the likeliest first. */
-async function moneyCandidates(ctx: RecordCtx, inv: Inv, q: string | null) {
+export async function moneyCandidates(ctx: RecordCtx, inv: Inv, q: string | null) {
   const balance = inv.balance_due;
   const words = q?.trim() ? `%${q.trim().replace(/[%_]/g, '')}%` : null;
   const amt = q && /^\s*[\d,]+(\.\d+)?\s*$/.test(q) ? Number(q.replace(/,/g, '')) : null;

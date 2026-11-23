@@ -20,7 +20,7 @@ import { AssistantLauncher } from './assistant/Assistant';
 /** Which work area each screen belongs to (screens not listed are for everyone). */
 const NAV_AREAS: [string, string][] = [
   ['/copilot', 'crm'], ['/sales-ops', 'sales'], ['/forecast', 'crm'], ['/field', 'operations'], ['/inventory', 'operations'], ['/schedule', 'operations'],
-  ['/after-sales', 'service'], ['/billing', 'billing'], ['/books', 'books'], ['/ca', 'gst'], ['/manufacturing', 'manufacturing'],
+  ['/after-sales', 'service'], ['/billing', 'billing'], ['/books', 'books'], ['/reconcile', 'billing'], ['/ca', 'gst'], ['/manufacturing', 'manufacturing'],
   ['/projects', 'projects'], ['/work', 'projects'], ['/sdlc', 'projects'], ['/timesheet', 'projects'], ['/calls', 'calls'], ['/it', 'it'],
   ['/inbox', 'inbox'], ['/campaigns', 'marketing'], ['/intake', 'intake'], ['/health', 'insights'], ['/reports', 'insights'], ['/dashboards', 'insights'],
   ['/knowledge', 'knowledge'],
@@ -302,6 +302,7 @@ export function Shell() {
         ...(apps.has('service') ? [{ to: '/after-sales', label: 'After-sales', icon: 'wrench' }] : []),
         ...(apps.has('billing') ? [{ to: '/billing', label: 'Billing & GST', icon: 'stamp' }] : []),
         ...(apps.has('books') && me && hasAdmin(me.permissions, 'books') ? [{ to: '/books', label: 'Books', icon: 'book' }] : []),
+        ...(apps.has('billing') || apps.has('books') ? [{ to: '/reconcile', label: 'Match & reconcile', icon: 'repeat' }] : []),
       ],
     },
     ...(apps.has('manufacturing')

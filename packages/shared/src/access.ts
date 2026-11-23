@@ -96,7 +96,7 @@ const RULES: Rule[] = [
   // knowledge
   ['/kb', 'knowledge'],
   // always: records (filtered by object rights), search, home, own things
-  ['/records', ALWAYS], ['/search', ALWAYS], ['/meta', ALWAYS], ['/home', ALWAYS], ['/dashboard', ALWAYS], ['/tasks', ALWAYS], ['/users', ALWAYS], ['/teams', ALWAYS],
+  ['/reconcile', ALWAYS], ['/records', ALWAYS], ['/search', ALWAYS], ['/meta', ALWAYS], ['/home', ALWAYS], ['/dashboard', ALWAYS], ['/tasks', ALWAYS], ['/users', ALWAYS], ['/teams', ALWAYS],
   ['/views', ALWAYS], ['/export', ALWAYS], ['/import', ALWAYS], ['/events', ALWAYS], ['/notifications', ALWAYS], ['/approvals', ALWAYS], ['/files', ALWAYS],
   ['/rules', ALWAYS], ['/digests', ALWAYS], ['/assistant', ALWAYS], ['/push', ALWAYS], ['/integrations', ALWAYS], ['/me', ALWAYS], ['/oauth', ALWAYS],
   ['/hooks', ALWAYS], ['/apps', ALWAYS], ['/organisation', ALWAYS], ['/documents', ALWAYS], ['/doc-templates', ALWAYS], ['/identity', ALWAYS],
