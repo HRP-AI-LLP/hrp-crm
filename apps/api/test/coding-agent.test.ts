@@ -55,6 +55,12 @@ describe('coding agent over MCP', () => {
     expect(bare.status).toBe(401);
     expect(bare.headers.get('www-authenticate')).toMatch(/Bearer/);
     expect(bare.json.error).toMatchObject({ code: 'api_key_required', message: expect.stringMatching(/Authorization: Bearer syn_/) });
+    // MCP clients look for OAuth metadata first: a JSON "not found", never the web page
+    for (const p of ['/.well-known/oauth-protected-resource/api/v1/mcp', '/.well-known/oauth-protected-resource', '/.well-known/oauth-authorization-server', '/.well-known/openid-configuration']) {
+      const wk = await h.call('GET', p);
+      expect(wk.status, p).toBe(404);
+      expect(wk.headers.get('content-type')).toMatch(/json/);
+    }
     const wrong = await h.call('POST', '/api/v1/mcp', { body: {}, headers: { authorization: `Bearer syn_nosuchplace_${'x'.repeat(40)}` } });
     expect(wrong.json.error.message).toMatch(/does not belong/);
   });

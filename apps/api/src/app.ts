@@ -160,6 +160,12 @@ export function createApp() {
     throw notFound('No such API route');
   });
 
+  // MCP clients (Claude, mcp-remote) look for OAuth metadata before connecting. SanchalanOS signs
+  // agents in with an API key, so the answer is a plain JSON "not found" (never the web app's page,
+  // which they cannot read).
+  app.all('/.well-known/oauth-*', (c) => c.json({ error: 'not_found', error_description: 'This server uses API keys: send Authorization: Bearer syn_…' }, 404, { 'cache-control': 'public, max-age=300' }));
+  app.all('/.well-known/openid-configuration', (c) => c.json({ error: 'not_found' }, 404, { 'cache-control': 'public, max-age=300' }));
+
   // Android Trusted Web Activity: proves the Play Store app and this domain belong together
   app.get('/.well-known/assetlinks.json', async (c) => {
     // the Android app keys can be set in Settings → Connection keys
