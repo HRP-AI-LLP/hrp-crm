@@ -19,7 +19,7 @@ const fyStart = `${Number(today.slice(5, 7)) >= 4 ? today.slice(0, 4) : Number(t
 
 let h: Awaited<ReturnType<typeof makeHarness>>;
 let api: ReturnType<typeof h.as>;
-const ids: Record<string, string> = {};
+const ids: Record<string, any> = {};
 const sql = async (q: string, p: unknown[] = []) => {
   const db = Db.fromEnv(h.env);
   try {

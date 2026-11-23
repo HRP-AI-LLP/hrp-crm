@@ -129,6 +129,20 @@ describe('a customer chat on a project', () => {
     expect(l.json).toMatchObject({ kind: 'contact', copied: 2 });
     ids.chat = l.json.id;
 
+    // a contact who has never written: linked now, their thread opened on the business number
+    const ct = await api('POST', '/api/v1/records/contact', { first_name: 'Meena', last_name: 'Iyer', phone: '+91 98200 22222' });
+    expect(ct.status, JSON.stringify(ct.json)).toBe(201);
+    const ch2 = (await api('GET', `${P()}/chats/choices`)).json;
+    const meena = ch2.contacts.find((x: Json) => x.id === ct.json.id);
+    expect(meena).toMatchObject({ number: '919820022222' });
+    expect(ch2.contacts.some((x: Json) => x.number === '919820011111')).toBe(false); // already a chat
+    const l2 = await api('POST', `${P()}/chats`, { contactId: ct.json.id });
+    expect(l2.status, JSON.stringify(l2.json)).toBe(201);
+    expect(l2.json).toMatchObject({ kind: 'contact', copied: 0 });
+    const ch3 = (await api('GET', `${P()}/chats/choices`)).json;
+    expect(ch3.conversations.find((x: Json) => x.address === '919820022222')).toMatchObject({ display_name: 'Meena Iyer', linked_here: true });
+    await api('DELETE', `${P()}/chats/${l2.json.id}`);
+
     aiReply = JSON.stringify({
       summary: 'A crash on the trip report, GPS tracking asked for, an invoice layout change and a call tomorrow.',
       items: [

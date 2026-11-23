@@ -28,7 +28,7 @@ import { createTask, projectAccess } from './projects';
 import type { RecordCtx } from './records';
 import { actAs } from './system';
 import { transcribeAll } from './transcribe';
-import { fetchMedia, upsertConversation, waFetch } from './whatsapp';
+import { fetchMedia, upsertConversation, waFetch, waNumber } from './whatsapp';
 
 export const CHATS_KV = 'chats:pending';
 const QUIET_MS = 10 * 60_000;
@@ -152,12 +152,30 @@ export async function chatChoices(ctx: RecordCtx, projectId: string) {
        from wa_groups g where g.tenant_id = $1 order by g.created_at desc limit 200`,
     [ctx.tenantId],
   );
-  return { accounts, conversations, groups };
+  // CRM contacts with a phone number but no WhatsApp thread yet: the business number has only the
+  // chats people started with it (WhatsApp does not share the phone's contacts or older chats)
+  const project = await ctx.tx.one<{ account_id: string | null }>(`select account_id from projects where tenant_id = $1 and id = $2`, [ctx.tenantId, projectId]);
+  const people = await ctx.tx.query<{ id: string; full_name: string; phone: string; account: string | null; of_customer: boolean }>(
+    `select c.id, c.full_name, c.phone, a.name as account, (c.account_id is not distinct from $2::uuid and $2::uuid is not null) as of_customer
+       from contacts c left join accounts a on a.tenant_id = c.tenant_id and a.id = c.account_id
+      where c.tenant_id = $1 and c.deleted_at is null and c.phone is not null and length(regexp_replace(c.phone, '[^0-9]', '', 'g')) >= 10
+      order by (c.account_id is not distinct from $2::uuid and $2::uuid is not null) desc, c.updated_at desc limit 500`,
+    [ctx.tenantId, project?.account_id ?? null],
+  );
+  const have = new Set((conversations as { address: string }[]).map((v) => v.address.slice(-10)));
+  const contacts = people
+    .map((p) => ({ ...p, number: waNumber(p.phone) }))
+    .filter((p) => p.number && !have.has(p.number.slice(-10)))
+    .slice(0, 300);
+  return { accounts, conversations, groups, contacts };
 }
 
 export const linkSchema = z.object({
   conversationId: z.string().uuid().nullish(),
   waGroupId: z.string().uuid().nullish(),
+  /** a CRM contact with no WhatsApp thread yet: one is opened on this business number */
+  contactId: z.string().uuid().nullish(),
+  channelAccountId: z.string().uuid().nullish(),
   title: z.string().trim().min(1).max(200).nullish(),
   mode: z.enum(['suggest', 'auto', 'off']).default('suggest'),
   /** read the last 14 days of the thread too (default) */
@@ -171,6 +189,21 @@ export async function linkChat(ctx: RecordCtx, projectId: string, input: z.infer
   let conversationId: string | null = null;
   let waGroupId: string | null = null;
   let title = input.title ?? null;
+  if (!input.conversationId && input.contactId) {
+    const ct = await ctx.tx.one<{ id: string; full_name: string; phone: string | null }>(`select id, full_name, phone from contacts where tenant_id = $1 and id = $2 and deleted_at is null`, [ctx.tenantId, input.contactId]);
+    if (!ct) throw notFound('Contact not found');
+    const number = waNumber(ct.phone);
+    if (!number) throw badRequest('This contact has no usable mobile number');
+    const acc = await ctx.tx.one<ChannelAccount>(
+      `select * from channel_accounts where tenant_id = $1 and channel = 'whatsapp' and status = 'active' and ($2::uuid is null or id = $2) order by created_at limit 1`,
+      [ctx.tenantId, input.channelAccountId ?? null],
+    );
+    if (!acc) throw badRequest('Connect a WhatsApp number first (Settings → Channels)');
+    const existing = await ctx.tx.one<{ id: string }>(`select id from conversations where tenant_id = $1 and channel_account_id = $2 and address = $3`, [ctx.tenantId, acc.id, number]);
+    input.conversationId =
+      existing?.id ??
+      (await upsertConversation(ctx.tx, ctx.tenantId, acc, number, { direction: 'out', preview: 'Linked to a project', name: ct.full_name, related: { object: 'contact', id: ct.id } })).id;
+  }
   if (input.conversationId) {
     const v = await ctx.tx.one<{ id: string; address: string; display_name: string | null; channel: string }>(`select id, address, display_name, channel from conversations where tenant_id = $1 and id = $2`, [ctx.tenantId, input.conversationId]);
     if (!v || v.channel !== 'whatsapp') throw badRequest('Choose a WhatsApp conversation');

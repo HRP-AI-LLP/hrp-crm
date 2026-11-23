@@ -350,11 +350,13 @@ function LinkChat({ projectId, onClose, onDone }: { projectId: string; onClose: 
   const [pick, setPick] = useState<Json | null>(null);
   const [mode, setMode] = useState('suggest');
   const [history, setHistory] = useState(true);
+  const [account, setAccount] = useState('');
   const act = useAct();
   if (!data) return null;
   const ql = q.trim().toLowerCase();
   const convs = (data.conversations as Json[]).filter((c) => !ql || `${c.display_name ?? ''} ${c.address}`.toLowerCase().includes(ql));
   const groups = (data.groups as Json[]).filter((g) => g.group_id && !g.linked_to);
+  const people = ((data.contacts ?? []) as Json[]).filter((c) => !ql || `${c.full_name} ${c.number} ${c.account ?? ''}`.toLowerCase().includes(ql));
   return (
     <Modal
       title="Link a customer chat"
@@ -365,7 +367,8 @@ function LinkChat({ projectId, onClose, onDone }: { projectId: string; onClose: 
           className="btn primary"
           disabled={!pick}
           onClick={async () => {
-            const r = await act(() => post<Json>(`/api/v1/projects/${projectId}/chats`, { ...(pick!.group ? { waGroupId: pick!.id } : { conversationId: pick!.id }), mode, readHistory: history }), 'Linked');
+            const target = pick!.group ? { waGroupId: pick!.id } : pick!.contact ? { contactId: pick!.id, channelAccountId: account || null } : { conversationId: pick!.id };
+            const r = await act(() => post<Json>(`/api/v1/projects/${projectId}/chats`, { ...target, mode, readHistory: history }), 'Linked');
             if (r) (onDone(), onClose());
           }}
         >
@@ -380,7 +383,10 @@ function LinkChat({ projectId, onClose, onDone }: { projectId: string; onClose: 
           </div>
         ) : (
           <>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${data.conversations.length} WhatsApp chats by name or number…`} />
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${data.conversations.length} WhatsApp chats and ${(data.contacts ?? []).length} contacts by name or number…`} />
+            <p className="small muted" style={{ margin: 0 }}>
+              Chats appear here once someone writes to your WhatsApp Business number{data.accounts.length > 1 ? 's' : ''} — WhatsApp does not share your phone's older chats or contact list. Contacts with a mobile number can be linked now; the first message to them must be an approved template.
+            </p>
             <div className="repo-pick" style={{ maxHeight: 320, overflowY: 'auto' }}>
               {groups.map((g) => (
                 <label key={g.id} className="repo-opt row small" style={{ gap: 8 }}>
@@ -401,9 +407,32 @@ function LinkChat({ projectId, onClose, onDone }: { projectId: string; onClose: 
                   </span>
                 </label>
               ))}
-              {!convs.length && !groups.length && <span className="muted small">No chats yet: they appear once a customer writes to your WhatsApp Business number.</span>}
+              {people.length > 0 && <div className="small muted" style={{ padding: '6px 4px 2px', fontWeight: 600 }}>Contacts not on WhatsApp chat yet</div>}
+              {people.map((c) => (
+                <label key={`c-${c.id}`} className="repo-opt row small" style={{ gap: 8 }}>
+                  <input type="radio" name="chat" checked={pick?.contact && pick.id === c.id} onChange={() => setPick({ ...c, contact: true })} />
+                  <span>
+                    <b>{c.full_name}</b> <span className="muted">+{c.number}</span>
+                    {c.of_customer && <span className="chip info" style={{ marginLeft: 6 }}>project's customer</span>}
+                    {c.account && <div className="muted">{c.account}</div>}
+                  </span>
+                </label>
+              ))}
+              {!convs.length && !groups.length && !people.length && <span className="muted small">No chats yet: they appear once a customer writes to your WhatsApp Business number. Add a mobile number to the customer's contacts to link them before they write.</span>}
             </div>
           </>
+        )}
+        {pick?.contact && data.accounts.length > 1 && (
+          <label className="field">
+            Chat from
+            <select value={account || data.accounts[0].id} onChange={(e) => setAccount(e.target.value)}>
+              {(data.accounts as Json[]).map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
         <ModeChoice mode={mode} set={setMode} />
         <label className="row small" style={{ gap: 6 }}>
