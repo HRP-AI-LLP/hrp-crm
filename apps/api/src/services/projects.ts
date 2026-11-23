@@ -728,7 +728,12 @@ export async function addComment(ctx: RecordCtx, projectId: string, target: { ta
         [ctx.tenantId, target.issueId, projectId],
       );
   if (!row) throw notFound();
-  const c = await ctx.tx.one<{ id: string }>(`insert into project_comments (tenant_id, project_id, task_id, issue_id, body) values ($1,$2,$3,$4,$5) returning id`, [ctx.tenantId, projectId, target.taskId ?? null, target.issueId ?? null, body]);
+  // a comment the coding agent writes (app.agent = 1) is shown as HRP AI, not the key's owner
+  const c = await ctx.tx.one<{ id: string }>(
+    `insert into project_comments (tenant_id, project_id, task_id, issue_id, user_id, body)
+     values ($1,$2,$3,$4, case when coalesce(current_setting('app.agent', true), '') = '1' then (select id from users where tenant_id = $1 and is_agent) else app.current_user_id() end, $5) returning id`,
+    [ctx.tenantId, projectId, target.taskId ?? null, target.issueId ?? null, body],
+  );
   const team = await workers(ctx.tx, ctx.tenantId, project);
   await notify(ctx, [...row.assignees, row.created_by].filter((u) => u && team.has(u)), `New comment on ${row.name}`, target.taskId ? `/projects/${project.id}?item=${target.taskId}` : `/projects/${project.id}`, body.slice(0, 200), 'watching');
   return c;

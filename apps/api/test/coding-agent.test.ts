@@ -119,9 +119,11 @@ describe('coding agent over MCP', () => {
     expect(d.events.map((e: Json) => e.stage)).toEqual(['claimed', 'working', 'tests_passed', 'review_requested', 'changes_requested', 'claimed', 'review_requested', 'approved', 'pushed', 'released']);
     const links = await sql(`select kind, url from project_task_links where task_id = $1`, [ids.item]);
     expect(links).toEqual([{ kind: 'pr', url: 'https://github.com/hrp/fleet/pull/7' }]);
-    // the comments the people see
-    const comments = (await sql(`select body from project_comments where task_id = $1 order by created_at`, [ids.item])).map((c) => c.body);
-    expect(comments.some((b) => b.includes('ready for review'))).toBe(true);
+    // the comments the people see — and they are shown as HRP AI, not the key's owner
+    const rows = await sql(`select c.body, u.is_agent, u.full_name from project_comments c join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at`, [ids.item]);
+    expect(rows.some((b) => b.body.includes('ready for review'))).toBe(true);
+    const review = rows.find((b) => b.body.includes('ready for review'))!;
+    expect(review.is_agent).toBe(true);
   });
 
   it('re-queues when a person changes or reopens an item, and lets the agent file bugs and comment', async () => {

@@ -255,6 +255,8 @@ function people(data: Json) {
   const m = new Map<string, string>();
   for (const x of data.members as Json[]) if (x.role !== 'viewer') m.set(x.user_id, x.full_name);
   if (data.project.owner_id && data.project.manager) m.set(data.project.owner_id, data.project.manager);
+  // HRP AI can take a plain task too — it is the default assignee unless changed
+  if (data.agent?.id) m.set(data.agent.id, `🤖 ${data.agent.name}`);
   return m;
 }
 
