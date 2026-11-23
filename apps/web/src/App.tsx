@@ -1,5 +1,6 @@
 import { type ComponentType, lazy, type ReactNode, Suspense } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { AutoDscSign } from './components/AutoDscSign';
 import { Shell } from './components/Shell';
 import { Spinner } from './components/ui';
 import { useAuth } from './lib/auth';
@@ -79,7 +80,12 @@ function RequireAuth({ children }: { children: ReactNode }) {
     );
   if (!me) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
   if (me.security?.mfaRequired && !me.security.mfaEnabled) return <MfaRequiredGate />;
-  return <>{children}</>;
+  return (
+    <>
+      <AutoDscSign />
+      {children}
+    </>
+  );
 }
 
 export function App() {

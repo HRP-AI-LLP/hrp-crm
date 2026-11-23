@@ -961,9 +961,7 @@ function Dsc({ d }: { d: Json }) {
               <small className="muted">The certificate must list you as allowed to sign. A USB-token certificate can’t be used here — see below.</small>
             </>
           ) : (
-            <p className="muted small" style={{ margin: '6px 0 0' }}>
-              Your certificates are all on <b>USB tokens</b>. A token keeps its key on the device, so it can only sign with the token plugged in and its PIN typed — it <b>cannot sign unattended</b>, and so can’t sign invoices automatically. To sign automatically, add a <b>.pfx</b> (file) certificate with “Add a .pfx certificate” above. With a token, sign each issued invoice in one step from the invoice’s <b>Sign</b> panel (the token must be connected and the local signer running).
-            </p>
+            <TokenAutoSign certs={certs.filter((c) => c.kind === 'token' && !c.expired)} billing={billing.data} refresh={() => { qc.invalidateQueries({ queryKey: ['org-dsc'] }); qc.invalidateQueries({ queryKey: ['billing-settings'] }); }} toast={toast} />
           )}
         </div>
       )}
@@ -1011,6 +1009,76 @@ function Dsc({ d }: { d: Json }) {
       {paired && <PairedModal code={paired.pairingCode} onClose={() => setPaired(null)} />}
       {modal === 'token' && <TokenCertModal d={d} sigs={sigs.data ?? []} signers={signers} onClose={() => setModal(null)} onSaved={refresh} />}
       {edit && <CertEditModal d={d} sigs={sigs.data ?? []} cert={edit} onClose={() => setEdit(null)} onSaved={refresh} />}
+    </div>
+  );
+}
+
+/** Auto-sign with a USB token: pick the certificate and save its PIN; a tab open on the laptop signs issued invoices. */
+function TokenAutoSign({ certs, billing, refresh, toast }: { certs: Json[]; billing: Json; refresh: () => void; toast: (m: string, bad?: boolean) => void }) {
+  const current = certs.find((c) => c.id === billing.autoDscCertId);
+  const [certId, setCertId] = useState<string>(current?.id ?? '');
+  const [pin, setPin] = useState('');
+  const chosen = certs.find((c) => c.id === certId);
+  const save = async () => {
+    if (!certId) return;
+    if (!chosen?.autoPin && !pin.trim()) {
+      toast('Enter the token PIN to save', true);
+      return;
+    }
+    try {
+      if (pin.trim()) await put(`/api/v1/organisation/dsc/${certId}/auto-pin`, { pin: pin.trim() });
+      await put('/api/admin/billing/settings', { autoDscCertId: certId });
+      setPin('');
+      refresh();
+      toast('Automatic token signing is on');
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
+  const turnOff = async () => {
+    try {
+      await put('/api/admin/billing/settings', { autoDscCertId: '' });
+      if (billing.autoDscCertId) await del(`/api/v1/organisation/dsc/${billing.autoDscCertId}/auto-pin`).catch(() => {});
+      refresh();
+      toast('Automatic signing turned off');
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
+  return (
+    <div className="stack" style={{ gap: 8, marginTop: 6 }}>
+      <p className="muted small" style={{ margin: 0 }}>
+        Your certificates are on <b>USB tokens</b>. A token can’t sign on its own in the cloud — but if you keep the token plugged in, run the local signer, and save the PIN here, then <b>any open SanchalanOS tab on that laptop signs issued invoices automatically</b>, with no typing. Invoices made overnight sign the next time a tab is open there. (The PIN is stored encrypted. Saving it removes the token’s PIN protection, so do this only on a trusted machine.)
+      </p>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <label className="field" style={{ minWidth: 240 }}>
+          Certificate
+          <select value={certId} onChange={(e) => setCertId(e.target.value)}>
+            <option value="">Choose a token certificate…</option>
+            {certs.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.subjectCn} — {c.label}
+                {c.autoPin ? ' (PIN saved)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field" style={{ minWidth: 160 }}>
+          Token PIN
+          <input type="password" value={pin} autoComplete="off" placeholder={chosen?.autoPin ? '•••• (saved — leave blank to keep)' : 'Token PIN'} onChange={(e) => setPin(e.target.value)} />
+        </label>
+        <button className="btn primary sm" onClick={save} disabled={!certId}>
+          Turn on auto-signing
+        </button>
+        {billing.autoDscCertId && (
+          <button className="btn ghost sm" onClick={turnOff}>
+            Turn off
+          </button>
+        )}
+      </div>
+      {billing.autoDscCertId && current && (
+        <span className="chip good">Auto-signing with {current.subjectCn} — keep the token plugged in and the signer running</span>
+      )}
     </div>
   );
 }

@@ -49,6 +49,7 @@ interface CertRow {
   signature_id: string | null;
   user_ids: string[];
   is_active: boolean;
+  auto_pin_enc: string | null;
 }
 
 /* ───────────────────────── certificates ───────────────────────── */
@@ -142,7 +143,44 @@ export async function listCerts(ctx: RecordCtx) {
     userIds: r.user_ids,
     canSign: r.user_ids.includes(me),
     canEdit: manager,
+    autoPin: !!r.auto_pin_enc,
   }));
+}
+
+/* ───── saved token PIN, for the browser's auto-sign loop ───── */
+
+export async function setAutoPin(ctx: RecordCtx, env: Env, id: string, pin: string) {
+  await assertOrgManager(ctx);
+  const c = await ctx.tx.one<CertRow>(`select * from dsc_certificates where tenant_id = $1 and id = $2 and is_active`, [ctx.tenantId, id]);
+  if (!c) throw notFound('Certificate not found');
+  if (c.kind !== 'token') throw badRequest('A saved PIN is only for a USB-token certificate');
+  await ctx.tx.query(`update dsc_certificates set auto_pin_enc = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, await encryptSecret(requireEncryptionKey(env), pin, ctx.tenantId)]);
+}
+
+export async function clearAutoPin(ctx: RecordCtx, id: string) {
+  await assertOrgManager(ctx);
+  await ctx.tx.query(`update dsc_certificates set auto_pin_enc = null where tenant_id = $1 and id = $2`, [ctx.tenantId, id]);
+}
+
+/** The saved PIN, for the signed-in manager's auto-sign loop to hand to the local signer. */
+export async function autoPin(ctx: RecordCtx, env: Env, id: string) {
+  await assertOrgManager(ctx);
+  const c = await ctx.tx.one<{ auto_pin_enc: string | null }>(`select auto_pin_enc from dsc_certificates where tenant_id = $1 and id = $2 and is_active and kind = 'token'`, [ctx.tenantId, id]);
+  if (!c?.auto_pin_enc) throw notFound('No saved PIN for this certificate');
+  return { pin: await decryptSecret(requireEncryptionKey(env), c.auto_pin_enc, ctx.tenantId) };
+}
+
+/** Issued tax invoices of the last week that have no digital signature yet — the auto-sign loop signs these. */
+export async function pendingSignature(ctx: RecordCtx) {
+  const rows = await ctx.tx.query<{ id: string; invoice_number: string | null }>(
+    `select i.id, i.invoice_number from invoices i
+      where i.tenant_id = $1 and i.doc_type = 'tax_invoice' and i.status in ('issued', 'partially_paid', 'paid')
+        and i.deleted_at is null and i.cancelled_at is null and i.issued_at > now() - interval '7 days'
+        and not exists (select 1 from document_signatures s where s.tenant_id = i.tenant_id and s.object_key = 'invoice' and s.record_id = i.id and s.method in ('dsc_pfx', 'dsc_token') and s.revoked_at is null)
+      order by i.issued_at desc limit 25`,
+    [ctx.tenantId],
+  );
+  return { invoices: rows.map((r) => ({ id: r.id, number: r.invoice_number })) };
 }
 
 async function certFor(ctx: RecordCtx, id: string, kind: 'pfx' | 'token') {

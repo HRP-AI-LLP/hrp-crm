@@ -197,6 +197,17 @@ export const organisationRoutes = new Hono<AppEnv>()
     await c.var.db.tx(scope(c), (tx) => dsc.removeCert(rctx(c, tx), id(c)));
     return c.json({ ok: true });
   })
+  .put('/organisation/dsc/:id/auto-pin', async (c) => {
+    const b = z.object({ pin: z.string().min(1).max(64) }).parse(await c.req.json());
+    await c.var.db.tx(scope(c), (tx) => dsc.setAutoPin(rctx(c, tx), c.env, id(c), b.pin));
+    return c.json({ ok: true });
+  })
+  .delete('/organisation/dsc/:id/auto-pin', async (c) => {
+    await c.var.db.tx(scope(c), (tx) => dsc.clearAutoPin(rctx(c, tx), id(c)));
+    return c.json({ ok: true });
+  })
+  .get('/organisation/dsc/:id/auto-pin', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => dsc.autoPin(rctx(c, tx), c.env, id(c)))))
+  .get('/organisation/dsc-pending-invoices', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => dsc.pendingSignature(rctx(c, tx)))))
   .post('/organisation/dsc-signers', async (c) => {
     const b = z.object({ label: z.string().trim().min(1).max(120) }).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => dsc.pairSigner(rctx(c, tx), c.env, b.label)), 201);

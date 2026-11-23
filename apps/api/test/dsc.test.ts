@@ -175,5 +175,17 @@ describe.skipIf(!canToken)('a DSC on a USB token, through the local signer', () 
     // the stored file is a properly signed PDF (checked by the public verifier too)
     const file = await h.app.request(`http://synapse.test${done.json.fileUrl ?? ''}`, {}, h.env);
     if (done.json.fileUrl) expect(file.status).toBe(200);
+
+    // a saved PIN for unattended auto-signing: round-trips, flagged on the cert, never leaked in the list
+    expect((await api('PUT', `/api/v1/organisation/dsc/${reg.json.id}/auto-pin`, { pin: '123456' })).status).toBe(200);
+    const list = (await api('GET', '/api/v1/organisation/dsc')).json as { certificates: any[] };
+    expect(list.certificates.find((c) => c.id === reg.json.id).autoPin).toBe(true);
+    expect(JSON.stringify(list)).not.toContain('123456');
+    expect((await api('GET', `/api/v1/organisation/dsc/${reg.json.id}/auto-pin`)).json.pin).toBe('123456');
+    // the invoice we just signed is no longer pending signature
+    expect(((await api('GET', '/api/v1/organisation/dsc-pending-invoices')).json.invoices as any[]).some((p) => p.id === ids.inv)).toBe(false);
+    // clearing the PIN turns the flag off
+    expect((await api('DELETE', `/api/v1/organisation/dsc/${reg.json.id}/auto-pin`)).status).toBe(200);
+    expect((await api('GET', '/api/v1/organisation/dsc')).json.certificates.find((c: any) => c.id === reg.json.id).autoPin).toBe(false);
   }, 60_000);
 });

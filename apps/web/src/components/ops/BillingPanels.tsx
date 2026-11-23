@@ -9,7 +9,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { download, get, post, put } from '../../lib/api';
 import { date, money2 } from '../../lib/format';
-import { signWithPfx } from '../../lib/dsc';
+import { signWithPfx, signWithToken } from '../../lib/dsc';
 import { Modal, useToast } from '../ui';
 import { type DocLine, LinesEditor, toLineInput } from './LinesEditor';
 import { TallySync } from './TallySync';
@@ -201,20 +201,28 @@ export function InvoicePanel({ id, canEdit }: { id: string; canEdit: boolean }) 
   const act = useAct([['invoice', id], ['record', 'invoice', id], ['timeline', 'invoice', id], ['records', 'invoice']]);
   const toast = useToast();
   const qc = useQueryClient();
-  // issue, then digitally sign with the configured DSC (.pfx) automatically — no manual signing
+  // issue, then digitally sign with the configured DSC automatically — no manual signing
   const issueAndSign = async () => {
     if (!window.confirm('Issue this invoice? It gets its GST number and can no longer be edited.')) return;
     const r = await act(() => post(`/api/v1/invoices/${id}/issue`), 'Invoice issued');
     if (!r) return;
     const certId = bset.data?.autoDscCertId as string | undefined;
-    if (certId) {
-      try {
+    if (!certId) return;
+    try {
+      const dsc = await get<Json>('/api/v1/organisation/dsc');
+      const cert = (dsc.certificates as Json[]).find((c) => c.id === certId);
+      if (cert?.kind === 'token') {
+        // a token with a saved PIN: sign now via the local signer (token plugged in, signer running)
+        if (!cert.autoPin) return; // the background loop will sign when a PIN is saved
+        const { pin } = await get<{ pin: string }>(`/api/v1/organisation/dsc/${certId}/auto-pin`);
+        await signWithToken('invoice', id, certId, pin, me!, (dsc.signers ?? []) as { id: string }[]);
+      } else {
         await signWithPfx('invoice', id, certId, me);
-        toast('Digitally signed with your DSC');
-        qc.invalidateQueries({ queryKey: ['doc-signatures', 'invoice', id] });
-      } catch (e) {
-        toast(`Issued, but automatic DSC signing failed: ${(e as Error).message}`, true);
       }
+      toast('Digitally signed with your DSC');
+      qc.invalidateQueries({ queryKey: ['doc-signatures', 'invoice', id] });
+    } catch (e) {
+      toast(`Issued, but automatic DSC signing failed: ${(e as Error).message}`, true);
     }
   };
   const [modal, setModal] = useState<null | 'pay' | 'cancel' | 'credit' | 'irn'>(null);
