@@ -274,6 +274,7 @@ function desktopConfig(url: string, auth: string, pin: string) {
 }
 
 const ASK_WORK = 'Queue the open bugs and tasks on the SanchalanOS board and fix them one by one. For each, request a review and wait for my approval before committing.';
+const ASK_BATCH = 'Queue the open bugs and tasks on the SanchalanOS board and take them all at once (next_work with all: true). Build and test every one, request a review for each, then wait for my verdicts with review_status_all and commit only the approved ones.';
 const ASK_BUILD = 'Look at this repository and tell me, in a few lines, how to build it, run it and run its tests on Windows.';
 
 /** After the key: where to talk to Claude Code, and what to say. */
@@ -317,6 +318,8 @@ function HowToStart() {
         <li>
           <b>Ask in the chat, as a normal message:</b>
           <Ask text={ASK_WORK} />
+          Or everything at once, then one review round (or set “All at once” above):
+          <Ask text={ASK_BATCH} />
           The first time it uses a SanchalanOS tool, Claude Code asks for permission: allow it.
         </li>
         <li>
@@ -394,6 +397,28 @@ export function CodingAgent({ id, manage }: { id: string; manage: boolean }) {
               {j.work_key}-{j.task_number} {j.name}
             </button>
           ))}
+          {manage && review.length > 1 && (
+            <button
+              className="btn sm primary"
+              style={{ marginLeft: 8 }}
+              disabled={busy}
+              onClick={async () => {
+                if (!confirm(`Approve all ${review.length}? Open each to see its changes and test report first — approving lets the agent commit and push them.`)) return;
+                setBusy(true);
+                try {
+                  const r = await post<Json>(`/api/v1/projects/${id}/agent/approve-all`, {});
+                  toast(`${r.approved} approved — the agent commits and pushes them`);
+                  refetch();
+                } catch (e) {
+                  toast((e as Error).message, true);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Approve all {review.length}
+            </button>
+          )}
         </div>
       )}
       <section className="panel stack" style={{ padding: 12 }}>
@@ -422,6 +447,23 @@ export function CodingAgent({ id, manage }: { id: string; manage: boolean }) {
           </label>
           <label className="row" style={{ gap: 4 }} title="Off: a person always verifies the work before it is committed and pushed">
             <input type="checkbox" disabled={!manage} checked={cfg.autoPush} onChange={(e) => change({ autoPush: e.target.checked })} /> push without review (not recommended)
+          </label>
+        </div>
+        <div className="field">
+          How the agent takes work
+          <label className="row small" style={{ gap: 6, alignItems: 'flex-start' }}>
+            <input type="radio" disabled={!manage} checked={(cfg.workMode ?? 'one') === 'one'} onChange={() => change({ workMode: 'one' })} />
+            <span>
+              <b>One at a time</b> — builds an item, waits for your review, then takes the next.
+            </span>
+          </label>
+          <label className="row small" style={{ gap: 6, alignItems: 'flex-start' }}>
+            <input type="radio" disabled={!manage} checked={cfg.workMode === 'batch'} onChange={() => change({ workMode: 'batch' })} />
+            <span>
+              <b>All at once</b> — takes every waiting item (up to{' '}
+              <input type="number" min={1} max={50} disabled={!manage || cfg.workMode !== 'batch'} value={cfg.batchSize ?? 20} onChange={(e) => change({ batchSize: Math.max(1, Math.min(50, Number(e.target.value) || 20)) })} style={{ width: 56 }} aria-label="Batch size" />
+              ), builds and tests them all, then waits for one review round. Review each, or approve them all together.
+            </span>
           </label>
         </div>
         <div className="grid-2" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>

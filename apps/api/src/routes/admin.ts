@@ -271,7 +271,7 @@ export const adminRoutes = new Hono<AppEnv>()
                   coalesce(array_agg(r.key) filter (where r.key is not null), '{}') as roles
              from users u left join user_roles ur on ur.tenant_id = u.tenant_id and ur.user_id = u.id
              left join roles r on r.tenant_id = ur.tenant_id and r.id = ur.role_id
-            where u.tenant_id = $1 group by u.id order by u.full_name`,
+            where u.tenant_id = $1 and not u.is_agent group by u.id order by u.full_name`,
           [c.var.tenant.id],
         ),
       ),

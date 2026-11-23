@@ -206,6 +206,10 @@ export const projectRoutes = new Hono<AppEnv>()
     c.json(await c.var.db.tx(scope(c, true), (tx) => pj.listProjects(rctx(c, tx), { status: c.req.query('status') || null, search: c.req.query('q') || null, mine: c.req.query('mine') === '1' }))),
   )
   .get('/projects/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pj.getProject(rctx(c, tx), id(c)))))
+  .put('/projects/:id/default-assignee', async (c) => {
+    const b = z.object({ value: z.union([z.enum(['agent', 'none']), z.string().uuid()]) }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => pj.setDefaultAssignee(rctx(c, tx), id(c), b.value)));
+  })
   .get('/projects/:id/summary', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pj.projectSummary(rctx(c, tx), id(c)))))
   .put('/projects/:id/members', async (c) => {
     const b = z

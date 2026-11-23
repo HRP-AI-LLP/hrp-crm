@@ -1424,10 +1424,12 @@ pre.transcript { white-space: pre-wrap; word-break: break-word; max-height: 60vh
 .kb-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border-radius: var(--r-sm); background: var(--line-2); font-weight: 700; font-size: 12.5px; text-transform: uppercase; letter-spacing: .03em; color: var(--ink-2); position: sticky; top: 0; }
 .kb-head.over { background: #fee2e2; color: #991b1b; }
 .kb-lane { font-weight: 600; font-size: 13px; padding: 8px 2px 2px; border-bottom: 1px solid var(--line); }
-.kb-col { min-height: 60px; border-radius: var(--r-sm); background: var(--line-2); padding: 6px; display: grid; gap: 6px; align-content: start; transition: background .12s; }
+.kb-col { min-height: 160px; border-radius: var(--r-sm); background: var(--line-2); padding: 6px; display: grid; gap: 6px; align-content: start; transition: background .12s; }
 .kb-col.drop { background: var(--brand-50); outline: 2px dashed var(--brand-500); outline-offset: -2px; }
 .kb-card { all: unset; box-sizing: border-box; cursor: pointer; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; display: grid; gap: 6px; box-shadow: var(--shadow-card); }
 .kb-card:hover { border-color: var(--brand-500); }
+.kb-card.movable { cursor: grab; user-select: none; -webkit-user-drag: element; }
+.kb-card.movable:active { cursor: grabbing; }
 .kb-card:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 .kb-title { font-size: 13.5px; line-height: 1.35; }
 .kb-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12px; }

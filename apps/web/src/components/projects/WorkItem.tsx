@@ -64,7 +64,9 @@ export function useTeam(projectId: string): [string, string][] {
     const m = new Map<string, string>();
     if (data.project.owner_id) m.set(data.project.owner_id, data.project.manager ?? 'Manager');
     for (const x of data.members as Json[]) if (x.role !== 'viewer') m.set(x.user_id, x.full_name);
-    return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+    const people = [...m.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+    // HRP AI, the coding agent, first: work given to it goes to Claude Code
+    return data.agent ? [[data.agent.id, `🤖 ${data.agent.name} (coding agent)`] as [string, string], ...people] : people;
   }, [data]);
 }
 

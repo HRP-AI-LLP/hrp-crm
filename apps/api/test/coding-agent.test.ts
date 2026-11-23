@@ -66,6 +66,8 @@ describe('coding agent over MCP', () => {
   });
 
   it('queues items once switched on, and hands the next one to the agent with the project setup', async () => {
+    // these items are not given to HRP AI by default (that queues them: see the HRP AI test)
+    expect((await api('PUT', `/api/v1/projects/${ids.project}/default-assignee`, { value: 'none' })).status).toBe(200);
     // off: nothing queued
     await api('POST', `/api/v1/projects/${ids.project}/work/items`, { name: 'Ignored before switching on', workType: 'story' });
     expect(await sql(`select 1 from coding_agent_jobs`)).toEqual([]);
@@ -195,5 +197,67 @@ describe('coding agent over MCP', () => {
     // revoked: it stops working
     expect((await api('DELETE', `/api/v1/projects/${ids.project}/agent/keys/${made.json.id}`)).status).toBe(200);
     expect((await h.call('POST', '/api/v1/mcp', { body: { jsonrpc: '2.0', id: 1, method: 'tools/list' }, headers: { authorization: `Bearer ${repoKey}` } })).status).toBe(401);
+  });
+
+  it('HRP AI: new work goes to the coding agent by default; assigning it queues the item', async () => {
+    const pid = (await api('POST', '/api/v1/records/project', { name: 'Driver app' })).json.id;
+    await sql(`update projects set status = 'active', work_key = 'DRV' where id = $1`, [pid]);
+    const g = (await api('GET', `/api/v1/projects/${pid}`)).json;
+    expect(g.agent).toMatchObject({ name: 'HRP AI' });
+    expect(g.defaultAssignee).toBe('agent');
+    // nobody chosen: HRP AI, and it is queued (the project's agent switched on with it)
+    const it = await api('POST', `/api/v1/projects/${pid}/work/items`, { name: 'Login with OTP', workType: 'story' });
+    expect(it.status, JSON.stringify(it.json)).toBe(201);
+    expect((await sql(`select assignees from project_tasks where id = $1`, [it.json.id]))[0]!.assignees).toEqual([g.agent.id]);
+    expect((await sql(`select reason, status from coding_agent_jobs where task_id = $1`, [it.json.id]))[0]).toMatchObject({ reason: 'assigned', status: 'queued' });
+    expect((await sql(`select enabled from coding_agent_settings where project_id = $1`, [pid]))[0]!.enabled).toBe(true);
+    // an epic is not coding work
+    const ep = await api('POST', `/api/v1/projects/${pid}/work/items`, { name: 'Onboarding', workType: 'epic' });
+    expect((await sql(`select assignees from project_tasks where id = $1`, [ep.json.id]))[0]!.assignees).toEqual([]);
+    // assigning an existing item to HRP AI queues it
+    await api('PUT', `/api/v1/projects/${pid}/default-assignee`, { value: 'none' });
+    const mine = await api('POST', `/api/v1/projects/${pid}/work/items`, { name: 'Profile photo upload', workType: 'task' });
+    expect((await sql(`select assignees from project_tasks where id = $1`, [mine.json.id]))[0]!.assignees).toEqual([]);
+    // (the agent is on for this project now, so it was queued as created; assigning marks it as given to HRP AI)
+    expect((await sql(`select reason from coding_agent_jobs where task_id = $1`, [mine.json.id]))[0]!.reason).toBe('created');
+    const upd = await api('PATCH', `/api/v1/projects/${pid}/tasks/${mine.json.id}`, { assignees: [g.agent.id] });
+    expect(upd.status, JSON.stringify(upd.json)).toBe(200);
+    expect((await sql(`select reason from coding_agent_jobs where task_id = $1`, [mine.json.id]))[0]!.reason).toBe('assigned');
+    // no notifications or mail for it; not among the people an admin manages
+    expect(await sql(`select 1 from notifications where user_id = $1`, [g.agent.id])).toEqual([]);
+    expect(((await api('GET', '/api/admin/users')).json.items as Json[]).some((u) => u.id === g.agent.id)).toBe(false);
+    expect(((await api('GET', '/api/v1/users')).json.items as Json[]).find((u) => u.id === g.agent.id)).toMatchObject({ is_agent: true });
+    // a person as the default instead
+    expect((await api('PUT', `/api/v1/projects/${pid}/default-assignee`, { value: g.agent.id === 'x' ? 'none' : '00000000-0000-4000-8000-000000000000' })).status).toBe(400);
+  });
+
+  it('all at once: takes every waiting item, then one review round; approve all in one go', async () => {
+    const pid = (await api('POST', '/api/v1/records/project', { name: 'Batch app' })).json.id;
+    await sql(`update projects set status = 'active', work_key = 'BAT' where id = $1`, [pid]);
+    const s = await api('PUT', `/api/v1/projects/${pid}/agent/settings`, { enabled: true, workTypes: ['story', 'bug', 'task'], onCreate: true, onUpdate: true, autoPush: false, workMode: 'batch', batchSize: 10 });
+    expect(s.json).toMatchObject({ workMode: 'batch', batchSize: 10 });
+    for (const n of ['Login', 'Signup', 'Logout']) expect((await api('POST', `/api/v1/projects/${pid}/work/items`, { name: n, workType: 'story' })).status).toBe(201);
+    // the project works in batches: next_work hands over all three
+    const b = await tool('next_work', { agent: 'claude-code@batch', project: 'BAT' });
+    expect(b.error, b.text).toBe(false);
+    expect(b.data!.jobs.map((j: Json) => j.item.title)).toEqual(['Login', 'Signup', 'Logout']);
+    expect(b.data!.setup.workMode).toBe('batch');
+    expect(b.data!.next).toMatch(/review_status_all/);
+    for (const j of b.data!.jobs) expect((await tool('request_review', { jobId: j.jobId, summary: `Did ${j.item.title}`, branch: 'agent/batch' })).error).toBe(false);
+    let all = await tool('review_status_all', { project: 'BAT' });
+    expect(all.data).toMatchObject({ awaiting: 3 });
+    // the person approves them all at once
+    const ok = await api('POST', `/api/v1/projects/${pid}/agent/approve-all`, {});
+    expect(ok.json).toEqual({ approved: 3 });
+    all = await tool('review_status_all', { project: 'BAT' });
+    expect(all.data!.awaiting).toBe(0);
+    expect(all.data!.jobs.map((j: Json) => j.status)).toEqual(['approved', 'approved', 'approved']);
+    // nothing left: an empty batch
+    expect((await tool('next_work', { agent: 'claude-code@batch', project: 'BAT' })).data).toMatchObject({ job: null, jobs: [] });
+    // one-at-a-time projects can still be asked for everything
+    await api('PUT', `/api/v1/projects/${pid}/agent/settings`, { enabled: true, workTypes: ['story', 'bug', 'task'], onCreate: true, onUpdate: true, autoPush: false, workMode: 'one' });
+    await api('POST', `/api/v1/projects/${pid}/work/items`, { name: 'Forgot password', workType: 'story' });
+    await api('POST', `/api/v1/projects/${pid}/work/items`, { name: 'Change password', workType: 'story' });
+    expect((await tool('next_work', { agent: 'claude-code@batch', project: 'BAT', all: true })).data!.jobs).toHaveLength(2);
   });
 });

@@ -35,6 +35,9 @@ export const settingsSchema = z.object({
   localFolder: z.string().trim().max(300).nullish(),
   instructions: z.string().max(8000).nullish(),
   releaseCommand: z.string().trim().max(500).nullish(),
+  /** 'one': an item at a time, reviewed before the next; 'batch': everything queued at once, then one review round */
+  workMode: z.enum(['one', 'batch']).optional(),
+  batchSize: z.number().int().min(1).max(50).optional(),
 });
 
 export async function getSettings(ctx: RecordCtx, projectId: string) {
@@ -49,17 +52,20 @@ export async function getSettings(ctx: RecordCtx, projectId: string) {
     localFolder: s?.local_folder ?? null,
     instructions: s?.instructions ?? null,
     releaseCommand: s?.release_command ?? null,
+    workMode: (s?.work_mode as 'one' | 'batch' | undefined) ?? 'one',
+    batchSize: Number(s?.batch_size ?? 20),
   };
 }
 
 export async function saveSettings(ctx: RecordCtx, projectId: string, s: z.infer<typeof settingsSchema>) {
   await projectAccess(ctx, projectId, 'manage');
   await ctx.tx.query(
-    `insert into coding_agent_settings (tenant_id, project_id, enabled, work_types, on_create, on_update, auto_push, local_folder, instructions, release_command, updated_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now())
+    `insert into coding_agent_settings (tenant_id, project_id, enabled, work_types, on_create, on_update, auto_push, local_folder, instructions, release_command, work_mode, batch_size, updated_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,coalesce($11, 'one'),coalesce($12, 20),now())
      on conflict (tenant_id, project_id) do update set enabled = excluded.enabled, work_types = excluded.work_types, on_create = excluded.on_create, on_update = excluded.on_update,
-       auto_push = excluded.auto_push, local_folder = excluded.local_folder, instructions = excluded.instructions, release_command = excluded.release_command, updated_by = app.current_user_id(), updated_at = now()`,
-    [ctx.tenantId, projectId, s.enabled, s.workTypes, s.onCreate, s.onUpdate, s.autoPush, s.localFolder || null, s.instructions || null, s.releaseCommand || null],
+       auto_push = excluded.auto_push, local_folder = excluded.local_folder, instructions = excluded.instructions, release_command = excluded.release_command,
+       work_mode = coalesce($11, coding_agent_settings.work_mode), batch_size = coalesce($12, coding_agent_settings.batch_size), updated_by = app.current_user_id(), updated_at = now()`,
+    [ctx.tenantId, projectId, s.enabled, s.workTypes, s.onCreate, s.onUpdate, s.autoPush, s.localFolder || null, s.instructions || null, s.releaseCommand || null, s.workMode ?? null, s.batchSize ?? null],
   );
   return getSettings(ctx, projectId);
 }
@@ -235,7 +241,7 @@ export async function resolveAgentProject(ctx: RecordCtx, ref: string) {
 
 async function projectsFor(ctx: RecordCtx) {
   const rows = await ctx.tx.query<Record<string, any>>(
-    `select p.id, p.name, p.work_key, p.status, s.enabled, s.local_folder, s.instructions, s.release_command, s.auto_push, s.work_types,
+    `select p.id, p.name, p.work_key, p.status, s.enabled, s.local_folder, s.instructions, s.release_command, s.auto_push, s.work_types, s.work_mode, s.batch_size,
             coalesce((select json_agg(json_build_object('provider', r.provider, 'repo', r.repo, 'defaultBranch', r.default_branch)) from project_repos r where r.tenant_id = p.tenant_id and r.project_id = p.id), '[]') as repos,
             (select count(*)::int from coding_agent_jobs j where j.tenant_id = p.tenant_id and j.project_id = p.id and j.status in ('queued','changes_requested')) as waiting
        from projects p left join coding_agent_settings s on s.tenant_id = p.tenant_id and s.project_id = p.id
@@ -269,6 +275,7 @@ function setupOf(p: Record<string, any>) {
     instructions: p.instructions ?? null,
     releaseCommand: p.release_command ?? null,
     autoPush: !!p.auto_push,
+    workMode: p.work_mode ?? 'one',
     steps: repos.length
       ? [`If the folder does not exist: git clone ${repos[0]!.cloneUrl} ${p.local_folder || repos[0]!.folder}`, `git fetch && git checkout ${repos[0]!.defaultBranch} && git pull`]
       : [`If the folder does not exist: create it, git init, and scaffold the project from the epic / story descriptions (no repository is linked in SanchalanOS yet — link one under Project → Repos)`],
@@ -323,6 +330,68 @@ async function jobFor(ctx: RecordCtx, jobId: string, lock = false) {
 }
 
 /** The next job for this agent (oldest first; asked-for changes before new work), claimed. Null when none. */
+/**
+ * Everything queued at once (requested changes first), up to the project's batch size: the agent
+ * implements them all, asks for review of each, then waits for one review round.
+ */
+export async function claimBatch(ctx: RecordCtx, agent: string, project?: string | null, limit?: number | null) {
+  await asAgent(ctx.tx);
+  const projects = (await projectsFor(ctx)).filter((p) => p.enabled || project);
+  const chosen = projects.filter((p) => !project || p.id === project || p.work_key?.toLowerCase() === project.toLowerCase() || p.name.toLowerCase() === project.toLowerCase());
+  if (!chosen.length) return { jobs: [] };
+  await ctx.tx.query(`update coding_agent_jobs set status = 'queued', agent = null where tenant_id = $1 and status in ('claimed','working','testing') and heartbeat_at < now() - interval '30 minutes'`, [ctx.tenantId]);
+  // one project per batch (one repository, one branch)
+  const first = await ctx.tx.one<{ project_id: string }>(
+    `select project_id from coding_agent_jobs where tenant_id = $1 and project_id = any($2::uuid[]) and status in ('queued','changes_requested') order by (status = 'changes_requested') desc, created_at limit 1`,
+    [ctx.tenantId, chosen.map((p) => p.id)],
+  );
+  if (!first) return { jobs: [] };
+  const p = chosen.find((x) => x.id === first.project_id)!;
+  const n = Math.max(1, Math.min(50, limit ?? Number(p.batch_size ?? 20)));
+  const rows = await ctx.tx.query<Record<string, any>>(
+    `select * from coding_agent_jobs where tenant_id = $1 and project_id = $2 and status in ('queued','changes_requested')
+      order by (status = 'changes_requested') desc, created_at for update skip locked limit $3`,
+    [ctx.tenantId, p.id, n],
+  );
+  const jobs = [];
+  for (const j of rows) {
+    await ctx.tx.query(`update coding_agent_jobs set status = 'claimed', agent = $3, claimed_at = now(), heartbeat_at = now(), seen_revision = revision, updated_at = now() where tenant_id = $1 and id = $2`, [ctx.tenantId, j.id, agent.slice(0, 120)]);
+    await event(ctx.tx, ctx.tenantId, j.id, 'agent', 'claimed', `${agent} picked it up with ${rows.length - 1} other item${rows.length === 2 ? '' : 's'}${j.reason === 'changes_requested' ? ', to make the requested changes' : ''}`);
+    await updateTask(ctx, j.project_id, j.task_id, { status: 'in_progress' }).catch(() => undefined);
+    jobs.push({ jobId: j.id, reason: j.reason, revision: j.revision, reviewNote: j.status === 'changes_requested' ? j.review_note : null, branch: j.branch ?? null, item: await itemBrief(ctx, j.project_id, j.task_id) });
+  }
+  return {
+    jobs,
+    setup: setupOf(p),
+    next: `Work them all, then one review round: set up the folder if needed; implement every item (one branch for the batch, e.g. agent/batch-${new Date().toISOString().slice(0, 10)}, or a branch per item); run the tests; call report_progress per jobId as you go; call request_review for each jobId with what changed for that item. Then wait with review_status_all until none is awaiting_review: commit and push the approved ones (complete each), redo the changes_requested ones (their notes say what) and ask for review again. Do not commit or push before an item is approved (unless setup.autoPush).`,
+  };
+}
+
+/** The verdicts on every item of this agent's batch (or all open jobs of a project). */
+export async function reviewStatusAll(ctx: RecordCtx, project?: string | null) {
+  const projects = await projectsFor(ctx);
+  const ids = projects.filter((p) => !project || p.id === project || p.work_key?.toLowerCase() === project.toLowerCase() || p.name.toLowerCase() === project.toLowerCase()).map((p) => p.id);
+  if (!ids.length) return { jobs: [], awaiting: 0 };
+  const rows = await ctx.tx.query<Record<string, any>>(
+    `select j.id, j.status, j.review_note, j.reviewed_at, j.branch, t.task_number, t.name, p.work_key from coding_agent_jobs j join project_tasks t on t.tenant_id = j.tenant_id and t.id = j.task_id join projects p on p.tenant_id = j.tenant_id and p.id = j.project_id
+      where j.tenant_id = $1 and j.project_id = any($2::uuid[]) and j.status in ('claimed','working','testing','awaiting_review','approved','changes_requested','committed') order by j.created_at limit 100`,
+    [ctx.tenantId, ids],
+  );
+  await ctx.tx.query(`update coding_agent_jobs set heartbeat_at = now() where tenant_id = $1 and id = any($2::uuid[])`, [ctx.tenantId, rows.map((r) => r.id)]);
+  return {
+    jobs: rows.map((r) => ({ jobId: r.id, key: r.work_key ? `${r.work_key}-${r.task_number}` : `#${r.task_number}`, title: r.name, status: r.status, note: r.review_note ?? null, branch: r.branch ?? null })),
+    awaiting: rows.filter((r) => r.status === 'awaiting_review').length,
+  };
+}
+
+/** Approves every item waiting for review in a project at once. */
+export async function approveAll(ctx: RecordCtx, projectId: string, note?: string | null) {
+  await projectAccess(ctx, projectId, 'manage');
+  const rows = await ctx.tx.query<{ id: string }>(`select id from coding_agent_jobs where tenant_id = $1 and project_id = $2 and status = 'awaiting_review' order by created_at`, [ctx.tenantId, projectId]);
+  for (const r of rows) await review(ctx, r.id, { verdict: 'approve', note: note ?? null });
+  return { approved: rows.length };
+}
+
 export async function claimNext(ctx: RecordCtx, agent: string, project?: string | null) {
   await asAgent(ctx.tx);
   const projects = (await projectsFor(ctx)).filter((p) => p.enabled || project);

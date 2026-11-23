@@ -276,7 +276,11 @@ describe('agents delivering a feature', () => {
     expect(code.status).toBe('awaiting_review');
     const done = await review(code.id, 'approve');
     expect(done.output.queued.map((q: Json) => q.key)).toEqual(['FLEET-2']);
-    expect(await sql(`select status, reason from coding_agent_jobs`)).toEqual([{ status: 'queued', reason: 'requested' }]);
+    // the stories went to HRP AI (the default assignee) when the backlog was made, so they were queued then;
+    // the code step hands over the ones it names (already queued: kept once each)
+    const jobs = await sql(`select j.status, t.task_number from coding_agent_jobs j join project_tasks t on t.id = j.task_id order by t.task_number`);
+    expect(jobs.every((j) => j.status === 'queued')).toBe(true);
+    expect(jobs.map((j) => j.task_number)).toContain(2);
     r = await getRun(ids.run);
     expect(r.run.status).toBe('done');
     expect((await api('GET', `/api/v1/sdlc/runs?projectId=${ids.project}`)).json.items[0]).toMatchObject({ status: 'done', steps: 10, done: 10 });

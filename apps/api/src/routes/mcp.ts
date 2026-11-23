@@ -70,13 +70,42 @@ const TOOLS: Tool[] = [
   {
     name: 'next_work',
     description:
-      'Claims the next work item (story, task, bug) queued for the coding agent — requested changes first — with everything needed to implement it. Waits up to waitSeconds (max 25) for one to arrive; returns {job: null} when there is none.',
-    inputSchema: obj({ agent: str('Who is working, e.g. "claude-code@my-laptop"'), project: str('Only this project (id, key or name)'), waitSeconds: { type: 'integer', minimum: 0, maximum: 25 } }, ['agent']),
+      'Claims work queued for the coding agent — requested changes first — with everything needed to implement it. One item ({job}) by default; with all: true, or when the project is set to "all at once" (setup.workMode = batch), every waiting item of one project ({jobs: [...]}) to implement together and then send for one review round. Waits up to waitSeconds (max 25) for work to arrive; returns {job: null} when there is none.',
+    inputSchema: obj(
+      {
+        agent: str('Who is working, e.g. "claude-code@my-laptop"'),
+        project: str('Only this project (id, key or name)'),
+        all: { type: 'boolean', description: 'Take every waiting item at once (then request_review for each and wait with review_status_all)' },
+        waitSeconds: { type: 'integer', minimum: 0, maximum: 25 },
+      },
+      ['agent'],
+    ),
+    run: async (c, a) => {
+      const until = Date.now() + (wait.parse(a.waitSeconds) ?? 0) * 1000;
+      const project = a.project ? String(a.project) : null;
+      for (;;) {
+        // batch when asked, or when the project works that way
+        const batch = a.all === true || (await run(c, async (ctx) => (await ag.agentProjects(ctx)).some((p) => p.workMode === 'batch' && (!project || p.project.id === project || p.project.key?.toLowerCase() === project.toLowerCase()))));
+        if (batch) {
+          const b = await run(c, (ctx) => ag.claimBatch(ctx, String(a.agent ?? 'agent'), project));
+          if (b.jobs.length || Date.now() >= until) return b.jobs.length ? b : { job: null, jobs: [] };
+        } else {
+          const job = await run(c, (ctx) => ag.claimNext(ctx, String(a.agent ?? 'agent'), project));
+          if (job || Date.now() >= until) return { job };
+        }
+        await sleep(3000);
+      }
+    },
+  },
+  {
+    name: 'review_status_all',
+    description: 'The verdicts on every open item (after a batch): awaiting_review, approved (commit, push and complete it), changes_requested (redo it: the note says what). Waits up to waitSeconds (max 25) while any is still awaiting review.',
+    inputSchema: obj({ project: str('Only this project (id, key or name)'), waitSeconds: { type: 'integer', minimum: 0, maximum: 25 } }, []),
     run: async (c, a) => {
       const until = Date.now() + (wait.parse(a.waitSeconds) ?? 0) * 1000;
       for (;;) {
-        const job = await run(c, (ctx) => ag.claimNext(ctx, String(a.agent ?? 'agent'), a.project ? String(a.project ?? '') : null));
-        if (job || Date.now() >= until) return { job };
+        const s = await run(c, (ctx) => ag.reviewStatusAll(ctx, a.project ? String(a.project) : null));
+        if (!s.awaiting || Date.now() >= until) return s;
         await sleep(3000);
       }
     },
@@ -231,7 +260,7 @@ async function handle(c: Context<AppEnv>, m: RpcReq) {
         capabilities: { tools: { listChanged: false } },
         serverInfo: { name: 'sanchalanos', title: 'SanchalanOS', version: '1.0.0' },
         instructions:
-          'SanchalanOS work items for coding agents. When this repository is linked to a project (its key or X-Sanchalan-Project), every tool works on that project only. Loop: next_work → (setup_project if the folder is missing) → implement on a branch, run tests, report_progress → request_review → review_status until approved → commit, push, complete(pushed) → run the release command if any → complete(released). Never commit or push before approval.',
+          'SanchalanOS work items for coding agents. When this repository is linked to a project (its key or X-Sanchalan-Project), every tool works on that project only. Loop: next_work → (setup_project if the folder is missing) → implement on a branch, run tests, report_progress → request_review → review_status until approved → commit, push, complete(pushed) → run the release command if any → complete(released). All at once (next_work with all: true, or a project set to batch): next_work returns jobs[] → implement them all → request_review for each → review_status_all until none awaits → commit/push/complete the approved ones, redo the changes_requested ones. Never commit or push before approval.',
       });
     case 'ping':
       return reply({});
@@ -301,6 +330,10 @@ export const agentRoutes = new Hono<AppEnv>()
     return c.json(await run(c, (ctx) => ag.queueOpen(ctx, pid, b)));
   })
   .get('/agent/jobs/:id', async (c) => c.json(await run(c, (ctx) => ag.jobDetail(ctx, uuid.parse(c.req.param('id'))), true)))
+  .post('/projects/:id/agent/approve-all', async (c) => {
+    const b = z.object({ note: z.string().max(8000).nullish() }).parse(await c.req.json().catch(() => ({})));
+    return c.json(await run(c, (ctx) => ag.approveAll(ctx, uuid.parse(c.req.param('id')), b.note)));
+  })
   .post('/agent/jobs/:id/review', async (c) => {
     const b = ag.reviewSchema.parse(await c.req.json());
     return c.json(await run(c, (ctx) => ag.review(ctx, uuid.parse(c.req.param('id')), b)));

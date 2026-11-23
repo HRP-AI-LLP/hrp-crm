@@ -110,7 +110,7 @@ export const crmRoutes = new Hono<AppEnv>()
 
   .get('/users', async (c) => {
     const rows = await c.var.db.tx(scope(c, true), (tx) =>
-      tx.query(`select id, full_name, email, status from users where tenant_id = $1 and status <> 'disabled' order by full_name`, [c.var.tenant.id]),
+      tx.query(`select id, full_name, email, status, is_agent from users where tenant_id = $1 and status <> 'disabled' order by is_agent, full_name`, [c.var.tenant.id]),
     );
     return c.json({ items: rows });
   })

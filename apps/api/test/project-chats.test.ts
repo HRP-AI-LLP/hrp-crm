@@ -244,7 +244,8 @@ describe('a customer chat on a project', () => {
     const rows = await sql(`select kind, title, status, created_key from project_chat_proposals where chat_id = $1 order by created_at`, [ids.chat]);
     // the repeated crash isn't proposed again; the new bug is created; the unsure question waits
     expect(rows.slice(4).map((r) => [r.kind, r.status, r.created_key])).toEqual([
-      ['bug', 'created', 'FLEET-3'],
+      // (FLEET-3 and 4 are the epics the first two were grouped under)
+      ['bug', 'created', 'FLEET-5'],
       ['question', 'proposed', null],
     ]);
     expect((await sql(`select pending_since from project_chats where id = $1`, [ids.chat]))[0]!.pending_since).toBeNull();
@@ -327,7 +328,7 @@ describe('an exported chat with its media', () => {
           response: JSON.stringify({
             summary: 'The PDF export fails; a driver app is wanted; the agreement says delivery in 6 weeks.',
             items: [
-              { type: 'bug', title: 'PDF export fails with error 500 on reports', priority: 'high', message: 0, messages: [0], confidence: 0.9 },
+              { type: 'bug', title: 'PDF export fails with error 500 on reports', priority: 'high', message: 0, messages: [0], confidence: 0.9, severity: 'critical', story_points: 4, estimate_hours: 6, epic: 'Reports', release: 'hotfix' },
               { type: 'requirement', title: 'Driver app for Android', message: 2, confidence: 0.85 },
             ],
           }),
@@ -395,6 +396,22 @@ describe('an exported chat with its media', () => {
     expect(task.description).toContain('PDF export still fails');
     const att = (await api('GET', `/api/v1/projects/${ids.project}/work/items/${made.json.id}/files`)).json as Json[];
     expect(att.map((f) => f.name)).toEqual(['00000012-PHOTO-2026-09-02-10-15-30.jpg']);
+    // every field filled: severity, points, hours, epic and release (both new: made with this approval; the hotfix
+    // follows 0.1.0, the release an earlier suggestion opened), HRP AI assigned
+    const full = (await sql(`select t.severity, t.story_points::float8 as points, t.estimate_hours::float8 as hours, t.remaining_hours::float8 as remaining, e.name as epic, r.name as release, r.version, r.release_type, t.assignees, u.full_name as assignee
+      from project_tasks t left join project_tasks e on e.id = t.epic_id left join project_releases r on r.id = t.release_id left join users u on u.id = t.assignees[1] where t.id = $1`, [made.json.id]))[0]!;
+    expect(full).toMatchObject({ severity: 'critical', points: 5, hours: 6, remaining: 6, epic: 'Reports', release: 'Hotfix', version: '0.1.1', release_type: 'hotfix', assignee: 'HRP AI' });
+    // the next one joins them (no second epic or release)
+    const list = (await api('GET', `/api/v1/projects/${ids.project}/chats`)).json;
+    const driver = list.proposals.find((x: Json) => x.title === 'Driver app for Android' && x.status === 'proposed');
+    expect(driver.plan.epic).toMatchObject({ isNew: false, label: 'FLEET-4 Client requests' });
+    expect(driver.plan.release).toMatchObject({ isNew: false, label: 'Next release 0.1.0' });
+    expect(list.epics.map((e: Json) => e.name)).toContain('Reports');
+    const d2 = await api('POST', `/api/v1/projects/${ids.project}/chat-proposals/${driver.id}/accept`, { epic: 'Reports', release: 'hotfix', storyPoints: 8 });
+    expect(d2.status, JSON.stringify(d2.json)).toBe(200);
+    expect((await sql(`select count(*)::int n from project_tasks where project_id = $1 and work_type = 'epic' and name = 'Reports'`, [ids.project]))[0]!.n).toBe(1);
+    expect((await sql(`select count(*)::int n from project_releases where project_id = $1 and release_type = 'hotfix'`, [ids.project]))[0]!.n).toBe(1);
+    expect((await sql(`select story_points::float8 p, estimate_hours::float8 h, severity from project_tasks where id = $1`, [d2.json.id]))[0]).toEqual({ p: 8, h: 9, severity: 'minor' });
     h.env.AI = oldAi;
   });
 });

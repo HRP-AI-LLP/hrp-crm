@@ -80,7 +80,10 @@ async function managedProjectIds(ctx: RecordCtx): Promise<string[] | 'all'> {
 
 export async function notify(ctx: RecordCtx, userIds: (string | null | undefined)[], title: string, link: string, body: string | null = null, mail: 'assigned' | 'watching' | null = null) {
   const me = ctx.principal.user.id;
-  for (const u of new Set(userIds.filter((x): x is string => !!x && x !== me))) {
+  const wanted = [...new Set(userIds.filter((x): x is string => !!x && x !== me))];
+  // HRP AI (the coding agent) reads its queue, not notifications
+  const agents = wanted.length ? new Set((await ctx.tx.query<{ id: string }>(`select id from users where tenant_id = $1 and id = any($2::uuid[]) and is_agent`, [ctx.tenantId, wanted])).map((r) => r.id)) : new Set<string>();
+  for (const u of wanted.filter((x) => !agents.has(x))) {
     await ctx.tx.query(`insert into notifications (tenant_id, user_id, kind, title, body, link) values ($1,$2,'project',$3,$4,$5)`, [ctx.tenantId, u, title.slice(0, 200), body, link]);
     if (mail) await (await import('./it/alerts')).queueMail(ctx.tx, ctx.tenantId, u, mail, { title, body, link });
   }
@@ -147,13 +150,29 @@ export async function getProject(ctx: RecordCtx, id: string) {
     members: members.map((m: any) => (showRates ? { ...m, commission_now: eco?.byMember[m.user_id] ?? null } : { ...m, bill_rate: undefined, cost_rate: undefined, pay_basis: undefined, pay_amount: undefined, commission_pct: undefined, commission_on: undefined })),
     milestones,
     lists,
+    // HRP AI, the coding agent, can be assigned in every project; new items go to the default assignee
+    agent: await ctx.tx.one<{ id: string; name: string }>(`select id, full_name as name from users where tenant_id = $1 and is_agent`, [ctx.tenantId]),
+    defaultAssignee: project.default_assignee ?? 'agent',
   };
+}
+
+/** Who new work items go to when nobody is chosen: 'agent' (HRP AI), 'none', or a team member's id. */
+export async function setDefaultAssignee(ctx: RecordCtx, projectId: string, value: string) {
+  const { project } = await projectAccess(ctx, projectId, 'manage');
+  if (value !== 'agent' && value !== 'none') {
+    const ok = await workers(ctx.tx, ctx.tenantId, project);
+    if (!ok.has(value)) throw badRequest('Choose someone on the project team');
+  }
+  await ctx.tx.query(`update projects set default_assignee = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, projectId, value]);
+  return { defaultAssignee: value };
 }
 
 /** People who can be assigned work: the manager and members (not viewers). */
 async function workers(tx: Tx, tenantId: string, project: Record<string, any>) {
   const rows = await tx.query<{ user_id: string }>(`select user_id from project_members where tenant_id = $1 and project_id = $2 and role <> 'viewer'`, [tenantId, project.id]);
-  return new Set([...rows.map((r) => r.user_id), ...(project.owner_id ? [project.owner_id] : [])]);
+  // HRP AI, the coding agent, can be given work in any project
+  const { agentUserId } = await import('./agent-user');
+  return new Set([...rows.map((r) => r.user_id), ...(project.owner_id ? [project.owner_id] : []), await agentUserId(tx, tenantId)]);
 }
 
 export const COMMISSION_BASES = ['invoiced', 'collected', 'gross_profit', 'net_profit', 'profit_after_all'] as const;
@@ -538,6 +557,11 @@ async function checkTaskRefs(ctx: RecordCtx, project: Record<string, any>, input
 
 export async function createTask(ctx: RecordCtx, projectId: string, input: TaskInput & { name: string }) {
   const { project, level } = await projectAccess(ctx, projectId, 'member');
+  // nobody chosen: the project's default assignee (HRP AI, the coding agent, unless set otherwise)
+  if (!input.assignees?.length && (input.workType ?? 'task') !== 'epic') {
+    const d = await (await import('./agent-user')).defaultAssignee(ctx.tx, ctx.tenantId, project);
+    if (d) input = { ...input, assignees: [d] };
+  }
   if (input.rate !== undefined && input.rate !== null && level !== 'manage') throw forbidden('Only the project manager sets task rates');
   await checkTaskRefs(ctx, project, input);
   await ctx.tx.query(`select 1 from projects where tenant_id = $1 and id = $2 for update`, [ctx.tenantId, projectId]);

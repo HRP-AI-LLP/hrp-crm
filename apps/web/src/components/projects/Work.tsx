@@ -153,21 +153,34 @@ function LaneRow({ lane, columns, showHead, onOpen, fields, canMove, over, setOv
         <div
           key={ci}
           className={`kb-col${over === ci ? ' drop' : ''}`}
-          onDragOver={(e) => canMove && (e.preventDefault(), setOver(ci))}
+          onDragOver={(e) => {
+            if (!canMove) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (over !== ci) setOver(ci);
+          }}
           onDragLeave={() => setOver(null)}
           onDrop={(e) => onDrop(e, ci)}
         >
           {(lane.items as Json[])
             .filter((i) => i.column === ci)
             .map((i) => (
-              <button
+              // a div, not a button: browsers do not start a drag from a <button>
+              <div
                 key={i.id}
-                type="button"
-                className="kb-card"
+                role="button"
+                tabIndex={0}
+                className={`kb-card${canMove ? ' movable' : ''}`}
                 draggable={canMove}
-                onDragStart={(e) => (e.dataTransfer.setData('text/plain', i.id), onDrag(i.id))}
+                title={canMove ? 'Drag to another column to change its status; click to open' : undefined}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('text/plain', i.id);
+                  e.dataTransfer.effectAllowed = 'move';
+                  onDrag(i.id);
+                }}
                 onDragEnd={() => onDrag(null)}
                 onClick={() => onOpen(i.id)}
+                onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), onOpen(i.id))}
               >
                 <div className="kb-title">{i.name}</div>
                 <div className="kb-meta">
@@ -183,7 +196,7 @@ function LaneRow({ lane, columns, showHead, onOpen, fields, canMove, over, setOv
                   {fields.includes('points') && i.storyPoints !== null && <span className="kb-points">{i.storyPoints}</span>}
                   {fields.includes('assignee') && <Avatar name={i.assigneeNames[0]} />}
                 </div>
-              </button>
+              </div>
             ))}
         </div>
       ))}
@@ -1614,6 +1627,41 @@ function Coverage({ id, onOpen }: { id: string; onOpen: (itemId: string) => void
 
 /* ───────────────────────── setup ───────────────────────── */
 
+/** Who new work items go to when nobody is chosen: HRP AI (the coding agent), a person, or nobody. */
+function DefaultAssignee({ id, manage, team }: { id: string; manage: boolean; team: [string, string][] }) {
+  const qc = useQueryClient();
+  const run = useRun();
+  const { data } = useQuery({ queryKey: ['project', id], queryFn: () => get<Json>(`/api/v1/projects/${id}`), staleTime: 30_000 });
+  if (!data) return null;
+  const value = data.defaultAssignee ?? 'agent';
+  const people = team.filter(([uid]) => uid !== data.agent?.id);
+  return (
+    <section className="callout">
+      <h3 className="section-label">New work items go to</h3>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select
+          value={value}
+          disabled={!manage}
+          onChange={async (e) => (await run(() => put(`/api/v1/projects/${id}/default-assignee`, { value: e.target.value }), 'Saved')) && qc.invalidateQueries({ queryKey: ['project', id] })}
+          aria-label="Default assignee"
+        >
+          <option value="agent">🤖 {data.agent?.name ?? 'HRP AI'} — the coding agent</option>
+          {people.map(([uid, name]) => (
+            <option key={uid} value={uid}>
+              {name}
+            </option>
+          ))}
+          <option value="none">Nobody (assign by hand)</option>
+        </select>
+      </div>
+      <p className="muted small" style={{ margin: '6px 0 0' }}>
+        When an item is created without an assignee — on the board, from a WhatsApp chat or by the AI. Work given to {data.agent?.name ?? 'HRP AI'} goes straight to the coding agent’s queue (Claude Code works it and asks for your review);
+        you can always reassign an item to a person.
+      </p>
+    </section>
+  );
+}
+
 export function WorkSetupTab({ id, manage }: { id: string; manage: boolean }) {
   const { data } = useWorkSetup(id);
   const { can } = useAuth();
@@ -1632,6 +1680,7 @@ export function WorkSetupTab({ id, manage }: { id: string; manage: boolean }) {
   const isAdmin = can('developers');
   return (
     <div className="stack" data-export="off">
+      <DefaultAssignee id={id} manage={manage} team={team} />
       <section className="callout">
         <div className="grid2">
           <div>
