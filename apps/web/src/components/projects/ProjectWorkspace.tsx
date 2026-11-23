@@ -15,6 +15,7 @@ import { AgileTab, ChangesTab, ReleasesTab } from './Agile';
 import { ProjectCalls } from './ProjectCalls';
 import { MailThreadSearch, MilestoneMailList } from './MilestoneMail';
 import { ProjectChats } from './ProjectChats';
+import { ProjectBilling } from './ProjectBilling';
 import { ProjectDocs } from './ProjectDocs';
 import { CodingAgent } from './CodingAgent';
 import { BoardsTab, DashboardsTab, HierarchyTab, QueriesView, TestsTab, WorkSetupTab } from './Work';
@@ -132,7 +133,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
         {tab === 'automation' && <AutomationTab id={id} manage={manage} />}
         {tab === 'issues' && <Issues id={id} data={data} member={member} />}
         {tab === 'time' && <ProjectTime id={id} data={data} member={member} />}
-        {tab === 'billing' && manage && <Billing id={id} />}
+        {tab === 'billing' && manage && <ProjectBilling id={id} unbilled={<Billing id={id} />} />}
         {tab === 'costs' && (
           <Suspense fallback={<Spinner />}>
             <ProjectCosts id={id} manage={manage} />

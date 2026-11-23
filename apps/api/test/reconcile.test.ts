@@ -181,4 +181,31 @@ describe('match & reconcile', () => {
     expect(g2.members.find((m: Json) => m.full_name === 'Nandan').commission_now.base).toBe('profit_after_all');
     expect(g2.economics.bases.profit_after_all).toBe(Math.round((150000 - (170000 - gross)) * 100) / 100);
   });
+
+  it('the project’s billing: its invoices (also through milestones), receipts with the TDS kept, GST out, and a new invoice for its customer', async () => {
+    const b = await api('GET', `/api/v1/projects/${ids.project}/billing`);
+    expect(b.status, JSON.stringify(b.json)).toBe(200);
+    const inv = b.json.invoices.find((i: Json) => i.id === ids.inv);
+    expect(inv).toMatchObject({ milestone: 'Milestone-1 design', taxable: 150000, total: 177000, balance: 0, status: 'paid' });
+    const rec = b.json.receipts.find((p: Json) => p.id === ids.pay);
+    expect(rec).toMatchObject({ amount: 177000, tds: 3000, gst_tds: 3000, to_project: 177000 });
+    expect(b.json.sales).toMatchObject({ tds: 3000, gstTds: 3000 });
+    expect(b.json.sales.taxable).toBeGreaterThanOrEqual(150000);
+    // GST out on the invoices (intra-state: CGST + SGST), less the GST TDS the government buyer deposited for us
+    expect(b.json.gst.output).toBe(Math.round((b.json.sales.cgst + b.json.sales.sgst + b.json.sales.igst) * 100) / 100);
+    expect(b.json.gst.net).toBe(Math.round((b.json.gst.output - b.json.gst.input - 3000) * 100) / 100);
+    expect(b.json.desk).toMatchObject({ booksOn: true, canDecide: true, autonomy: 'auto_sure' });
+    // a new draft invoice for the project's customer, booked to the project
+    const n = await api('POST', `/api/v1/projects/${ids.project}/billing/new`, { kind: 'invoice' });
+    expect(n.status, JSON.stringify(n.json)).toBe(201);
+    expect((await sql(`select project_id, account_id, status from invoices where id = $1`, [n.json.id]))[0]).toEqual({ project_id: ids.project, account_id: ids.fci, status: 'draft' });
+    const again = (await api('GET', `/api/v1/projects/${ids.project}/billing`)).json;
+    expect(again.sales.drafts).toBeGreaterThanOrEqual(1);
+    // a bill for the project
+    expect((await api('POST', `/api/v1/projects/${ids.project}/billing/new`, { kind: 'bill' })).status).toBe(400);
+    const vendor = (await api('POST', '/api/v1/records/vendor', { name: 'Cloud Hosting Pvt Ltd' })).json.id;
+    const bill = await api('POST', `/api/v1/projects/${ids.project}/billing/new`, { kind: 'bill', vendorId: vendor });
+    expect(bill.status, JSON.stringify(bill.json)).toBe(201);
+    expect((await api('GET', `/api/v1/projects/${ids.project}/billing`)).json.bills.some((x: Json) => x.id === bill.json.id && x.whole)).toBe(true);
+  });
 });

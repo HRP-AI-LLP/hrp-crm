@@ -206,6 +206,11 @@ export const projectRoutes = new Hono<AppEnv>()
     c.json(await c.var.db.tx(scope(c, true), (tx) => pj.listProjects(rctx(c, tx), { status: c.req.query('status') || null, search: c.req.query('q') || null, mine: c.req.query('mine') === '1' }))),
   )
   .get('/projects/:id', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pj.getProject(rctx(c, tx), id(c)))))
+  .get('/projects/:id/billing', async (c) => c.json(await c.var.db.tx(scope(c, true), async (tx) => (await import('../services/project-billing')).projectBilling(rctx(c, tx), id(c)))))
+  .post('/projects/:id/billing/new', async (c) => {
+    const b = z.object({ kind: z.enum(['invoice', 'bill']), vendorId: z.string().uuid().nullish() }).parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), async (tx) => (await import('../services/project-billing')).newDocument(rctx(c, tx), id(c), b.kind, b.vendorId)), 201);
+  })
   .put('/projects/:id/default-assignee', async (c) => {
     const b = z.object({ value: z.union([z.enum(['agent', 'none']), z.string().uuid()]) }).parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => pj.setDefaultAssignee(rctx(c, tx), id(c), b.value)));
