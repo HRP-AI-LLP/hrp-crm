@@ -64,7 +64,15 @@ export function ProjectDocs({ projectId }: { projectId: string }) {
     if (bad.length) toast(`Not added: ${bad.join('; ')}`, true);
     refetch();
   };
-  const pick = (list: FileList | null) => list && setFiles((f) => [...f, ...Array.from(list)]);
+  const pick = (list: FileList | null) => {
+    if (!list?.length) return;
+    // Copy the files out NOW, not inside the state updater. A FileList is live: the change handler resets
+    // input.value straight after this call so the same file can be picked again, and that reset empties this
+    // very list. React runs the updater after that, so a deferred Array.from(list) would add nothing at all -
+    // you would pick files and watch nothing happen.
+    const picked = Array.from(list);
+    setFiles((f) => [...f, ...picked]);
+  };
 
   return (
     <div className="stack">
