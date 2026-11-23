@@ -1095,6 +1095,8 @@ kbd { font: 600 11px/1 'Inter', system-ui, sans-serif; padding: 3px 5px; border-
 .topbar .icon-btn:hover { background: var(--surface-2); color: var(--ink); }
 .content { padding: 24px 28px 40px; }
 .content > * { max-width: 1480px; }
+/* full-window layers inside the page are not held to the page width */
+.content > :is(.overlay, .cmdk-overlay, .asst-drawer, .asst-fab, .toasts) { max-width: none; }
 
 /* page heads */
 .page-head { margin-bottom: 20px; }
