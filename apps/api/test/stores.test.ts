@@ -21,6 +21,15 @@ beforeAll(async () => {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'PLAY_TOKEN', expires_in: 3600 });
+    if (url.includes('/crashRateMetricSet:query'))
+      return Response.json({
+        rows: [
+          { startTime: { year: 2026, month: 11, day: 1 }, metrics: [{ metric: 'userPerceivedCrashRate', decimalValue: { value: '0.012' } }, { metric: 'distinctUsers', decimalValue: { value: '900' } }] },
+          { startTime: { year: 2026, month: 11, day: 2 }, metrics: [{ metric: 'userPerceivedCrashRate', decimalValue: { value: '0.008' } }, { metric: 'distinctUsers', decimalValue: { value: '1234' } }] },
+        ],
+      });
+    if (url.includes('/anrRateMetricSet:query'))
+      return Response.json({ rows: [{ startTime: { year: 2026, month: 11, day: 2 }, metrics: [{ metric: 'userPerceivedAnrRate', decimalValue: { value: '0.003' } }] }] });
     if (url.includes('/edits/') && url.includes('/tracks')) return Response.json({ tracks: [{ track: 'production', releases: [{ name: '1.0.0', versionCodes: ['3'], status: 'completed', userFraction: null }] }, { track: 'internal', releases: [{ name: '1.1.0-rc1', versionCodes: ['4'], status: 'draft' }] }] });
     if (url.endsWith('/edits') && (init?.method ?? 'GET') === 'POST') return Response.json({ id: 'EDIT1' });
     if (url.includes('/edits/') && (init?.method ?? 'GET') === 'DELETE') return new Response('', { status: 204 });
@@ -59,6 +68,16 @@ describe('Google Play', () => {
     expect(st.app).toBe('in.hrpai.ludoverse');
     expect(st.tracks.find((t: Json) => t.track === 'production')).toMatchObject({ versionName: '1.0.0', status: 'live', versionCodes: ['3'] });
     expect(st.tracks.find((t: Json) => t.track === 'internal')).toMatchObject({ versionName: '1.1.0-rc1', status: 'draft' });
+  });
+
+  it('reads Android vitals (crash / ANR / active users) from the Reporting API', async () => {
+    const r = await api('GET', `/api/v1/projects/${ids.project}/store/vitals?days=28`);
+    expect(r.status, JSON.stringify(r.json)).toBe(200);
+    expect(r.json.app).toBe('in.hrpai.ludoverse');
+    expect(r.json.crashRate.latest).toBeCloseTo(0.008, 5); // last day's value
+    expect(r.json.crashRate.series).toHaveLength(2);
+    expect(r.json.activeUsers.latest).toBe(1234);
+    expect(r.json.anrRate.latest).toBeCloseTo(0.003, 5);
   });
 
   it('CI records a store submission through the project key', async () => {

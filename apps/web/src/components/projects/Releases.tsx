@@ -8,7 +8,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { del, get, post, put, upload } from '../../lib/api';
 import { date } from '../../lib/format';
-import { Empty, Modal, Spinner, useToast } from '../ui';
+import { Empty, Kpi, Modal, Spinner, useToast } from '../ui';
 
 type Json = Record<string, any>;
 
@@ -205,6 +205,7 @@ function StorePanel({ id, manage }: { id: string; manage: boolean }) {
               {status.isFetching ? 'Checking…' : 'Check status'}
             </button>
           </div>
+          {store.data.kind === 'google_play' && <VitalsPanel id={id} />}
         </>
       )}
       {connecting && (
@@ -218,6 +219,70 @@ function StorePanel({ id, manage }: { id: string; manage: boolean }) {
         />
       )}
     </section>
+  );
+}
+
+/** A tiny inline sparkline for a value timeline. */
+function Sparkline({ points, color = 'var(--brand-600)' }: { points: { date: string; value: number }[]; color?: string }) {
+  if (points.length < 2) return null;
+  const w = 120;
+  const h = 28;
+  const vals = points.map((p) => p.value);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const span = max - min || 1;
+  const d = points
+    .map((p, i) => {
+      const x = (i / (points.length - 1)) * w;
+      const y = h - ((p.value - min) / span) * (h - 4) - 2;
+      return `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: 'block', marginTop: 4 }} aria-hidden="true">
+      <path d={d} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** Android vitals (crash rate, ANR rate, active users) for the linked Play app. */
+function VitalsPanel({ id }: { id: string }) {
+  const v = useQuery({ queryKey: ['store-vitals', id], queryFn: () => get<Json>(`/api/v1/projects/${id}/store/vitals`), retry: false, staleTime: 600_000 });
+  const pct = (x: number | null) => (x == null ? '—' : `${(x * 100).toFixed(x < 0.01 ? 3 : 2)}%`);
+  const num = (x: number | null) => (x == null ? '—' : Math.round(x).toLocaleString('en-IN'));
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="spread" style={{ alignItems: 'baseline' }}>
+        <b>App health (Android vitals)</b>
+        <span className="muted small">Last {v.data?.days ?? 28} days · from Google Play</span>
+      </div>
+      {v.isLoading ? (
+        <Spinner />
+      ) : v.error ? (
+        <p className="notice small" style={{ marginTop: 8 }}>
+          {(v.error as Error).message}
+        </p>
+      ) : (
+        <div className="kpis" style={{ margin: '8px 0 0' }}>
+          <Kpi
+            l="User-perceived crash rate"
+            v={pct(v.data!.crashRate.latest)}
+            tone={v.data!.crashRate.latest > 0.0109 ? 'bad' : v.data!.crashRate.latest != null ? 'good' : undefined}
+            sub={<Sparkline points={v.data!.crashRate.series} color="var(--bad)" />}
+          />
+          <Kpi
+            l="User-perceived ANR rate"
+            v={pct(v.data!.anrRate.latest)}
+            tone={v.data!.anrRate.latest > 0.0047 ? 'bad' : v.data!.anrRate.latest != null ? 'good' : undefined}
+            sub={<Sparkline points={v.data!.anrRate.series} color="var(--warn, #d97706)" />}
+          />
+          <Kpi l="Active users / day" v={num(v.data!.activeUsers.latest)} sub={<Sparkline points={v.data!.activeUsers.series} />} />
+        </div>
+      )}
+      <p className="muted small" style={{ marginTop: 6 }}>
+        Google's “bad behaviour” thresholds: crash rate 1.09%, ANR rate 0.47%. Installs, ratings and revenue come next (they need the reports bucket).
+      </p>
+    </div>
   );
 }
 

@@ -224,4 +224,75 @@ export async function recordSubmission(ctx: RecordCtx, projectId: string, input:
   return { ok: true, channelId: input.channelId, status: input.status };
 }
 
+/* ── Android vitals via the Google Play Developer Reporting API (read with the service account) ── */
+
+const REPORTING = 'https://playdeveloperreporting.googleapis.com/v1beta1';
+const VITALS_SCOPE = 'https://www.googleapis.com/auth/playdeveloperreporting';
+
+async function reportingQuery(token: string, pkg: string, metricSet: string, body: unknown) {
+  const res = await fetch(`${REPORTING}/apps/${encodeURIComponent(pkg)}/${metricSet}:query`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const text = await res.text();
+  const json = text ? JSON.parse(text) : {};
+  if (!res.ok) {
+    const msg = json?.error?.message ?? res.status;
+    if (res.status === 403 || res.status === 404)
+      throw badRequest(`Play vitals: ${msg} — enable the "Google Play Developer Reporting API" in Google Cloud for this service account, and grant it access to the app in Play Console.`);
+    throw badRequest(`Play vitals: ${msg}`);
+  }
+  return json as { rows?: any[] };
+}
+
+function ymd(d: Date) {
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), timeZone: { id: 'America/Los_Angeles' } };
+}
+
+/** Pulls one metric's daily timeline out of a reporting response → { series:[{date,value}], latest }. */
+function series(rows: any[], metric: string) {
+  const pts = (rows ?? [])
+    .map((r) => {
+      const t = r.startTime ?? {};
+      if (!t.year) return null;
+      const date = `${t.year}-${String(t.month).padStart(2, '0')}-${String(t.day).padStart(2, '0')}`;
+      const m = (r.metrics ?? []).find((x: any) => x.metric === metric);
+      const value = m?.decimalValue?.value != null ? Number(m.decimalValue.value) : null;
+      return value == null || Number.isNaN(value) ? null : { date, value };
+    })
+    .filter((p): p is { date: string; value: number } => !!p);
+  return { series: pts, latest: pts.length ? pts[pts.length - 1]!.value : null };
+}
+
+/**
+ * Android vitals for the project's Play app over the last `days` days: user-perceived crash rate,
+ * ANR rate, and the count of distinct users seen — each as a daily timeline plus its latest value.
+ * Rates are fractions (0..1). The Reporting API must be enabled and the service account granted.
+ */
+export async function playVitals(ctx: RecordCtx, env: Env, projectId: string, days = 28) {
+  await projectAccess(ctx, projectId, 'view');
+  const { kind, secret, appId } = await connForProject(ctx, env, projectId);
+  if (kind !== 'google_play') throw badRequest('This project is linked to the App Store, not Google Play');
+  const token = await googleToken(secret, VITALS_SCOPE);
+  const end = new Date(Date.now() - 86_400_000); // yesterday — today's data is still partial
+  const start = new Date(end.getTime() - (Math.max(1, Math.min(90, days)) - 1) * 86_400_000);
+  const timelineSpec = { aggregationPeriod: 'DAILY', startTime: ymd(start), endTime: ymd(end) };
+  const [crash, anr] = await Promise.all([
+    reportingQuery(token, appId, 'crashRateMetricSet', { timelineSpec, metrics: ['userPerceivedCrashRate', 'distinctUsers'], dimensions: [] }).catch((e) => {
+      throw e;
+    }),
+    reportingQuery(token, appId, 'anrRateMetricSet', { timelineSpec, metrics: ['userPerceivedAnrRate'], dimensions: [] }).catch(() => ({ rows: [] as any[] })),
+  ]);
+  return {
+    app: appId,
+    days,
+    crashRate: series(crash.rows ?? [], 'userPerceivedCrashRate'),
+    anrRate: series(anr.rows ?? [], 'userPerceivedAnrRate'),
+    activeUsers: series(crash.rows ?? [], 'distinctUsers'),
+    checkedAt: new Date().toISOString(),
+  };
+}
+
 export { PLAY_TRACKS, APPLE_TRACKS };
