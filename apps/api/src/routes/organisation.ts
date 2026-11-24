@@ -55,6 +55,7 @@ export const organisationRoutes = new Hono<AppEnv>()
   .get('/projects/:id/store/vitals', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => stores.playVitals(rctx(c, tx), c.env, id(c), Number(c.req.query('days') ?? 28)))))
   // Accountants & CAs — outside finance people, each with scoped access
   .get('/organisation/professionals', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pros.listProfessionals(rctx(c, tx)))))
+  .post('/organisation/professionals/sync-roles', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => pros.syncRoles(rctx(c, tx)))))
   .post('/organisation/professionals', async (c) => {
     const b = pros.addSchema.parse(await c.req.json());
     const r = await c.var.db.tx(scope(c), async (tx) => {

@@ -36,9 +36,10 @@ export const LEVEL_LABEL: Record<Level, string> = { view: 'Read only', download:
 export const MODULES = [
   { key: 'billing', label: 'Invoices & payments', areas: ['billing'], objects: ['invoice', 'payment'], admin: 'billing' },
   { key: 'books', label: 'Bills, expenses & ledger', areas: ['books', 'operations'], objects: ['bill', 'vendor_payment', 'expense', 'vendor'], admin: 'books' },
-  // GST returns are built from invoices and bills, and the GST portal gates on books/billing admin —
-  // so this module also opens the books area and grants read on the documents the returns are made of.
-  { key: 'gst', label: 'GST returns & e-invoices', areas: ['gst', 'books'], objects: ['invoice', 'bill', 'expense'], admin: 'compliance' },
+  // GST returns, the GST portal and e-invoices live under the "Billing & GST" area (apps: billing) and
+  // the accountant portal (apps: gst); the returns are built from invoices and bills, and the portal
+  // gates on books/billing admin. So this module opens all three areas and reads the source documents.
+  { key: 'gst', label: 'GST returns & e-invoices', areas: ['gst', 'books', 'billing'], objects: ['invoice', 'bill', 'expense'], admin: 'compliance' },
   { key: 'intake', label: 'Documents read from mail', areas: ['intake'], objects: [], admin: null },
   { key: 'insights', label: 'Dashboards & reports', areas: ['insights'], objects: [], admin: null },
 ] as const;
@@ -216,6 +217,26 @@ export async function setAccess(ctx: RecordCtx, id: string, input: AccessConfig)
   assertManage(ctx);
   await applyAccess(ctx, id, input);
   return { ok: true };
+}
+
+/**
+ * Rebuilds every professional's derived role from their stored access config. Called when an admin
+ * opens the Accountants & CAs screen, so changes to how modules map to permissions apply to everyone
+ * already added, without anyone having to re-save each person.
+ */
+export async function syncRoles(ctx: RecordCtx) {
+  assertManage(ctx);
+  const rows = await ctx.tx.query<{ id: string; role_id: string | null; access: any; full_name: string }>(
+    `select p.id, p.role_id, p.access, u.full_name from professionals p join users u on u.tenant_id = p.tenant_id and u.id = p.user_id where p.tenant_id = $1`,
+    [ctx.tenantId],
+  );
+  let rebuilt = 0;
+  for (const r of rows) {
+    if (!r.role_id) continue;
+    await writeRole(ctx, r.role_id, `${r.full_name} — access`, normAccess(r.access));
+    rebuilt++;
+  }
+  return { rebuilt };
 }
 
 /** Writes the access config to the row and rebuilds the derived role (creating one if missing). */

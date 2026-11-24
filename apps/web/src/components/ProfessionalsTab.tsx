@@ -85,7 +85,15 @@ export function AccessChips({ access, meta }: { access: Access; meta: Json }) {
 export function ProfessionalsTab() {
   const toast = useToast();
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ['organisation', 'professionals'], queryFn: () => get<Json>('/api/v1/organisation/professionals') });
+  const q = useQuery({
+    queryKey: ['organisation', 'professionals'],
+    // rebuild everyone's derived role from their stored access first, so permission-mapping changes
+    // apply to people already added without anyone re-saving them (best-effort)
+    queryFn: async () => {
+      await post('/api/v1/organisation/professionals/sync-roles', {}).catch(() => undefined);
+      return get<Json>('/api/v1/organisation/professionals');
+    },
+  });
   const [edit, setEdit] = useState<Json | null | 'new'>(null);
   const [access, setAccess] = useState<Json | null>(null);
   const [showRequests, setShowRequests] = useState(false);
