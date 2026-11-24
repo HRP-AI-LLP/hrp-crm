@@ -304,7 +304,9 @@ ePBG Percentage(%) 5.00`;
     expect(c.json.checks.find((x: any) => x.what === 'Average annual turnover')).toMatchObject({ ok: true });
     expect(c.json.checks.find((x: any) => x.what === 'Years of experience').detail).toMatch(/exempt by MSE/);
     const docs = Object.fromEntries(c.json.documents.map((d: any) => [d.asked, d.status]));
-    expect(docs).toMatchObject({ PAN: 'ready', 'GST registration': 'ready', 'Experience Criteria': 'missing', 'Bidder Turnover': 'ready', 'Certificate (Requested in ATC)': 'manual', 'MSE exemption': 'ready', 'Startup exemption': 'missing' });
+    // experience is relaxed by the MSE/Startup exemption; turnover is on file so it stays satisfied
+    expect(docs).toMatchObject({ PAN: 'ready', 'GST registration': 'ready', 'Experience Criteria': 'relaxed', 'Bidder Turnover': 'ready', 'Certificate (Requested in ATC)': 'manual', 'MSE exemption': 'ready', 'Startup exemption': 'missing' });
+    expect(c.json.documents.find((d: any) => d.asked === 'Experience Criteria').relaxedBy).toMatch(/MSE exemption/);
     const pack = await h.app.request(`http://synapse.test/api/v1/intake/gem/${ids.bid}/pack`, { headers: { 'x-tenant': 'acme', authorization: `Bearer ${token}` } }, h.env);
     expect(pack.status).toBe(200);
     const out = await PDFDocument.load(new Uint8Array(await pack.arrayBuffer()));

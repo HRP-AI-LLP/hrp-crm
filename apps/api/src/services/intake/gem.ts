@@ -252,6 +252,10 @@ export async function bidCheck(ctx: RecordCtx, env: Env, id: string) {
   }
   if (b.mse_exempt && f.msme) wants.push({ asked: 'MSE exemption', kinds: ['udyam'], name: kindName('udyam') });
   if (b.startup_exempt && f.startup) wants.push({ asked: 'Startup exemption', kinds: ['startup_india'], name: kindName('startup_india') });
+  // Prior turnover and prior-experience requirements are relaxed for MSEs (Udyam) and DPIIT startups
+  // under GeM's relaxation of norms — when the exemption is offered and the certificate is on file,
+  // those documents need not be furnished.
+  const RELAXABLE = /turnover|experience|past\s*performance|prior\b|work\s*order|completion/i;
   const seen = new Set<string>();
   const documents = [];
   for (const w of wants) {
@@ -260,11 +264,19 @@ export async function bidCheck(ctx: RecordCtx, env: Env, id: string) {
     seen.add(key);
     const have = usable(w.kinds);
     const expired = f.docs.filter((d) => w.kinds.includes(d.kind) && d.file_id && d.valid_until && d.valid_until < today);
+    let status = !w.kinds.length ? 'manual' : have.length ? 'ready' : expired.length ? 'expired' : 'missing';
+    let relaxedBy: string | null = null;
+    // only relax what's actually asked of the bidder (not the exemption certificates themselves)
+    if (exempt && status !== 'ready' && !['udyam', 'startup_india'].some((k) => w.kinds.includes(k)) && RELAXABLE.test(w.asked)) {
+      status = 'relaxed';
+      relaxedBy = exemptWhy;
+    }
     documents.push({
       asked: w.asked,
       answer: w.name,
       kinds: w.kinds,
-      status: !w.kinds.length ? 'manual' : have.length ? 'ready' : expired.length ? 'expired' : 'missing',
+      status,
+      relaxedBy,
       files: await Promise.all(have.map(async (d) => ({ docId: d.id, kind: d.kind, name: d.label || kindName(d.kind), fileName: d.file_name, url: await signedFileUrl(env, ctx.tenantId, d.file_id!, true) }))),
     });
   }
@@ -330,7 +342,13 @@ export async function bidPack(ctx: RecordCtx, env: Env, id: string): Promise<{ n
       line(`(could not add ${p.title}: the file may be protected)`);
     }
   }
-  const missing = c.documents.filter((d) => d.status !== 'ready');
+  const relaxed = c.documents.filter((d) => d.status === 'relaxed');
+  if (relaxed.length) {
+    y -= 8;
+    line('Relaxed (not required) under MSE / Startup exemption:', bold);
+    for (const m of relaxed) line(`- ${m.asked}${m.relaxedBy ? ` — ${m.relaxedBy}` : ''}`);
+  }
+  const missing = c.documents.filter((d) => d.status !== 'ready' && d.status !== 'relaxed');
   if (missing.length) {
     y -= 8;
     line('Still to prepare:', bold);

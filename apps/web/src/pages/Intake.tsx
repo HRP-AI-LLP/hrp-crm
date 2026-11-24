@@ -399,7 +399,60 @@ function BidDetails({ b }: { b: Json }) {
   );
 }
 
-const DOC_CLS: Record<string, [string, string]> = { ready: ['good', 'On file'], missing: ['bad', 'Missing'], expired: ['bad', 'Expired'], manual: ['warn', 'Prepare'] };
+const DOC_CLS: Record<string, [string, string]> = { ready: ['good', 'On file'], missing: ['bad', 'Missing'], expired: ['bad', 'Expired'], manual: ['warn', 'Prepare'], relaxed: ['good', 'Relaxed by MSME/startup'] };
+
+/** Plain-language "what this bid is and what work it involves", from the parsed facts and buyer files. */
+function BidAbout({ b, files }: { b: Json; files: Json[] }) {
+  const details = (b.details ?? {}) as Record<string, string>;
+  const buyer = [b.organisation, b.department, b.ministry].filter(Boolean).join(', ');
+  const item = b.title || b.category || 'the requirement below';
+  // the buyer's own scope / BOQ / specification file, when they attached one
+  const scope = files.find((f) => /scope|bo[qr]\b|specification|technical|sow|work|terms|atc|tender/i.test(String(f.label ?? '')));
+  const asks = (b.documents_required ?? []) as string[];
+  const facts: [string, React.ReactNode][] = [
+    ['Type of work', b.category || b.bid_type || null],
+    ['Quantity', b.quantity ?? null],
+    ['Contract period', details['Contract period'] ?? null],
+    ['Evaluation', details['Evaluation method'] ?? null],
+    ['Estimated value', b.bid_value != null ? money2(b.bid_value) : (details['Estimated bid value'] ?? null)],
+  ].filter(([, v]) => v != null && v !== '') as [string, React.ReactNode][];
+  return (
+    <div className="panel" style={{ padding: 12 }}>
+      <b>About this bid</b>
+      <p className="small" style={{ margin: '4px 0 8px' }}>
+        {buyer ? `${buyer} is ` : 'The buyer is '}inviting bids for <b>{item}</b>
+        {b.quantity ? ` (quantity ${b.quantity})` : ''}
+        {b.bid_type ? `, as ${/boq/i.test(String(b.bid_type)) ? 'a' : 'a'} ${b.bid_type}` : ''}.
+        {b.end_at ? ` Bids close ${dateTime(b.end_at)}.` : ''}
+      </p>
+      {facts.length > 0 && (
+        <dl className="grid2 small" style={{ margin: 0, rowGap: 4 }}>
+          {facts.map(([k, v]) => (
+            <div key={k} style={{ display: 'flex', gap: 8 }}>
+              <dt className="muted" style={{ minWidth: 130, flex: 'none' }}>{k}</dt>
+              <dd style={{ margin: 0 }}>{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {asks.length > 0 && (
+        <div className="small" style={{ marginTop: 8 }}>
+          <span className="muted">What they ask the bidder for: </span>
+          {asks.join(', ')}
+        </div>
+      )}
+      <div className="small" style={{ marginTop: 8 }}>
+        {scope?.open ? (
+          <a className="btn sm" href={scope.open} target="_blank" rel="noreferrer">
+            Open scope of work ({scope.label})
+          </a>
+        ) : (
+          <span className="muted">Full scope is in the bid document / ATC below — read it for the exact work, specifications and terms.</span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function BidModal({ id, onClose }: { id: string; onClose: () => void }) {
   const key = ['intake', 'gem', 'check', id];
@@ -478,6 +531,8 @@ function BidModal({ id, onClose }: { id: string; onClose: () => void }) {
             </select>
           </div>
         </div>
+
+        <BidAbout b={b} files={(data.files as Json[]) ?? []} />
 
         <BidDetails b={b} />
 
@@ -581,7 +636,9 @@ function BidModal({ id, onClose }: { id: string; onClose: () => void }) {
               {data.documents.map((d: Json) => (
                 <tr key={`${d.asked}|${d.kinds.join()}`}>
                   <td>{d.asked}</td>
-                  <td className="small">{d.answer}</td>
+                  <td className="small">
+                    {d.status === 'relaxed' ? <span className="muted">Not required — {d.relaxedBy ?? 'MSE/Startup exemption'}</span> : d.answer}
+                  </td>
                   <td>
                     <span className={`chip ${DOC_CLS[d.status]?.[0] ?? ''}`}>{DOC_CLS[d.status]?.[1] ?? d.status}</span>
                   </td>
