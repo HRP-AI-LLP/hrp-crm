@@ -9,7 +9,7 @@ const realFetch = globalThis.fetch;
 
 async function serviceAccountJson() {
   const kp = (await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify'])) as CryptoKeyPair;
-  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
+  const pkcs8 = new Uint8Array((await crypto.subtle.exportKey('pkcs8', kp.privateKey)) as ArrayBuffer);
   let b = '';
   for (const x of pkcs8) b += String.fromCharCode(x);
   const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(b).replace(/(.{64})/g, '$1\n')}\n-----END PRIVATE KEY-----\n`;
