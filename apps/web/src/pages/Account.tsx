@@ -53,6 +53,47 @@ function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void 
   );
 }
 
+const AUTH_APPS = [
+  {
+    name: 'Google Authenticator',
+    android: 'https://play.google.com/store/apps/details?id=com.google.android.apps.authenticator2',
+    ios: 'https://apps.apple.com/app/google-authenticator/id388497605',
+  },
+  {
+    name: 'Microsoft Authenticator',
+    android: 'https://play.google.com/store/apps/details?id=com.azure.authenticator',
+    ios: 'https://apps.apple.com/app/microsoft-authenticator/id983156458',
+  },
+];
+
+/** A short guide to installing an authenticator app on any phone. */
+export function AuthenticatorGuide() {
+  return (
+    <div className="panel" style={{ padding: 14 }}>
+      <b>Step 1 — Install a free authenticator app on your phone</b>
+      <p className="muted small" style={{ margin: '4px 0 10px' }}>Pick one (if you don't already have one). Any TOTP app works — Authy and 1Password too.</p>
+      <div className="stack" style={{ gap: 10 }}>
+        {AUTH_APPS.map((a) => (
+          <div key={a.name} className="spread" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            <span>{a.name}</span>
+            <span style={{ display: 'flex', gap: 6 }}>
+              <a className="btn sm" href={a.android} target="_blank" rel="noreferrer">
+                Android (Play Store)
+              </a>
+              <a className="btn sm" href={a.ios} target="_blank" rel="noreferrer">
+                iPhone (App Store)
+              </a>
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="muted small" style={{ margin: '10px 0 0' }}>
+        On another device (tablet, laptop)? Any authenticator or password manager that shows 6-digit codes will work. Once it's installed, continue below to scan the code.
+      </p>
+    </div>
+  );
+}
+
 /** Two-factor setup: scan → confirm a code → save recovery codes. */
 export function TwoFactorSetup({ onEnabled }: { onEnabled?: () => void }) {
   const { reload } = useAuth();
@@ -76,7 +117,8 @@ export function TwoFactorSetup({ onEnabled }: { onEnabled?: () => void }) {
   if (!setup) {
     return (
       <div className="stack">
-        <p style={{ margin: 0 }}>Protect your account with a code from an authenticator app (Google Authenticator, Microsoft Authenticator, Authy, 1Password…) in addition to your password.</p>
+        <p style={{ margin: 0 }}>Two-factor sign-in adds a 6-digit code from an app on your phone on top of your password, so your account is safe even if your password leaks.</p>
+        <AuthenticatorGuide />
         {err && <div className="field-error">{err}</div>}
         <div>
           <button
@@ -94,7 +136,7 @@ export function TwoFactorSetup({ onEnabled }: { onEnabled?: () => void }) {
               }
             }}
           >
-            Set up two-factor sign-in
+            I've installed an app — continue
           </button>
         </div>
       </div>
@@ -385,6 +427,35 @@ export function MfaRequiredGate() {
             <b>{me?.tenant.name}</b> requires two-factor sign-in for everyone. It takes about a minute.
           </p>
           <TwoFactorSetup />
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/** Optional, skippable 2FA offer — shown when the workspace doesn't require it, so people can turn it
+ *  on (with a full guide) or skip and continue. */
+export function MfaOfferGate({ onDone }: { onDone: () => void }) {
+  const { logout, me } = useAuth();
+  return (
+    <div className="gate">
+      <section className="panel" style={{ maxWidth: 640, width: '100%' }}>
+        <div className="panel-head">
+          <h2>Protect your account with two-factor sign-in?</h2>
+          <button className="btn ghost sm" onClick={() => logout()}>
+            Sign out
+          </button>
+        </div>
+        <div className="panel-body stack">
+          <p style={{ margin: 0 }}>
+            Recommended, not required. It keeps your <b>{me?.tenant.name}</b> account safe even if your password is ever stolen. Set it up now, or skip and turn it on any time from your account settings.
+          </p>
+          <TwoFactorSetup onEnabled={onDone} />
+          <div>
+            <button className="btn" onClick={onDone}>
+              Skip for now
+            </button>
+          </div>
         </div>
       </section>
     </div>
