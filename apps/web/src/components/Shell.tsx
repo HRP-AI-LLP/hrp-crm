@@ -211,6 +211,9 @@ export function Shell() {
   // people an admin named to manage the organisation profile reach it without the rest of Settings
   const orgQ = useQuery({ queryKey: ['organisation'], queryFn: () => get<Record<string, any>>('/api/v1/organisation'), enabled: !!me, staleTime: 300_000, retry: false });
   const orgManager = !!orgQ.data?.canManage;
+  // a finance professional (CA/accountant) reaches their own access screen
+  const proQ = useQuery({ queryKey: ['professionals', 'me'], queryFn: () => get<Record<string, any>>('/api/v1/professionals/me'), enabled: !!me, staleTime: 300_000, retry: false });
+  const isProfessional = !!proQ.data?.professional;
   const [palette, setPalette] = useState(false);
   // the main menu folds to icons (remembered)
   const [rail, setRail] = useState(() => {
@@ -359,6 +362,7 @@ export function Shell() {
       items: [
         { to: '/knowledge', label: 'Knowledge base', icon: 'bulb' },
         ...(can('developers') || can('channels') || can('users') ? [{ to: '/developers', label: 'Developers', icon: 'code' }] : []),
+        ...(isProfessional ? [{ to: '/my-access', label: 'My access', icon: 'lock' }] : []),
         ...(admin || orgManager ? [{ to: '/organisation', label: 'Organisation', icon: 'org' }] : []),
         ...(admin ? [{ to: '/settings', label: 'Settings', icon: 'gear' }] : []),
       ],

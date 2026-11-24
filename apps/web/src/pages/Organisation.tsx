@@ -16,9 +16,10 @@ import { del, get, post, put } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { SideTabs } from '../components/SideTabs';
 import { Guide } from '../components/admin/ConnectionKeys';
+import { ProfessionalsTab } from '../components/ProfessionalsTab';
 
 type Json = Record<string, any>;
-type Tab = 'profile' | 'contacts' | 'leaders' | 'people' | 'banks' | 'documents' | 'signatures' | 'dsc' | 'templates';
+type Tab = 'profile' | 'contacts' | 'leaders' | 'people' | 'banks' | 'documents' | 'signatures' | 'dsc' | 'templates' | 'professionals';
 
 const CONSTITUTIONS: [string, string][] = [
   ['llp', 'Limited liability partnership (LLP)'],
@@ -70,6 +71,7 @@ export function OrganisationTab() {
           { key: 'banks', label: 'Bank accounts', icon: 'wallet', group: 'Company' },
           { key: 'leaders', label: 'Leadership & key people', icon: 'users', group: 'People' },
           { key: 'people', label: 'Partners & directors', icon: 'user', group: 'People' },
+          { key: 'professionals', label: 'Accountants & CAs', icon: 'users', group: 'People' },
           { key: 'documents', label: 'Documents', icon: 'folder', group: 'Papers' },
           { key: 'signatures', label: 'Signatures', icon: 'contract', group: 'Papers' },
           { key: 'dsc', label: 'Digital signatures (DSC)', icon: 'stamp', group: 'Papers' },
@@ -81,6 +83,7 @@ export function OrganisationTab() {
       {tab === 'contacts' && <Contacts d={d} />}
       {tab === 'leaders' && <KeyPeople d={d} />}
       {tab === 'people' && <People d={d} />}
+      {tab === 'professionals' && <ProfessionalsTab />}
       {tab === 'banks' && <Banks d={d} />}
       {tab === 'documents' && <OrgDocuments d={d} />}
       {tab === 'signatures' && <Signatures d={d} />}

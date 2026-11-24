@@ -99,7 +99,7 @@ const RULES: Rule[] = [
   ['/reconcile', ALWAYS], ['/records', ALWAYS], ['/search', ALWAYS], ['/meta', ALWAYS], ['/home', ALWAYS], ['/dashboard', ALWAYS], ['/tasks', ALWAYS], ['/users', ALWAYS], ['/teams', ALWAYS],
   ['/views', ALWAYS], ['/export', ALWAYS], ['/import', ALWAYS], ['/events', ALWAYS], ['/notifications', ALWAYS], ['/approvals', ALWAYS], ['/files', ALWAYS],
   ['/rules', ALWAYS], ['/digests', ALWAYS], ['/assistant', ALWAYS], ['/push', ALWAYS], ['/integrations', ALWAYS], ['/me', ALWAYS], ['/oauth', ALWAYS],
-  ['/hooks', ALWAYS], ['/apps', ALWAYS], ['/organisation', ALWAYS], ['/documents', ALWAYS], ['/doc-templates', ALWAYS], ['/identity', ALWAYS],
+  ['/hooks', ALWAYS], ['/apps', ALWAYS], ['/organisation', ALWAYS], ['/professionals', ALWAYS], ['/stores', ALWAYS], ['/documents', ALWAYS], ['/doc-templates', ALWAYS], ['/identity', ALWAYS],
   ['/verify', ALWAYS], ['/verify-pdf', ALWAYS], ['/privacy', ALWAYS], ['/consent', ALWAYS], ['/audit', ALWAYS], ['/unsubscribe', ALWAYS], ['/privacy-status', ALWAYS],
   ['/privacy-verify', ALWAYS], ['/openapi.json', ALWAYS], ['/webhook-deliveries', ALWAYS], ['/webhook-events', ALWAYS], ['/status', ALWAYS],
   ['/score', ALWAYS], ['/sentiment', ALWAYS], ['/summarize', ALWAYS], ['/next-actions', ALWAYS], ['/draft-email', ALWAYS],

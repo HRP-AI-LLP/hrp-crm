@@ -16,6 +16,7 @@ import * as dsc from '../services/dsc';
 import * as tpl from '../services/doc-templates';
 import * as odocs from '../services/org-documents';
 import * as ident from '../services/person-identity';
+import * as pros from '../services/professionals';
 import type { RecordCtx } from '../services/records';
 import { loadMeta } from '../services/tenancy';
 import { systemPrincipal } from '../services/worker';
@@ -48,6 +49,33 @@ export const organisationRoutes = new Hono<AppEnv>()
     return c.json(await c.var.db.tx(scope(c), (tx) => stores.linkProject(rctx(c, tx), id(c), b)));
   })
   .get('/projects/:id/store/status', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => stores.playStatus(rctx(c, tx), c.env, id(c)))))
+  // Accountants & CAs — outside finance people, each with scoped access
+  .get('/organisation/professionals', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pros.listProfessionals(rctx(c, tx)))))
+  .post('/organisation/professionals', async (c) => {
+    const b = pros.addSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => pros.addProfessional(rctx(c, tx), b)), 201);
+  })
+  .patch('/organisation/professionals/:id', async (c) => {
+    const b = pros.updateSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => pros.updateProfessional(rctx(c, tx), id(c), b)));
+  })
+  .put('/organisation/professionals/:id/access', async (c) => {
+    const b = pros.accessSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => pros.setAccess(rctx(c, tx), id(c), b)));
+  })
+  .delete('/organisation/professionals/:id', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => pros.removeProfessional(rctx(c, tx), id(c)))))
+  // access requests — admin side
+  .get('/organisation/professional-requests', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pros.listRequests(rctx(c, tx)))))
+  .post('/organisation/professional-requests/:id/decide', async (c) => {
+    const b = pros.decideSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => pros.decideRequest(rctx(c, tx), id(c), b)));
+  })
+  // self-service — a professional's own access and requests
+  .get('/professionals/me', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pros.meProfile(rctx(c, tx)))))
+  .post('/professionals/me/requests', async (c) => {
+    const b = pros.requestSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => pros.raiseRequest(rctx(c, tx), b)), 201);
+  })
   .put('/organisation', async (c) => {
     const b = org.profileSchema.parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => org.saveProfile(rctx(c, tx), b)));
