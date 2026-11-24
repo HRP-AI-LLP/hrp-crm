@@ -229,7 +229,7 @@ export function GstPortal() {
               </button>
             ))}
           </div>
-          {tab === "overview" && <Overview conn={conn} />}
+          {tab === "overview" && <Overview conn={conn} onOpen={setTab} />}
           {tab === "returns" && <Returns conn={conn} />}
           {tab === "portal" && <PortalViews conn={conn} />}
           {tab === "settings" && (
@@ -370,7 +370,21 @@ function SessionBar({
 
 /* ───────────────────────── overview ───────────────────────── */
 
-function Overview({ conn }: { conn: Json }) {
+type GstTab = "overview" | "returns" | "portal" | "settings" | "log";
+const cardOpen = (onOpen: (t: GstTab) => void, t: GstTab) => ({
+  className: "panel kpi kpi-link",
+  role: "button" as const,
+  tabIndex: 0,
+  onClick: () => onOpen(t),
+  onKeyDown: (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onOpen(t);
+    }
+  },
+});
+
+function Overview({ conn, onOpen }: { conn: Json; onOpen: (t: GstTab) => void }) {
   const gsp = useGsp();
   const has = (k: string) => (gsp.views ?? []).includes(k);
   const act = useAct([["gst"]]);
@@ -464,7 +478,7 @@ function Overview({ conn }: { conn: Json }) {
         )}
       </div>
       <div className="kpis" style={{ margin: 0 }}>
-        <div className="panel kpi">
+        <div {...cardOpen(onOpen, "portal")}>
           <div className="l">
             Cash ledger{" "}
             {data.ledgerBalance && (
@@ -491,7 +505,7 @@ function Overview({ conn }: { conn: Json }) {
             </div>
           )}
         </div>
-        <div className="panel kpi">
+        <div {...cardOpen(onOpen, "portal")}>
           <div className="l">ITC (credit ledger)</div>
           <div className="v">
             {bal
@@ -510,7 +524,7 @@ function Overview({ conn }: { conn: Json }) {
             </div>
           )}
         </div>
-        <div className="panel kpi">
+        <div {...cardOpen(onOpen, "returns")}>
           <div className="l">Returns to file now</div>
           <div
             className="v"

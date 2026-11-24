@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { del, get, patch, post, put } from '../../lib/api';
 import { money2 } from '../../lib/format';
 import { FilesPanel } from '../Files';
-import { Modal, Spinner, useToast } from '../ui';
+import { Kpi, Modal, Spinner, useToast } from '../ui';
 
 type Json = Record<string, any>;
 const AUTH = ['MCA', 'GST', 'Income tax', 'TDS', 'EPFO', 'ESIC', 'State', 'Other'];
@@ -21,6 +21,7 @@ export function Compliance({ manage = true }: { manage?: boolean }) {
   const [fy, setFy] = useState(fyNow());
   const [auth, setAuth] = useState('');
   const [show, setShow] = useState<'open' | 'all'>('open');
+  const [only, setOnly] = useState<'overdue' | 'soon' | 'filed' | null>(null);
   const [open, setOpen] = useState<Json | null>(null);
   const [adding, setAdding] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -39,9 +40,20 @@ export function Compliance({ manage = true }: { manage?: boolean }) {
   };
   const items = (data ?? []) as Json[];
   const t = today();
-  const shown = useMemo(() => items.filter((i) => (!auth || i.authority === auth) && (show === 'all' || ['pending', 'in_progress'].includes(i.status))), [items, auth, show]);
+  const soonEnd = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+  const shown = useMemo(
+    () =>
+      items.filter((i) => {
+        if (auth && i.authority !== auth) return false;
+        if (only === 'overdue') return ['pending', 'in_progress'].includes(i.status) && i.due_date < t;
+        if (only === 'soon') return ['pending', 'in_progress'].includes(i.status) && i.due_date >= t && i.due_date <= soonEnd;
+        if (only === 'filed') return i.status === 'filed';
+        return show === 'all' || ['pending', 'in_progress'].includes(i.status);
+      }),
+    [items, auth, show, only, t, soonEnd],
+  );
   const overdue = items.filter((i) => ['pending', 'in_progress'].includes(i.status) && i.due_date < t);
-  const soon = items.filter((i) => ['pending', 'in_progress'].includes(i.status) && i.due_date >= t && i.due_date <= new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10));
+  const soon = items.filter((i) => ['pending', 'in_progress'].includes(i.status) && i.due_date >= t && i.due_date <= soonEnd);
   const filed = items.filter((i) => i.status === 'filed');
   const groups = useMemo(() => {
     const m = new Map<string, Json[]>();
@@ -103,28 +115,32 @@ export function Compliance({ manage = true }: { manage?: boolean }) {
       ) : (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
-            <div className="panel kpi">
-              <div className="l">Overdue</div>
-              <div className="v" style={{ color: overdue.length ? 'var(--bad)' : undefined }}>{overdue.length}</div>
-            </div>
-            <div className="panel kpi">
-              <div className="l">Due in 30 days</div>
-              <div className="v">{soon.length}</div>
-            </div>
-            <div className="panel kpi">
-              <div className="l">Filed</div>
-              <div className="v" style={{ color: 'var(--good)' }}>
-                {filed.length}
-                <span className="small muted" style={{ fontWeight: 500 }}>
-                  {' '}
-                  / {items.filter((i) => i.status !== 'not_applicable').length}
-                </span>
-              </div>
-            </div>
-            <div className="panel kpi">
-              <div className="l">Paid with filings</div>
-              <div className="v" style={{ fontSize: 20 }}>{money2(items.reduce((s, i) => s + Number(i.amount_paid ?? 0), 0))}</div>
-            </div>
+            <Kpi
+              l="Overdue"
+              v={overdue.length}
+              tone={overdue.length ? 'bad' : undefined}
+              onClick={() => setOnly((o) => (o === 'overdue' ? null : 'overdue'))}
+              sub={only === 'overdue' ? 'Showing overdue — tap to clear' : undefined}
+            />
+            <Kpi
+              l="Due in 30 days"
+              v={soon.length}
+              onClick={() => setOnly((o) => (o === 'soon' ? null : 'soon'))}
+              sub={only === 'soon' ? 'Showing due soon — tap to clear' : undefined}
+            />
+            <Kpi
+              l="Filed"
+              v={
+                <>
+                  {filed.length}
+                  <span className="small muted" style={{ fontWeight: 500 }}> / {items.filter((i) => i.status !== 'not_applicable').length}</span>
+                </>
+              }
+              tone="good"
+              onClick={() => setOnly((o) => (o === 'filed' ? null : 'filed'))}
+              sub={only === 'filed' ? 'Showing filed — tap to clear' : undefined}
+            />
+            <Kpi l="Paid with filings" v={<span style={{ fontSize: 20 }}>{money2(items.reduce((s, i) => s + Number(i.amount_paid ?? 0), 0))}</span>} onClick={() => setOnly((o) => (o === 'filed' ? null : 'filed'))} />
           </div>
           {overdue.length > 3 && (
             <div className="notice">
