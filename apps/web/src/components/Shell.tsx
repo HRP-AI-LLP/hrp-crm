@@ -129,21 +129,36 @@ function Notifications() {
   const qc = useQueryClient();
   const nav = useNavigate();
   const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
   const { data } = useQuery({
     queryKey: ['notifications'],
     queryFn: () => get<{ items: Note[]; unread: number }>('/api/v1/notifications'),
     refetchInterval: () => (document.visibilityState === 'visible' ? 60_000 : false),
     staleTime: 30_000,
   });
+  // close the popup on a click outside it, or on Escape
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
   const markRead = async (ids?: string[]) => {
     await post('/api/v1/notifications/read', ids ? { ids } : {}).catch(() => undefined);
     qc.invalidateQueries({ queryKey: ['notifications'] });
   };
   const unread = data?.unread ?? 0;
   return (
-    <div className="notif">
-      <button className="btn ghost sm notif-btn" aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <div className="notif" ref={ref}>
+      <button className="icon-btn notif-btn" aria-label={`Notifications${unread ? `, ${unread} unread` : ''}`} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" aria-hidden="true">
           <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
           <path d="M13.7 21a2 2 0 0 1-3.4 0" />
         </svg>
@@ -451,10 +466,12 @@ export function Shell() {
           <span className={`offline-pill${online ? '' : ' on'}`} role="status">
             {online ? '' : 'Offline'}
           </span>
-          <button className="icon-btn push" title={theme === 'dark' ? 'Light theme' : 'Dark theme'} aria-label="Switch theme" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
-            <NI name={theme === 'dark' ? 'sun' : 'moon'} size={18} className="" />
-          </button>
-          <Notifications />
+          <div className="topbar-actions">
+            <button className="icon-btn" title={theme === 'dark' ? 'Light theme' : 'Dark theme'} aria-label="Switch theme" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+              <NI name={theme === 'dark' ? 'sun' : 'moon'} size={21} className="" />
+            </button>
+            <Notifications />
+          </div>
         </header>
         {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
         <main className="content">

@@ -519,8 +519,9 @@ input.num { text-align: right; }
 
 /* notifications */
 .topbar { gap: 12px; }
-.notif { position: relative; margin-left: auto; }
-.notif-btn { position: relative; width: 36px; height: 36px; padding: 0; justify-content: center; }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.notif { position: relative; }
+.notif-btn { position: relative; }
 .notif-count { position: absolute; top: 2px; right: 2px; min-width: 16px; height: 16px; border-radius: 999px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 800; display: grid; place-items: center; padding: 0 3px; }
 .notif-pop { position: absolute; right: 0; top: 42px; width: min(360px, 92vw); max-height: 70vh; overflow: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(15, 23, 42, .16); z-index: 40; }
 .notif-head { padding: 10px 12px; border-bottom: 1px solid var(--line-2); }
