@@ -11,6 +11,7 @@ import { createBankAccount } from '../services/books/banking';
 import * as own from '../services/books/own-accounts';
 import { ensureBooks } from '../services/books/ledger';
 import * as org from '../services/organisation';
+import * as stores from '../services/stores';
 import * as dsc from '../services/dsc';
 import * as tpl from '../services/doc-templates';
 import * as odocs from '../services/org-documents';
@@ -33,6 +34,20 @@ export const organisationRoutes = new Hono<AppEnv>()
   .get('/organisation', async (c) => {
     return c.json(await c.var.db.tx(scope(c, true), (tx) => org.getProfile(rctx(c, tx))));
   })
+  // app-store connections (org-level)
+  .get('/stores', async (c) => c.json({ items: await c.var.db.tx(scope(c, true), (tx) => stores.listStores(rctx(c, tx))) }))
+  .post('/stores', async (c) => {
+    const b = stores.connectSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => stores.connectStore(rctx(c, tx), c.env, b)), 201);
+  })
+  .delete('/stores/:id', async (c) => c.json(await c.var.db.tx(scope(c), (tx) => stores.deleteStore(rctx(c, tx), id(c)))))
+  // project ↔ store app + live status
+  .get('/projects/:id/store', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => stores.storeOf(rctx(c, tx), id(c)))))
+  .put('/projects/:id/store', async (c) => {
+    const b = stores.linkSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => stores.linkProject(rctx(c, tx), id(c), b)));
+  })
+  .get('/projects/:id/store/status', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => stores.playStatus(rctx(c, tx), c.env, id(c)))))
   .put('/organisation', async (c) => {
     const b = org.profileSchema.parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => org.saveProfile(rctx(c, tx), b)));

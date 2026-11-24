@@ -80,6 +80,183 @@ function useAct(keys: unknown[][]) {
   };
 }
 
+const PLAY_STATE: Record<string, [string, string]> = { live: ['Live', 'good'], draft: ['Draft', ''], halted: ['Halted', 'bad'], in_review: ['In review', 'info'], none: ['—', ''] };
+
+/** Links a mobile project to its Google Play / App Store app and shows each track's live status. */
+function StorePanel({ id, manage }: { id: string; manage: boolean }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const store = useQuery({ queryKey: ['store', id], queryFn: () => get<Json>(`/api/v1/projects/${id}/store`) });
+  const conns = useQuery({ queryKey: ['stores'], queryFn: () => get<{ items: Json[] }>('/api/v1/stores'), enabled: manage });
+  const status = useQuery({ queryKey: ['store-status', id], queryFn: () => get<Json>(`/api/v1/projects/${id}/store/status`), enabled: !!store.data?.connectionId, retry: false });
+  const [editing, setEditing] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [f, setF] = useState<{ connectionId: string; appId: string; track: string }>({ connectionId: '', appId: '', track: 'production' });
+  if (!store.data) return null;
+  const linked = !!store.data.connectionId;
+  const begin = () => {
+    setF({ connectionId: store.data!.connectionId ?? '', appId: store.data!.appId ?? '', track: store.data!.track ?? 'production' });
+    setEditing(true);
+  };
+  const save = async () => {
+    try {
+      await put(`/api/v1/projects/${id}/store`, { connectionId: f.connectionId || null, appId: f.appId.trim() || null, track: f.track });
+      setEditing(false);
+      qc.invalidateQueries({ queryKey: ['store', id] });
+      qc.invalidateQueries({ queryKey: ['store-status', id] });
+      toast('Store link saved');
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
+  return (
+    <section className="card stack" style={{ padding: 14, gap: 10 }}>
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+        <b>App store</b>
+        {manage && !editing && (
+          <button className="btn sm ghost" onClick={begin}>
+            {linked ? 'Change' : 'Link app'}
+          </button>
+        )}
+      </div>
+      {!linked && !editing && <p className="muted small" style={{ margin: 0 }}>Link this project to its Google Play (or App Store) app to track releases and review status here. Connect a store account first in Settings → App stores.</p>}
+      {editing && (
+        <div className="stack" style={{ gap: 8 }}>
+          <div className="grid2">
+            <label className="field">
+              Store account
+              <select value={f.connectionId} onChange={(e) => setF({ ...f, connectionId: e.target.value })}>
+                <option value="">Not linked</option>
+                {(conns.data?.items ?? []).map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label} ({c.kind === 'google_play' ? 'Google Play' : 'App Store'})
+                  </option>
+                ))}
+              </select>
+              {manage && (
+                <button type="button" className="btn ghost sm" style={{ marginTop: 4, alignSelf: 'flex-start' }} onClick={() => setConnecting(true)}>
+                  + Connect Google Play
+                </button>
+              )}
+            </label>
+            <label className="field">
+              Package / bundle id
+              <input value={f.appId} placeholder="e.g. in.hrpai.ludoverse" onChange={(e) => setF({ ...f, appId: e.target.value })} />
+            </label>
+          </div>
+          <label className="field" style={{ maxWidth: 240 }}>
+            Default track
+            <select value={f.track} onChange={(e) => setF({ ...f, track: e.target.value })}>
+              {(store.data.tracks as string[]).map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn primary sm" onClick={save}>
+              Save
+            </button>
+            <button className="btn ghost sm" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {linked && !editing && (
+        <>
+          <div className="muted small">
+            {store.data.label} · <code>{store.data.appId}</code>
+          </div>
+          {status.isError ? (
+            <small className="muted" style={{ color: 'var(--bad)' }}>{(status.error as Error).message}</small>
+          ) : status.data ? (
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Track</th>
+                  <th>Version</th>
+                  <th>Build</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(status.data.tracks as Json[]).map((t) => {
+                  const [lbl, cls] = PLAY_STATE[String(t.status)] ?? [String(t.status), ''];
+                  return (
+                    <tr key={t.track}>
+                      <td>{t.track}</td>
+                      <td>{t.versionName ?? '—'}</td>
+                      <td>{(t.versionCodes ?? []).join(', ') || '—'}</td>
+                      <td>
+                        <span className={`chip ${cls}`}>{lbl}{t.rolloutPercent != null && t.rolloutPercent < 100 ? ` ${t.rolloutPercent}%` : ''}</span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <Spinner />
+          )}
+          <div>
+            <button className="btn sm ghost" onClick={() => qc.invalidateQueries({ queryKey: ['store-status', id] })} disabled={status.isFetching}>
+              {status.isFetching ? 'Checking…' : 'Check status'}
+            </button>
+          </div>
+        </>
+      )}
+      {connecting && (
+        <ConnectStore
+          onClose={() => setConnecting(false)}
+          onDone={(newId) => {
+            setConnecting(false);
+            qc.invalidateQueries({ queryKey: ['stores'] });
+            setF((x) => ({ ...x, connectionId: newId }));
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+/** Connect a Google Play service account by pasting its JSON key. */
+function ConnectStore({ onClose, onDone }: { onClose: () => void; onDone: (id: string) => void }) {
+  const toast = useToast();
+  const [label, setLabel] = useState('Google Play');
+  const [secret, setSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await post<{ id: string }>('/api/v1/stores', { kind: 'google_play', label: label.trim() || 'Google Play', secret: secret.trim() });
+      toast('Google Play connected');
+      onDone(r.id);
+    } catch (e) {
+      toast((e as Error).message, true);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal title="Connect Google Play" onClose={onClose} footer={<button className="btn primary" disabled={busy || secret.trim().length < 20} onClick={save}>{busy ? 'Checking…' : 'Connect'}</button>}>
+      <div className="modal-body stack">
+        <p className="muted small" style={{ margin: 0 }}>
+          In Google Play Console → Users and permissions, create a <b>service account</b> (via Google Cloud), grant it access to your app, enable the <b>Google Play Android Developer API</b>, download its <b>JSON key</b>, and paste it here. It’s stored encrypted and used only to read your releases and let CI publish.
+        </p>
+        <label className="field">
+          Name
+          <input value={label} onChange={(e) => setLabel(e.target.value)} />
+        </label>
+        <label className="field">
+          Service-account JSON
+          <textarea rows={8} value={secret} placeholder='{ "type": "service_account", "client_email": "…", "private_key": "…" }' onChange={(e) => setSecret(e.target.value)} style={{ fontFamily: 'monospace', fontSize: 12 }} />
+        </label>
+      </div>
+    </Modal>
+  );
+}
+
 export function ReleasesTab({ id, manage }: { id: string; manage: boolean }) {
   const key = ['agile', id];
   const { data: b } = useQuery({ queryKey: key, queryFn: () => get<Json>(`/api/v1/projects/${id}/agile`) });
@@ -90,8 +267,10 @@ export function ReleasesTab({ id, manage }: { id: string; manage: boolean }) {
   if (!b) return <Spinner />;
   const releases = b.releases as Json[];
   const milestones = (project?.milestones ?? []) as Json[];
+  const mobile = ['mobile_app', 'mobile_game'].includes(String(project?.project?.product_type ?? project?.product_type ?? ''));
   return (
     <div className="stack">
+      {mobile && <StorePanel id={id} manage={manage} />}
       {manage && (
         <div>
           <button className="btn primary" onClick={() => setEdit({})}>

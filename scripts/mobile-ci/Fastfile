@@ -1,0 +1,19 @@
+# android/fastlane/Fastfile — build and publish to Google Play.
+default_platform(:android)
+
+platform :android do
+  desc "Build a signed AAB and upload it to a Play track"
+  lane :release do |options|
+    track = options[:track] || "internal"
+    gradle(task: "clean bundleRelease")   # or Flutter: sh("flutter build appbundle --release")
+    upload_to_play_store(
+      track: track,
+      aab: lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH],
+      json_key_data: ENV["PLAY_SERVICE_ACCOUNT_JSON"],
+      release_status: "draft",            # "completed" to roll out immediately
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true
+    )
+  end
+end

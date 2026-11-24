@@ -1,0 +1,40 @@
+# .github/workflows/release.yml — build the app and publish it to Google Play, then tell SanchalanOS.
+name: Release to Google Play
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      track: { description: "Play track", default: "internal" }
+      channelId: { description: "SanchalanOS release channel id", required: true }
+      version: { description: "versionName, e.g. 1.1.0", required: true }
+      versionCode: { description: "versionCode", required: true }
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: ruby/setup-ruby@v1
+        with: { ruby-version: "3.2", bundler-cache: true }
+      - name: Restore signing keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/app/keystore.jks
+      - name: Build & upload to Play
+        working-directory: android
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bundle exec fastlane release track:"${{ inputs.track || 'internal' }}"
+      - name: Tell SanchalanOS the build was submitted
+        if: ${{ inputs.channelId != '' }}
+        run: |
+          curl -fsS -X POST "$SANCHALAN_URL/api/v1/mcp" \
+            -H "authorization: Bearer $SANCHALAN_KEY" -H "content-type: application/json" \
+            --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"store_submit\",\"arguments\":{\"channelId\":\"${{ inputs.channelId }}\",\"track\":\"${{ inputs.track || 'internal' }}\",\"version\":\"${{ inputs.version }}\",\"versionCode\":\"${{ inputs.versionCode }}\",\"status\":\"in_review\"}}}"
+        env:
+          SANCHALAN_URL: ${{ secrets.SANCHALAN_URL }}
+          SANCHALAN_KEY: ${{ secrets.SANCHALAN_KEY }}

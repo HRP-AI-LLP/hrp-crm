@@ -14,6 +14,7 @@ import * as ag from '../services/coding-agent';
 import * as sd from '../services/sdlc';
 import * as pd from '../services/project-docs';
 import * as rd from '../services/release-dist';
+import * as stores from '../services/stores';
 import { appOrigin } from '../services/mailer';
 import { DIAGRAM_TYPES, type DiagramType, specGuide } from '@synapse/shared/diagrams';
 import type { RecordCtx } from '../services/records';
@@ -252,6 +253,17 @@ const TOOLS: Tool[] = [
     description: 'Start uploading a built installer to the channel’s Google Drive account/folder. Returns an uploadUrl — PUT the installer bytes straight to it (any size; it goes direct to Google), then read the file id from Google’s response and call release_publish. Use this from the build machine after compiling.',
     inputSchema: obj({ channelId: str('From release_channels'), fileName: str('The installer file name, e.g. CPFSlipsApp-1.1.0-setup.exe'), contentType: str('Optional MIME type (default application/octet-stream)') }, ['channelId', 'fileName']),
     run: (c, a) => run(c, (ctx) => rd.agentUploadUrl(ctx as ag.AgentCtx, c.env, String(a.channelId), String(a.fileName), a.contentType ? String(a.contentType) : undefined)),
+  },
+  {
+    name: 'store_submit',
+    description: 'Record that a build was uploaded to an app store (Google Play / App Store) and submitted, so SanchalanOS tracks the release. Call this from CI after Fastlane uploads the AAB/IPA. channelId is the release channel; status is uploaded | in_review | approved | rejected | live | halted.',
+    inputSchema: obj({ channelId: str('The release channel id'), track: str('internal | closed | open | production (Play), or testflight | appstore'), version: str('versionName, e.g. 1.2.0'), versionCode: str('Android versionCode / iOS build number'), status: str('uploaded | in_review | approved | rejected | live | halted') }, ['channelId', 'track']),
+    run: (c, a) =>
+      run(c, (ctx) => {
+        const pin = (ctx as ag.AgentCtx).agentProject;
+        if (!pin) throw new Error('This key is not tied to a project');
+        return stores.recordSubmission(ctx, pin.id, stores.submitSchema.parse({ channelId: a.channelId, track: a.track, version: a.version ?? null, versionCode: a.versionCode ?? null, status: a.status ?? 'in_review' }));
+      }),
   },
   {
     name: 'release_publish',
