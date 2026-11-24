@@ -36,7 +36,9 @@ export const LEVEL_LABEL: Record<Level, string> = { view: 'Read only', download:
 export const MODULES = [
   { key: 'billing', label: 'Invoices & payments', areas: ['billing'], objects: ['invoice', 'payment'], admin: 'billing' },
   { key: 'books', label: 'Bills, expenses & ledger', areas: ['books', 'operations'], objects: ['bill', 'vendor_payment', 'expense', 'vendor'], admin: 'books' },
-  { key: 'gst', label: 'GST returns & e-invoices', areas: ['gst'], objects: [], admin: 'compliance' },
+  // GST returns are built from invoices and bills, and the GST portal gates on books/billing admin —
+  // so this module also opens the books area and grants read on the documents the returns are made of.
+  { key: 'gst', label: 'GST returns & e-invoices', areas: ['gst', 'books'], objects: ['invoice', 'bill', 'expense'], admin: 'compliance' },
   { key: 'intake', label: 'Documents read from mail', areas: ['intake'], objects: [], admin: null },
   { key: 'insights', label: 'Dashboards & reports', areas: ['insights'], objects: [], admin: null },
 ] as const;
@@ -58,8 +60,10 @@ export const accessSchema = z.object({
 export type AccessConfig = z.infer<typeof accessSchema>;
 
 export function assertManage(ctx: RecordCtx) {
+  // managing who the accountants/CAs are is user management — owner or a users-admin only (NOT books
+  // admin, which the GST module now grants, so a GST-scoped CA can't manage other professionals)
   const p = ctx.principal.permissions;
-  if (!ctx.principal.user.isOwner && !hasAdmin(p, 'users') && !hasAdmin(p, 'books')) {
+  if (!ctx.principal.user.isOwner && !hasAdmin(p, 'users')) {
     throw forbidden('Only an admin can manage accountants and CAs');
   }
 }
@@ -94,6 +98,9 @@ function buildPermissions(access: AccessConfig) {
     if (lvl === 'download' || lvl === 'edit') anyReports = true;
     if (lvl === 'edit' && m.admin && m.admin !== 'compliance') admin.add(m.admin); // billing / books admin to change
   }
+  // GST returns, e-invoices and the GST portal require books/billing admin to open at all — grant it
+  // whenever the GST module is given, so GST details are actually visible (not just the calendar).
+  if (levelOf('gst')) admin.add('books');
   // GST filing is opt-in and needs the gst module
   if (access.canFile && levelOf('gst')) admin.add('compliance');
   // reports/exports: open the Dashboards & reports area and analytics for anyone with download or edit
