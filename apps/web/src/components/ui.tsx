@@ -61,11 +61,11 @@ export function Modal({ title, onClose, children, footer, wide, xl }: { title: s
       <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={ref} style={xl ? { width: 'min(1280px, 96vw)', maxHeight: '96vh' } : wide ? { width: 'min(860px, 100%)' } : undefined}>
         <div className="modal-head">
           <h2>{title}</h2>
-          <button className="btn ghost sm" onClick={onClose} aria-label="Close">
+          <button className="modal-x" onClick={onClose} aria-label="Close" title="Close">
             ✕
           </button>
         </div>
-        {children}
+        <div className="modal-scroll">{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
     </div>

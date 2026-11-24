@@ -238,11 +238,27 @@ table.data { width: 100%; border-collapse: collapse; }
 
 /* ---------- modal / toast / empty ---------- */
 .overlay { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.55); backdrop-filter: blur(4px); display: grid; place-items: center; z-index: 50; padding: 16px; }
-.modal { background: var(--surface); border-radius: 12px; width: min(640px, 100%); max-height: 90vh; display: flex; flex-direction: column; box-shadow: var(--shadow-pop); }
-.modal-head { padding: 16px 20px; border-bottom: 1px solid var(--line-2); display: flex; justify-content: space-between; align-items: center; }
-.modal-body { padding: 18px 20px; overflow: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.modal { background: var(--surface); border-radius: 14px; width: min(640px, 100%); max-height: 90vh; display: flex; flex-direction: column; box-shadow: var(--shadow-pop); border: 1px solid var(--line-2); overflow: hidden; }
+.modal-head { padding: 16px 22px; border-bottom: 1px solid var(--line-2); display: flex; justify-content: space-between; align-items: center; gap: 12px; flex: none; }
+.modal-head h2 { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; color: var(--ink); margin: 0; }
+/* the close "✕": a quiet icon button, consistent in every modal */
+.modal-x { all: unset; box-sizing: border-box; cursor: pointer; width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--ink-3); font-size: 15px; line-height: 1; flex: none; transition: background .12s ease, color .12s ease; }
+.modal-x:hover { background: var(--surface-2); color: var(--ink); }
+.modal-x:focus-visible { outline: 2px solid var(--brand-500); outline-offset: 1px; }
+/* every modal's content scrolls in one consistently padded region, whether or not the caller
+   wraps its own .modal-body */
+.modal-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 20px 22px; }
+.modal-scroll > .modal-body { padding: 0; overflow: visible; }
+/* a two-column form inside a modal (labels stack above their fields) */
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.form-grid > .field[style*="1 / -1"], .form-grid .wide { grid-column: 1 / -1; }
+.modal-body { overflow: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .modal-body .wide { grid-column: 1 / -1; }
-.modal-foot { padding: 14px 20px; border-top: 1px solid var(--line-2); display: flex; justify-content: flex-end; gap: 8px; }
+/* comfortable control height inside modals (denser tables keep the global 34px) */
+.modal-scroll :is(input:not([type=checkbox]):not([type=radio]), select) { height: 38px; }
+.modal-scroll h3, .modal-scroll h4 { margin: 2px 0; font-size: 13.5px; font-weight: 650; color: var(--ink); }
+.modal-foot { padding: 14px 22px; border-top: 1px solid var(--line-2); background: var(--surface-2); display: flex; justify-content: flex-end; gap: 8px; flex: none; }
+@media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
 .toasts { position: fixed; bottom: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 60; }
 .toast { background: var(--brand-900); color: #fff; padding: 10px 14px; border-radius: var(--r-sm); box-shadow: var(--shadow-pop); max-width: 380px; }
 .toast.err { background: var(--bad); }

@@ -28,7 +28,7 @@ export function AccessEditor({ meta, value, onChange }: { meta: Json; value: Acc
   return (
     <div className="stack">
       <div className="table-wrap">
-        <table className="data">
+        <table className="data" data-export="off">
           <thead>
             <tr>
               <th>Functionality / module</th>
