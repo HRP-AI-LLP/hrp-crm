@@ -108,6 +108,8 @@ export function MyAccessPage() {
         </div>
       </section>
 
+      <SignRequests />
+
       {(data.requests as Json[]).length > 0 && (
         <section className="panel">
           <div className="panel-body stack">
@@ -144,6 +146,113 @@ export function MyAccessPage() {
         </section>
       )}
     </>
+  );
+}
+
+const fileToB64 = (file: File) =>
+  new Promise<string>((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).replace(/^data:[^,]*,/, ''));
+    r.onerror = rej;
+    r.readAsDataURL(file);
+  });
+
+const SIGN_STATUS: Record<string, [string, string]> = { pending: ['', 'Waiting for signature'], signed: ['good', 'Signed'], rejected: ['warn', 'Declined'] };
+
+/** A professional uploads a document to be digitally signed, and downloads it once signed. */
+function SignRequests() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['sign-requests', 'me'], queryFn: () => get<{ items: Json[] }>('/api/v1/professionals/me/sign-requests') });
+  const [name, setName] = useState('');
+  const [note, setNote] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    if (!file) return toast('Choose a PDF to upload', true);
+    if (file.type && file.type !== 'application/pdf') return toast('Only PDF files can be signed', true);
+    setBusy(true);
+    try {
+      const pdf = await fileToB64(file);
+      await post('/api/v1/professionals/me/sign-requests', { name: name.trim() || file.name.replace(/\.pdf$/i, ''), note: note.trim() || undefined, pdf });
+      toast('Sent for signature');
+      setName('');
+      setNote('');
+      setFile(null);
+      qc.invalidateQueries({ queryKey: ['sign-requests', 'me'] });
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const items = q.data?.items ?? [];
+  return (
+    <section className="panel">
+      <div className="panel-body stack">
+        <h3 style={{ margin: 0 }}>Get a document digitally signed</h3>
+        <p className="muted small" style={{ margin: 0 }}>
+          Upload a PDF (a form, declaration or certificate) that needs the company's digital signature. An admin signs it with the company DSC and the signed copy appears here to download.
+        </p>
+        <div className="form-grid">
+          <label className="field">
+            Document name
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Form 15CB" />
+          </label>
+          <label className="field">
+            PDF file
+            <input type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          </label>
+          <label className="field" style={{ gridColumn: '1 / -1' }}>
+            Note (optional)
+            <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Anything the signer should know" />
+          </label>
+        </div>
+        <div>
+          <button className="btn primary" disabled={busy || !file} onClick={submit}>
+            Send for signature
+          </button>
+        </div>
+        {items.length > 0 && (
+          <div className="table-wrap">
+            <table className="data" data-export="off">
+              <thead>
+                <tr>
+                  <th>Document</th>
+                  <th>Sent</th>
+                  <th>Status</th>
+                  <th>Signed copy</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((r) => (
+                  <tr key={r.id}>
+                    <td>
+                      <b>{r.name}</b>
+                      {r.note && <div className="muted small">{r.note}</div>}
+                      {r.status === 'rejected' && r.decisionNote && <div className="muted small">Reason: {r.decisionNote}</div>}
+                    </td>
+                    <td className="small">{fmtDate(r.createdAt)}</td>
+                    <td>
+                      <span className={`chip ${SIGN_STATUS[r.status]?.[0] ?? ''}`}>{SIGN_STATUS[r.status]?.[1] ?? r.status}</span>
+                    </td>
+                    <td>
+                      {r.signedUrl ? (
+                        <a className="btn sm" href={r.signedUrl} target="_blank" rel="noreferrer">
+                          Download signed
+                        </a>
+                      ) : (
+                        <span className="muted small">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

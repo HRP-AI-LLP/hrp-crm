@@ -89,6 +89,7 @@ export function ProfessionalsTab() {
   const [edit, setEdit] = useState<Json | null | 'new'>(null);
   const [access, setAccess] = useState<Json | null>(null);
   const [showRequests, setShowRequests] = useState(false);
+  const [showSign, setShowSign] = useState(false);
   const [invite, setInvite] = useState<{ url: string; emailed: boolean; name?: string } | null>(null);
   const sendInviteFor = async (p: Json) => {
     try {
@@ -115,6 +116,9 @@ export function ProfessionalsTab() {
         </button>
         <button className="btn sm" onClick={() => setShowRequests(true)}>
           Access requests{data.pendingRequests ? ` (${data.pendingRequests})` : ''}
+        </button>
+        <button className="btn sm" onClick={() => setShowSign(true)}>
+          Signature requests
         </button>
       </div>
       {!data.items.length ? (
@@ -208,7 +212,120 @@ export function ProfessionalsTab() {
         />
       )}
       {showRequests && <RequestsModal meta={data} onClose={() => setShowRequests(false)} onDecided={refresh} />}
+      {showSign && <SignRequestsModal onClose={() => setShowSign(false)} />}
     </div>
+  );
+}
+
+/** Admin: pending signature requests — sign each with a soft (.pfx) certificate, or decline. */
+function SignRequestsModal({ onClose }: { onClose: () => void }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ['sign-requests', 'admin'], queryFn: () => get<{ items: Json[] }>('/api/v1/organisation/sign-requests') });
+  const certsQ = useQuery({ queryKey: ['org-dsc'], queryFn: () => get<Json>('/api/v1/organisation/dsc'), staleTime: 60_000 });
+  const [cert, setCert] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const softCerts: Json[] = ((certsQ.data?.certificates as Json[]) ?? []).filter((c) => c.kind === 'pfx');
+  const refresh = () => qc.invalidateQueries({ queryKey: ['sign-requests', 'admin'] });
+  const sign = async (id: string) => {
+    if (!cert) return toast('Pick the signing certificate first', true);
+    setBusy(id);
+    try {
+      await post(`/api/v1/organisation/sign-requests/${id}/sign`, { certificateId: cert });
+      toast('Signed');
+      refresh();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const reject = async (id: string) => {
+    const note = prompt('Reason for declining (optional)') ?? undefined;
+    setBusy(id);
+    try {
+      await post(`/api/v1/organisation/sign-requests/${id}/reject`, { note });
+      toast('Declined');
+      refresh();
+    } catch (e) {
+      toast((e as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const items: Json[] = q.data?.items ?? [];
+  const pending = items.filter((r) => r.status === 'pending');
+  const done = items.filter((r) => r.status !== 'pending');
+  return (
+    <Modal title="Signature requests" onClose={onClose} wide>
+      {q.isLoading ? (
+        <Spinner />
+      ) : !items.length ? (
+        <Empty title="No signature requests">When an accountant or CA uploads a document to be signed, it shows up here.</Empty>
+      ) : (
+        <div className="stack">
+          {pending.length > 0 && (
+            <label className="field">
+              Sign with
+              <select value={cert} onChange={(e) => setCert(e.target.value)}>
+                <option value="">Choose a certificate…</option>
+                {softCerts.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label} ({c.subjectCn ?? c.subject_cn})
+                  </option>
+                ))}
+              </select>
+              {!softCerts.length && <span className="muted small">No soft (.pfx) certificate is set up. Add one under Digital signatures (DSC) — a USB token can't sign uploads unattended.</span>}
+            </label>
+          )}
+          {pending.map((r) => (
+            <div key={r.id} className="panel" style={{ padding: 12 }}>
+              <div className="spread" style={{ gap: 8 }}>
+                <div>
+                  <b>{r.name}</b> <span className="muted small">{r.requestedBy} · {fmtDate(r.createdAt)}</span>
+                  {r.note && <div className="small" style={{ marginTop: 2 }}>{r.note}</div>}
+                  {r.sourceUrl && (
+                    <div style={{ marginTop: 4 }}>
+                      <a className="small" href={r.sourceUrl} target="_blank" rel="noreferrer">
+                        Open uploaded document
+                      </a>
+                    </div>
+                  )}
+                </div>
+                <div style={{ whiteSpace: 'nowrap' }}>
+                  <button className="btn primary sm" disabled={busy === r.id || !softCerts.length} onClick={() => sign(r.id)}>
+                    Sign
+                  </button>
+                  <button className="btn ghost sm" disabled={busy === r.id} onClick={() => reject(r.id)}>
+                    Decline
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {done.length > 0 && (
+            <>
+              <h4 style={{ margin: '8px 0 0' }}>Recently handled</h4>
+              {done.map((r) => (
+                <div key={r.id} className="small spread">
+                  <span>
+                    {r.name} — {r.requestedBy}
+                  </span>
+                  <span>
+                    <span className={`chip ${r.status === 'signed' ? 'good' : 'warn'}`}>{r.status}</span>{' '}
+                    {r.signedUrl && (
+                      <a href={r.signedUrl} target="_blank" rel="noreferrer">
+                        signed PDF
+                      </a>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }
 

@@ -139,6 +139,16 @@ async function assertRecordAccess(ctx: RecordCtx, objectKey: string, recordId: s
     await assertOwnerAccess(ctx, await ownerOf(ctx, recordId));
     return;
   }
+  // documents a professional uploaded for signing: admins manage; the owning professional may read theirs
+  if (objectKey === 'sign_request') {
+    const row = await ctx.tx.one<{ professional_id: string }>(`select professional_id from sign_requests where tenant_id = $1 and id = $2`, [ctx.tenantId, recordId]);
+    if (!row) throw notFound();
+    const p = ctx.principal.permissions;
+    if (ctx.principal.user.isOwner || hasAdmin(p, 'users') || hasAdmin(p, 'books')) return;
+    const mine = await ctx.tx.one(`select 1 from professionals where tenant_id = $1 and id = $2 and user_id = $3`, [ctx.tenantId, row.professional_id, ctx.principal.user.id]);
+    if (mine && action === 'read') return;
+    throw forbidden();
+  }
   const table = BOOKS_OWNED[objectKey];
   if (table) {
     if (!hasAdmin(ctx.principal.permissions, 'books') && !(objectKey === 'compliance_item' && hasAdmin(ctx.principal.permissions, 'compliance'))) throw forbidden();

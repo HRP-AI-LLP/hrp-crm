@@ -57,11 +57,18 @@ export const accessSchema = z.object({
 });
 export type AccessConfig = z.infer<typeof accessSchema>;
 
-function assertManage(ctx: RecordCtx) {
+export function assertManage(ctx: RecordCtx) {
   const p = ctx.principal.permissions;
   if (!ctx.principal.user.isOwner && !hasAdmin(p, 'users') && !hasAdmin(p, 'books')) {
     throw forbidden('Only an admin can manage accountants and CAs');
   }
+}
+
+/** The current user's professional row (or throws) — for self-service endpoints. */
+export async function requireSelf(ctx: RecordCtx) {
+  const pr = await ctx.tx.one<{ id: string }>(`select id from professionals where tenant_id = $1 and user_id = $2`, [ctx.tenantId, ctx.principal.user.id]);
+  if (!pr) throw forbidden('Only accountants and CAs can do this here');
+  return pr.id;
 }
 
 const edit = { read: 'all', create: true, update: 'all', delete: 'none' } as const;

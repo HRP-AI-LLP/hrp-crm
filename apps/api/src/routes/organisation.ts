@@ -17,6 +17,7 @@ import * as tpl from '../services/doc-templates';
 import * as odocs from '../services/org-documents';
 import * as ident from '../services/person-identity';
 import * as pros from '../services/professionals';
+import * as signreq from '../services/sign-requests';
 import type { RecordCtx } from '../services/records';
 import { createUserToken } from './auth';
 import { sendInvite } from './security';
@@ -99,6 +100,21 @@ export const organisationRoutes = new Hono<AppEnv>()
   .post('/professionals/me/requests', async (c) => {
     const b = pros.requestSchema.parse(await c.req.json());
     return c.json(await c.var.db.tx(scope(c), (tx) => pros.raiseRequest(rctx(c, tx), b)), 201);
+  })
+  // signature requests — a professional uploads a doc to be signed; an admin signs it with the DSC
+  .get('/professionals/me/sign-requests', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => signreq.myRequests(rctx(c, tx), c.env))))
+  .post('/professionals/me/sign-requests', async (c) => {
+    const b = signreq.raiseSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => signreq.raiseSignRequest(rctx(c, tx), c.env, b)), 201);
+  })
+  .get('/organisation/sign-requests', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => signreq.listSignRequests(rctx(c, tx), c.env))))
+  .post('/organisation/sign-requests/:id/sign', async (c) => {
+    const b = signreq.signSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => signreq.signRequest(rctx(c, tx), c.env, id(c), b)));
+  })
+  .post('/organisation/sign-requests/:id/reject', async (c) => {
+    const b = signreq.rejectSchema.parse(await c.req.json());
+    return c.json(await c.var.db.tx(scope(c), (tx) => signreq.rejectSignRequest(rctx(c, tx), id(c), b)));
   })
   .put('/organisation', async (c) => {
     const b = org.profileSchema.parse(await c.req.json());

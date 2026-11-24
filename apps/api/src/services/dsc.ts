@@ -248,6 +248,33 @@ export async function signWithPfx(ctx: RecordCtx, env: Env, objectKey: string, r
   return record(ctx, env, { objectKey, recordId, ...doc }, c, 'dsc_pfx', signed, code);
 }
 
+/**
+ * Signs arbitrary PDF bytes with a soft (.pfx) certificate — used to sign documents people upload
+ * for signature, which aren't tied to any record. Returns the signed bytes and the certificate used.
+ */
+export async function signPdfWithPfx(ctx: RecordCtx, env: Env, certId: string, pdf: Uint8Array, opts: { reason: string; location?: string | null; verifyLine?: string | null }) {
+  const c = await certFor(ctx, certId, 'pfx');
+  if (!c.pfx_enc || c.pfx_enc === 'removed' || !c.pass_enc) throw badRequest('This certificate was removed');
+  const key = requireEncryptionKey(env);
+  const signer = readPfx(b64ToBytes(await decryptSecret(key, c.pfx_enc, ctx.tenantId)), await decryptSecret(key, c.pass_enc, ctx.tenantId));
+  if (!(pdf[0] === 0x25 && pdf[1] === 0x50 && pdf[2] === 0x44 && pdf[3] === 0x46)) throw badRequest('That file is not a PDF — upload a PDF to be signed');
+  const signed = await signPdf(pdf, signer, {
+    name: c.subject_cn,
+    reason: opts.reason,
+    location: opts.location ?? undefined,
+    stamp: { text: [`Digitally signed by ${c.subject_cn}`, `Date: ${istNow()} IST`, `Reason: ${opts.reason}`, ...(opts.verifyLine ? [opts.verifyLine] : [])] },
+  });
+  const v = verifyPdf(signed);
+  if (!v.ok) throw new Error(`The signed PDF did not verify: ${v.reason}`);
+  return { signed, cert: c };
+}
+
+/** Does the tenant have a soft certificate that can sign uploads server-side? */
+export async function hasSoftCert(ctx: RecordCtx) {
+  const r = await ctx.tx.one<{ id: string }>(`select id from dsc_certificates where tenant_id = $1 and is_active and kind = 'pfx' and pfx_enc is not null and pfx_enc <> 'removed' limit 1`, [ctx.tenantId]);
+  return !!r;
+}
+
 /* ───────────────────────── USB token through the local signer ───────────────────────── */
 
 export async function pairSigner(ctx: RecordCtx, env: Env, label: string) {
