@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 // ------------------------------------------------------------------ toasts
 interface Toast {
@@ -123,6 +124,48 @@ export const Icon = {
     </svg>
   ),
 };
+
+/**
+ * A KPI / stat tile. The standard, system-wide stat card: label, big value, optional sub-line and
+ * tone. Pass `to` (a route) or `onClick` (e.g. switch a tab) to make it a clickable card that
+ * navigates to the screen behind the number — it then gets a pointer, hover lift and keyboard focus.
+ * Prefer this over a hand-rolled `.panel.kpi` so every stat card behaves the same everywhere.
+ */
+export function Kpi({
+  l,
+  v,
+  sub,
+  tone,
+  to,
+  onClick,
+  title,
+}: {
+  l: ReactNode;
+  v: ReactNode;
+  sub?: ReactNode;
+  tone?: 'good' | 'bad' | 'warn';
+  to?: string;
+  onClick?: () => void;
+  title?: string;
+}) {
+  const interactive = !!(to || onClick);
+  const cls = `panel kpi${interactive ? ' kpi-link' : ''}`;
+  const inner = (
+    <>
+      <div className="l">{l}</div>
+      <div className={`v${tone ? ` tone-${tone}` : ''}`}>{v}</div>
+      {sub && <div className="small muted">{sub}</div>}
+    </>
+  );
+  if (to) return <Link className={cls} to={to} title={title ?? `Open ${typeof l === 'string' ? l : 'details'}`}>{inner}</Link>;
+  if (onClick)
+    return (
+      <button type="button" className={cls} onClick={onClick} title={title ?? `Open ${typeof l === 'string' ? l : 'details'}`}>
+        {inner}
+      </button>
+    );
+  return <div className={cls}>{inner}</div>;
+}
 
 export function Spinner() {
   return <span className="muted">Loading…</span>;

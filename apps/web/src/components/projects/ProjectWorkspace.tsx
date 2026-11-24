@@ -10,7 +10,7 @@ import { useAuth } from '../../lib/auth';
 import { date, money2 } from '../../lib/format';
 import { useUsers } from '../../lib/hooks';
 import { BarChart } from '../charts';
-import { Empty, Modal, Spinner, useToast } from '../ui';
+import { Empty, Kpi, Modal, Spinner, useToast } from '../ui';
 import { AgileTab, ChangesTab, ReleasesTab } from './Agile';
 import { ProjectCalls } from './ProjectCalls';
 import { MailThreadSearch, MilestoneMailList } from './MilestoneMail';
@@ -109,7 +109,7 @@ export function ProjectWorkspace({ id }: { id: string }) {
       items={tabs.map(([k, l]) => ({ key: k, label: l, icon: PROJECT_ICON[k], group: GROUP[k] }))}
     >
       <div className="panel-body">
-        {tab === 'overview' && <Overview id={id} data={data} />}
+        {tab === 'overview' && <Overview id={id} data={data} onOpen={setTab} />}
         {tab === 'tasks' && <Tasks id={id} data={data} member={member} manage={manage} />}
         {tab === 'agile' && <AgileTab id={id} manage={manage} member={member} />}
         {tab === 'releases' && <ReleasesTab id={id} manage={manage} />}
@@ -169,7 +169,7 @@ function RepoBanner({ id, manage, status, onOpen }: { id: string; manage: boolea
 
 /* ───────────────────────── overview ───────────────────────── */
 
-function Overview({ id, data }: { id: string; data: Json }) {
+function Overview({ id, data, onOpen }: { id: string; data: Json; onOpen: (tab: Tab) => void }) {
   const { data: s } = useQuery({ queryKey: ['project', id, 'summary'], queryFn: () => get<Json>(`/api/v1/projects/${id}/summary`) });
   const nav = useNavigate();
   const toast = useToast();
@@ -183,16 +183,17 @@ function Overview({ id, data }: { id: string; data: Json }) {
         <Kpi
           l="Progress"
           v={`${Math.round(s.progress)}%`}
+          onClick={() => onOpen(s.milestones?.total ? 'milestones' : 'tasks')}
           sub={s.milestones?.total ? `${s.milestones.done} of ${s.milestones.total} milestones done · ${t.done ?? 0} of ${total} tasks` : `${t.done ?? 0} of ${total} tasks done (add milestones to track delivery)`}
         />
-        <Kpi l="Overdue tasks" v={String(s.overdueTasks)} tone={s.overdueTasks ? 'bad' : undefined} sub={`${s.issues?.open ?? 0} open issues (${s.issues?.critical ?? 0} critical)`} />
-        <Kpi l="Hours logged" v={String(s.hours.logged)} sub={`${s.hours.billable} billable · ${s.hours.estimated} estimated`} />
-        {s.budget && <Kpi l={`Budget (${s.budget.type})`} v={s.budget.pct != null ? `${s.budget.pct}%` : '—'} tone={s.budget.pct > 100 ? 'bad' : undefined} sub={`${s.budget.type === 'hours' ? s.budget.used : money2(s.budget.used)} of ${s.budget.type === 'hours' ? s.budget.planned : money2(s.budget.planned)}`} />}
-        {s.schedule && <Kpi l="Days left" v={String(s.schedule.daysLeft)} tone={s.schedule.daysLeft < 0 ? 'bad' : undefined} sub={`Ends ${date(s.schedule.endDate)}`} />}
+        <Kpi l="Overdue tasks" v={String(s.overdueTasks)} tone={s.overdueTasks ? 'bad' : undefined} onClick={() => onOpen('issues')} sub={`${s.issues?.open ?? 0} open issues (${s.issues?.critical ?? 0} critical)`} />
+        <Kpi l="Hours logged" v={String(s.hours.logged)} onClick={() => onOpen('time')} sub={`${s.hours.billable} billable · ${s.hours.estimated} estimated`} />
+        {s.budget && <Kpi l={`Budget (${s.budget.type})`} v={s.budget.pct != null ? `${s.budget.pct}%` : '—'} tone={s.budget.pct > 100 ? 'bad' : undefined} onClick={() => onOpen(s.budget.type === 'hours' ? 'time' : 'costs')} sub={`${s.budget.type === 'hours' ? s.budget.used : money2(s.budget.used)} of ${s.budget.type === 'hours' ? s.budget.planned : money2(s.budget.planned)}`} />}
+        {s.schedule && <Kpi l="Days left" v={String(s.schedule.daysLeft)} tone={s.schedule.daysLeft < 0 ? 'bad' : undefined} onClick={() => onOpen('milestones')} sub={`Ends ${date(s.schedule.endDate)}`} />}
       </div>
       {s.money && data.project.project_kind === 'in_house' && (
         <div className="kpis" style={{ margin: 0 }}>
-          <Kpi l="Spent on it" v={money2(s.money.cost)} sub={`Team ${money2(s.money.labourCost)} · expenses ${money2(s.money.expenses)} · bills ${money2(s.money.bills)}`} />
+          <Kpi l="Spent on it" v={money2(s.money.cost)} onClick={() => onOpen('costs')} sub={`Team ${money2(s.money.labourCost)} · expenses ${money2(s.money.expenses)} · bills ${money2(s.money.bills)}`} />
         </div>
       )}
       {s.money && data.project.project_kind !== 'in_house' && (
@@ -200,10 +201,11 @@ function Overview({ id, data }: { id: string; data: Json }) {
           <Kpi
             l="Invoiced"
             v={money2(s.money.revenue)}
+            onClick={() => onOpen('billing')}
             sub={[s.money.milestonesUninvoiced ? `${money2(s.money.milestonesUninvoiced)} of milestones done, not invoiced` : null, s.money.unbilled ? `${money2(s.money.unbilled)} of time approved, not billed` : null].filter(Boolean).join(' · ') || 'Before GST; invoices of the project and its milestones'}
           />
-          <Kpi l="Cost" v={money2(s.money.cost)} sub={`Labour ${money2(s.money.labourCost)}${s.money.fixedPay ? ` (fixed pay ${money2(s.money.fixedPay)})` : ''}${s.money.commission ? ` (commission ${money2(s.money.commission)})` : ''} · expenses ${money2(s.money.expenses)} · bills ${money2(s.money.bills)}`} />
-          <Kpi l="Profit" v={money2(s.money.profit)} tone={s.money.profit < 0 ? 'bad' : 'good'} sub={s.money.margin != null ? `Margin ${s.money.margin}%` : undefined} />
+          <Kpi l="Cost" v={money2(s.money.cost)} onClick={() => onOpen('costs')} sub={`Labour ${money2(s.money.labourCost)}${s.money.fixedPay ? ` (fixed pay ${money2(s.money.fixedPay)})` : ''}${s.money.commission ? ` (commission ${money2(s.money.commission)})` : ''} · expenses ${money2(s.money.expenses)} · bills ${money2(s.money.bills)}`} />
+          <Kpi l="Profit" v={money2(s.money.profit)} tone={s.money.profit < 0 ? 'bad' : 'good'} onClick={() => onOpen('billing')} sub={s.money.margin != null ? `Margin ${s.money.margin}%` : undefined} />
         </div>
       )}
       {data.project.description && <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{data.project.description}</p>}
@@ -235,15 +237,6 @@ function Overview({ id, data }: { id: string; data: Json }) {
   );
 }
 
-function Kpi({ l, v, sub, tone }: { l: string; v: string; sub?: string; tone?: 'good' | 'bad' }) {
-  return (
-    <div className="panel kpi">
-      <div className="l">{l}</div>
-      <div className={`v${tone ? ` tone-${tone}` : ''}`}>{v}</div>
-      {sub && <div className="small muted">{sub}</div>}
-    </div>
-  );
-}
 
 /* ───────────────────────── tasks ───────────────────────── */
 

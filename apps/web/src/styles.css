@@ -227,6 +227,10 @@ table.data { width: 100%; border-collapse: collapse; }
 .kpi { padding: 14px 16px; }
 .kpi .v { font-size: 26px; font-weight: 700; margin-top: 2px; }
 .kpi .l { color: var(--ink-3); font-size: 13px; }
+/* a clickable stat card (same look, navigates to the screen behind the number) */
+.kpi-link { display: grid; gap: 2px; cursor: pointer; text-align: left; text-decoration: none; color: inherit; width: 100%; transition: border-color .12s ease, transform .12s ease, box-shadow .12s ease; }
+.kpi-link:hover { border-color: var(--brand-500); transform: translateY(-1px); box-shadow: 0 6px 16px rgba(15, 23, 42, .08); }
+.kpi-link:focus-visible { outline: 2px solid var(--brand-500); outline-offset: 2px; }
 .funnel-row { display: grid; grid-template-columns: 150px 1fr 110px; gap: 12px; align-items: center; padding: 6px 0; }
 .funnel-bar { height: 22px; background: var(--line-2); border-radius: 4px; overflow: hidden; }
 .funnel-bar > div { height: 100%; background: var(--brand-500); border-radius: 4px; }
