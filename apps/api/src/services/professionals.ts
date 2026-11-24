@@ -158,7 +158,17 @@ export async function addProfessional(ctx: RecordCtx, input: z.infer<typeof addS
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, app.current_user_id()) returning id`,
     [ctx.tenantId, userId, roleId, input.kind, input.firm ?? null, input.membershipNo ?? null, input.phone ?? null, input.engagedFrom ?? null, input.engagedTo ?? null, input.notes ?? null, JSON.stringify(access)],
   );
-  return { id: r!.id, userId, invited };
+  return { id: r!.id, userId, invited, email: input.email, fullName: input.fullName };
+}
+
+/** Prepares an invite for an invited professional (the route creates the token and sends the mail). */
+export async function inviteTarget(ctx: RecordCtx, id: string) {
+  assertManage(ctx);
+  const pr = await rowOf(ctx, id);
+  const u = await ctx.tx.one<{ email: string; full_name: string; status: string }>(`select email, full_name, status from users where tenant_id = $1 and id = $2`, [ctx.tenantId, pr.user_id]);
+  if (!u) throw notFound('Professional not found');
+  if (u.status !== 'invited') throw badRequest('This person has already accepted and signed in');
+  return { userId: pr.user_id, email: u.email, fullName: u.full_name };
 }
 
 export const updateSchema = z.object({

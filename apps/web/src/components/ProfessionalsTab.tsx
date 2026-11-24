@@ -89,6 +89,16 @@ export function ProfessionalsTab() {
   const [edit, setEdit] = useState<Json | null | 'new'>(null);
   const [access, setAccess] = useState<Json | null>(null);
   const [showRequests, setShowRequests] = useState(false);
+  const [invite, setInvite] = useState<{ url: string; emailed: boolean; name?: string } | null>(null);
+  const sendInviteFor = async (p: Json) => {
+    try {
+      const r = await post<{ inviteUrl: string; emailed: boolean }>(`/api/v1/organisation/professionals/${p.id}/invite`, {});
+      setInvite({ url: r.inviteUrl, emailed: r.emailed, name: p.fullName });
+      if (r.emailed) toast('Invite emailed');
+    } catch (e) {
+      toast((e as Error).message, true);
+    }
+  };
   if (q.isLoading) return <Spinner />;
   if (q.error) return <Empty title="Only admins see this">Accountants and CAs are managed by admins and the people they name.</Empty>;
   const data = q.data!;
@@ -141,6 +151,11 @@ export function ProfessionalsTab() {
                     <button className="btn ghost sm" onClick={() => setAccess(p)}>
                       Access
                     </button>
+                    {p.status === 'invited' && (
+                      <button className="btn ghost sm" onClick={() => sendInviteFor(p)} title="Send or copy the sign-in invite">
+                        Invite
+                      </button>
+                    )}
                     <button className="btn ghost sm" onClick={() => setEdit(p)}>
                       Edit
                     </button>
@@ -171,13 +186,15 @@ export function ProfessionalsTab() {
           pro={edit === 'new' ? null : edit}
           meta={data}
           onClose={() => setEdit(null)}
-          onSaved={() => {
-            toast('Saved');
+          onSaved={(res) => {
             setEdit(null);
             refresh();
+            if (res?.inviteUrl) setInvite({ url: res.inviteUrl, emailed: !!res.emailed, name: res.fullName });
+            else toast('Saved');
           }}
         />
       )}
+      {invite && <InviteModal invite={invite} onClose={() => setInvite(null)} />}
       {access && (
         <AccessModal
           pro={access}
@@ -195,7 +212,50 @@ export function ProfessionalsTab() {
   );
 }
 
-function ProfessionalModal({ pro, meta, onClose, onSaved }: { pro: Json | null; meta: Json; onClose: () => void; onSaved: () => void }) {
+/** Shows the sign-in invite link after adding/inviting, and whether it was emailed. */
+function InviteModal({ invite, onClose }: { invite: { url: string; emailed: boolean; name?: string }; onClose: () => void }) {
+  const toast = useToast();
+  return (
+    <Modal
+      title={`Invite${invite.name ? ` ${invite.name}` : ''}`}
+      onClose={onClose}
+      footer={
+        <button className="btn primary" onClick={onClose}>
+          Done
+        </button>
+      }
+    >
+      <div className="stack">
+        {invite.emailed ? (
+          <div className="notice">An email with this sign-in link has been sent. You can also copy it below to share directly.</div>
+        ) : (
+          <div className="notice warn">Email isn't set up on this workspace, so no mail was sent. Copy this link and send it to them — it lets them set a password and sign in. It's valid for 7 days.</div>
+        )}
+        <label className="field">
+          Invite link
+          <input readOnly value={invite.url} onFocus={(e) => e.currentTarget.select()} />
+        </label>
+        <div>
+          <button
+            className="btn sm"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(invite.url);
+                toast('Link copied');
+              } catch {
+                toast('Select the link and copy it', true);
+              }
+            }}
+          >
+            Copy link
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ProfessionalModal({ pro, meta, onClose, onSaved }: { pro: Json | null; meta: Json; onClose: () => void; onSaved: (res?: Json) => void }) {
   const toast = useToast();
   const [f, setF] = useState<Json>(
     pro
@@ -220,10 +280,11 @@ function ProfessionalModal({ pro, meta, onClose, onSaved }: { pro: Json | null; 
       };
       if (pro) {
         await patch(`/api/v1/organisation/professionals/${pro.id}`, base);
+        onSaved();
       } else {
-        await post('/api/v1/organisation/professionals', { ...base, email: f.email.trim(), modules: acc.modules, canFile: acc.canFile });
+        const res = await post<Json>('/api/v1/organisation/professionals', { ...base, email: f.email.trim(), modules: acc.modules, canFile: acc.canFile });
+        onSaved({ ...res, fullName: base.fullName });
       }
-      onSaved();
     } catch (e) {
       toast((e as Error).message, true);
       setBusy(false);

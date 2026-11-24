@@ -18,6 +18,8 @@ import * as odocs from '../services/org-documents';
 import * as ident from '../services/person-identity';
 import * as pros from '../services/professionals';
 import type { RecordCtx } from '../services/records';
+import { createUserToken } from './auth';
+import { sendInvite } from './security';
 import { loadMeta } from '../services/tenancy';
 import { systemPrincipal } from '../services/worker';
 
@@ -54,7 +56,28 @@ export const organisationRoutes = new Hono<AppEnv>()
   .get('/organisation/professionals', async (c) => c.json(await c.var.db.tx(scope(c, true), (tx) => pros.listProfessionals(rctx(c, tx)))))
   .post('/organisation/professionals', async (c) => {
     const b = pros.addSchema.parse(await c.req.json());
-    return c.json(await c.var.db.tx(scope(c), (tx) => pros.addProfessional(rctx(c, tx), b)), 201);
+    const r = await c.var.db.tx(scope(c), async (tx) => {
+      const res = await pros.addProfessional(rctx(c, tx), b);
+      const token = res.invited ? await createUserToken(tx, c.var.tenant.id, res.userId, 'invite', 7 * 86_400) : null;
+      return { ...res, token };
+    });
+    // send (or, when email isn't configured, hand back) the invite link so they can actually sign in
+    let emailed = false;
+    let inviteUrl: string | null = null;
+    if (r.token) {
+      const sent = await sendInvite(c, { email: r.email, full_name: r.fullName }, r.token);
+      emailed = sent.emailed;
+      inviteUrl = sent.url;
+    }
+    return c.json({ id: r.id, userId: r.userId, invited: r.invited, emailed, inviteUrl }, 201);
+  })
+  .post('/organisation/professionals/:id/invite', async (c) => {
+    const t = await c.var.db.tx(scope(c), async (tx) => {
+      const target = await pros.inviteTarget(rctx(c, tx), id(c));
+      return { ...target, token: await createUserToken(tx, c.var.tenant.id, target.userId, 'invite', 7 * 86_400) };
+    });
+    const sent = await sendInvite(c, { email: t.email, full_name: t.fullName }, t.token);
+    return c.json({ emailed: sent.emailed, inviteUrl: sent.url });
   })
   .patch('/organisation/professionals/:id', async (c) => {
     const b = pros.updateSchema.parse(await c.req.json());
