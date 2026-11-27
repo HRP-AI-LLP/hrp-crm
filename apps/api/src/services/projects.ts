@@ -113,7 +113,7 @@ export async function listProjects(ctx: RecordCtx, q: { status?: string | null; 
             (select coalesce(sum(minutes), 0)::float8 / 60 from time_entries e where e.tenant_id = r.tenant_id and e.project_id = r.id) as hours,
             (select count(*)::int from project_repos g where g.tenant_id = r.tenant_id and g.project_id = r.id) as repos
        from projects r where ${where.join(' and ')}
-      order by case r.status when 'active' then 0 when 'planning' then 1 when 'on_hold' then 2 else 3 end, coalesce(r.end_date, '9999-12-31'), r.name limit 500`,
+      order by case r.status when 'active' then 0 when 'planning' then 1 when 'on_hold' then 2 when 'maintenance' then 3 else 4 end, coalesce(r.end_date, '9999-12-31'), r.name limit 500`,
     p.values,
   );
 }
@@ -1391,7 +1391,7 @@ export async function myTasks(ctx: RecordCtx) {
   return ctx.tx.query(
     `select t.id, t.project_id, t.task_number, t.name, t.status, t.priority, t.start_date, t.due_date, t.estimate_hours::float8 as estimate_hours, t.progress, p.name as project
        from project_tasks t join projects p on p.tenant_id = t.tenant_id and p.id = t.project_id
-      where t.tenant_id = $1 and $2 = any(t.assignees) and t.status not in ('done','cancelled') and p.deleted_at is null and p.status in ('active','planning','on_hold')
+      where t.tenant_id = $1 and $2 = any(t.assignees) and t.status not in ('done','cancelled') and p.deleted_at is null and p.status in ('active','planning','on_hold','maintenance')
         and (p.owner_id = $2 or exists (select 1 from project_members m where m.tenant_id = t.tenant_id and m.project_id = t.project_id and m.user_id = $2 and m.role <> 'viewer'))
       order by t.due_date nulls last, array_position(array['urgent','high','medium','low','none'], t.priority) limit 500`,
     [ctx.tenantId, ctx.principal.user.id],

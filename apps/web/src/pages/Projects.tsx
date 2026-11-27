@@ -36,6 +36,7 @@ const STATUS_CLS: Record<string, string> = {
   planning: "info",
   active: "good",
   on_hold: "warn",
+  maintenance: "maint",
   completed: "",
   cancelled: "bad",
 };
@@ -70,7 +71,7 @@ export function ProjectsPage() {
   const rows = (data ?? []).filter(
     (p) =>
       q.status !== "open" ||
-      ["planning", "active", "on_hold"].includes(p.status),
+      ["planning", "active", "on_hold", "maintenance"].includes(p.status),
   );
   return (
     <>
@@ -126,6 +127,7 @@ export function ProjectsPage() {
               <option value="planning">Planning</option>
               <option value="active">Active</option>
               <option value="on_hold">On hold</option>
+              <option value="maintenance">Under maintenance</option>
               <option value="completed">Completed</option>
               <option value="cancelled">Cancelled</option>
             </select>

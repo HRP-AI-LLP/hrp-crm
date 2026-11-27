@@ -1167,6 +1167,8 @@ input:hover:not(:focus):not(:disabled), select:hover:not(:focus):not(:disabled),
 .chip { border-radius: 999px; }
 .chip.info { background: var(--brand-50); color: var(--brand-700); }
 .chip.warn { background: #fff7ed; color: #b45309; }
+.chip.maint { background: #e0f2fe; color: #075985; }
+:root[data-theme='dark'] .chip.maint { background: rgba(14, 165, 233, .14); color: #7dd3fc; }
 
 /* modal and toast */
 .overlay { animation: fade-in .15s var(--ease); }

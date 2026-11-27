@@ -1409,7 +1409,7 @@ function ProjectTime({ id, data, member }: { id: string; data: Json; member: boo
   const [f, setF] = useState({ date: today(), hours: '', taskId: '', notes: '', billable: data.project.billing_method !== 'non_billable' && data.project.billing_method !== 'fixed_price' });
   return (
     <div className="stack">
-      {member && ['active', 'planning'].includes(data.project.status) && (
+      {member && ['active', 'planning', 'maintenance'].includes(data.project.status) && (
         <div className="panel" style={{ padding: 12 }}>
           <b>Log time</b>
           <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 6 }}>
