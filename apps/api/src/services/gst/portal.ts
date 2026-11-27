@@ -339,7 +339,8 @@ export async function requestOtp(deps: GstDeps, id: string) {
       throw new GspError(msg, step.result.code, step.result);
     }
     await loadConn(ctx, id, true);
-    await saveSession(ctx, deps.env, id, step.session, `, status = 'otp_sent', otp_sent_at = now(), session_expires_at = null, last_error = null`);
+    // the GST OTP transaction is bound to this IP; pin it so verify and every later call reuse it
+    await saveSession(ctx, deps.env, id, { ...step.session, otpIp: deps.ip }, `, status = 'otp_sent', otp_sent_at = now(), session_expires_at = null, last_error = null`);
     await logEvent(ctx, { connectionId: id, action: 'otp.request', ok: true, message: gp.sandbox ? 'Sandbox: the OTP is 575757' : null });
     return { ok: true, sandbox: gp.sandbox };
   });
@@ -356,12 +357,17 @@ export async function verifyOtp(deps: GstDeps, id: string, otp: string) {
     if (c.otp_sent_at && Date.now() - Date.parse(c.otp_sent_at) > 15 * 60_000) throw badRequest('The OTP has expired; request a new one');
     return { c, session: await unseal<Session>(deps.env, ctx.tenantId, c.session_ciphertext) };
   });
-  const step = await gp.verifyOtp(gspConn(c), session, otp, deps.ip);
+  // reuse the IP the OTP was requested from — the txn is IP-bound (otherwise: "invalid token")
+  const step = await gp.verifyOtp(gspConn(c), session, otp, session.otpIp ?? deps.ip);
   return deps.run(async (ctx) => {
     if (!step.result.ok) {
-      await ctx.tx.query(`update gst_connections set last_error = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, step.result.message.slice(0, 1000)]);
+      let msg = step.result.message;
+      if (/invalid token|token expired|\b1005\b/i.test(`${step.result.code ?? ''} ${msg}`))
+        msg =
+          'The GST portal rejected the session (“invalid token”). This usually means your internet connection’s IP changed between requesting the OTP and entering it — common on mobile data, office networks or with a VPN. Request a fresh OTP and enter it on the same network, without switching Wi-Fi or VPN.';
+      await ctx.tx.query(`update gst_connections set last_error = $3 where tenant_id = $1 and id = $2`, [ctx.tenantId, id, msg.slice(0, 1000)]);
       await logEvent(ctx, { connectionId: id, action: 'otp.verify', ok: false, message: step.result.message });
-      throw new GspError(step.result.message, step.result.code, step.result);
+      throw new GspError(msg, step.result.code, step.result);
     }
     await loadConn(ctx, id, true);
     const minutes = step.minutes ?? SESSION_MINUTES;
@@ -378,7 +384,7 @@ export async function disconnect(deps: GstDeps, id: string) {
     const c = await loadConn(ctx, id);
     return { c, session: await unseal<Session>(deps.env, ctx.tenantId, c.session_ciphertext) };
   });
-  if (gp && c.status === 'active') await gp.logout(gspConn(c), session, deps.ip).catch(() => null);
+  if (gp && c.status === 'active') await gp.logout(gspConn(c), session, session.otpIp ?? deps.ip).catch(() => null);
   return deps.run(async (ctx) => {
     await loadConn(ctx, id, true);
     const { txn: _t, ic: _i, ...rest } = session;
@@ -398,7 +404,7 @@ async function liveSession(deps: GstDeps, gp: GspProvider, id: string): Promise<
   const exp = c.session_expires_at ? Date.parse(c.session_expires_at) : 0;
   if (c.status !== 'active' || exp <= Date.now()) throw new ApiError(409, 'gst_session_required', 'Connect to the GST portal first: request an OTP and enter it (the session lasts 6 hours)');
   if (exp - Date.now() > REFRESH_WITHIN_MS) return { c, session };
-  const step = await gp.refresh(gspConn(c), session, deps.ip);
+  const step = await gp.refresh(gspConn(c), session, session.otpIp ?? deps.ip);
   return deps.run(async (ctx) => {
     if (!step.result.ok) {
       await logEvent(ctx, { connectionId: id, action: 'session.refresh', ok: false, message: step.result.message });
@@ -415,7 +421,7 @@ async function liveSession(deps: GstDeps, gp: GspProvider, id: string): Promise<
 async function portalOp(deps: GstDeps, id: string, op: GstOp, log: { action: string; filingId?: string | null; quiet?: boolean }): Promise<WbResult> {
   const gp = requireProvider(deps.env);
   const { c, session } = await liveSession(deps, gp, id);
-  const r = await gp.call(gspConn(c), session, deps.ip, op);
+  const r = await gp.call(gspConn(c), session, session.otpIp ?? deps.ip, op);
   const gone = !r.ok && gp.sessionGone(r);
   // every call is recorded with what came back, so nothing paid for is lost
   await deps.run(async (ctx) => {

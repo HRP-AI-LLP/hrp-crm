@@ -32,6 +32,9 @@ export interface Session {
   ewbAt?: string;
   /** India Compliance: the GSTN session */
   ic?: { appKey: string; sek?: string; authToken?: string; ip?: string };
+  /** The client IP the OTP was requested from — the GST txn is IP-bound, so the whole session must
+   *  keep using this exact IP (the user's public IP can shift between requests on mobile/NAT networks). */
+  otpIp?: string;
 }
 export interface Secrets {
   einvPassword?: string;
