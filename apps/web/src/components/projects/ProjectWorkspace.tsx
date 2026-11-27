@@ -7,6 +7,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { uploadFile } from '../Files';
 import { del, get, patch, post, put } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
+import { hasAdmin } from '@synapse/shared';
 import { date, money2 } from '../../lib/format';
 import { useUsers } from '../../lib/hooks';
 import { BarChart } from '../charts';
@@ -1799,7 +1800,18 @@ function Billing({ id }: { id: string }) {
 
 function Team({ id, data, manage }: { id: string; data: Json; manage: boolean }) {
   const { data: users } = useUsers();
+  const { me } = useAuth();
   const act = useAct([['project', id]]);
+  // admins can edit a member's own details and re-share their invite, right from the team
+  const userAdmin = !!me && (me.user.isOwner || hasAdmin(me.permissions, 'users'));
+  const adminUsers = useQuery({ queryKey: ['admin-users'], queryFn: () => get<{ items: Json[] }>('/api/admin/users'), enabled: userAdmin, staleTime: 60_000 });
+  const info = (userId: string) => (adminUsers.data?.items ?? []).find((u) => u.id === userId);
+  const [editUser, setEditUser] = useState<Json | null>(null);
+  const [link, setLink] = useState<{ title: string; intro: string; url: string } | null>(null);
+  const reinvite = async (userId: string, name: string) => {
+    const r = (await act(() => post<{ inviteUrl: string; emailed: boolean }>(`/api/admin/users/${userId}/invite-link`), 'Invitation created')) as { inviteUrl: string; emailed: boolean } | null;
+    if (r && !r.emailed) setLink({ title: 'Invitation link', intro: `Send this link to ${name}. It is valid for 7 days.`, url: r.inviteUrl });
+  };
   const [rows, setRows] = useState<Json[] | null>(null);
   const list =
     rows ??
@@ -1850,7 +1862,22 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
         <tbody>
           {list.map((m, i) => (
             <tr key={m.userId}>
-              <td>{nameOf(m.userId)}</td>
+              <td>
+                {nameOf(m.userId)}
+                {userAdmin &&
+                  (() => {
+                    const u = info(m.userId);
+                    if (!u) return null;
+                    return (
+                      <div className="muted small">
+                        {u.email ?? 'No email yet'}
+                        {u.status === 'invited' && ' · invited'}
+                        {u.status === 'profile' && ' · no login yet'}
+                        {u.status === 'disabled' && ' · disabled'}
+                      </div>
+                    );
+                  })()}
+              </td>
               <td>
                 <select disabled={!manage} value={m.role} onChange={(e) => setRows(list.map((x, j) => (j === i ? { ...x, role: e.target.value } : x)))} style={{ width: 'auto' }}>
                   <option value="manager">Manager</option>
@@ -1919,7 +1946,24 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
                   {m.payBasis === 'none' && <span className="muted small">No cost on this project</span>}
                 </td>
               )}
-              <td>
+              <td style={{ whiteSpace: 'nowrap' }}>
+                {userAdmin &&
+                  info(m.userId) &&
+                  (() => {
+                    const u = info(m.userId)!;
+                    return (
+                      <>
+                        <button className="btn sm ghost" onClick={() => setEditUser(u)}>
+                          Edit
+                        </button>
+                        {(u.status === 'invited' || u.status === 'profile') && (
+                          <button className="btn sm ghost" onClick={() => reinvite(u.id, u.full_name)} title="Create or email a fresh sign-in invitation">
+                            Re-invite
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
                 {manage && (
                   <button className="btn sm ghost" onClick={() => setRows(list.filter((_, j) => j !== i))}>
                     Remove
@@ -1981,7 +2025,97 @@ function Team({ id, data, manage }: { id: string; data: Json; manage: boolean })
           }}
         />
       )}
+      {editUser && (
+        <EditMember
+          user={editUser}
+          onClose={() => setEditUser(null)}
+          onSaved={() => {
+            setEditUser(null);
+            adminUsers.refetch();
+          }}
+        />
+      )}
+      {link && (
+        <Modal title={link.title} onClose={() => setLink(null)} footer={<button className="btn primary" onClick={() => setLink(null)}>Done</button>}>
+          <div className="stack">
+            <p style={{ margin: 0 }}>{link.intro}</p>
+            <input readOnly value={link.url} onFocus={(e) => e.currentTarget.select()} />
+            <div>
+              <button
+                className="btn sm"
+                onClick={() => {
+                  navigator.clipboard?.writeText(link.url).then(
+                    () => undefined,
+                    () => undefined,
+                  );
+                }}
+              >
+                Copy link
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
+  );
+}
+
+/** Admin: edit a member's own details (name, email, phone) straight from the team. */
+function EditMember({ user, onClose, onSaved }: { user: Json; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast();
+  const [fullName, setFullName] = useState<string>(user.full_name ?? '');
+  const [email, setEmail] = useState<string>(user.email ?? '');
+  const [phone, setPhone] = useState<string>(user.phone ?? '');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    setBusy(true);
+    try {
+      if (fullName.trim() !== (user.full_name ?? '') || (phone.trim() || null) !== (user.phone ?? null)) {
+        await patch(`/api/admin/users/${user.id}`, { fullName: fullName.trim(), phone: phone.trim() || null });
+      }
+      if ((email.trim() || null) !== (user.email ?? null)) {
+        await put(`/api/admin/users/${user.id}/email`, { email: email.trim() || null });
+      }
+      toast('Saved');
+      onSaved();
+    } catch (e) {
+      toast((e as Error).message, true);
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      title={`Edit ${user.full_name}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn primary" disabled={busy || !fullName.trim()} onClick={save}>
+            Save
+          </button>
+        </>
+      }
+    >
+      <div className="form-grid">
+        <label className="field">
+          Full name
+          <input value={fullName} onChange={(e) => setFullName(e.target.value)} autoFocus />
+        </label>
+        <label className="field">
+          Email
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" />
+        </label>
+        <label className="field">
+          Phone
+          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91 98100 00000" />
+        </label>
+      </div>
+      <p className="muted small" style={{ marginBottom: 0 }}>
+        Changing the email updates where their invitations and reset links go. Roles, pay and access are managed on this team and in Settings.
+      </p>
+    </Modal>
   );
 }
 
