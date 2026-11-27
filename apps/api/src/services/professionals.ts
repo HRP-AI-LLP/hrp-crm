@@ -39,7 +39,7 @@ export const MODULES = [
   // GST returns, the GST portal and e-invoices live under the "Billing & GST" area (apps: billing) and
   // the accountant portal (apps: gst); the returns are built from invoices and bills, and the portal
   // gates on books/billing admin. So this module opens all three areas and reads the source documents.
-  { key: 'gst', label: 'GST returns & e-invoices', areas: ['gst', 'books', 'billing'], objects: ['invoice', 'bill', 'expense'], admin: 'compliance' },
+  { key: 'gst', label: 'GST returns & e-invoices', areas: ['gst'], objects: ['invoice', 'bill', 'expense'], admin: 'compliance' },
   { key: 'intake', label: 'Documents read from mail', areas: ['intake'], objects: [], admin: null },
   { key: 'insights', label: 'Dashboards & reports', areas: ['insights'], objects: [], admin: null },
 ] as const;
@@ -99,11 +99,11 @@ function buildPermissions(access: AccessConfig) {
     if (lvl === 'download' || lvl === 'edit') anyReports = true;
     if (lvl === 'edit' && m.admin && m.admin !== 'compliance') admin.add(m.admin); // billing / books admin to change
   }
-  // GST returns, e-invoices and the GST portal require books/billing admin to open at all — grant it
-  // whenever the GST module is given, so GST details are actually visible (not just the calendar).
-  if (levelOf('gst')) admin.add('books');
-  // GST filing is opt-in and needs the gst module
-  if (access.canFile && levelOf('gst')) admin.add('compliance');
+  // GST is the compliance area: granting the GST module gives compliance admin (NOT books/billing),
+  // which lands the CA in the dedicated accountant portal with GST returns, statements and the filing
+  // calendar — and crucially no edit access to banking or the rest of Books. The GST APIs accept
+  // compliance, so GST details are visible there.
+  if (levelOf('gst')) admin.add('compliance');
   // reports/exports: open the Dashboards & reports area and analytics for anyone with download or edit
   if (anyReports) {
     apps.add('insights');

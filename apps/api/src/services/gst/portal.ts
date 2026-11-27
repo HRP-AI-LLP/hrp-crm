@@ -30,7 +30,8 @@ export interface GstDeps {
 
 export function assertGstAdmin(ctx: RecordCtx) {
   const p = ctx.principal.permissions;
-  if (!hasAdmin(p, 'books') && !hasAdmin(p, 'billing')) throw forbidden('The GST portal needs the books or billing permission');
+  // compliance covers the CA / accountant (GST is their area); books / billing cover finance staff
+  if (!hasAdmin(p, 'books') && !hasAdmin(p, 'billing') && !hasAdmin(p, 'compliance')) throw forbidden('The GST portal needs the books, billing or compliance permission');
 }
 
 /* ───────────────────────── forms ───────────────────────── */
@@ -515,7 +516,7 @@ export async function searchTaxpayer(deps: GstDeps, gstin: string, refresh = fal
   if (!validGstin(g)) throw badRequest('That GSTIN is not valid');
   const gp = requireProvider(deps.env);
   await deps.run(async (ctx) => {
-    if (!hasAdmin(ctx.principal.permissions, 'books') && !hasAdmin(ctx.principal.permissions, 'billing') && !hasAdmin(ctx.principal.permissions, 'accounts')) {
+    if (!hasAdmin(ctx.principal.permissions, 'books') && !hasAdmin(ctx.principal.permissions, 'billing') && !hasAdmin(ctx.principal.permissions, 'accounts') && !hasAdmin(ctx.principal.permissions, 'compliance')) {
       throw forbidden();
     }
   });
