@@ -1622,6 +1622,9 @@ span.rm-nodate { border: 0; cursor: default; }
 .asst-json { width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; background: var(--sunken); border-radius: var(--r-sm); padding: 6px 8px; max-height: 260px; overflow: auto; }
 .asst-input { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: flex-end; }
 .asst-input textarea { flex: 1; resize: none; }
+.asst-input .btn.ghost.on { color: var(--accent); }
+.asst-input .btn.ghost.rec { animation: asst-rec 1.1s ease-in-out infinite; }
+@keyframes asst-rec { 50% { opacity: 0.4; } }
 .asst-empty { margin: auto 0; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .asst-hello { font-size: 28px; color: var(--accent); }
 .asst-suggest { display: flex; flex-wrap: wrap; gap: 6px; }

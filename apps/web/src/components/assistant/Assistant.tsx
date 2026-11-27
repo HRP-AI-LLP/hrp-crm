@@ -97,6 +97,63 @@ function ActionCard({ a, busy, onApprove, onReject }: { a: Json; busy: boolean; 
   );
 }
 
+/* ─── Voice: dictation in, spoken replies out (Web Speech API, when the browser has it) ─── */
+const SR: any = typeof window !== 'undefined' ? (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition : undefined;
+const SYNTH: SpeechSynthesis | undefined = typeof window !== 'undefined' ? window.speechSynthesis : undefined;
+// strip markdown/links so the reply is read aloud as plain speech
+const plainForSpeech = (s: string) =>
+  s
+    .replace(/```[\s\S]*?```/g, ' code block ')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`#>|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** Push-to-talk dictation. Appends what it hears to whatever is already typed. */
+function useDictation(onText: (append: string) => void) {
+  const [listening, setListening] = useState(false);
+  const recRef = useRef<any>(null);
+  useEffect(() => () => { try { recRef.current?.stop(); } catch { /* noop */ } }, []);
+  const toggle = () => {
+    if (!SR) return;
+    if (listening) { try { recRef.current?.stop(); } catch { /* noop */ } return; }
+    const rec = new SR();
+    rec.lang = navigator.language || 'en-IN';
+    rec.interimResults = false;
+    rec.continuous = false;
+    rec.onresult = (e: any) => {
+      const said = Array.from(e.results).map((r: any) => r[0].transcript).join(' ').trim();
+      if (said) onText(said);
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    recRef.current = rec;
+    try { rec.start(); setListening(true); } catch { setListening(false); }
+  };
+  return { supported: !!SR, listening, toggle };
+}
+
+/** Read assistant replies aloud when the viewer turns it on. The choice sticks per browser. */
+function useSpeech() {
+  const [on, setOn] = useState(() => {
+    try { return localStorage.getItem('asst-speak') === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('asst-speak', on ? '1' : '0'); } catch { /* noop */ }
+    if (!on) SYNTH?.cancel();
+  }, [on]);
+  useEffect(() => () => SYNTH?.cancel(), []);
+  const speak = (text: string) => {
+    if (!on || !SYNTH || !text.trim()) return;
+    SYNTH.cancel();
+    const u = new SpeechSynthesisUtterance(plainForSpeech(text).slice(0, 4000));
+    u.lang = navigator.language || 'en-IN';
+    SYNTH.speak(u);
+  };
+  return { supported: !!SYNTH, on, setOn, speak, cancel: () => SYNTH?.cancel() };
+}
+
 /** One chat: messages, change cards, and the box to type in. */
 export function AssistantChat({ threadId, onThread, compact }: { threadId: string | null; onThread: (id: string | null) => void; compact?: boolean }) {
   const qc = useQueryClient();
@@ -128,11 +185,23 @@ export function AssistantChat({ threadId, onThread, compact }: { threadId: strin
       if (fileRef.current) fileRef.current.value = '';
     }
   };
+  const dictation = useDictation((said) => setText((t) => (t ? `${t} ${said}` : said)));
+  const speech = useSpeech();
+  const spokenRef = useRef<string | null>(null);
   const { data, isLoading } = useQuery({ queryKey: ['assistant', threadId], queryFn: () => get<Thread>(`/api/v1/assistant/threads/${threadId}`), enabled: !!threadId });
   const set = (t: Thread) => qc.setQueryData(['assistant', t.thread.id], t);
   useEffect(() => {
     end.current?.scrollIntoView({ block: 'end' });
   }, [data, pendingText, busy]);
+  // read the newest assistant reply aloud, once, when speak-aloud is on
+  useEffect(() => {
+    if (!speech.on || busy) return;
+    const last = [...(data?.messages ?? [])].reverse().find((m) => m.role === 'assistant' && !m.data?.error);
+    if (last && last.id !== spokenRef.current) {
+      spokenRef.current = last.id;
+      speech.speak(String(last.content));
+    }
+  }, [data, busy, speech.on]);
 
   const send = async (msg: string) => {
     const m = msg.trim();
@@ -304,6 +373,16 @@ export function AssistantChat({ threadId, onThread, compact }: { threadId: strin
         <button type="button" className="btn ghost" disabled={busy || uploading} onClick={() => fileRef.current?.click()} title="Attach documents or pictures (a BRD, notes, sketches, screenshots)" aria-label="Attach files">
           {uploading ? '…' : '📎'}
         </button>
+        {dictation.supported && (
+          <button type="button" className={`btn ghost ${dictation.listening ? 'rec' : ''}`} disabled={busy} onClick={dictation.toggle} title={dictation.listening ? 'Listening… tap to stop' : 'Speak your message'} aria-label="Dictate message" aria-pressed={dictation.listening}>
+            {dictation.listening ? '🔴' : '🎤'}
+          </button>
+        )}
+        {speech.supported && (
+          <button type="button" className={`btn ghost ${speech.on ? 'on' : ''}`} onClick={() => speech.setOn((v) => !v)} title={speech.on ? 'Reading replies aloud — tap to mute' : 'Read replies aloud'} aria-label="Read replies aloud" aria-pressed={speech.on}>
+            {speech.on ? '🔊' : '🔈'}
+          </button>
+        )}
         <button className="btn primary" disabled={busy || uploading || !text.trim()}>
           Send
         </button>

@@ -128,7 +128,10 @@ export function PeopleTab() {
                   </select>
                 </td>
                 <td className="small">{teamOf(u.id).join(', ') || <span className="muted">—</span>}</td>
-                <td>{u.mfa_enabled ? <span className="chip good">2FA on</span> : <span className="muted small">Password only</span>}</td>
+                <td>
+                  {u.mfa_enabled ? <span className="chip good">2FA on</span> : <span className="muted small">Password only</span>}
+                  {u.attributes?.assistantOff === true && <span className="chip" style={{ marginLeft: 4 }}>AI off</span>}
+                </td>
                 <td style={{ width: 90 }}>
                   <button
                     className="btn sm"
@@ -180,6 +183,14 @@ export function PeopleTab() {
                       {u.mfa_enabled && (
                         <button role="menuitem" onClick={() => window.confirm(`Turn off two-factor sign-in for ${u.full_name}? Use this when they lost their phone.`) && act(() => post(`/api/admin/users/${u.id}/reset-mfa`), 'Two-factor reset')}>
                           Reset two-factor
+                        </button>
+                      )}
+                      {!u.is_owner && (
+                        <button
+                          role="menuitem"
+                          onClick={() => act(() => patch(`/api/admin/users/${u.id}`, { attributes: { ...(u.attributes ?? {}), assistantOff: u.attributes?.assistantOff === true ? undefined : true } }), u.attributes?.assistantOff === true ? 'AI assistant turned on' : 'AI assistant turned off')}
+                        >
+                          {u.attributes?.assistantOff === true ? 'Turn on AI assistant' : 'Turn off AI assistant'}
                         </button>
                       )}
                       <button

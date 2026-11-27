@@ -17,7 +17,7 @@ import { fieldAccess, objectPerm } from '@synapse/shared';
 import { z } from 'zod';
 import type { Env, Principal } from '../env';
 import type { Db, Tx } from '../lib/db';
-import { badRequest, notFound } from '../lib/errors';
+import { badRequest, forbidden, notFound } from '../lib/errors';
 import { guardedChat } from './ai/features';
 import { AiUnavailableError, extractJson } from './ai/router';
 import { enabledApps } from './apps';
@@ -150,6 +150,10 @@ async function dispatch(caller: Caller, method: string, path: string, body?: unk
 
 type Thread = { id: string; title: string; created_at: string; updated_at: string };
 const uid = (c: Caller) => c.principal.user.id;
+/** The assistant is on for everyone by default; an admin can turn it off per person. */
+function assertAssistantOn(c: Caller) {
+  if ((c.principal.user.attributes as { assistantOff?: boolean })?.assistantOff === true) throw forbidden('The AI assistant has been turned off for your account. Ask an admin to turn it back on.');
+}
 const tx = <T>(c: Caller, fn: (t: Tx) => Promise<T>, readOnly = false) => c.db.tx({ tenantId: c.tenantId, userId: uid(c), readOnly }, fn);
 
 export async function listThreads(c: Caller) {
@@ -380,6 +384,7 @@ function withAttachments(input: z.infer<typeof chatSchema>) {
 }
 
 export async function chat(c: Caller, input: z.infer<typeof chatSchema>) {
+  assertAssistantOn(c);
   const msg = withAttachments(input);
   const threadId = await tx(c, async (t) => {
     if (input.threadId) {
@@ -404,6 +409,7 @@ export async function chat(c: Caller, input: z.infer<typeof chatSchema>) {
 
 /** After the person decided the cards: the assistant sees the results and carries on (or confirms). */
 export async function continueThread(c: Caller, threadId: string, page: string | null) {
+  assertAssistantOn(c);
   await tx(c, (t) => ownThread(t, c, threadId), true);
   const waiting = await tx(c, (t) => t.one(`select 1 from assistant_actions where tenant_id = $1 and thread_id = $2 and status in ('proposed','running') limit 1`, [c.tenantId, threadId]), true);
   if (waiting) throw badRequest('Approve or reject the remaining changes first');

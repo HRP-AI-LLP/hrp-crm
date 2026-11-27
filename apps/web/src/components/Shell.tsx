@@ -238,6 +238,8 @@ export function Shell() {
   const opsObjects = opsKeys.map((k) => objects.find((o) => o.key === k)).filter((o): o is NonNullable<typeof o> => !!o);
   // the business's CA sees their portal and nothing of the CRM
   const caOnly = !!me && hasAdmin(me.permissions, 'compliance') && !hasAdmin(me.permissions, 'books') && !me.user.isOwner;
+  // the AI assistant is on for everyone by default; an admin can turn it off per person
+  const assistantOn = !!me && (me.user.attributes as { assistantOff?: boolean } | undefined)?.assistantOff !== true;
   const navTo = useNavigate();
   useEffect(() => {
     if (caOnly && loc.pathname === '/') navTo('/ca', { replace: true });
@@ -318,7 +320,7 @@ export function Shell() {
       label: null,
       items: [
         { to: '/', label: 'Home', icon: 'home', end: true },
-        { to: '/assistant', label: 'Assistant', icon: 'spark' },
+        ...(assistantOn ? [{ to: '/assistant', label: 'Assistant', icon: 'spark' } as Item] : []),
         { to: '/copilot', label: 'Copilot', icon: 'spark', badge: copilot.data?.insights?.length || null },
         { to: '/field', label: 'My day', icon: 'sun' },
         { to: '/tasks', label: 'My tasks', icon: 'check' },
@@ -518,7 +520,7 @@ export function Shell() {
           </Suspense>
         </main>
         <TabBar onMenu={() => setNavOpen(true)} />
-        {!caOnly && <AssistantLauncher />}
+        {assistantOn && <AssistantLauncher />}
       </div>
     </div>
   );
