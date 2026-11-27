@@ -16,6 +16,29 @@ import { NI, OBJECT_ICON } from './NavIcons';
 import { useTheme } from '../lib/theme';
 import { NavTrail } from './NavTrail';
 import { AssistantLauncher } from './assistant/Assistant';
+import type { Me } from '../lib/auth';
+
+const ROLE_LABELS: Record<string, string> = {
+  admin: 'Administrator',
+  manager: 'Manager',
+  project_manager: 'Project manager',
+  project_member: 'Project member',
+  sales_rep: 'Sales',
+  sales_manager: 'Sales manager',
+  accountant: 'Accountant',
+  chartered_accountant: 'Chartered accountant',
+  viewer: 'Viewer',
+  member: 'Member',
+};
+
+/** A friendly one-line role for the sidebar footer, from the user's primary role. */
+function roleLabel(me: Me): string {
+  if (me.user.isOwner) return 'Owner';
+  const key = me.user.roles[0];
+  if (!key) return 'Member';
+  if (key.startsWith('pro_')) return 'Accountant / CA';
+  return ROLE_LABELS[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 /** Which work area each screen belongs to (screens not listed are for everyone). */
 const NAV_AREAS: [string, string][] = [
@@ -443,10 +466,15 @@ export function Shell() {
         ))}
         <div className="nav-foot">
           <span className="avatar">{initials(me?.user.fullName ?? '')}</span>
-          <div className="grow">
+          <div className="grow" style={{ minWidth: 0 }}>
             <Link to="/account" style={{ color: '#fff', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', display: 'block', whiteSpace: 'nowrap' }} title="My account and security">
               {me?.user.fullName}
             </Link>
+            {me && (
+              <div style={{ color: '#8fb6c0', fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.3 }} title={roleLabel(me)}>
+                {roleLabel(me)}
+              </div>
+            )}
             <button className="btn ghost sm" style={{ color: '#8fb6c0', padding: 0, height: 20 }} onClick={() => logout()}>
               Sign out
             </button>
